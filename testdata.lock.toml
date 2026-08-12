@@ -1,0 +1,12 @@
+schema_version = 1
+catalogue_commit = "413659f6d6e01b80e958a1df461f1e82b675b696"
+
+[suite]
+id = "layer2/conformance-jpeg-2000"
+revision = 3
+
+[pack]
+id = "jpeg-2000/conformance"
+version = "15444-4-2024-ed4"
+archive_sha256 = "ac04b52e1fe38404912036c14f215099ea9a785f38644fbe76ae8f3d1523c86d"
+tree_sha256 = "5a5c564c70d46740a213e416b772e3f799dc7850c9ffef343cf33b2e7c937816"

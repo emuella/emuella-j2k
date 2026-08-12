@@ -79,7 +79,13 @@ def files() -> tuple[list[Path], list[Path], list[Path]]:
             and not (ROOT / relative_directory / name).is_symlink()
         ]
         for filename in sorted(filenames):
-            result.append(relative_directory / filename)
+            relative = relative_directory / filename
+            # Linked Git worktrees use a root .git administrative file rather
+            # than the directory used by a primary checkout. Neither belongs
+            # to the public source tree being audited.
+            if relative == Path(".git"):
+                continue
+            result.append(relative)
     return result, forbidden_directories, symbolic_link_directories
 
 

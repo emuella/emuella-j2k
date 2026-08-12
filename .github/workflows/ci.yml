@@ -17,6 +17,7 @@ jobs:
           components: clippy,rustfmt
       - run: python3 scripts/test-public-tree-policy.py
       - run: python3 scripts/test-package-legal-policy.py
+      - run: python3 scripts/test-layer2-conformance-inspection.py
       - run: python3 scripts/audit-public-tree.py
       - run: python3 scripts/generate-binary-dependency-notices.py --check
       - name: Check dependency policy and licences

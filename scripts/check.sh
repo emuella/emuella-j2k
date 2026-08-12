@@ -6,6 +6,7 @@ cd "$repository_root"
 
 python3 scripts/test-public-tree-policy.py
 python3 scripts/test-package-legal-policy.py
+python3 scripts/test-layer2-conformance-inspection.py
 python3 scripts/audit-public-tree.py
 python3 scripts/generate-binary-dependency-notices.py --check
 cargo fmt --all --check

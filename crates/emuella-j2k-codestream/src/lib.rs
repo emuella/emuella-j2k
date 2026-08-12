@@ -6823,6 +6823,11 @@ impl Marker {
 
     fn has_segment(self) -> bool {
         !matches!(self, Self::Soc | Self::Sod | Self::Eoc | Self::Eph)
+            && !self.is_reserved_parameterless()
+    }
+
+    fn is_reserved_parameterless(self) -> bool {
+        matches!(self, Self::Unknown(0xff30..=0xff3f))
     }
 }
 
@@ -7039,15 +7044,24 @@ fn scan_part1_source_headers(
             cursor.seek(source_offset)?;
             break source_offset;
         }
+        let marker_offset = marker_bytes.len();
+        marker_bytes.extend_from_slice(&marker_code);
         if !marker.has_segment() {
+            markers.push(MarkerSegment {
+                marker,
+                offset: marker_offset,
+                data_offset: marker_bytes.len(),
+                data_len: 0,
+            });
+            if marker.is_reserved_parameterless() {
+                continue;
+            }
             return Err(invalid(
                 usize::try_from(source_offset).ok(),
                 Some(marker),
                 "source main header ended before SOT",
             ));
         }
-        let marker_offset = marker_bytes.len();
-        marker_bytes.extend_from_slice(&marker_code);
         let mut length_bytes = [0_u8; 2];
         cursor.read_exact(&mut length_bytes)?;
         marker_bytes.extend_from_slice(&length_bytes);
@@ -7283,6 +7297,9 @@ fn scan_selected_source_tile_part_header(
                 data_offset: marker_bytes.len(),
                 data_len: 0,
             });
+            if marker.is_reserved_parameterless() {
+                continue;
+            }
             if marker != Marker::Sod {
                 return Err(invalid(
                     Some(marker_offset),
@@ -8075,6 +8092,53 @@ pub fn encode_planar_u8_no_decomp_test_fixture(
         components: &components,
         multiple_component_transform: false,
     })
+}
+
+#[cfg(test)]
+#[test]
+fn reserved_parameterless_markers_are_skipped_in_main_and_tile_headers() {
+    let samples = (0_u8..16).collect::<Vec<_>>();
+    let mut codestream =
+        encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).expect("fixture encodes");
+    let sot = find_marker(&codestream, 0, Marker::Sot).expect("fixture has SOT");
+    codestream.splice(sot..sot, [0xff, 0x30]);
+
+    let shifted_sot = sot + 2;
+    let sod = find_marker(&codestream, shifted_sot, Marker::Sod).expect("fixture has SOD");
+    codestream.splice(sod..sod, [0xff, 0x3f]);
+    let psot = read_u32(&codestream, shifted_sot + 6).expect("fixture has Psot");
+    codestream[shifted_sot + 6..shifted_sot + 10].copy_from_slice(&(psot + 2).to_be_bytes());
+
+    let parsed = parse(&codestream).expect("slice parser skips reserved markers");
+    let reserved = parsed
+        .markers
+        .iter()
+        .filter(|segment| segment.marker.is_reserved_parameterless())
+        .collect::<Vec<_>>();
+    assert_eq!(reserved.len(), 2);
+    assert!(reserved.iter().all(|segment| segment.data_len == 0));
+    assert!(is_supported_no_decomposition_encode_compatible_profile(
+        &parsed
+    ));
+
+    let source = source::SliceSource::new(&codestream);
+    let components = [0_u16];
+    let prepared = prepare_part1_component_decode_from_source(
+        &source,
+        Part1ComponentDecodeRequest {
+            component_indices: &components,
+            region: TileRegionRequest {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            discard_levels: 0,
+            max_layers: None,
+        },
+    )
+    .expect("source parser skips reserved markers");
+    assert_eq!(prepared.output_dimensions(), (4, 4));
 }
 
 /// Build a deterministic no-decomposition CPRL fixture with a 2x2 grid of
@@ -12155,6 +12219,7 @@ fn unsupported_part1_profile_marker(codestream: &Codestream) -> Option<(Marker, 
                 "SOP/EPH packet markers are not consumed by the profile packet walker"
             }
             Marker::Cap => "CAP markers identify HTJ2K/extended capability codestreams outside Part 1 profile decode",
+            Marker::Unknown(code) if Marker::Unknown(code).is_reserved_parameterless() => return None,
             Marker::Unknown(_) => "unknown marker segments are outside the admitted native profile",
         };
         Some((segment.marker, detail))
@@ -32416,6 +32481,15 @@ fn retain_tile_part_header_markers(
         }
 
         if !marker.has_segment() {
+            if marker.is_reserved_parameterless() {
+                markers.push(MarkerSegment {
+                    marker,
+                    offset: marker_offset,
+                    data_offset: offset,
+                    data_len: 0,
+                });
+                continue;
+            }
             return Err(invalid(
                 Some(marker_offset),
                 Some(marker),
