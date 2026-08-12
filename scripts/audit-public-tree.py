@@ -16,6 +16,7 @@ from public_tree_policy import (  # noqa: E402
     contains_public_openjph_identifier,
     content_policy_errors,
     exception_configuration_errors,
+    openjph_provenance_errors,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -91,6 +92,8 @@ def files() -> tuple[list[Path], list[Path], list[Path]]:
 
 def main() -> int:
     errors: list[str] = []
+    rust_sources: dict[PurePosixPath, str] = {}
+    third_party = ""
     paths, forbidden_directories, symbolic_link_directories = files()
     errors.extend(
         f"forbidden path component: {relative}" for relative in forbidden_directories
@@ -131,6 +134,10 @@ def main() -> int:
         if policy_errors or policy_path in PUBLIC_TREE_HASH_EXCEPTIONS:
             continue
         text = content.decode("utf-8")
+        if relative.suffix == ".rs":
+            rust_sources[policy_path] = text
+        if relative == Path("THIRD_PARTY.md"):
+            third_party = text
         if ABSOLUTE_PRIVATE_PATH.search(text):
             errors.append(f"absolute private path in {relative}")
         if relative != Path("scripts/audit-public-tree.py"):
@@ -144,6 +151,8 @@ def main() -> int:
                 errors.append(f"empty byte-array fixture placeholder in {relative}")
             if relative.suffix == ".rs" and contains_public_openjph_identifier(text):
                 errors.append(f"external-codec name in public Rust API: {relative}")
+
+    errors.extend(openjph_provenance_errors(rust_sources, third_party))
 
     cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace = cargo.get("workspace", {})

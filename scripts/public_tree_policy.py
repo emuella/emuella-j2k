@@ -186,6 +186,29 @@ PUBLIC_OPENJPH_IDENTIFIER = re.compile(
     r"\bpub\s+(?!\()[^;\n{=]*\bopenjph[A-Za-z0-9_]*\b",
     re.IGNORECASE,
 )
+OPENJPH_COMMIT = "2d0a033a135fb58dab87ea9551db8870e5b68548"
+OPENJPH_DERIVED_RUST_PATHS = frozenset(
+    {
+        PurePosixPath("crates/emuella-j2k-accel/src/openjph_ht_cleanup.rs"),
+        PurePosixPath("crates/emuella-j2k-codestream/src/openjph_transfer.rs"),
+        PurePosixPath("crates/emuella-j2k-ht/src/block_encoder.rs"),
+        PurePosixPath("crates/emuella-j2k-ht/src/ht_vlc_tables.rs"),
+        PurePosixPath("crates/emuella-j2k-ht/src/openjph_decoder.rs"),
+        PurePosixPath("crates/emuella-j2k-ht/src/openjph_fast_cleanup.rs"),
+    }
+)
+OPENJPH_TABLE_HEADING = "### Emuella files"
+OPENJPH_TABLE_HEADER = (
+    "| Emuella path | OpenJPH-derived or aligned material | Emuella modifications |"
+)
+OPENJPH_TABLE_SEPARATOR = "| --- | --- | --- |"
+BSD_SOURCE_HEADER = "// SPDX-License-Identifier: BSD-2-Clause"
+SPDX_DECLARATION = re.compile(r"SPDX-License-Identifier[ \t]*:[ \t]*([^\r\n]*)")
+BSD_SPDX_TOKEN = re.compile(r"(?<![A-Za-z0-9.-])BSD-2-Clause(?![A-Za-z0-9.-])")
+OPENJPH_PIN_RECORD = re.compile(
+    r"^[ \t]*Pinned upstream commit[ \t]*:.*$", re.MULTILINE
+)
+STANDALONE_40_HEX = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
 ALLOWED_CONTROL_BYTES = frozenset({9, 10, 12, 13})
 
 
@@ -196,6 +219,127 @@ def sha256_bytes(content: bytes) -> str:
 def contains_public_openjph_identifier(text: str) -> bool:
     """Return whether Rust-like source exports an OpenJPH-named identifier."""
     return PUBLIC_OPENJPH_IDENTIFIER.search(text) is not None
+
+
+def openjph_table_paths(third_party: str) -> tuple[list[PurePosixPath], list[str]]:
+    """Parse the bounded root provenance table without accepting loose mentions."""
+    errors: list[str] = []
+    lines = third_party.splitlines()
+    headings = [
+        index for index, line in enumerate(lines) if line == OPENJPH_TABLE_HEADING
+    ]
+    if len(headings) != 1:
+        return [], [
+            "THIRD_PARTY.md must contain exactly one OpenJPH Emuella-file table"
+        ]
+    start = headings[0] + 1
+    while start < len(lines) and not lines[start]:
+        start += 1
+    if start >= len(lines) or lines[start] != OPENJPH_TABLE_HEADER:
+        return [], ["THIRD_PARTY.md has an invalid OpenJPH Emuella-file header"]
+    if start + 1 >= len(lines) or lines[start + 1] != OPENJPH_TABLE_SEPARATOR:
+        return [], ["THIRD_PARTY.md has an invalid OpenJPH Emuella-file separator"]
+
+    paths: list[PurePosixPath] = []
+    for line in lines[start + 2 :]:
+        if not line:
+            break
+        if not line.startswith("|") or not line.endswith("|"):
+            errors.append("THIRD_PARTY.md has a malformed OpenJPH Emuella-file row")
+            continue
+        cells = [cell.strip() for cell in line[1:-1].split("|")]
+        if len(cells) != 3 or not cells[1] or not cells[2]:
+            errors.append("THIRD_PARTY.md has a malformed OpenJPH Emuella-file row")
+            continue
+        match = re.fullmatch(r"`([^`]+)`", cells[0])
+        if match is None:
+            errors.append("THIRD_PARTY.md has a malformed OpenJPH Emuella path")
+            continue
+        value = match.group(1)
+        path = PurePosixPath(value)
+        if (
+            path.is_absolute()
+            or path.as_posix() != value
+            or path.suffix != ".rs"
+            or "\\" in value
+            or not path.parts
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            errors.append(f"THIRD_PARTY.md has an unsafe OpenJPH Emuella path: {value}")
+            continue
+        paths.append(path)
+    if len(paths) != len(set(paths)):
+        errors.append("THIRD_PARTY.md repeats an OpenJPH-derived Emuella path")
+    return paths, errors
+
+
+def openjph_provenance_errors(
+    rust_sources: Mapping[PurePosixPath, str], third_party: str
+) -> list[str]:
+    """Validate only the mechanically knowable closed OpenJPH source boundary."""
+    documented_list, errors = openjph_table_paths(third_party)
+    expected_pin_record = f"Pinned upstream commit: `{OPENJPH_COMMIT}`"
+    if OPENJPH_PIN_RECORD.findall(third_party) != [expected_pin_record]:
+        errors.append(
+            "THIRD_PARTY.md must contain exactly one pinned OpenJPH commit record "
+            f"for {OPENJPH_COMMIT}"
+        )
+    documented = set(documented_list)
+    for path in sorted(OPENJPH_DERIVED_RUST_PATHS - documented):
+        errors.append(f"THIRD_PARTY.md omits approved OpenJPH-derived file: {path}")
+    for path in sorted(documented - OPENJPH_DERIVED_RUST_PATHS):
+        errors.append(f"THIRD_PARTY.md names unapproved OpenJPH-derived file: {path}")
+
+    preambles: dict[PurePosixPath, str] = {}
+    spdx_declarations: dict[PurePosixPath, list[str]] = {}
+    for path, source in rust_sources.items():
+        preamble_lines: list[str] = []
+        for line in source.splitlines():
+            if line.startswith("//") or not line:
+                preamble_lines.append(line)
+            else:
+                break
+        preambles[path] = "\n".join(preamble_lines)
+        spdx_declarations[path] = SPDX_DECLARATION.findall(source)
+    bsd_sources = {
+        path
+        for path, declarations in spdx_declarations.items()
+        if any(BSD_SPDX_TOKEN.search(declaration) for declaration in declarations)
+    }
+    for path in sorted(OPENJPH_DERIVED_RUST_PATHS - rust_sources.keys()):
+        errors.append(f"approved OpenJPH-derived file is absent: {path}")
+    for path in sorted(OPENJPH_DERIVED_RUST_PATHS & rust_sources.keys()):
+        lines = rust_sources[path].splitlines()
+        if (
+            not lines
+            or lines[0] != BSD_SOURCE_HEADER
+            or spdx_declarations[path] != ["BSD-2-Clause"]
+        ):
+            errors.append(
+                f"approved OpenJPH-derived file must have exactly one exact first-line "
+                f"BSD-2-Clause header: {path}"
+            )
+    for path in sorted(bsd_sources - OPENJPH_DERIVED_RUST_PATHS):
+        errors.append(f"unapproved BSD-derived Rust source: {path}")
+
+    required = {
+        "OpenJPH": "OpenJPH attribution",
+        "https://github.com/aous72/OpenJPH": "OpenJPH source URL",
+        "Copyright (c)": "upstream copyright notice",
+        "Modified for Emuella:": "Emuella modification summary",
+        "THIRD_PARTY.md": "third-party provenance reference",
+    }
+    for path in sorted(OPENJPH_DERIVED_RUST_PATHS & rust_sources.keys()):
+        preamble = preambles[path]
+        if STANDALONE_40_HEX.findall(preamble) != [OPENJPH_COMMIT]:
+            errors.append(
+                f"{path} header must name exactly one pinned OpenJPH revision "
+                f"{OPENJPH_COMMIT}"
+            )
+        for needle, label in required.items():
+            if needle not in preamble:
+                errors.append(f"{path} header omits {label}")
+    return errors
 
 
 def binary_reason(content: bytes) -> str | None:

@@ -53,9 +53,17 @@ catalogue revision, pack ID and version, and pack digest. Restricted packs must
 be pre-provisioned. Missing restricted data is never fetched as a side effect
 of `cargo test`.
 
-No Kakadu SDK, OpenJPEG/OpenJPH output, standards insert, PDF, OCR transcript,
-or externally sourced fixture is permitted in this repository without a new
-file-level provenance and redistribution review.
+No Kakadu SDK, external codec binary or source, OpenJPEG/OpenJPH output,
+standards insert, PDF, OCR transcript, or externally sourced fixture is
+permitted in this repository. Another implementation may be executed as an
+authorised black-box interoperability oracle, but only project-authored
+summaries of observed behaviour may enter public project artefacts; its source,
+binaries, fixtures, output payloads, verbatim diagnostics, generated files, and
+other artefacts remain outside them. The only source-derived codec
+exception is the closed set of OpenJPH-derived files and pinned inputs already
+enumerated in `THIRD_PARTY.md`; changing that set requires prior maintainer
+approval through an explicit human copyright, licence, provenance, and
+architectural review.
 
 Library support classification is structural and algorithmic. Exact-payload
 classifiers, embedded reference-pixel replay, empty fixture-array placeholders,

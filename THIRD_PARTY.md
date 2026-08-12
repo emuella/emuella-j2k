@@ -22,6 +22,14 @@ Pinned upstream commit: `2d0a033a135fb58dab87ea9551db8870e5b68548`
 | `crates/emuella-j2k-accel/src/openjph_ht_cleanup.rs` | AVX2 octet gather, MagSgn extraction, and coefficient reconstruction | Checked prepared slices, Rust intrinsics, packed-codeword interface, typed output |
 | `crates/emuella-j2k-codestream/src/openjph_transfer.rs` | 32-bit cleanup bitplane bound and reversible sign-magnitude code-block transfer | Typed transfer metadata and signed/sign-magnitude scalar Rust helpers |
 
+This table is the closed source-derived JPEG 2000 implementation allowlist.
+Adding, removing, renaming, or replacing an Emuella path, or consulting a new
+upstream input for derived implementation work, requires prior explicit human
+copyright, licence, provenance, and architectural review. It is not routine
+provenance maintenance and must be reflected in source headers, pinned source
+hashes, licence declarations, notices, package metadata, and root and package
+provenance records.
+
 OpenJPH names outside this table identify the isolated provenance-bearing
 modules and their representation/transfer helpers. Part 15 syntax and
 algorithms implemented independently from the standard remain project-authored

@@ -23,6 +23,20 @@ OpenJPH-derived material is not relicensed as Apache-2.0. Its exact files,
 upstream revision, hashes, licence, and modification summary are recorded in
 `THIRD_PARTY.md` and `LICENSES/OpenJPH-BSD-2-Clause.txt`.
 
+That OpenJPH file set is the repository's complete approved source-derived JPEG
+2000 implementation exception. All other JPEG 2000 implementation material is
+governed as project-authored under `CONTRIBUTING.md`. Any proposal to expand or
+change the OpenJPH-derived file set or its pinned inputs requires prior explicit
+human approval and a new copyright, licence, provenance, and architectural
+review.
+
+Standards citations identify the normative authority behind implementation
+decisions without redistributing specification content. Public project
+artefacts may preserve exact interoperability identifiers and cite standards
+locations, but do not reproduce or closely transcribe specification prose,
+page transcriptions, tables, figures, diagrams, examples, images, or rendered
+equations.
+
 Historical conformance, interoperability, and benchmark data is intentionally
 absent. Optional external corpus integration belongs in the separately
 versioned `emuella-testdata` catalogue and must retain each pack's own terms.
