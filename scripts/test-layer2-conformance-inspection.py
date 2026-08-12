@@ -86,6 +86,13 @@ class ContractTests(unittest.TestCase):
                 self.lock,
             )
 
+    def test_timeout_must_be_finite_and_positive(self) -> None:
+        for invalid in ("nan", "inf", "-inf", "0", "-1"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    runner.positive_finite_seconds(invalid)
+        self.assertEqual(runner.positive_finite_seconds("0.25"), 0.25)
+
 
 class ProcessIsolationTests(unittest.TestCase):
     def test_outcomes_are_isolated_and_compared(self) -> None:

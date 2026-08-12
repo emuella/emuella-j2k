@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import math
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
@@ -23,6 +24,16 @@ ALLOWED_EXPECTATIONS = {"accept", "reject"}
 
 class RunnerError(Exception):
     """A preflight, integrity, contract, or invocation failure."""
+
+
+def positive_finite_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be finite and greater than zero")
+    return seconds
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,12 +104,10 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "testdata.lock.toml",
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--timeout-seconds", type=float, default=10.0)
+    parser.add_argument("--timeout-seconds", type=positive_finite_seconds, default=10.0)
     arguments = parser.parse_args()
     if arguments.testdata is None:
         parser.error("--testdata or EMUELLA_TESTDATA_ROOT is required")
-    if arguments.timeout_seconds <= 0:
-        parser.error("--timeout-seconds must be greater than zero")
     return arguments
 
 
