@@ -1,0 +1,42 @@
+[package]
+name = "emuella-j2k-codestream-fuzz"
+version = "0.0.0"
+description = "Coverage-guided fuzz targets for Emuella codestream and container parsers."
+edition = "2024"
+rust-version = "1.97.1"
+license = "Apache-2.0"
+repository = "https://github.com/emuella/emuella-j2k"
+homepage = "https://github.com/emuella/emuella-j2k"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+emuella-j2k-codestream = { version = "0.1.0", path = ".." }
+emuella-j2k-container = { version = "0.1.0", path = "../../emuella-j2k-container" }
+emuella-j2k-ht = { version = "0.1.0", path = "../../emuella-j2k-ht" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "codestream_marker_parser"
+path = "fuzz_targets/codestream_marker_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_parser"
+path = "fuzz_targets/container_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ht_cleanup_readers"
+path = "fuzz_targets/ht_cleanup_readers.rs"
+test = false
+doc = false
+bench = false

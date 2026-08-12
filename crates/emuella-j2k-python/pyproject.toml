@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.14.1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "emuella-j2k"
+version = "0.1.0"
+description = "Experimental Python binding for the Emuella JPEG 2000 and HTJ2K codec"
+# Combined because the native extension embeds the OpenJPH-derived HT code.
+license = "Apache-2.0 AND BSD-2-Clause"
+license-files = [
+  "LICENSE-APACHE-2.0",
+  "LICENSE-OPENJPH-BSD-2-CLAUSE",
+  "NOTICE",
+  "THIRD_PARTY.md",
+  "THIRD_PARTY_DEPENDENCIES.md",
+  "THIRD_PARTY_LICENSES/**/*",
+]
+requires-python = ">=3.13"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+]
+
+[tool.maturin]
+module-name = "emuella_j2k"
+features = ["pyo3/extension-module"]

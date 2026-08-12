@@ -1,0 +1,27 @@
+[package]
+name = "emuella-j2k-python"
+description = "Experimental Python binding for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# The cdylib embeds the OpenJPH-derived HT/codestream modules through core.
+license = "Apache-2.0 AND BSD-2-Clause"
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "emuella_j2k"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+parallel = ["emuella-j2k-core/parallel"]
+
+[dependencies]
+bytemuck = "1.23.1"
+emuella-j2k-core = { workspace = true, features = ["std"] }
+numpy.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+
+[lints]
+workspace = true

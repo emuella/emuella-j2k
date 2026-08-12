@@ -1,0 +1,19 @@
+[package]
+name = "emuella-j2k-tier1"
+description = "Classic JPEG 2000 tier-1 block coding boundary for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

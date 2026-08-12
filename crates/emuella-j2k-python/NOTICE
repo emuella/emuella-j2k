@@ -1,0 +1,22 @@
+Emuella JPEG 2000 and HTJ2K Python extension
+Copyright 2026 Rob Christie
+
+The compiled extension statically includes Emuella HTJ2K code derived from
+OpenJPH. That code remains subject to the OpenJPH BSD 2-Clause notice and
+conditions. The project-authored classic Tier-1 implementation is licensed
+under Apache-2.0.
+
+The compiled extension also statically incorporates third-party Rust crates.
+Their exact locked package inventory, binary role, upstream source checksum,
+licence expression, and applicable redistribution texts are recorded in
+THIRD_PARTY_DEPENDENCIES.md and THIRD_PARTY_LICENSES/.
+
+The complete applicable licence texts are in:
+
+- LICENSE-APACHE-2.0
+- LICENSE-OPENJPH-BSD-2-CLAUSE
+- THIRD_PARTY_DEPENDENCIES.md
+- THIRD_PARTY_LICENSES/
+
+Detailed upstream revisions, source paths, hashes, and modification summaries
+are recorded in THIRD_PARTY.md.

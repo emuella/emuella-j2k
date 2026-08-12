@@ -1,0 +1,74 @@
+# emuella-j2k
+
+`emuella-j2k` is a pure-Rust JPEG 2000 and HTJ2K codec workspace. It provides
+native Rust libraries for JP2/JPH containers, JPEG 2000 and HTJ2K codestreams,
+wavelet transforms, classic Tier-1 and HT block coding, a small command-line
+adapter, and an experimental Python binding.
+
+The project is preparing for its first public release. APIs and the supported
+profile boundaries may still change.
+
+## Build and test
+
+The repository pins Rust 1.97.1:
+
+```sh
+cargo check --workspace --all-targets
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+The ordinary test suite is self-contained. It generates its inputs
+algorithmically and does not download or invoke OpenJPEG, OpenJPH, Kakadu, or
+standards conformance material.
+
+Applications should normally depend on the facade package and import its
+underscore-form Rust crate name:
+
+```sh
+cargo add emuella-j2k
+```
+
+```rust
+use emuella_j2k::{DecodeOptions, decode};
+```
+
+The command-line adapter installs the `emuella-j2k` executable:
+
+```sh
+emuella-j2k inspect image.jp2
+```
+
+## Workspace
+
+- `emuella-j2k`: stable public facade for application users.
+- `emuella-j2k-core`: implementation of the high-level inspect, decode, and
+  encode API.
+- `emuella-j2k-container`: JP2 and JPH container parsing.
+- `emuella-j2k-codestream`: J2K and HTJ2K codestream parsing and coding.
+- `emuella-j2k-tier1`: classic JPEG 2000 Tier-1 block coding.
+- `emuella-j2k-ht`: HTJ2K block coding.
+- `emuella-j2k-transform`: wavelet and component transforms.
+- `emuella-j2k-accel`: safe architecture-acceleration boundary.
+- `emuella-j2k-cli`: package for the `emuella-j2k` command-line inspection
+  adapter.
+- `emuella-j2k-python`: experimental PyO3 binding.
+- `emuella-j2k-test-support`: deterministic public test and fixture generator.
+
+See `docs/architecture.md` and `docs/testing.md` for the public development
+boundary.
+
+## Test data
+
+Large, third-party, conformance, interoperability, and benchmark corpora do not
+belong in this repository. They are catalogued separately by
+`emuella-testdata`, with stable pack identities and per-pack licensing.
+Runtime support is classified from parsed codec structure, not by matching or
+replaying corpus payloads.
+
+## Licensing
+
+Project-authored material is licensed under Apache-2.0. Small, isolated HTJ2K
+modules contain OpenJPH-derived code or table data under BSD-2-Clause. Read
+`NOTICE`, `THIRD_PARTY.md`, and `LICENSES/OpenJPH-BSD-2-Clause.txt` before
+redistribution.

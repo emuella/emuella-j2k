@@ -1,0 +1,15 @@
+/target/
+**/target/
+**/fuzz/artifacts/
+**/fuzz/corpus/
+/.local/
+/.smoogle/
+/.pytest_cache/
+/.ruff_cache/
+/benchmark-output/
+/testdata/
+/artifacts/
+*.profraw
+*.profdata
+*.pyc
+__pycache__/

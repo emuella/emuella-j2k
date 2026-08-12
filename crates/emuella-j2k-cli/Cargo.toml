@@ -1,0 +1,27 @@
+[package]
+name = "emuella-j2k-cli"
+description = "Command-line adapter for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "emuella-j2k"
+path = "src/main.rs"
+
+[features]
+default = []
+parallel = ["emuella-j2k-core/parallel"]
+simd = ["emuella-j2k-core/simd"]
+
+[dependencies]
+emuella-j2k-core = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

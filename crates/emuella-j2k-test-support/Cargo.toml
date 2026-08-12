@@ -1,0 +1,16 @@
+[package]
+name = "emuella-j2k-test-support"
+description = "Deterministic project-authored tests and fixture generation for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+emuella-j2k-core = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

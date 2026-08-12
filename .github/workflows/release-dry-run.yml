@@ -1,0 +1,45 @@
+name: emuella-j2k release dry run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python3 scripts/test-public-tree-policy.py
+      - run: python3 scripts/test-package-legal-policy.py
+      - run: python3 scripts/audit-public-tree.py
+      - run: python3 scripts/generate-binary-dependency-notices.py --check
+      - run: cargo test --workspace
+      - run: cargo package --workspace --locked
+      - run: python3 scripts/check-package-contents.py
+      - name: Install the pinned Python build backend
+        run: python3 -m pip install --disable-pip-version-check "maturin==1.14.1"
+      - name: Build and inspect Python distributions
+        run: sh scripts/check-python-distributions.sh
+      - name: Build and inspect the prebuilt CLI distribution
+        run: sh scripts/package-cli-binary.sh
+      - name: Record Cargo package evidence
+        run: |
+          mkdir -p target/release-evidence/cargo/members
+          sha256sum target/package/*.crate > target/release-evidence/cargo/SHA256SUMS
+          for archive in target/package/*.crate; do
+            tar -tzf "$archive" > "target/release-evidence/cargo/members/$(basename "$archive").txt"
+          done
+      - name: Preserve release artifacts and evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: emuella-j2k-release-evidence-${{ github.sha }}
+          path: |
+            target/package/*.crate
+            target/release-evidence
+          if-no-files-found: error

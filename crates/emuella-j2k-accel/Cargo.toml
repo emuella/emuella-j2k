@@ -1,0 +1,16 @@
+[package]
+name = "emuella-j2k-accel"
+description = "Internal architecture acceleration boundary for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0 AND BSD-2-Clause"
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+[features]
+default = ["std"]
+simd = ["std"]
+std = []
+
+[lints]
+workspace = true

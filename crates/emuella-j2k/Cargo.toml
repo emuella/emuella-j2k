@@ -1,0 +1,25 @@
+[package]
+name = "emuella-j2k"
+description = "Public Rust API for the Emuella JPEG 2000 and HTJ2K codec."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/emuella-j2k"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+parallel = ["std", "emuella-j2k-core/parallel"]
+simd = ["std", "emuella-j2k-core/simd"]
+std = ["emuella-j2k-core/std"]
+
+[dependencies]
+emuella-j2k-core = { workspace = true, default-features = false }
+
+[lints]
+workspace = true

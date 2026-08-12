@@ -1,0 +1,34 @@
+[package]
+name = "emuella-j2k-core"
+description = "Public Rust API for JPEG 2000 and HTJ2K operations in emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["std"]
+parallel = [
+  "std",
+  "emuella-j2k-codestream/parallel",
+]
+simd = ["std", "emuella-j2k-codestream/simd"]
+std = [
+  "emuella-j2k-codestream/std",
+  "emuella-j2k-container/std",
+]
+
+[dependencies]
+emuella-j2k-codestream.workspace = true
+emuella-j2k-container.workspace = true
+
+[dev-dependencies]
+sha2 = "0.10.9"
+
+[lints]
+workspace = true

@@ -1,0 +1,40 @@
+[package]
+name = "emuella-j2k-codestream"
+description = "Raw JPEG 2000 and HTJ2K codestream boundary for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0 AND BSD-2-Clause"
+rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["std"]
+parallel = [
+  "std",
+  "dep:rayon",
+  "emuella-j2k-transform/parallel",
+]
+simd = ["std", "emuella-j2k-transform/simd"]
+std = [
+  "emuella-j2k-ht/std",
+  "emuella-j2k-tier1/std",
+  "emuella-j2k-transform/std",
+]
+
+[dependencies]
+emuella-j2k-accel.workspace = true
+emuella-j2k-ht.workspace = true
+emuella-j2k-tier1.workspace = true
+emuella-j2k-transform.workspace = true
+rayon = { version = "1.11.0", optional = true }
+
+[dev-dependencies]
+emuella-j2k-container.workspace = true
+sha2 = "0.10.9"
+
+[lints]
+workspace = true

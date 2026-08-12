@@ -1,0 +1,54 @@
+[workspace]
+members = [
+  "crates/emuella-j2k",
+  "crates/emuella-j2k-accel",
+  "crates/emuella-j2k-cli",
+  "crates/emuella-j2k-codestream",
+  "crates/emuella-j2k-container",
+  "crates/emuella-j2k-core",
+  "crates/emuella-j2k-ht",
+  "crates/emuella-j2k-python",
+  "crates/emuella-j2k-test-support",
+  "crates/emuella-j2k-tier1",
+  "crates/emuella-j2k-transform",
+]
+exclude = ["crates/emuella-j2k-codestream/fuzz"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+rust-version = "1.97.1"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/emuella/emuella-j2k"
+homepage = "https://github.com/emuella/emuella-j2k"
+keywords = ["jpeg2000", "jp2", "j2k", "htj2k", "codec"]
+categories = ["multimedia::images", "encoding"]
+
+[workspace.dependencies]
+emuella-j2k-accel = { version = "0.1.0", path = "crates/emuella-j2k-accel", default-features = false }
+emuella-j2k-codestream = { version = "0.1.0", path = "crates/emuella-j2k-codestream", default-features = false }
+emuella-j2k-container = { version = "0.1.0", path = "crates/emuella-j2k-container", default-features = false }
+emuella-j2k-core = { version = "0.1.0", path = "crates/emuella-j2k-core", default-features = false }
+emuella-j2k-ht = { version = "0.1.0", path = "crates/emuella-j2k-ht", default-features = false }
+emuella-j2k-tier1 = { version = "0.1.0", path = "crates/emuella-j2k-tier1", default-features = false }
+emuella-j2k-transform = { version = "0.1.0", path = "crates/emuella-j2k-transform", default-features = false }
+numpy = "0.29.0"
+pyo3 = "0.29.0"
+
+[profile.perf]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.metadata.emuella-j2k.feature-policy]
+default = "Default crate builds enable std for CLI, tests, and ordinary application use."
+std = "Library crates must compile with --no-default-features."
+parallel = "Parallel execution is feature-gated and retains deterministic serial fallbacks."
+simd = "SIMD is feature-gated behind a safe facade and retains scalar fallbacks."

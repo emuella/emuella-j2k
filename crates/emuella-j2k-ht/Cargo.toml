@@ -1,0 +1,25 @@
+[package]
+name = "emuella-j2k-ht"
+description = "HTJ2K block coding boundary for emuella-j2k."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0 AND BSD-2-Clause"
+rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["std"]
+std = [
+  "emuella-j2k-accel/std",
+  "emuella-j2k-accel/simd",
+]
+
+[dependencies]
+emuella-j2k-accel.workspace = true
+
+[lints]
+workspace = true
