@@ -3,6 +3,7 @@ use emuella_j2k_core::{
     SampleEndian, SampleFormat, decode, inspect,
 };
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -66,13 +67,22 @@ fn take_flag_value(arguments: &[String], index: &mut usize, flag: &str) -> Resul
 }
 
 fn parse_comparison_arguments(
-    arguments: Vec<String>,
+    arguments: Vec<OsString>,
 ) -> Result<(PathBuf, PathBuf, ComparisonContract), String> {
     if arguments.len() < 2 {
         return Err(usage().to_owned());
     }
     let input = PathBuf::from(&arguments[0]);
     let reference = PathBuf::from(&arguments[1]);
+    let arguments = arguments[2..]
+        .iter()
+        .map(|argument| {
+            argument
+                .clone()
+                .into_string()
+                .map_err(|_| "comparison options must be valid UTF-8".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut component = None;
     let mut width = None;
     let mut height = None;
@@ -80,7 +90,7 @@ fn parse_comparison_arguments(
     let mut signed = None;
     let mut peak_error_limit = None;
     let mut mean_squared_error_limit = None;
-    let mut index = 2;
+    let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--component" if component.is_none() => {
@@ -323,7 +333,7 @@ fn run_inspect(input: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_compare(arguments: Vec<String>) -> Result<(), String> {
+fn run_compare(arguments: Vec<OsString>) -> Result<(), String> {
     let (input, reference, contract) = parse_comparison_arguments(arguments)?;
     let codestream = read_bounded(&input, MAX_INPUT_BYTES, "input")?;
     let pgx = read_bounded(&reference, MAX_REFERENCE_BYTES, "reference")?;
@@ -348,21 +358,19 @@ fn run_compare(arguments: Vec<String>) -> Result<(), String> {
     }
 }
 
-fn run() -> Result<(), String> {
-    let mut arguments = env::args_os().skip(1);
+fn run_arguments(arguments: Vec<OsString>) -> Result<(), String> {
+    let mut arguments = arguments.into_iter();
     let command = arguments.next().ok_or_else(|| usage().to_owned())?;
-    let remaining = arguments
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "arguments must be valid UTF-8".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let remaining = arguments.collect::<Vec<_>>();
     match command.to_str() {
         Some("inspect") if remaining.len() == 1 => run_inspect(Path::new(&remaining[0])),
         Some("compare-pgx") => run_compare(remaining),
         _ => Err(usage().to_owned()),
     }
+}
+
+fn run() -> Result<(), String> {
+    run_arguments(env::args_os().skip(1).collect())
 }
 
 fn main() {
@@ -485,5 +493,24 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_preserves_non_utf8_unix_paths() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut filename = format!("emuella-j2k-cli-{}-", std::process::id()).into_bytes();
+        filename.push(0xff);
+        filename.extend_from_slice(b".j2k");
+        let path = std::env::temp_dir().join(OsString::from_vec(filename));
+        let codestream = generate_grayscale_j2k(2, 2).expect("synthetic J2K encodes");
+        fs::write(&path, codestream).expect("synthetic J2K fixture is written");
+        let result = run_arguments(vec![
+            OsString::from("inspect"),
+            path.clone().into_os_string(),
+        ]);
+        fs::remove_file(&path).expect("synthetic J2K fixture is removed");
+        result.expect("inspect accepts a native non-UTF-8 path");
     }
 }
