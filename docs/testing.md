@@ -26,6 +26,22 @@ process with a per-file timeout. Integrity failures, empty or unclassified
 selections, crashes, timeouts, unexpected acceptance or rejection, and
 rejection-diagnostic mismatches make the run fail.
 
+The normal invocation binds its evidence to this codec checkout. Run the
+documented `cargo build` immediately beforehand; the runner then requires a
+clean tracked checkout, reports its full `HEAD`, verifies that the executable
+is this worktree's canonical `target/debug/emuella-j2k`, and copies it to one
+private execution snapshot. Every candidate runs through that snapshot; its
+SHA-256 is reported and rechecked after inspection, alongside the canonical
+source path and checkout. This identifies the tested checkout and bytes but is
+not a cryptographic build-provenance attestation.
+
+An arbitrary executable may be exercised explicitly with
+`--unbound-codec --codec /path/to/executable`. That mode still records the
+executable digest, but labels its source revision unbound and produces
+diagnostic evidence rather than pinned qualification evidence. It is intended
+for project-authored orchestration tests and deliberate external comparisons,
+not release qualification.
+
 The deterministic summary separates J2K, HTJ2K, JP2, and JPH results by their
 Annex C, Annex G, or informative Annex H cohort. Successful metadata inspection
 does not mean native decoding is supported; those are distinct API outcomes.
