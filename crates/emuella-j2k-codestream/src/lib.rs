@@ -173,6 +173,18 @@ impl Codestream {
             .map(|style| style.coding_style)
             .or(self.coding_style)
     }
+
+    /// Return the effective coding style when every component resolves alike.
+    ///
+    /// Decoder paths that do not yet support heterogeneous component styles
+    /// use this boundary so classification, planning, and reconstruction
+    /// cannot accidentally mix raw COD defaults with resolved COC fields.
+    pub fn uniform_effective_coding_style(&self) -> Option<CodingStyleMarker> {
+        let first = self.effective_coding_style(0)?;
+        (1..self.siz.component_count())
+            .all(|component_index| self.effective_coding_style(component_index) == Some(first))
+            .then_some(first)
+    }
 }
 
 /// Image and tile size marker (`SIZ`) contents.
@@ -12296,25 +12308,23 @@ fn default_precinct_layer_count_supported(layers: u16) -> bool {
 }
 
 fn uniform_effective_coding_style(codestream: &Codestream) -> Result<CodingStyleMarker> {
-    let first = codestream.effective_coding_style(0).ok_or_else(|| {
-        unsupported(
+    if let Some(style) = codestream.uniform_effective_coding_style() {
+        return Ok(style);
+    }
+    if codestream.effective_coding_style(0).is_none() {
+        return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::MarkerSegment,
             "COD marker is required before component coding style can be resolved",
-        )
-    })?;
-    for component_index in 1..codestream.siz.component_count() {
-        if codestream.effective_coding_style(component_index) != Some(first) {
-            return Err(unsupported(
-                None,
-                Some(Marker::Coc),
-                UnsupportedConstruct::MarkerSegment,
-                "the current packet walker requires one compatible effective coding style across selected components",
-            ));
-        }
+        ));
     }
-    Ok(first)
+    Err(unsupported(
+        None,
+        Some(Marker::Coc),
+        UnsupportedConstruct::MarkerSegment,
+        "the current packet walker requires one compatible effective coding style across selected components",
+    ))
 }
 
 fn classic_tier1_code_block_style_supported(style: u8) -> bool {
