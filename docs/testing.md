@@ -100,6 +100,33 @@ The reviewed transcription used for the contract was retrieval revision
 `7b3d8d60cd4d4f6c056cd108d928b7f99f492aa9`). Exactness therefore applies to
 corresponding logical samples for this case, not to file bytes.
 
+### Component coding-style overrides
+
+The main-header COC parser and its project-authored synthetic fixtures follow
+ISO/IEC 15444-1:2024, Annex A, A.6.1 and A.6.2, including Tables A.15 and
+A.18–A.23, PDF pages 46–51. COD supplies the default coding style and COC
+replaces the component-local fields for its named component. Components with
+no override retain the COD fields. The canonical transcription consulted for
+this implementation was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose and
+fixtures are project-authored and do not reproduce ISO expression.
+
+The parser rejects malformed lengths, duplicate or out-of-range component
+selectors, reserved forms, unsupported explicit precinct forms, and tile-part
+COD or COC precedence that the current decoder cannot safely resolve. Decoder
+classification, packet parsing, code-block reconstruction, quantisation, and
+synthesis all consume the same resolved style; a parsed COC is therefore
+exposed only when its effective component style is unambiguous within the
+supported main-header boundary.
+
+Correct COC selection advances `p0_02.j2k` to a separate packet-marker
+boundary: its effective coding style requires SOP/EPH handling, which the
+native subsampled-component decoder does not implement. The decoded-pixel
+canary must report that capability stop rather than claim an exact comparison.
+Adding SOP/EPH support is a distinct work package; it is not part of the COC
+parser increment.
+
 ## Reserved parameterless marker basis
 
 The project-authored parser regression for `0xFF30`–`0xFF3F` records the rule

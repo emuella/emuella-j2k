@@ -1741,7 +1741,7 @@ fn decode_part1_components_into_direct(
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
     if parsed
-        .coding_style
+        .uniform_effective_coding_style()
         .is_some_and(|coding_style| coding_style.multiple_component_transform)
     {
         return Ok(false);
@@ -1951,7 +1951,7 @@ fn decode_owned_selective_part1_partial(
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
     if parsed
-        .coding_style
+        .uniform_effective_coding_style()
         .is_some_and(|coding_style| coding_style.multiple_component_transform)
     {
         return Ok(None);
@@ -2019,7 +2019,7 @@ pub(crate) fn plan_partial_decode_work(
             is_direct_selective_part1_component_profile(bytes)
                 && codestream::parse(bytes).is_ok_and(|parsed| {
                     parsed
-                        .coding_style
+                        .uniform_effective_coding_style()
                         .is_some_and(|coding_style| !coding_style.multiple_component_transform)
                 })
         });
@@ -2162,7 +2162,9 @@ fn reduced_roi_region(
 
 fn codestream_resolution_level(codestream_bytes: Option<&[u8]>, discard_levels: u8) -> Option<u8> {
     let codestream = codestream::parse(codestream_bytes?).ok()?;
-    let decomposition_levels = codestream.coding_style?.decomposition_levels;
+    let decomposition_levels = codestream
+        .uniform_effective_coding_style()?
+        .decomposition_levels;
     decomposition_levels.checked_sub(discard_levels)
 }
 
@@ -2318,7 +2320,7 @@ pub fn prepare_part1_decode<'a>(
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
     if parsed
-        .coding_style
+        .uniform_effective_coding_style()
         .is_some_and(|coding_style| coding_style.multiple_component_transform)
     {
         return Err(unsupported(
@@ -2516,7 +2518,7 @@ fn decode_partial_part1_components_into_direct(
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
     if parsed
-        .coding_style
+        .uniform_effective_coding_style()
         .is_some_and(|coding_style| coding_style.multiple_component_transform)
     {
         return Ok(false);
@@ -4026,6 +4028,7 @@ fn metadata_from_codestream(
 }
 
 fn codestream_info_from_codestream(codestream: &codestream::Codestream) -> CodestreamInfo {
+    let coding_style = codestream.uniform_effective_coding_style();
     CodestreamInfo {
         kind: codestream.kind,
         tile_grid: Some(TileGrid {
@@ -4034,11 +4037,9 @@ fn codestream_info_from_codestream(codestream: &codestream::Codestream) -> Codes
             tile_origin_x: codestream.siz.tile_origin_x,
             tile_origin_y: codestream.siz.tile_origin_y,
         }),
-        progression_order: codestream
-            .coding_style
+        progression_order: coding_style
             .map(|coding_style| progression_order_from_codestream(coding_style.progression_order)),
-        transform: codestream
-            .coding_style
+        transform: coding_style
             .map(|coding_style| transform_from_codestream(coding_style.transform)),
         entropy_coder: Some(match codestream.kind {
             codestream::CodestreamKind::J2k => EntropyCoder::ClassicTier1,
@@ -4835,7 +4836,7 @@ fn selective_part1_discard_target_info(
         return Ok(None);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-    let Some(coding_style) = parsed.coding_style else {
+    let Some(coding_style) = parsed.uniform_effective_coding_style() else {
         return Ok(None);
     };
     if coding_style.multiple_component_transform
@@ -5406,4 +5407,77 @@ fn checked_public_row_bytes(
             parameter,
             message: "packed row byte size overflowed usize",
         })
+}
+
+#[cfg(test)]
+mod effective_coding_style_tests {
+    use super::*;
+
+    fn insert_main_coc(mut codestream: Vec<u8>, parameters: [u8; 5]) -> Vec<u8> {
+        let sot = codestream
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x90])
+            .unwrap();
+        let mut coc = vec![0xff, 0x53, 0, 9, 0, 0];
+        coc.extend_from_slice(&parameters);
+        codestream.splice(sot..sot, coc);
+        codestream
+    }
+
+    #[test]
+    fn reduced_partial_decode_uses_coc_decomposition_over_cod() {
+        let samples = (0..64 * 64)
+            .map(|sample| ((sample * 17 + sample / 64) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let mut codestream =
+            codestream::encode_grayscale_u8_one_decomp(codestream::GrayscaleU8Encode {
+                width: 64,
+                height: 64,
+                samples: &samples,
+                stride_bytes: 64,
+            })
+            .unwrap();
+        let original = codestream::parse(&codestream)
+            .unwrap()
+            .coding_style
+            .unwrap();
+        let transform = match original.transform {
+            codestream::WaveletTransform::Irreversible97 => 0,
+            codestream::WaveletTransform::Reversible53 => 1,
+        };
+        let parameters = [
+            original.decomposition_levels,
+            original.code_block_width_exponent - 2,
+            original.code_block_height_exponent - 2,
+            original.code_block_style,
+            transform,
+        ];
+        let cod = codestream
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x52])
+            .unwrap();
+        codestream[cod + 9] = 0;
+        let codestream = insert_main_coc(codestream, parameters);
+
+        let parsed = codestream::parse(&codestream).unwrap();
+        assert_eq!(parsed.coding_style.unwrap().decomposition_levels, 0);
+        assert_eq!(
+            parsed
+                .uniform_effective_coding_style()
+                .unwrap()
+                .decomposition_levels,
+            1
+        );
+
+        let decoded = decode_partial(
+            &codestream,
+            &PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(decoded.info.width, 32);
+        assert_eq!(decoded.info.height, 32);
+    }
 }
