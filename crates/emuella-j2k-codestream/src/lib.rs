@@ -12155,11 +12155,17 @@ pub fn unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedCons
         ));
     }
 
-    let Some(coding_style) = codestream.coding_style else {
-        return Some((
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before decode support can be classified".into(),
-        ));
+    let coding_style = match uniform_effective_coding_style(codestream) {
+        Ok(style) => style,
+        Err(CodestreamError::Unsupported {
+            construct, message, ..
+        }) => return Some((construct, message.into())),
+        Err(_) => {
+            return Some((
+                UnsupportedConstruct::MarkerSegment,
+                "COD and COC markers must resolve to one supported decoder coding style".into(),
+            ));
+        }
     };
 
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
@@ -12557,11 +12563,10 @@ fn no_decomposition_encode_compatible_unsupported_construct(
         ));
     }
 
-    let Some(coding_style) = codestream.coding_style else {
+    let Ok(coding_style) = uniform_effective_coding_style(codestream) else {
         return Some((
             UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before encode-compatible decode support can be classified"
-                .into(),
+            "COD and COC markers must resolve before encode-compatible decode support can be classified".into(),
         ));
     };
 
@@ -12734,11 +12739,11 @@ fn decomposition_encode_compatible_unsupported_construct(
         ));
     }
 
-    let Some(coding_style) = codestream.coding_style else {
+    let Ok(coding_style) = uniform_effective_coding_style(codestream) else {
         return Some((
             UnsupportedConstruct::MarkerSegment,
             alloc::format!(
-                "COD marker is required before {level_name} encode-compatible decode support can be classified"
+                "COD and COC markers must resolve before {level_name} encode-compatible decode support can be classified"
             ),
         ));
     };
@@ -12927,14 +12932,7 @@ fn validate_supported_part1_reversible53_default_precinct(
         || is_supported_grayscale_u16_two_decomposition_encode_compatible_profile(codestream)
         || is_supported_rgb_u16_two_decomposition_encode_compatible_profile(codestream)
     {
-        return codestream.coding_style.ok_or_else(|| {
-            unsupported(
-                None,
-                Some(Marker::Cod),
-                UnsupportedConstruct::MarkerSegment,
-                "COD marker is required before encode-compatible native Part 1 decode",
-            )
-        });
+        return uniform_effective_coding_style(codestream);
     }
 
     if let Some((construct, _message)) = unsupported_construct(codestream) {
@@ -12946,14 +12944,7 @@ fn validate_supported_part1_reversible53_default_precinct(
         ));
     }
 
-    codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before profile-scoped native Part 1 decode",
-        )
-    })
+    uniform_effective_coding_style(codestream)
 }
 
 fn validate_supported_part1_irreversible97_default_precinct(
@@ -13025,14 +13016,7 @@ fn validate_supported_part1_irreversible97_default_precinct(
             "initial irreversible decode is guarded to at most 16 Mi component samples",
         ));
     }
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before irreversible decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -13216,14 +13200,7 @@ fn validate_supported_part1_high_bit_depth_component_profile(
             "native Part 1 profile decode is guarded to at most 16 Mi component samples",
         ));
     }
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before high-bit-depth component decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -13379,14 +13356,7 @@ fn validate_supported_part1_multitile_grayscale_profile(
             "native Part 1 profile decode is guarded to at most 16 Mi component samples",
         ));
     }
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before multi-tile grayscale decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -13546,14 +13516,7 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
         ));
     }
 
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before native component multi-tile decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -13849,14 +13812,7 @@ fn validate_supported_native_irreversible_component_selective_profile(
         ));
     }
 
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before selective irreversible decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -13974,8 +13930,8 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
     codestream: &Codestream,
     enforce_total_sample_guard: bool,
 ) -> Result<CodingStyleMarker> {
-    match codestream.coding_style.map(|style| style.transform) {
-        Some(WaveletTransform::Irreversible97) => {
+    match uniform_effective_coding_style(codestream)?.transform {
+        WaveletTransform::Irreversible97 => {
             validate_supported_native_irreversible_component_selective_profile(input, codestream)
         }
         _ if codestream.siz.components.iter().any(|component| {
@@ -14086,14 +14042,7 @@ fn validate_supported_native_two_decomp_multitile_profile(
         ));
     }
 
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before native multi-tile DWT2 decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -14652,7 +14601,7 @@ pub fn decode_parallel_plan_for_bench(input: &[u8]) -> Result<Option<DecodeParal
     if codestream.kind != CodestreamKind::J2k {
         return Ok(None);
     }
-    let Some(coding_style) = codestream.coding_style else {
+    let Ok(coding_style) = uniform_effective_coding_style(&codestream) else {
         return Ok(None);
     };
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1
@@ -15010,9 +14959,8 @@ pub fn decode_baseline_owned(input: &[u8]) -> Result<DecodedImage> {
 pub fn decode_baseline_owned_rendered(input: &[u8]) -> Result<DecodedImage> {
     let codestream = parse(input)?;
     decode_supported_part1_reversible53_default_precinct(input, &codestream).or_else(|error| {
-        if codestream
-            .coding_style
-            .is_some_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
+        if uniform_effective_coding_style(&codestream)
+            .is_ok_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
         {
             decode_supported_part1_irreversible97_default_precinct(input, &codestream)
         } else if is_supported_grayscale_u8_two_decomposition_multitile_encode_compatible_profile(
@@ -15023,9 +14971,8 @@ pub fn decode_baseline_owned_rendered(input: &[u8]) -> Result<DecodedImage> {
             &codestream,
         ) {
             decode_native_rgb_u8_two_decomp_multitile(input, &codestream)
-        } else if codestream
-            .coding_style
-            .is_some_and(|coding_style| coding_style.precincts_declared)
+        } else if uniform_effective_coding_style(&codestream)
+            .is_ok_and(|coding_style| coding_style.precincts_declared)
             && matches!(codestream.siz.component_count(), 1 | 3)
             && codestream
                 .siz
@@ -15051,9 +14998,8 @@ pub fn decode_baseline_owned_rendered(input: &[u8]) -> Result<DecodedImage> {
 pub fn decode_baseline_owned_components(input: &[u8]) -> Result<DecodedImage> {
     let codestream = parse(input)?;
     decode_supported_part1_reversible53_default_precinct(input, &codestream).or_else(|error| {
-        if codestream
-            .coding_style
-            .is_some_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
+        if uniform_effective_coding_style(&codestream)
+            .is_ok_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
         {
             decode_supported_part1_irreversible97_default_precinct(input, &codestream)
         } else if is_supported_part1_multitile_grayscale_profile(&codestream) {
@@ -20740,17 +20686,7 @@ pub fn decode_multitile_grayscale_region_owned(
             missing_most_significant_bitplanes: packet.missing_most_significant_bitplanes,
             coding_passes: packet.coding_passes,
             style: tier1::CodeBlockStyle::from_bits(
-                codestream
-                    .coding_style
-                    .ok_or_else(|| {
-                        unsupported(
-                            None,
-                            Some(Marker::Cod),
-                            UnsupportedConstruct::MarkerSegment,
-                            "COD marker is required for owned partial decode",
-                        )
-                    })?
-                    .code_block_style,
+                uniform_effective_coding_style(&codestream)?.code_block_style,
             ),
             subband: tier1::Subband::LowLow,
         },
@@ -22644,6 +22580,7 @@ pub fn parse_component_quantization(
     codestream: &Codestream,
     expected_subbands: usize,
 ) -> Result<Vec<ComponentQuantization>> {
+    let coding_style = uniform_effective_coding_style(codestream)?;
     let first_tile_offset = codestream
         .markers
         .iter()
@@ -22665,16 +22602,7 @@ pub fn parse_component_quantization(
     let default = parse_quantization_marker_payload(
         checked_slice(input, qcd.data_offset, qcd.data_len)?,
         expected_subbands,
-        codestream
-            .coding_style
-            .ok_or_else(|| {
-                invalid(
-                    None,
-                    Some(Marker::Cod),
-                    "COD marker is required before quantization parsing",
-                )
-            })?
-            .transform,
+        coding_style.transform,
         Marker::Qcd,
         qcd.offset,
     )?;
@@ -22718,10 +22646,7 @@ pub fn parse_component_quantization(
         components[component_index] = parse_quantization_marker_payload(
             &segment[component_index_bytes..],
             expected_subbands,
-            codestream
-                .coding_style
-                .ok_or(CodestreamError::SizeOverflow)?
-                .transform,
+            coding_style.transform,
             Marker::Qcc,
             qcc.offset,
         )?;
@@ -23157,14 +23082,7 @@ fn validate_multitile_region_shape(codestream: &Codestream) -> Result<()> {
             "owned partial decode accepts only the 4x2 two-tile profile grid",
         ));
     }
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required for owned partial decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1
         || coding_style.progression_order != ProgressionOrder::Lrcp
         || coding_style.layers != 1
@@ -30174,7 +30092,7 @@ fn ht_reversible_code_block_transfer(
     input: &[u8],
     codestream: &Codestream,
 ) -> Result<Option<HtReversibleCodeBlockTransfer>> {
-    let Some(coding_style) = codestream.coding_style else {
+    let Ok(coding_style) = uniform_effective_coding_style(codestream) else {
         return Ok(None);
     };
     if coding_style.transform != WaveletTransform::Reversible53
@@ -30499,7 +30417,7 @@ pub fn htj2k_lossless_no_decomp_workload_profile(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
-    let Some(coding_style) = codestream.coding_style else {
+    let Ok(coding_style) = uniform_effective_coding_style(&codestream) else {
         return Ok(None);
     };
     if coding_style.entropy_coder != EntropyCoder::HtBlockCoding
@@ -30737,14 +30655,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             ));
         }
     };
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "HTJ2K decode requires a COD marker",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(&codestream)?;
     if coding_style.decomposition_levels > 1 {
         return Err(unsupported(
             None,
@@ -31160,9 +31071,8 @@ fn decode_htj2k_lossless_no_decomp_tile_components(
 ) -> Result<Vec<DecodedComponent>> {
     // Keep MCT plane assembly outlined so independent components retain their
     // direct byte-placement loop without per-block destination dispatch.
-    if codestream
-        .coding_style
-        .is_some_and(|style| style.multiple_component_transform)
+    if uniform_effective_coding_style(codestream)
+        .is_ok_and(|style| style.multiple_component_transform)
     {
         let component_format =
             ht_reversible_mct_component_format(codestream).ok_or(CodestreamError::SizeOverflow)?;
@@ -32190,7 +32100,7 @@ pub fn is_htj2k_lossless_profile(input: &[u8], codestream: &Codestream) -> bool 
     let Some(Ok(_candidate)) = ht_decode_candidate(codestream) else {
         return false;
     };
-    let Some(coding_style) = codestream.coding_style else {
+    let Ok(coding_style) = uniform_effective_coding_style(codestream) else {
         return false;
     };
     if coding_style.decomposition_levels > 1
@@ -32266,9 +32176,8 @@ pub fn decode_htj2k_lossless_no_decomp_owned_with_workspace(
 ) -> Result<Option<DecodedImage>> {
     let codestream = parse(input)?;
     if codestream.kind == CodestreamKind::Htj2k
-        && codestream
-            .coding_style
-            .is_some_and(|style| style.decomposition_levels != 0)
+        && uniform_effective_coding_style(&codestream)
+            .is_ok_and(|style| style.decomposition_levels != 0)
     {
         return Err(unsupported(
             None,
@@ -32292,14 +32201,12 @@ pub fn decode_htj2k_lossless_no_decomp_owned(input: &[u8]) -> Result<Option<Deco
 /// compatibility profile.
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_no_decomp_profile(input: &[u8], codestream: &Codestream) -> bool {
-    codestream
-        .coding_style
-        .is_some_and(|style| style.decomposition_levels == 0)
+    uniform_effective_coding_style(codestream).is_ok_and(|style| style.decomposition_levels == 0)
         && is_htj2k_lossless_profile(input, codestream)
 }
 
 fn ht_marker_state(codestream: &Codestream) -> Option<ht::HtMarkerState> {
-    let coding_style = codestream.coding_style;
+    let coding_style = uniform_effective_coding_style(codestream).ok();
     let first_component = codestream.siz.components.first()?;
     Some(ht::HtMarkerState {
         has_cap_marker: codestream.capability.is_some(),
@@ -32509,6 +32416,17 @@ fn parse_main_component_coding_styles(
     markers: &[MarkerSegment],
     main_header_end: usize,
 ) -> Result<Vec<ComponentCodingStyleMarker>> {
+    if let Some(tile_cod) = markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Cod && segment.offset >= main_header_end)
+    {
+        return Err(unsupported(
+            Some(tile_cod.offset),
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "tile-part COD precedence is outside the current decoder coding-style boundary",
+        ));
+    }
     let coc_markers = markers
         .iter()
         .filter(|segment| segment.marker == Marker::Coc)
@@ -32726,7 +32644,7 @@ mod coc_marker_tests {
         codestream
     }
 
-    fn insert_tile_header_coc(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+    fn insert_tile_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
         let sot = codestream
             .windows(2)
             .position(|bytes| bytes == Marker::Sot.code().to_be_bytes())
@@ -32780,9 +32698,16 @@ mod coc_marker_tests {
             default.code_block_style,
             transform,
         ];
+        let cod = codestream
+            .windows(2)
+            .position(|bytes| bytes == Marker::Cod.code().to_be_bytes())
+            .unwrap();
+        let mut codestream = codestream;
+        codestream[cod + 9] = default.decomposition_levels + 1;
         let codestream =
             insert_before_marker(codestream, Marker::Sot, &coc_segment(0, 0, &parameters));
         let parsed = parse(&codestream).unwrap();
+        assert_eq!(parsed.coding_style.unwrap().decomposition_levels, 1);
         assert_eq!(parsed.effective_coding_style(0), Some(default));
 
         let decoded = decode_baseline_owned_components(&codestream).unwrap();
@@ -32825,11 +32750,35 @@ mod coc_marker_tests {
     #[test]
     fn rejects_conflicting_tile_override_and_unsupported_coc_forms() {
         let segment = coc_segment(0, 0, &[0, 2, 2, 0, 1]);
-        let tile_override = insert_tile_header_coc(fixture(1), &segment);
+        let tile_override = insert_tile_header_segment(fixture(1), &segment);
         assert!(matches!(
             parse(&tile_override),
             Err(CodestreamError::Unsupported {
                 marker: Some(Marker::Coc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+
+        let main_codestream = fixture(1);
+        let cod = main_codestream
+            .windows(2)
+            .position(|bytes| bytes == Marker::Cod.code().to_be_bytes())
+            .unwrap();
+        let cod_len = usize::from(u16::from_be_bytes(
+            main_codestream[cod + 2..cod + 4].try_into().unwrap(),
+        ));
+        let tile_cod = main_codestream[cod..cod + 2 + cod_len].to_vec();
+        let main_coc = insert_before_marker(
+            main_codestream,
+            Marker::Sot,
+            &coc_segment(0, 0, &[0, 2, 2, 0, 1]),
+        );
+        let tile_cod_override = insert_tile_header_segment(main_coc, &tile_cod);
+        assert!(matches!(
+            parse(&tile_cod_override),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
                 construct: UnsupportedConstruct::MarkerSegment,
                 ..
             })

@@ -114,9 +114,11 @@ fixtures are project-authored and do not reproduce ISO expression.
 
 The parser rejects malformed lengths, duplicate or out-of-range component
 selectors, reserved forms, unsupported explicit precinct forms, and tile-part
-COC precedence that the current decoder cannot safely resolve. A parsed COC is
-therefore exposed only when its effective component style is unambiguous
-within the supported main-header boundary.
+COD or COC precedence that the current decoder cannot safely resolve. Decoder
+classification, packet parsing, code-block reconstruction, quantisation, and
+synthesis all consume the same resolved style; a parsed COC is therefore
+exposed only when its effective component style is unambiguous within the
+supported main-header boundary.
 
 Correct COC selection advances `p0_02.j2k` to a separate packet-marker
 boundary: its effective coding style requires SOP/EPH handling, which the
