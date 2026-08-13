@@ -21699,7 +21699,15 @@ fn consume_inline_sop(
             "SOP packet sequence disagrees with packet progression",
         ));
     }
-    offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)
+    let next = offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)?;
+    if packet_source_u16(payload, next) == Some(Marker::Sop.code()) {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "packet contains duplicate SOP marker segments",
+        ));
+    }
+    Ok(next)
 }
 
 /// Consume the inline EPH marker that COD requires immediately after one
@@ -21722,7 +21730,15 @@ fn consume_inline_eph(
                 "COD requires EPH immediately after every packet header",
             ));
         }
-        return offset.checked_add(2).ok_or(CodestreamError::SizeOverflow);
+        let next = offset.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+        if packet_source_u16(payload, next) == Some(Marker::Eph.code()) {
+            return Err(invalid(
+                None,
+                Some(Marker::Eph),
+                "packet header is followed by duplicate EPH markers",
+            ));
+        }
+        return Ok(next);
     }
     if marker == Some(Marker::Eph.code()) {
         return Err(invalid(
@@ -21796,6 +21812,21 @@ mod inline_packet_marker_tests {
         (codestream, expected)
     }
 
+    fn add_to_psot(codestream: &mut [u8], delta: u32) {
+        let sot = find_marker(codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&psot.checked_add(delta).unwrap().to_be_bytes());
+    }
+
+    fn insert_single_packet_plt(mut codestream: Vec<u8>, packet_len: u8) -> Vec<u8> {
+        let sod = find_marker(&codestream, 0, Marker::Sod).unwrap();
+        let segment = [0xff, 0x58, 0, 4, 0, packet_len];
+        codestream.splice(sod..sod, segment);
+        add_to_psot(&mut codestream, 6);
+        codestream
+    }
+
     #[test]
     fn consumes_supported_sop_and_eph_in_native_subsampled_decode() {
         for (sop, eph) in [(true, false), (false, true), (true, true)] {
@@ -21831,6 +21862,57 @@ mod inline_packet_marker_tests {
             decode_baseline_owned_components(&unsignalled),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_inline_packet_markers() {
+        let (mut duplicate_sop, _) = marker_fixture(true, false);
+        let sod = find_marker(&duplicate_sop, 0, Marker::Sod).unwrap();
+        let packet_start = sod + 2;
+        let sop = duplicate_sop[packet_start..packet_start + 6].to_vec();
+        duplicate_sop.splice(packet_start + 6..packet_start + 6, sop);
+        add_to_psot(&mut duplicate_sop, 6);
+        assert!(matches!(
+            decode_baseline_owned_components(&duplicate_sop),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+
+        let (mut duplicate_eph, _) = marker_fixture(false, true);
+        let sod = find_marker(&duplicate_eph, 0, Marker::Sod).unwrap();
+        let eph = find_marker(&duplicate_eph, sod + 2, Marker::Eph).unwrap();
+        duplicate_eph.splice(eph + 2..eph + 2, Marker::Eph.code().to_be_bytes());
+        add_to_psot(&mut duplicate_eph, 2);
+        assert!(matches!(
+            decode_baseline_owned_components(&duplicate_eph),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reconciles_marker_inclusive_plt_packet_lengths() {
+        let (codestream, expected) = marker_fixture(true, true);
+        let sod = find_marker(&codestream, 0, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        let packet_len = u8::try_from(eoc - (sod + 2)).unwrap();
+
+        let with_plt = insert_single_packet_plt(codestream.clone(), packet_len);
+        let decoded = decode_baseline_owned_components(&with_plt).unwrap();
+        assert_eq!(decoded.components[0].samples, expected);
+
+        let mismatched = insert_single_packet_plt(codestream, packet_len - 1);
+        assert!(matches!(
+            decode_baseline_owned_components(&mismatched),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plt),
                 ..
             })
         ));
