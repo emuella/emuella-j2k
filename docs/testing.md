@@ -120,12 +120,27 @@ synthesis all consume the same resolved style; a parsed COC is therefore
 exposed only when its effective component style is unambiguous within the
 supported main-header boundary.
 
-Correct COC selection advances `p0_02.j2k` to a separate packet-marker
-boundary: its effective coding style requires SOP/EPH handling, which the
-native subsampled-component decoder does not implement. The decoded-pixel
-canary must report that capability stop rather than claim an exact comparison.
-Adding SOP/EPH support is a distinct work package; it is not part of the COC
-parser increment.
+## Inline packet markers
+
+The native subsampled-component path consumes inline SOP and EPH syntax at
+structurally known packet boundaries. SOP remains optional for each packet
+when COD permits it; an observed `Nsop` must equal the packet's tile-scoped
+16-bit sequence value, including packets that omit SOP. EPH is required
+immediately after every inline packet header when COD signals it. Marker
+length, sequence, placement, truncation, signalling, packet-body bounds, and
+PLT agreement are checked before Tier-1 reconstruction.
+
+This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.1 and A.8.1–A.8.2,
+Tables A.12–A.13 and A.40–A.41, and Annex B, B.10.8, PDF pages 46–49, 60–61,
+and 93–95. The canonical transcription consulted for this implementation was
+retrieval revision `34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed
+bundle `1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose
+and synthetic fixtures are project-authored and do not reproduce ISO
+expression.
+
+Packed packet headers, multiple tile parts in this native profile, explicit
+precincts, and encoder-side SOP/EPH production remain outside this increment.
+Other decoder profiles retain their existing packet-marker support boundary.
 
 ## Reserved parameterless marker basis
 

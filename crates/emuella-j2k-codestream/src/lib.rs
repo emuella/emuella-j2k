@@ -13726,14 +13726,6 @@ fn validate_supported_native_subsampled_component_profile(
             "native subsampled component decode requires at least one quality layer",
         ));
     }
-    if coding_style.sop_markers || coding_style.eph_markers {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "SOP/EPH packet markers are outside native subsampled component decode",
-        ));
-    }
     if coding_style.precincts_declared {
         return Err(unsupported(
             None,
@@ -21171,14 +21163,12 @@ fn parse_default_precinct_packets_from_source(
     let coding_style = uniform_effective_coding_style(codestream)?;
     if !default_precinct_layer_count_supported(coding_style.layers)
         || !coding_style_has_supported_precinct_grid(coding_style, tile_rect)
-        || coding_style.sop_markers
-        || coding_style.eph_markers
     {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::PacketDecode,
-            "packet parser requires at least one layer, a supported default or explicit precinct grid, and no packet markers",
+            "packet parser requires at least one layer and a supported default or explicit precinct grid",
         ));
     }
 
@@ -21222,6 +21212,7 @@ fn parse_default_precinct_packets_from_source(
     let mut contribution_indices = BTreeMap::new();
     let mut excluded_body_bytes = 0_u64;
     let mut packet_count = 0_u64;
+    let mut expected_sop_sequence = 0_u16;
     let mut packets_skipped_via_plt = 0_u64;
     let mut packet_bytes_skipped_via_plt = 0_u64;
     let mut plt_packet_cursor = 0_usize;
@@ -21312,7 +21303,11 @@ fn parse_default_precinct_packets_from_source(
             if let Some(declared_packet_len) = declared_packet_len {
                 payload.set_read_window(packet_start, declared_packet_len);
             }
-            if plt_fully_covers_packets && unrequested_component {
+            if plt_fully_covers_packets
+                && unrequested_component
+                && !coding_style.sop_markers
+                && !coding_style.eph_markers
+            {
                 let declared_packet_len =
                     declared_packet_len.ok_or(CodestreamError::SizeOverflow)?;
                 payload.require_range(packet_start, declared_packet_len)?;
@@ -21328,6 +21323,13 @@ fn parse_default_precinct_packets_from_source(
                 return Ok(());
             }
             packet_count = packet_count.saturating_add(1);
+            packet_offset = consume_inline_sop(
+                payload,
+                packet_offset,
+                coding_style.sop_markers,
+                expected_sop_sequence,
+            )?;
+            expected_sop_sequence = next_sop_sequence(expected_sop_sequence);
             let component_state = component_states
                 .get_mut(usize::from(packet_cursor.component))
                 .ok_or(CodestreamError::SizeOverflow)?;
@@ -21551,9 +21553,11 @@ fn parse_default_precinct_packets_from_source(
 
             reader.align();
             let header_len = reader.byte_pos();
-            let mut segment_offset = packet_offset
+            let header_end = packet_offset
                 .checked_add(header_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
+            let mut segment_offset =
+                consume_inline_eph(payload, header_end, coding_style.eph_markers)?;
             for pending in packet_contributions {
                 payload.require_range(segment_offset, pending.codeword_len)?;
                 let codeword_len = pending.codeword_len;
@@ -21648,6 +21652,344 @@ fn parse_default_precinct_packets_from_source(
         packets_skipped_via_plt,
         packet_bytes_skipped_via_plt,
     })
+}
+
+/// Consume an optional inline SOP marker at one structurally known packet
+/// boundary.
+///
+/// ISO/IEC 15444-1:2024, A.6.1 and A.8.1, PDF pages 47 and 60–61, permits SOP
+/// per packet when COD signals it. `Nsop` still counts every packet in the
+/// coded tile, including packets without the marker. The reviewed retrieval
+/// revision is `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+fn consume_inline_sop(
+    payload: &dyn PacketByteSource,
+    offset: usize,
+    sop_allowed: bool,
+    expected_sequence: u16,
+) -> Result<usize> {
+    let marker = packet_source_u16(payload, offset);
+    if marker != Some(Marker::Sop.code()) {
+        return Ok(offset);
+    }
+    if !sop_allowed {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "SOP marker is present without COD permission",
+        ));
+    }
+    payload.require_range(offset, 6)?;
+    let length_offset = offset.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+    let length = packet_source_u16(payload, length_offset)
+        .ok_or_else(|| invalid(None, Some(Marker::Sop), "SOP marker segment is truncated"))?;
+    if length != 4 {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "SOP marker segment length must be four",
+        ));
+    }
+    let sequence_offset = offset.checked_add(4).ok_or(CodestreamError::SizeOverflow)?;
+    let sequence = packet_source_u16(payload, sequence_offset)
+        .ok_or_else(|| invalid(None, Some(Marker::Sop), "SOP packet sequence is truncated"))?;
+    if sequence != expected_sequence {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "SOP packet sequence disagrees with packet progression",
+        ));
+    }
+    let next = offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)?;
+    if packet_source_u16(payload, next) == Some(Marker::Sop.code()) {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "packet contains duplicate SOP marker segments",
+        ));
+    }
+    Ok(next)
+}
+
+/// Consume the inline EPH marker that COD requires immediately after one
+/// packet header.
+///
+/// ISO/IEC 15444-1:2024, A.6.1, A.8.2 and B.10.8, PDF pages 47, 61 and
+/// 93–95, requires EPH exactly at this boundary when signalled. Packed packet
+/// headers use a different placement model and remain outside this path.
+fn consume_inline_eph(
+    payload: &dyn PacketByteSource,
+    offset: usize,
+    eph_required: bool,
+) -> Result<usize> {
+    let marker = packet_source_u16(payload, offset);
+    if eph_required {
+        if marker != Some(Marker::Eph.code()) {
+            return Err(invalid(
+                None,
+                Some(Marker::Eph),
+                "COD requires EPH immediately after every packet header",
+            ));
+        }
+        let next = offset.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+        if packet_source_u16(payload, next) == Some(Marker::Eph.code()) {
+            return Err(invalid(
+                None,
+                Some(Marker::Eph),
+                "packet header is followed by duplicate EPH markers",
+            ));
+        }
+        return Ok(next);
+    }
+    if marker == Some(Marker::Eph.code()) {
+        return Err(invalid(
+            None,
+            Some(Marker::Eph),
+            "EPH marker is present without COD signalling",
+        ));
+    }
+    Ok(offset)
+}
+
+fn packet_source_u16(payload: &dyn PacketByteSource, offset: usize) -> Option<u16> {
+    let high = payload.byte(offset)?;
+    let low = payload.byte(offset.checked_add(1)?)?;
+    Some(u16::from_be_bytes([high, low]))
+}
+
+fn next_sop_sequence(sequence: u16) -> u16 {
+    sequence.wrapping_add(1)
+}
+
+#[cfg(test)]
+mod inline_packet_marker_tests {
+    use super::*;
+
+    fn source(bytes: &[u8]) -> ContiguousPacketSource<'_> {
+        ContiguousPacketSource { bytes }
+    }
+
+    fn marker_fixture(sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
+        let samples = vec![3, 17, 129, 250];
+        let mut codestream = encode_planar_u8_no_decomp_test_fixture(2, 2, &[&samples]).unwrap();
+
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 6..siz + 10].copy_from_slice(&4_u32.to_be_bytes());
+        codestream[siz + 10..siz + 14].copy_from_slice(&4_u32.to_be_bytes());
+        codestream[siz + 22..siz + 26].copy_from_slice(&4_u32.to_be_bytes());
+        codestream[siz + 26..siz + 30].copy_from_slice(&4_u32.to_be_bytes());
+        codestream[siz + 41] = 2;
+        codestream[siz + 42] = 2;
+
+        let expected = decode_baseline_owned_components(&codestream)
+            .unwrap()
+            .components[0]
+            .samples
+            .clone();
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] = (u8::from(sop) << 1) | (u8::from(eph) << 2);
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let payload_offset = sod + 2;
+        let eoc = find_marker(&codestream, payload_offset, Marker::Eoc).unwrap();
+        let packet = parse_no_decomp_lrcp_packet(&codestream[payload_offset..eoc]).unwrap();
+        let mut inserted = 0_u32;
+        if eph {
+            let eph_offset = payload_offset + packet.header_len;
+            codestream.splice(eph_offset..eph_offset, Marker::Eph.code().to_be_bytes());
+            inserted += 2;
+        }
+        if sop {
+            let mut segment = Vec::from(Marker::Sop.code().to_be_bytes());
+            segment.extend_from_slice(&4_u16.to_be_bytes());
+            segment.extend_from_slice(&0_u16.to_be_bytes());
+            codestream.splice(payload_offset..payload_offset, segment);
+            inserted += 6;
+        }
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(&(psot + inserted).to_be_bytes());
+        (codestream, expected)
+    }
+
+    fn add_to_psot(codestream: &mut [u8], delta: u32) {
+        let sot = find_marker(codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&psot.checked_add(delta).unwrap().to_be_bytes());
+    }
+
+    fn insert_single_packet_plt(mut codestream: Vec<u8>, packet_len: u8) -> Vec<u8> {
+        let sod = find_marker(&codestream, 0, Marker::Sod).unwrap();
+        let segment = [0xff, 0x58, 0, 4, 0, packet_len];
+        codestream.splice(sod..sod, segment);
+        add_to_psot(&mut codestream, 6);
+        codestream
+    }
+
+    #[test]
+    fn consumes_supported_sop_and_eph_in_native_subsampled_decode() {
+        for (sop, eph) in [(true, false), (false, true), (true, true)] {
+            let (codestream, samples) = marker_fixture(sop, eph);
+            let parsed = parse(&codestream).unwrap();
+            assert!(is_supported_part1_native_subsampled_component_profile(
+                &parsed
+            ));
+            let decoded = decode_baseline_owned_components(&codestream).unwrap();
+            assert_eq!(decoded.width, 4);
+            assert_eq!(decoded.height, 4);
+            assert_eq!(decoded.components[0].samples, samples);
+        }
+    }
+
+    #[test]
+    fn rejects_inconsistent_sop_in_native_subsampled_decode() {
+        let (mut wrong_sequence, _) = marker_fixture(true, false);
+        let sod = find_marker(&wrong_sequence, 0, Marker::Sod).unwrap();
+        wrong_sequence[sod + 6..sod + 8].copy_from_slice(&1_u16.to_be_bytes());
+        assert!(matches!(
+            decode_baseline_owned_components(&wrong_sequence),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+
+        let (mut unsignalled, _) = marker_fixture(true, false);
+        let cod = find_marker(&unsignalled, 0, Marker::Cod).unwrap();
+        unsignalled[cod + 4] &= !0x02;
+        assert!(matches!(
+            decode_baseline_owned_components(&unsignalled),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_inline_packet_markers() {
+        let (mut duplicate_sop, _) = marker_fixture(true, false);
+        let sod = find_marker(&duplicate_sop, 0, Marker::Sod).unwrap();
+        let packet_start = sod + 2;
+        let sop = duplicate_sop[packet_start..packet_start + 6].to_vec();
+        duplicate_sop.splice(packet_start + 6..packet_start + 6, sop);
+        add_to_psot(&mut duplicate_sop, 6);
+        assert!(matches!(
+            decode_baseline_owned_components(&duplicate_sop),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+
+        let (mut duplicate_eph, _) = marker_fixture(false, true);
+        let sod = find_marker(&duplicate_eph, 0, Marker::Sod).unwrap();
+        let eph = find_marker(&duplicate_eph, sod + 2, Marker::Eph).unwrap();
+        duplicate_eph.splice(eph + 2..eph + 2, Marker::Eph.code().to_be_bytes());
+        add_to_psot(&mut duplicate_eph, 2);
+        assert!(matches!(
+            decode_baseline_owned_components(&duplicate_eph),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reconciles_marker_inclusive_plt_packet_lengths() {
+        let (codestream, expected) = marker_fixture(true, true);
+        let sod = find_marker(&codestream, 0, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        let packet_len = u8::try_from(eoc - (sod + 2)).unwrap();
+
+        let with_plt = insert_single_packet_plt(codestream.clone(), packet_len);
+        let decoded = decode_baseline_owned_components(&with_plt).unwrap();
+        assert_eq!(decoded.components[0].samples, expected);
+
+        let mismatched = insert_single_packet_plt(codestream, packet_len - 1);
+        assert!(matches!(
+            decode_baseline_owned_components(&mismatched),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plt),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn permits_omitted_sop_and_validates_sequence_progression_and_wrap() {
+        let no_marker = source(&[0x80]);
+        assert_eq!(consume_inline_sop(&no_marker, 0, true, 7).unwrap(), 0);
+
+        let sequence_one = source(&[0xff, 0x91, 0, 4, 0, 1]);
+        assert_eq!(consume_inline_sop(&sequence_one, 0, true, 1).unwrap(), 6);
+        assert_eq!(next_sop_sequence(u16::MAX), 0);
+        let wrapped = source(&[0xff, 0x91, 0, 4, 0, 0]);
+        assert_eq!(consume_inline_sop(&wrapped, 0, true, 0).unwrap(), 6);
+        assert!(matches!(
+            consume_inline_sop(&sequence_one, 0, true, 2),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_or_unsignalled_sop() {
+        let unsignalled = source(&[0xff, 0x91, 0, 4, 0, 0]);
+        assert!(matches!(
+            consume_inline_sop(&unsignalled, 0, false, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+        let wrong_length = source(&[0xff, 0x91, 0, 3, 0, 0]);
+        assert!(matches!(
+            consume_inline_sop(&wrong_length, 0, true, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+        let truncated = source(&[0xff, 0x91, 0, 4, 0]);
+        assert!(matches!(
+            consume_inline_sop(&truncated, 0, true, 0),
+            Err(CodestreamError::TruncatedInput { .. })
+        ));
+    }
+
+    #[test]
+    fn requires_or_rejects_eph_according_to_cod() {
+        let eph = source(&[0xff, 0x92]);
+        assert_eq!(consume_inline_eph(&eph, 0, true).unwrap(), 2);
+        assert!(matches!(
+            consume_inline_eph(&eph, 0, false),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+        let missing = source(&[0x7f, 0x00]);
+        assert!(matches!(
+            consume_inline_eph(&missing, 0, true),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+        let truncated = source(&[0xff]);
+        assert!(matches!(
+            consume_inline_eph(&truncated, 0, true),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
