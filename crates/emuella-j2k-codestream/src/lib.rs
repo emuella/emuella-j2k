@@ -137,6 +137,8 @@ pub struct Codestream {
     pub kind: CodestreamKind,
     pub siz: SizMarker,
     pub coding_style: Option<CodingStyleMarker>,
+    /// Main-header component coding-style overrides, resolved over COD.
+    pub component_coding_styles: Vec<ComponentCodingStyleMarker>,
     pub capability: Option<CapabilityMarker>,
     /// Main-header TLM entries reconciled with observed tile parts.
     pub tile_part_lengths: Option<TilePartLengthTable>,
@@ -152,6 +154,24 @@ impl Codestream {
 
     pub fn image_height(&self) -> u32 {
         self.siz.reference_grid_height - self.siz.image_origin_y
+    }
+
+    /// Return the effective main-header coding style for one component.
+    ///
+    /// ISO/IEC 15444-1:2024, Annex A, A.6.1 and A.6.2, PDF pages 46–51,
+    /// defines COD as the default and COC as the component-specific override.
+    /// This project-authored representation keeps COD's image-wide fields and
+    /// replaces only the component-local fields carried by COC. The reviewed
+    /// retrieval revision is `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+    pub fn effective_coding_style(&self, component_index: u16) -> Option<CodingStyleMarker> {
+        if component_index >= self.siz.component_count() {
+            return None;
+        }
+        self.component_coding_styles
+            .iter()
+            .find(|style| style.component_index == component_index)
+            .map(|style| style.coding_style)
+            .or(self.coding_style)
     }
 }
 
@@ -231,6 +251,13 @@ pub struct CodingStyleMarker {
     /// Packed precinct exponents in resolution order, low resolution first.
     /// Only the first `decomposition_levels + 1` entries are meaningful.
     pub precinct_exponents: [u8; 33],
+}
+
+/// Main-header component coding-style marker (`COC`) resolved over COD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComponentCodingStyleMarker {
+    pub component_index: u16,
+    pub coding_style: CodingStyleMarker,
 }
 
 /// Entropy coding family declared or inferred from marker syntax.
@@ -7097,6 +7124,7 @@ fn scan_part1_source_headers(
             _ => {}
         }
     };
+    let main_header_end = marker_bytes.len();
 
     let siz = siz.ok_or(CodestreamError::InvalidMarker {
         offset: None,
@@ -7235,6 +7263,13 @@ fn scan_part1_source_headers(
     {
         style.entropy_coder = EntropyCoder::HtBlockCoding;
     }
+    let component_coding_styles = parse_main_component_coding_styles(
+        &marker_bytes,
+        &siz,
+        coding_style,
+        &markers,
+        main_header_end,
+    )?;
     let progression = ProgressionState {
         order: coding_style.map(|style| style.progression_order),
         layers: coding_style.map(|style| style.layers),
@@ -7261,6 +7296,7 @@ fn scan_part1_source_headers(
             kind,
             siz,
             coding_style,
+            component_coding_styles,
             capability,
             tile_part_lengths,
             markers,
@@ -7515,7 +7551,10 @@ fn parse_with_selected_region(
         Some(table) => Some(table),
         None => parse_tile_part_length_table(input, &siz, &markers, &tiles)?,
     };
-
+    let main_header_end = markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map_or(input.len(), |segment| segment.offset);
     let kind = if capability.is_some() {
         CodestreamKind::Htj2k
     } else {
@@ -7526,6 +7565,8 @@ fn parse_with_selected_region(
     {
         coding_style.entropy_coder = EntropyCoder::HtBlockCoding;
     }
+    let component_coding_styles =
+        parse_main_component_coding_styles(input, &siz, coding_style, &markers, main_header_end)?;
     let progression = ProgressionState {
         order: coding_style.map(|cod| cod.progression_order),
         layers: coding_style.map(|cod| cod.layers),
@@ -7545,6 +7586,7 @@ fn parse_with_selected_region(
             kind,
             siz,
             coding_style,
+            component_coding_styles,
             capability,
             tile_part_lengths,
             markers,
@@ -12085,10 +12127,16 @@ pub fn unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedCons
         .iter()
         .any(|component| component.horizontal_separation != 1 || component.vertical_separation != 1)
     {
-        return Some((
-            UnsupportedConstruct::ComponentSampling,
-            "subsampled component-grid decode is not implemented for this profile".into(),
-        ));
+        return match validate_supported_native_subsampled_component_profile(codestream) {
+            Ok(_) => None,
+            Err(CodestreamError::Unsupported {
+                construct, message, ..
+            }) => Some((construct, message.into())),
+            Err(_) => Some((
+                UnsupportedConstruct::ComponentSampling,
+                "subsampled component-grid structure is invalid for native decode".into(),
+            )),
+        };
     }
 
     if codestream.siz.tile_count_x().ok()? > 1 || codestream.siz.tile_count_y().ok()? > 1 {
@@ -12209,7 +12257,10 @@ fn unsupported_part1_profile_marker(codestream: &Codestream) -> Option<(Marker, 
             | Marker::Plm
             | Marker::Plt
             | Marker::Com => return None,
-            Marker::Coc => "COC component coding style overrides are not consumed by the profile decoder",
+            Marker::Coc if codestream.siz.component_count() == 1 => return None,
+            Marker::Coc => {
+                "heterogeneous multi-component COC styles are outside the current profile decoder"
+            }
             Marker::Qcc => "QCC component quantization overrides are not consumed by the profile decoder",
             Marker::Poc => "POC progression order changes are not consumed by the profile packet walker",
             Marker::Rgn => "RGN region-of-interest scaling is not implemented in native profile decode",
@@ -12236,6 +12287,28 @@ fn default_precinct_progression_order_supported(order: ProgressionOrder) -> bool
 
 fn default_precinct_layer_count_supported(layers: u16) -> bool {
     layers > 0
+}
+
+fn uniform_effective_coding_style(codestream: &Codestream) -> Result<CodingStyleMarker> {
+    let first = codestream.effective_coding_style(0).ok_or_else(|| {
+        unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "COD marker is required before component coding style can be resolved",
+        )
+    })?;
+    for component_index in 1..codestream.siz.component_count() {
+        if codestream.effective_coding_style(component_index) != Some(first) {
+            return Err(unsupported(
+                None,
+                Some(Marker::Coc),
+                UnsupportedConstruct::MarkerSegment,
+                "the current packet walker requires one compatible effective coding style across selected components",
+            ));
+        }
+    }
+    Ok(first)
 }
 
 fn classic_tier1_code_block_style_supported(style: u8) -> bool {
@@ -13652,14 +13725,7 @@ fn validate_supported_native_subsampled_component_profile(
         ));
     }
 
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before native subsampled component decode",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1 {
         return Err(unsupported(
             None,
@@ -13668,15 +13734,8 @@ fn validate_supported_native_subsampled_component_profile(
             "native subsampled component decode requires classic Tier-1 coding",
         ));
     }
-    if coding_style.transform != WaveletTransform::Reversible53
-        || coding_style.decomposition_levels != 0
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::WaveletTransform,
-            "native subsampled component decode currently requires reversible 5/3 with no decomposition",
-        ));
+    if coding_style.transform == WaveletTransform::Irreversible97 {
+        validate_irreversible97_zero_origin_aligned_tile_grid(codestream, coding_style)?;
     }
     if !default_precinct_progression_order_supported(coding_style.progression_order) {
         return Err(unsupported(
@@ -13686,17 +13745,36 @@ fn validate_supported_native_subsampled_component_profile(
             "native subsampled component decode currently accepts LRCP or RLCP progression",
         ));
     }
-    if !default_precinct_layer_count_supported(coding_style.layers)
-        || coding_style.sop_markers
-        || coding_style.eph_markers
-        || coding_style.precincts_declared
-        || !classic_tier1_code_block_style_supported(coding_style.code_block_style)
-    {
+    if !default_precinct_layer_count_supported(coding_style.layers) {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::PacketDecode,
-            "native subsampled component decode requires at least one layer, default precincts, admitted code-block style, and no SOP/EPH",
+            "native subsampled component decode requires at least one quality layer",
+        ));
+    }
+    if coding_style.sop_markers || coding_style.eph_markers {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "SOP/EPH packet markers are outside native subsampled component decode",
+        ));
+    }
+    if coding_style.precincts_declared {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "explicit precincts are outside native subsampled component decode",
+        ));
+    }
+    if !classic_tier1_code_block_style_supported(coding_style.code_block_style) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Tier1Decode,
+            "native subsampled component decode requires an admitted code-block style",
         ));
     }
     if coding_style.multiple_component_transform {
@@ -21144,14 +21222,7 @@ fn parse_default_precinct_packets_from_source(
     max_resolution: Option<u8>,
     selected_components: Option<&[u16]>,
 ) -> Result<ParsedPacketContributions> {
-    let coding_style = codestream.coding_style.ok_or_else(|| {
-        unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "COD marker is required before packet parsing",
-        )
-    })?;
+    let coding_style = uniform_effective_coding_style(codestream)?;
     if !default_precinct_layer_count_supported(coding_style.layers)
         || !coding_style_has_supported_precinct_grid(coding_style, tile_rect)
         || coding_style.sop_markers
@@ -32429,6 +32500,368 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
         code_block_style: segment[8],
         transform,
     })
+}
+
+fn parse_main_component_coding_styles(
+    input: &[u8],
+    siz: &SizMarker,
+    default: Option<CodingStyleMarker>,
+    markers: &[MarkerSegment],
+    main_header_end: usize,
+) -> Result<Vec<ComponentCodingStyleMarker>> {
+    let coc_markers = markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Coc)
+        .collect::<Vec<_>>();
+    if coc_markers.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some(tile_coc) = coc_markers
+        .iter()
+        .find(|segment| segment.offset >= main_header_end)
+    {
+        return Err(unsupported(
+            Some(tile_coc.offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "tile-part COC precedence is outside the current main-header component override boundary",
+        ));
+    }
+    let default = default.ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Coc),
+            "COC component overrides require the main-header COD default",
+        )
+    })?;
+    let mut styles = Vec::with_capacity(coc_markers.len());
+    for marker in coc_markers {
+        let segment = checked_slice(input, marker.data_offset, marker.data_len)?;
+        let parsed = parse_coc(segment, marker.offset, siz, default)?;
+        if styles.iter().any(|style: &ComponentCodingStyleMarker| {
+            style.component_index == parsed.component_index
+        }) {
+            return Err(invalid(
+                Some(marker.offset),
+                Some(Marker::Coc),
+                "main header repeats a COC override for one component",
+            ));
+        }
+        styles.push(parsed);
+    }
+    Ok(styles)
+}
+
+fn parse_coc(
+    segment: &[u8],
+    marker_offset: usize,
+    siz: &SizMarker,
+    default: CodingStyleMarker,
+) -> Result<ComponentCodingStyleMarker> {
+    let component_bytes = if siz.component_count() < 257 { 1 } else { 2 };
+    let fixed_len = component_bytes + 1 + 5;
+    if segment.len() < fixed_len {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            "COC marker payload is too short for its component coding parameters",
+        ));
+    }
+    let component_index = if component_bytes == 1 {
+        u16::from(segment[0])
+    } else {
+        read_u16(segment, 0)?
+    };
+    if component_index >= siz.component_count() {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            "COC component index is outside the SIZ component range",
+        ));
+    }
+    let scoc = segment[component_bytes];
+    if scoc & !0x01 != 0 {
+        return Err(unsupported(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "COC Scoc uses reserved or extended coding-style bits",
+        ));
+    }
+    let parameters = &segment[component_bytes + 1..];
+    let decomposition_levels = parameters[0];
+    if decomposition_levels > 32 {
+        return Err(unsupported(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::WaveletTransform,
+            "COC declares more than 32 wavelet decomposition levels",
+        ));
+    }
+    let precincts_declared = scoc & 0x01 != 0;
+    let precinct_count = if precincts_declared {
+        usize::from(decomposition_levels) + 1
+    } else {
+        0
+    };
+    let expected_len = fixed_len
+        .checked_add(precinct_count)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if segment.len() != expected_len {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            "COC marker length does not match Scoc and the decomposition count",
+        ));
+    }
+
+    let raw_width = parameters[1];
+    let raw_height = parameters[2];
+    if raw_width > 8 || raw_height > 8 || u16::from(raw_width) + u16::from(raw_height) > 8 {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            "COC code-block exponents are outside the Part 1 bounds",
+        ));
+    }
+    let code_block_style = parameters[3];
+    if code_block_style & !0x3f != 0 {
+        return Err(unsupported(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::Tier1Decode,
+            "COC code-block style requires an extended coding method",
+        ));
+    }
+    let transform = match parameters[4] {
+        0 => WaveletTransform::Irreversible97,
+        1 => WaveletTransform::Reversible53,
+        _ => {
+            return Err(unsupported(
+                Some(marker_offset),
+                Some(Marker::Coc),
+                UnsupportedConstruct::WaveletTransform,
+                "COC declares an unknown wavelet transform",
+            ));
+        }
+    };
+    let mut precinct_exponents = [0_u8; 33];
+    if precincts_declared {
+        let declared = &parameters[5..];
+        if declared
+            .iter()
+            .skip(1)
+            .any(|packed| packed & 0x0f == 0 || packed >> 4 == 0)
+        {
+            return Err(invalid(
+                Some(marker_offset),
+                Some(Marker::Coc),
+                "COC precinct exponents may be zero only at the lowest resolution",
+            ));
+        }
+        precinct_exponents[..declared.len()].copy_from_slice(declared);
+        return Err(unsupported(
+            Some(marker_offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "explicit precincts in COC are outside the current decoded-pixel boundary",
+        ));
+    }
+
+    Ok(ComponentCodingStyleMarker {
+        component_index,
+        coding_style: CodingStyleMarker {
+            entropy_coder: default.entropy_coder,
+            sop_markers: default.sop_markers,
+            eph_markers: default.eph_markers,
+            progression_order: default.progression_order,
+            layers: default.layers,
+            multiple_component_transform: default.multiple_component_transform,
+            decomposition_levels,
+            code_block_width_exponent: raw_width + 2,
+            code_block_height_exponent: raw_height + 2,
+            code_block_style,
+            transform,
+            precincts_declared: false,
+            precinct_width_exponent: None,
+            precinct_height_exponent: None,
+            precinct_exponents,
+        },
+    })
+}
+
+#[cfg(test)]
+mod coc_marker_tests {
+    use super::*;
+
+    fn fixture(component_count: usize) -> Vec<u8> {
+        let planes = (0..component_count)
+            .map(|component| {
+                (0..16)
+                    .map(|sample| u8::try_from(component * 16 + sample).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        encode_planar_u8_no_decomp_test_fixture(4, 4, &views).unwrap()
+    }
+
+    fn coc_segment(component: u8, scoc: u8, parameters: &[u8]) -> Vec<u8> {
+        let payload_len = 2 + parameters.len();
+        let lcoc = u16::try_from(payload_len + 2).unwrap();
+        let mut marker = vec![0xff, 0x53];
+        marker.extend_from_slice(&lcoc.to_be_bytes());
+        marker.push(component);
+        marker.push(scoc);
+        marker.extend_from_slice(parameters);
+        marker
+    }
+
+    fn insert_before_marker(mut codestream: Vec<u8>, before: Marker, segment: &[u8]) -> Vec<u8> {
+        let position = codestream
+            .windows(2)
+            .position(|bytes| bytes == before.code().to_be_bytes())
+            .unwrap();
+        codestream.splice(position..position, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header_coc(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = codestream
+            .windows(2)
+            .position(|bytes| bytes == Marker::Sot.code().to_be_bytes())
+            .unwrap();
+        let sod = codestream
+            .windows(2)
+            .position(|bytes| bytes == Marker::Sod.code().to_be_bytes())
+            .unwrap();
+        let psot = u32::from_be_bytes(codestream[sot + 6..sot + 10].try_into().unwrap());
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(segment.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
+    #[test]
+    fn resolves_main_coc_over_cod_for_only_the_named_component() {
+        let parameters = [0, 1, 2, 0, 0];
+        let codestream =
+            insert_before_marker(fixture(2), Marker::Sot, &coc_segment(0, 0, &parameters));
+        let parsed = parse(&codestream).unwrap();
+        let default = parsed.coding_style.unwrap();
+        let component_zero = parsed.effective_coding_style(0).unwrap();
+
+        assert_eq!(parsed.component_coding_styles.len(), 1);
+        assert_eq!(component_zero.transform, WaveletTransform::Irreversible97);
+        assert_eq!(component_zero.code_block_width_exponent, 3);
+        assert_eq!(component_zero.progression_order, default.progression_order);
+        assert_eq!(component_zero.layers, default.layers);
+        assert_eq!(parsed.effective_coding_style(1), Some(default));
+        assert_eq!(parsed.effective_coding_style(2), None);
+    }
+
+    #[test]
+    fn decoded_component_accepts_resolved_main_coc() {
+        let samples = (0..16).map(|sample| sample as u8).collect::<Vec<_>>();
+        let codestream = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let default = parse(&codestream).unwrap().coding_style.unwrap();
+        let transform = match default.transform {
+            WaveletTransform::Irreversible97 => 0,
+            WaveletTransform::Reversible53 => 1,
+        };
+        let parameters = [
+            default.decomposition_levels,
+            default.code_block_width_exponent - 2,
+            default.code_block_height_exponent - 2,
+            default.code_block_style,
+            transform,
+        ];
+        let codestream =
+            insert_before_marker(codestream, Marker::Sot, &coc_segment(0, 0, &parameters));
+        let parsed = parse(&codestream).unwrap();
+        assert_eq!(parsed.effective_coding_style(0), Some(default));
+
+        let decoded = decode_baseline_owned_components(&codestream).unwrap();
+        assert_eq!(decoded.width, 4);
+        assert_eq!(decoded.height, 4);
+        assert_eq!(decoded.components.len(), 1);
+        assert_eq!(decoded.components[0].samples, samples);
+    }
+
+    #[test]
+    fn rejects_malformed_duplicate_and_out_of_range_main_coc() {
+        let malformed = insert_before_marker(fixture(1), Marker::Sot, &coc_segment(0, 0, &[0, 2]));
+        assert!(matches!(
+            parse(&malformed),
+            Err(CodestreamError::InvalidMarker { .. })
+        ));
+
+        let segment = coc_segment(0, 0, &[0, 2, 2, 0, 1]);
+        let duplicate = insert_before_marker(
+            insert_before_marker(fixture(1), Marker::Sot, &segment),
+            Marker::Sot,
+            &segment,
+        );
+        assert!(matches!(
+            parse(&duplicate),
+            Err(CodestreamError::InvalidMarker { .. })
+        ));
+
+        let out_of_range = insert_before_marker(
+            fixture(2),
+            Marker::Sot,
+            &coc_segment(2, 0, &[0, 2, 2, 0, 1]),
+        );
+        assert!(matches!(
+            parse(&out_of_range),
+            Err(CodestreamError::InvalidMarker { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_conflicting_tile_override_and_unsupported_coc_forms() {
+        let segment = coc_segment(0, 0, &[0, 2, 2, 0, 1]);
+        let tile_override = insert_tile_header_coc(fixture(1), &segment);
+        assert!(matches!(
+            parse(&tile_override),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Coc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+
+        let reserved_scoc = insert_before_marker(
+            fixture(1),
+            Marker::Sot,
+            &coc_segment(0, 2, &[0, 2, 2, 0, 1]),
+        );
+        assert!(matches!(
+            parse(&reserved_scoc),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Coc),
+                ..
+            })
+        ));
+
+        let explicit_precinct = insert_before_marker(
+            fixture(1),
+            Marker::Sot,
+            &coc_segment(0, 1, &[0, 2, 2, 0, 1, 0xff]),
+        );
+        assert!(matches!(
+            parse(&explicit_precinct),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Coc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+    }
 }
 
 fn parse_cap(segment: &[u8], marker_offset: usize) -> Result<CapabilityMarker> {
