@@ -150,7 +150,10 @@ magnitude-plane count combines the QCD guard-bit field and the sub-band
 exponent, with one deducted from their sum. Packet-header missing-MSB state is
 then deducted by the shared Tier-1 contract. Impossible subtraction and coding
 pass counts above the resulting cumulative bit-plane capacity remain errors;
-valid layer truncation may contribute fewer passes.
+valid layer truncation may contribute fewer passes. A non-empty contribution
+with more than 30 reconstructed magnitude planes is also rejected because the
+current checked and packed classic coefficient stores cannot represent a wider
+result without colliding with their signed 32-bit boundary.
 
 This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.4 and Tables
 A.28–A.29; Annex B, B.10.5–B.10.6; Annex D, D.2–D.3; and Annex E, E.1 and
@@ -164,8 +167,10 @@ expression.
 The synthetic regressions qualify guard-bit values below, at, and above the
 historical two-bit case, the maximum syntactic magnitude width, consistent
 application across resolved sub-bands, exact and excessive coding-pass bounds,
-and impossible missing-MSB or zero-width claims. QCC and other packet or
-quantisation extensions remain outside this increment.
+impossible missing-MSB or zero-width claims, and fail-closed dispatch across
+the checked and both packed decoder backends when the current coefficient
+representation is too narrow. QCC and other packet or quantisation extensions
+remain outside this increment.
 
 ## Reserved parameterless marker basis
 
