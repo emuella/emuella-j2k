@@ -96,16 +96,17 @@ pub struct ComponentQuantization {
 }
 
 impl ComponentQuantization {
-    fn available_bitplanes(&self, subband_index: usize) -> Result<u8> {
+    fn available_bitplanes(&self, subband_index: usize, entropy_coder: EntropyCoder) -> Result<u8> {
         let exponent = self
             .steps
             .get(subband_index)
             .ok_or(CodestreamError::SizeOverflow)?
             .exponent;
-        let available = if self.style == transform::QuantizationStyle::NoQuantization {
-            // The reversible packet/Tier-1 contract historically carries the
-            // QCD exponent plus its sign-plane slot. Preserve that exact
-            // integer path independently of irreversible guard-bit planning.
+        let available = if self.style == transform::QuantizationStyle::NoQuantization
+            && entropy_coder == EntropyCoder::HtBlockCoding
+        {
+            // The HT transfer resolves its QCD guard-bit contribution after
+            // packet planning, so retain the exponent representation here.
             exponent.checked_add(1)
         } else {
             exponent
@@ -128,6 +129,123 @@ impl ComponentQuantization {
         (self.style != transform::QuantizationStyle::NoQuantization)
             .then(|| self.steps.get(subband_index).copied())
             .flatten()
+    }
+}
+
+#[cfg(test)]
+mod reversible_quantization_tests {
+    use super::*;
+
+    fn reversible_quantization(guard_bits: u8, exponents: &[u8]) -> ComponentQuantization {
+        ComponentQuantization {
+            style: transform::QuantizationStyle::NoQuantization,
+            guard_bits,
+            steps: exponents
+                .iter()
+                .map(|&exponent| transform::IrreversibleQuantizationStep::new(exponent, 0).unwrap())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn derives_reversible_magnitude_planes_from_each_qcd_field() {
+        for (guard_bits, exponent, expected) in
+            [(0, 2, 1), (1, 9, 9), (2, 8, 9), (3, 7, 9), (7, 31, 37)]
+        {
+            let quantization = reversible_quantization(guard_bits, &[exponent]);
+            assert_eq!(
+                quantization
+                    .available_bitplanes(0, EntropyCoder::ClassicTier1)
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn applies_reversible_magnitude_planes_to_every_resolved_subband() {
+        let quantization = reversible_quantization(3, &[7, 8, 9, 10]);
+        let available = (0..4)
+            .map(|index| {
+                quantization
+                    .available_bitplanes(index, EntropyCoder::ClassicTier1)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(available, [9, 10, 11, 12]);
+    }
+
+    #[test]
+    fn rejects_reversible_qcd_without_a_magnitude_plane() {
+        for (guard_bits, exponent) in [(0, 0), (0, 1), (1, 0)] {
+            let quantization = reversible_quantization(guard_bits, &[exponent]);
+            assert!(matches!(
+                quantization.available_bitplanes(0, EntropyCoder::ClassicTier1),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Qcd),
+                    ..
+                })
+            ));
+        }
+
+        let quantization = reversible_quantization(u8::MAX, &[31]);
+        assert!(matches!(
+            quantization.available_bitplanes(0, EntropyCoder::ClassicTier1),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcd),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn guard_bit_equivalent_reversible_qcd_decodes_identically() {
+        let samples = (0_u8..16).collect::<Vec<_>>();
+        let baseline = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let qcd = find_marker(&baseline, 0, Marker::Qcd).unwrap();
+        let baseline_exponent = baseline[qcd + 5] >> 3;
+        assert_eq!(baseline[qcd + 4] >> 5, 2);
+        assert_eq!(baseline[qcd + 5] & 0x07, 0);
+
+        for (guard_bits, exponent) in [
+            (1, baseline_exponent + 1),
+            (2, baseline_exponent),
+            (3, baseline_exponent - 1),
+        ] {
+            let mut codestream = baseline.clone();
+            codestream[qcd + 4] = guard_bits << 5;
+            codestream[qcd + 5] = exponent << 3;
+
+            let decoded = decode_baseline_owned_components(&codestream).unwrap();
+            assert_eq!(decoded.width, 4);
+            assert_eq!(decoded.height, 4);
+            assert_eq!(decoded.components.len(), 1);
+            assert_eq!(decoded.components[0].samples, samples);
+        }
+    }
+
+    #[test]
+    fn preserves_ht_packet_planning_exponent_representation() {
+        let quantization = reversible_quantization(3, &[7]);
+        assert_eq!(
+            quantization
+                .available_bitplanes(0, EntropyCoder::HtBlockCoding)
+                .unwrap(),
+            8
+        );
+    }
+
+    #[test]
+    fn benchmark_profile_uses_qcd_magnitude_planes() {
+        let samples = (0_u8..16).collect::<Vec<_>>();
+        let mut codestream = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let exponent = codestream[qcd + 5] >> 3;
+        codestream[qcd + 4] = 3 << 5;
+
+        let segments = profile_code_block_segments_for_bench(&codestream).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].spec.available_bitplanes, exponent + 2);
     }
 }
 
@@ -14363,11 +14481,11 @@ pub fn profile_code_block_segments_for_bench(
     let component_count = codestream.siz.component_count();
 
     if coding_style.decomposition_levels == 0 && component_count == 1 {
-        let component = *codestream
-            .siz
-            .components
+        let quantization = parse_component_quantization(input, &codestream, 1)?;
+        let available_bitplanes = quantization
             .first()
-            .ok_or(CodestreamError::SizeOverflow)?;
+            .ok_or(CodestreamError::SizeOverflow)?
+            .available_bitplanes(0, coding_style.entropy_coder)?;
         let packet = parse_no_decomp_lrcp_packet(payload)?;
         let segment = checked_slice(payload, packet.payload_offset, packet.codeword_len)?;
         let width = u16::try_from(tile_rect.width).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -14381,7 +14499,7 @@ pub fn profile_code_block_segments_for_bench(
             }],
             spec: tier1::CodeBlockDecodeSpec {
                 dimensions,
-                available_bitplanes: component.bits_per_sample.saturating_add(1),
+                available_bitplanes,
                 missing_most_significant_bitplanes: packet.missing_most_significant_bitplanes,
                 coding_passes: packet.coding_passes,
                 style: tier1::CodeBlockStyle::from_bits(coding_style.code_block_style),
@@ -20673,6 +20791,12 @@ pub fn decode_multitile_grayscale_region_owned(
     let payload = checked_slice(input, tile_part.payload_offset, tile_part.payload_len)?;
     let packet = parse_no_decomp_lrcp_packet(payload)?;
     let segment = checked_slice(payload, packet.payload_offset, packet.codeword_len)?;
+    let coding_style = uniform_effective_coding_style(&codestream)?;
+    let quantization = parse_component_quantization(input, &codestream, 1)?;
+    let available_bitplanes = quantization
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?
+        .available_bitplanes(0, coding_style.entropy_coder)?;
 
     let dimensions = tier1::CodeBlockDimensions::new(
         u16::try_from(planned.tile.width).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -20684,12 +20808,10 @@ pub fn decode_multitile_grayscale_region_owned(
         segment,
         tier1::CodeBlockDecodeSpec {
             dimensions,
-            available_bitplanes: 9,
+            available_bitplanes,
             missing_most_significant_bitplanes: packet.missing_most_significant_bitplanes,
             coding_passes: packet.coding_passes,
-            style: tier1::CodeBlockStyle::from_bits(
-                uniform_effective_coding_style(&codestream)?.code_block_style,
-            ),
+            style: tier1::CodeBlockStyle::from_bits(coding_style.code_block_style),
             subband: tier1::Subband::LowLow,
         },
         &mut coefficients,
@@ -22955,6 +23077,7 @@ pub fn parse_component_quantization(
         checked_slice(input, qcd.data_offset, qcd.data_len)?,
         expected_subbands,
         coding_style.transform,
+        coding_style.entropy_coder,
         Marker::Qcd,
         qcd.offset,
     )?;
@@ -22999,6 +23122,7 @@ pub fn parse_component_quantization(
             &segment[component_index_bytes..],
             expected_subbands,
             coding_style.transform,
+            coding_style.entropy_coder,
             Marker::Qcc,
             qcc.offset,
         )?;
@@ -23012,6 +23136,7 @@ fn parse_quantization_marker_payload(
     segment: &[u8],
     expected_subbands: usize,
     wavelet_transform: WaveletTransform,
+    entropy_coder: EntropyCoder,
     marker: Marker,
     marker_offset: usize,
 ) -> Result<ComponentQuantization> {
@@ -23131,7 +23256,7 @@ fn parse_quantization_marker_payload(
         steps,
     };
     for subband_index in 0..expected_subbands {
-        quantization.available_bitplanes(subband_index)?;
+        quantization.available_bitplanes(subband_index, entropy_coder)?;
     }
     Ok(quantization)
 }
@@ -23174,7 +23299,7 @@ fn default_precinct_subbands(
         ll_height,
         code_block_width,
         code_block_height,
-        quantization.available_bitplanes(exponent_index)?,
+        quantization.available_bitplanes(exponent_index, coding_style.entropy_coder)?,
         quantization.irreversible_step(exponent_index),
         coding_style
             .precincts_declared
@@ -23236,7 +23361,7 @@ fn default_precinct_subbands(
                 height,
                 code_block_width,
                 code_block_height,
-                quantization.available_bitplanes(exponent_index)?,
+                quantization.available_bitplanes(exponent_index, coding_style.entropy_coder)?,
                 quantization.irreversible_step(exponent_index),
                 coding_style
                     .precincts_declared

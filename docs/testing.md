@@ -142,6 +142,31 @@ Packed packet headers, multiple tile parts in this native profile, explicit
 precincts, and encoder-side SOP/EPH production remain outside this increment.
 Other decoder profiles retain their existing packet-marker support boundary.
 
+## Reversible QCD magnitude planes
+
+The classic decoder resolves every LL, HL, LH, and HH sub-band through one
+quantisation calculation. For reversible no-quantisation, the available
+magnitude-plane count combines the QCD guard-bit field and the sub-band
+exponent, with one deducted from their sum. Packet-header missing-MSB state is
+then deducted by the shared Tier-1 contract. Impossible subtraction and coding
+pass counts above the resulting cumulative bit-plane capacity remain errors;
+valid layer truncation may contribute fewer passes.
+
+This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.4 and Tables
+A.28–A.29; Annex B, B.10.5–B.10.6; Annex D, D.2–D.3; and Annex E, E.1 and
+E.1.2, PDF pages 52–53, 92–93, 119–120, and 129–130. The canonical
+transcription consulted for this implementation was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose and
+synthetic fixtures are independently project-authored and do not reproduce ISO
+expression.
+
+The synthetic regressions qualify guard-bit values below, at, and above the
+historical two-bit case, the maximum syntactic magnitude width, consistent
+application across resolved sub-bands, exact and excessive coding-pass bounds,
+and impossible missing-MSB or zero-width claims. QCC and other packet or
+quantisation extensions remain outside this increment.
+
 ## Reserved parameterless marker basis
 
 The project-authored parser regression for `0xFF30`–`0xFF3F` records the rule

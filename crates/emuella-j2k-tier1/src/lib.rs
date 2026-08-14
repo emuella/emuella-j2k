@@ -1763,7 +1763,11 @@ const SEGMENTATION_SYMBOL: u32 = 0x0a;
 
 fn validate_bitplane_pass_count(spec: CodeBlockDecodeSpec) -> Result<u8> {
     let available_bitplanes = spec.available_bitplanes;
-    let bitplanes = available_bitplanes.saturating_sub(spec.missing_most_significant_bitplanes);
+    let bitplanes = available_bitplanes
+        .checked_sub(spec.missing_most_significant_bitplanes)
+        .ok_or(Tier1Error::MalformedBitstream {
+            reason: "missing most-significant bit-planes exceed the available magnitude planes",
+        })?;
     let max_passes = if bitplanes == 0 {
         0
     } else {
@@ -3921,6 +3925,35 @@ mod tests {
         let mut coefficients = [1; 15];
         decode_baseline_code_block_segments(&[], &[], decode_spec, &mut coefficients).unwrap();
         assert_eq!(coefficients, [0; 15]);
+    }
+
+    #[test]
+    fn guard_bit_magnitude_planes_bound_missing_planes_and_coding_passes() {
+        let dimensions = CodeBlockDimensions::new(1, 1).unwrap();
+        let spec = |available_bitplanes, missing_bitplanes, coding_passes| CodeBlockDecodeSpec {
+            dimensions,
+            available_bitplanes,
+            missing_most_significant_bitplanes: missing_bitplanes,
+            coding_passes,
+            style: CodeBlockStyle::NONE,
+            subband: Subband::LowLow,
+        };
+
+        assert_eq!(validate_bitplane_pass_count(spec(37, 0, 109)).unwrap(), 37);
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(37, 0, 110)),
+            Err(Tier1Error::UnsupportedCodingPass { .. })
+        ));
+        assert_eq!(validate_bitplane_pass_count(spec(9, 8, 1)).unwrap(), 1);
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(9, 8, 2)),
+            Err(Tier1Error::UnsupportedCodingPass { .. })
+        ));
+        assert_eq!(validate_bitplane_pass_count(spec(9, 9, 0)).unwrap(), 0);
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(9, 10, 0)),
+            Err(Tier1Error::MalformedBitstream { .. })
+        ));
     }
 }
 
