@@ -1760,19 +1760,34 @@ pub struct MqByteInput<'a> {
 const CONTEXT_COUNT: usize = 19;
 const COEFFICIENTS_PADDING: usize = 1;
 const SEGMENTATION_SYMBOL: u32 = 0x0a;
+const MAX_RECONSTRUCTED_MAGNITUDE_BITPLANES: u8 = 30;
 
-fn validate_bitplane_pass_count(spec: CodeBlockDecodeSpec) -> Result<u8> {
-    let available_bitplanes = spec.available_bitplanes;
-    let bitplanes = available_bitplanes.saturating_sub(spec.missing_most_significant_bitplanes);
-    let max_passes = if bitplanes == 0 {
+fn maximum_coding_passes(bitplanes: u8) -> u16 {
+    if bitplanes == 0 {
         0
     } else {
         1 + 3 * u16::from(bitplanes - 1)
-    };
+    }
+}
+
+fn validate_bitplane_pass_count(spec: CodeBlockDecodeSpec) -> Result<u8> {
+    let available_bitplanes = spec.available_bitplanes;
+    let bitplanes = available_bitplanes
+        .checked_sub(spec.missing_most_significant_bitplanes)
+        .ok_or(Tier1Error::MalformedBitstream {
+            reason: "missing most-significant bit-planes exceed the available magnitude planes",
+        })?;
+    let max_passes = maximum_coding_passes(bitplanes);
     if spec.coding_passes > max_passes {
         return Err(Tier1Error::UnsupportedCodingPass {
             pass: coding_pass_for_index(max_passes),
             reason: "packet requests more coding passes than the baseline bit-plane count permits",
+        });
+    }
+    if spec.coding_passes != 0 && bitplanes > MAX_RECONSTRUCTED_MAGNITUDE_BITPLANES {
+        return Err(Tier1Error::UnsupportedCodingPass {
+            pass: coding_pass_for_index(0),
+            reason: "classic coefficient storage supports at most 30 reconstructed magnitude bit-planes",
         });
     }
     Ok(bitplanes)
@@ -3921,6 +3936,102 @@ mod tests {
         let mut coefficients = [1; 15];
         decode_baseline_code_block_segments(&[], &[], decode_spec, &mut coefficients).unwrap();
         assert_eq!(coefficients, [0; 15]);
+    }
+
+    #[test]
+    fn guard_bit_magnitude_planes_bound_missing_planes_and_coding_passes() {
+        let dimensions = CodeBlockDimensions::new(1, 1).unwrap();
+        let spec = |available_bitplanes, missing_bitplanes, coding_passes| CodeBlockDecodeSpec {
+            dimensions,
+            available_bitplanes,
+            missing_most_significant_bitplanes: missing_bitplanes,
+            coding_passes,
+            style: CodeBlockStyle::NONE,
+            subband: Subband::LowLow,
+        };
+
+        assert_eq!(maximum_coding_passes(37), 109);
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(37, 0, 110)),
+            Err(Tier1Error::UnsupportedCodingPass { .. })
+        ));
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(37, 0, 109)),
+            Err(Tier1Error::UnsupportedCodingPass { .. })
+        ));
+        assert_eq!(validate_bitplane_pass_count(spec(9, 8, 1)).unwrap(), 1);
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(9, 8, 2)),
+            Err(Tier1Error::UnsupportedCodingPass { .. })
+        ));
+        assert_eq!(validate_bitplane_pass_count(spec(9, 9, 0)).unwrap(), 0);
+        assert!(matches!(
+            validate_bitplane_pass_count(spec(9, 10, 0)),
+            Err(Tier1Error::MalformedBitstream { .. })
+        ));
+    }
+
+    #[test]
+    fn every_classic_backend_rejects_unrepresentable_magnitude_width() {
+        let spec = CodeBlockDecodeSpec {
+            dimensions: CodeBlockDimensions::new(1, 1).unwrap(),
+            available_bitplanes: MAX_RECONSTRUCTED_MAGNITUDE_BITPLANES + 1,
+            missing_most_significant_bitplanes: 0,
+            coding_passes: 1,
+            style: CodeBlockStyle::NONE,
+            subband: Subband::LowLow,
+        };
+        let segment = [0_u8];
+        let coding_segments = [CodeBlockSegment {
+            byte_len: segment.len(),
+            coding_passes: spec.coding_passes,
+        }];
+
+        let assert_rejected = |result: Result<_>| {
+            assert!(matches!(
+                result,
+                Err(Tier1Error::UnsupportedCodingPass { .. })
+            ));
+        };
+
+        let mut checked = [0_i32];
+        let mut checked_scratch = CodeBlockDecodeScratch::new();
+        assert_rejected(
+            decode_baseline_code_block_segments_with_scratch(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut checked,
+                &mut checked_scratch,
+            )
+            .map(|_| ()),
+        );
+
+        let mut dense = [0_i32];
+        let mut dense_scratch = CodeBlockDecodeScratch::new();
+        assert_rejected(
+            decode_baseline_code_block_segments_with_packed_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut dense,
+                &mut dense_scratch,
+            )
+            .map(|_| ()),
+        );
+
+        let mut sparse = [0_i32];
+        let mut sparse_scratch = CodeBlockDecodeScratch::new();
+        assert_rejected(
+            decode_baseline_code_block_segments_with_sparse_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut sparse,
+                &mut sparse_scratch,
+            )
+            .map(|_| ()),
+        );
     }
 }
 
