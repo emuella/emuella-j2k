@@ -131,6 +131,29 @@ synthesis all consume the same resolved style; a parsed COC is therefore
 exposed only when its effective component style is unambiguous within the
 supported main-header boundary.
 
+### Profile-0 component quantization overrides
+
+The native component multi-tile decoder resolves a main-header QCC over the
+main QCD only for the component selected by QCC. Components without an
+override retain the QCD default. The resolver derives the selector width from
+the SIZ component count and applies the same checked quantization-style,
+guard-bit and step-size parsing to QCD and QCC.
+
+This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.5.1 and A.6.4–A.6.5,
+including Tables A.9 and A.28–A.31, and Annex A, A.10, including Table A.45,
+PDF pages 41–42, 52–54 and 63–64. The canonical transcription consulted for
+this implementation was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose and
+fixtures are project-authored and do not reproduce ISO expression.
+
+Synthetic regressions cover QCC before QCD, QCD fallback for unmentioned
+components, the one-byte/two-byte selector boundary, end-to-end native
+multi-tile decode, and fail-closed handling of truncated, duplicate,
+out-of-range, reserved or transform-incompatible forms. Tile-header QCC
+precedence and encoder-side QCC production remain outside this decoder
+increment.
+
 ## Inline packet markers
 
 The native subsampled-component path consumes inline SOP and EPH syntax at
@@ -180,8 +203,8 @@ historical two-bit case, the maximum syntactic magnitude width, consistent
 application across resolved sub-bands, exact and excessive coding-pass bounds,
 impossible missing-MSB or zero-width claims, and fail-closed dispatch across
 the checked and both packed decoder backends when the current coefficient
-representation is too narrow. QCC and other packet or quantisation extensions
-remain outside this increment.
+representation is too narrow. Other packet or quantisation extensions remain
+outside this increment.
 
 ## Reserved parameterless marker basis
 

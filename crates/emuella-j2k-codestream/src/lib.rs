@@ -12224,7 +12224,7 @@ pub fn unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedCons
         return ht_unsupported_construct(codestream);
     }
 
-    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Some((
             UnsupportedConstruct::MarkerSegment,
             detail_for_marker(marker, detail),
@@ -12379,7 +12379,16 @@ pub fn unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedCons
     None
 }
 
-fn unsupported_part1_profile_marker(codestream: &Codestream) -> Option<(Marker, &'static str)> {
+fn unsupported_part1_profile_marker(
+    codestream: &Codestream,
+    allow_main_header_qcc: bool,
+) -> Option<(Marker, &'static str)> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .unwrap_or(usize::MAX);
     codestream.markers.iter().find_map(|segment| {
         let detail = match segment.marker {
             Marker::Soc
@@ -12396,6 +12405,13 @@ fn unsupported_part1_profile_marker(codestream: &Codestream) -> Option<(Marker, 
             Marker::Coc if codestream.siz.component_count() == 1 => return None,
             Marker::Coc => {
                 "heterogeneous multi-component COC styles are outside the current profile decoder"
+            }
+            Marker::Qcc if allow_main_header_qcc && segment.offset < first_tile_offset =>
+            {
+                return None;
+            }
+            Marker::Qcc if allow_main_header_qcc => {
+                "tile-part QCC precedence is outside the native Profile-0 decoder boundary"
             }
             Marker::Qcc => "QCC component quantization overrides are not consumed by the profile decoder",
             Marker::Poc => "POC progression order changes are not consumed by the profile packet walker",
@@ -12633,7 +12649,7 @@ pub fn is_supported_part1_multitile_grayscale_profile(codestream: &Codestream) -
 fn no_decomposition_encode_compatible_unsupported_construct(
     codestream: &Codestream,
 ) -> Option<(UnsupportedConstruct, String)> {
-    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Some((
             UnsupportedConstruct::MarkerSegment,
             detail_for_marker(marker, detail),
@@ -12790,7 +12806,7 @@ fn decomposition_encode_compatible_unsupported_construct(
         2 => "two-decomposition",
         _ => "decomposition",
     };
-    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Some((
             UnsupportedConstruct::MarkerSegment,
             detail_for_marker(marker, detail),
@@ -13273,7 +13289,7 @@ fn validate_supported_part1_high_bit_depth_component_profile(
             "high-bit-depth component decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Err(unsupported(
             None,
             Some(marker),
@@ -13429,7 +13445,7 @@ fn validate_supported_part1_multitile_grayscale_profile(
             "multi-tile grayscale decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Err(unsupported(
             None,
             Some(marker),
@@ -13588,7 +13604,7 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
             "native component multi-tile decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, true) {
         return Err(unsupported(
             None,
             Some(marker),
@@ -13742,7 +13758,7 @@ fn validate_supported_native_subsampled_component_profile(
             "native subsampled component decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Err(unsupported(
             None,
             Some(marker),
@@ -14093,7 +14109,7 @@ fn validate_supported_native_two_decomp_multitile_profile(
             "native multi-tile DWT2 decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream) {
+    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false) {
         return Err(unsupported(
             None,
             Some(marker),
@@ -23259,6 +23275,253 @@ fn parse_quantization_marker_payload(
         quantization.available_bitplanes(subband_index, entropy_coder)?;
     }
     Ok(quantization)
+}
+
+#[cfg(test)]
+mod qcc_marker_tests {
+    use super::*;
+
+    fn fixture(component_count: usize) -> Vec<u8> {
+        let planes = (0..component_count)
+            .map(|component| {
+                (0..64)
+                    .map(|sample| u8::try_from((component * 64 + sample) % 256).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        encode_planar_u8_no_decomp_test_fixture(8, 8, &views).unwrap()
+    }
+
+    fn qcc_segment(component_selector: &[u8], quantization: &[u8]) -> Vec<u8> {
+        let payload_len = component_selector.len() + quantization.len();
+        let lqcc = u16::try_from(payload_len + 2).unwrap();
+        let mut marker = Marker::Qcc.code().to_be_bytes().to_vec();
+        marker.extend_from_slice(&lqcc.to_be_bytes());
+        marker.extend_from_slice(component_selector);
+        marker.extend_from_slice(quantization);
+        marker
+    }
+
+    fn insert_before_marker(mut codestream: Vec<u8>, before: Marker, segment: &[u8]) -> Vec<u8> {
+        let position = find_marker(&codestream, 0, before).unwrap();
+        codestream.splice(position..position, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(segment.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
+    fn resolved(codestream: &[u8]) -> Result<Vec<ComponentQuantization>> {
+        let parsed = parse(codestream)?;
+        let decomposition_levels = parsed
+            .uniform_effective_coding_style()
+            .ok_or(CodestreamError::SizeOverflow)?
+            .decomposition_levels;
+        parse_component_quantization(
+            codestream,
+            &parsed,
+            1 + usize::from(decomposition_levels) * 3,
+        )
+    }
+
+    #[test]
+    fn resolves_main_qcc_independently_of_marker_order_and_preserves_qcd_default() {
+        let codestream = insert_before_marker(
+            fixture(2),
+            Marker::Qcd,
+            &qcc_segment(&[1], &[3 << 5, 7 << 3]),
+        );
+        let components = resolved(&codestream).unwrap();
+
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].guard_bits, 2);
+        assert_eq!(components[0].steps[0].exponent, 8);
+        assert_eq!(components[1].guard_bits, 3);
+        assert_eq!(components[1].steps[0].exponent, 7);
+        assert_eq!(
+            components[0].style,
+            transform::QuantizationStyle::NoQuantization
+        );
+        assert_eq!(components[0].style, components[1].style);
+    }
+
+    #[test]
+    fn native_component_multitile_decode_consumes_main_qcc() {
+        let samples = (0..256)
+            .map(|sample| u8::try_from((sample * 29 + 7) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let codestream = encode_grayscale_u8_two_decomp_multitile(
+            GrayscaleU8Encode {
+                width: 16,
+                height: 16,
+                samples: &samples,
+                stride_bytes: 16,
+            },
+            TileSize {
+                width: 8,
+                height: 8,
+            },
+        )
+        .unwrap();
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&codestream, qcd + 2).unwrap());
+        let qcd_payload = codestream[qcd + 4..qcd + 2 + lqcd].to_vec();
+        let codestream =
+            insert_before_marker(codestream, Marker::Sot, &qcc_segment(&[0], &qcd_payload));
+        let parsed = parse(&codestream).unwrap();
+
+        assert!(is_supported_native_component_multitile_profile(&parsed));
+        let decoded = decode_baseline_owned_components(&codestream).unwrap();
+        assert_eq!(decoded.width, 16);
+        assert_eq!(decoded.height, 16);
+        assert_eq!(decoded.components.len(), 1);
+        assert_eq!(decoded.components[0].samples, samples);
+    }
+
+    #[test]
+    fn rejects_malformed_duplicate_out_of_range_and_unsupported_main_qcc() {
+        let truncated =
+            insert_before_marker(fixture(1), Marker::Sot, &qcc_segment(&[0], &[2 << 5]));
+        assert!(matches!(
+            resolved(&truncated),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+
+        let segment = qcc_segment(&[0], &[2 << 5, 8 << 3]);
+        let duplicate = insert_before_marker(
+            insert_before_marker(fixture(1), Marker::Sot, &segment),
+            Marker::Sot,
+            &segment,
+        );
+        assert!(matches!(
+            resolved(&duplicate),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+
+        let out_of_range = insert_before_marker(
+            fixture(2),
+            Marker::Sot,
+            &qcc_segment(&[2], &[2 << 5, 8 << 3]),
+        );
+        assert!(matches!(
+            resolved(&out_of_range),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+
+        let reserved_style = insert_before_marker(
+            fixture(1),
+            Marker::Sot,
+            &qcc_segment(&[0], &[(2 << 5) | 3, 8 << 3]),
+        );
+        assert!(matches!(
+            resolved(&reserved_style),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+
+        let scalar_for_reversible = insert_before_marker(
+            fixture(1),
+            Marker::Sot,
+            &qcc_segment(&[0], &[(2 << 5) | 1, 0x40, 0]),
+        );
+        assert!(matches!(
+            resolved(&scalar_for_reversible),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_tile_header_qcc_precedence_in_native_component_profile() {
+        let samples = (0..256)
+            .map(|sample| u8::try_from((sample * 17 + 3) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let codestream = encode_grayscale_u8_two_decomp_multitile(
+            GrayscaleU8Encode {
+                width: 16,
+                height: 16,
+                samples: &samples,
+                stride_bytes: 16,
+            },
+            TileSize {
+                width: 8,
+                height: 8,
+            },
+        )
+        .unwrap();
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&codestream, qcd + 2).unwrap());
+        let qcd_payload = codestream[qcd + 4..qcd + 2 + lqcd].to_vec();
+        let codestream = insert_tile_header_segment(codestream, &qcc_segment(&[0], &qcd_payload));
+        let parsed = parse(&codestream).unwrap();
+
+        assert!(matches!(
+            validate_supported_native_component_multitile_profile(&parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Qcc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn selects_one_or_two_byte_component_index_at_the_256_component_boundary() {
+        for (component_count, selector, selected) in
+            [(256, vec![255], 255_usize), (257, vec![1, 0], 256_usize)]
+        {
+            let mut input = fixture(1);
+            let mut parsed = parse(&input).unwrap();
+            let component = parsed.siz.components[0];
+            parsed.siz.components.resize(component_count, component);
+            let first_tile_offset = parsed
+                .markers
+                .iter()
+                .find(|segment| segment.marker == Marker::Sot)
+                .unwrap()
+                .offset;
+            let data_offset = input.len();
+            input.extend_from_slice(&selector);
+            input.extend_from_slice(&[3 << 5, 7 << 3]);
+            parsed.markers.push(MarkerSegment {
+                marker: Marker::Qcc,
+                offset: first_tile_offset - 1,
+                data_offset,
+                data_len: selector.len() + 2,
+            });
+
+            let components = parse_component_quantization(&input, &parsed, 1).unwrap();
+            assert_eq!(components.len(), component_count);
+            assert_eq!(components[selected].guard_bits, 3);
+            assert_eq!(components[selected].steps[0].exponent, 7);
+            assert_eq!(components[(selected + 1) % component_count].guard_bits, 2);
+        }
+    }
 }
 
 fn default_precinct_subbands(
