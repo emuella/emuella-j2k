@@ -26,6 +26,7 @@ def comparison_case() -> runner.ComparisonCase:
         input="files/input.j2k",
         reference="files/reference.pgx",
         component=0,
+        output_window=False,
         resolution_reduction=0,
         output_origin_x=0,
         output_origin_y=0,
@@ -154,13 +155,14 @@ class ContractTests(unittest.TestCase):
             [
                 (
                     alternative.id,
+                    alternative.output_window,
                     alternative.resolution_reduction,
                     alternative.output_origin_x,
                     alternative.output_origin_y,
                 )
                 for alternative in selection.alternatives
             ],
-            [("window", 0, 1, 2), ("reduced", 1, 0, 0)],
+            [("window", True, 0, 1, 2), ("reduced", True, 1, 0, 0)],
         )
 
     def test_rejects_unbounded_choice_group(self) -> None:

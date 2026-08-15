@@ -1,6 +1,7 @@
 use emuella_j2k_core::{
-    ComponentLayout, ComponentSelection, ImageData, InspectOptions, PartialDecodeOptions, Region,
-    ResolutionLevel, SampleEndian, SampleFormat, decode_partial, inspect,
+    ComponentLayout, ComponentSelection, DecodeMode, DecodeOptions, ImageData, InspectOptions,
+    PartialDecodeOptions, Region, ResolutionLevel, SampleEndian, SampleFormat, decode,
+    decode_partial, inspect,
 };
 use std::env;
 use std::ffi::OsString;
@@ -12,12 +13,13 @@ const MAX_REFERENCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_COMPARISON_SAMPLES: u64 = 100_000_000;
 
 fn usage() -> &'static str {
-    "usage:\n  emuella-j2k inspect INPUT\n  emuella-j2k compare-pgx INPUT REFERENCE --component N --resolution-reduction N --output-origin-x N --output-origin-y N --width N --height N --bits-per-sample N (--signed|--unsigned) --peak-error-limit N --mean-squared-error-limit N"
+    "usage:\n  emuella-j2k inspect INPUT\n  emuella-j2k compare-pgx INPUT REFERENCE --component N (--full-component|--output-window) --resolution-reduction N --output-origin-x N --output-origin-y N --width N --height N --bits-per-sample N (--signed|--unsigned) --peak-error-limit N --mean-squared-error-limit N"
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ComparisonContract {
     component: u16,
+    output_window: bool,
     resolution_reduction: u8,
     output_origin_x: u32,
     output_origin_y: u32,
@@ -87,6 +89,7 @@ fn parse_comparison_arguments(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut component = None;
+    let mut output_window = None;
     let mut resolution_reduction = None;
     let mut output_origin_x = None;
     let mut output_origin_y = None;
@@ -103,6 +106,8 @@ fn parse_comparison_arguments(
                 let value = take_flag_value(&arguments, &mut index, "--component")?;
                 component = Some(parse_number(&value, "component")?);
             }
+            "--full-component" if output_window.is_none() => output_window = Some(false),
+            "--output-window" if output_window.is_none() => output_window = Some(true),
             "--resolution-reduction" if resolution_reduction.is_none() => {
                 let value = take_flag_value(&arguments, &mut index, "--resolution-reduction")?;
                 resolution_reduction = Some(parse_number(&value, "resolution reduction")?);
@@ -143,6 +148,7 @@ fn parse_comparison_arguments(
     }
     let contract = ComparisonContract {
         component: component.ok_or_else(|| usage().to_owned())?,
+        output_window: output_window.ok_or_else(|| usage().to_owned())?,
         resolution_reduction: resolution_reduction.ok_or_else(|| usage().to_owned())?,
         output_origin_x: output_origin_x.ok_or_else(|| usage().to_owned())?,
         output_origin_y: output_origin_y.ok_or_else(|| usage().to_owned())?,
@@ -166,6 +172,13 @@ fn validate_contract(contract: ComparisonContract) -> Result<(), String> {
     }
     if contract.resolution_reduction > 1 {
         return Err("comparison resolution reduction must be zero or one".to_owned());
+    }
+    if !contract.output_window
+        && (contract.resolution_reduction != 0
+            || contract.output_origin_x != 0
+            || contract.output_origin_y != 0)
+    {
+        return Err("full-component comparison cannot select a window or reduction".to_owned());
     }
     comparison_source_region(contract)?;
     if !(1..=32).contains(&contract.bits_per_sample) {
@@ -348,21 +361,31 @@ fn compare_j2k_to_pgx(
     {
         return Err("PGX metadata disagrees with the comparison contract".to_owned());
     }
-    let options = PartialDecodeOptions {
-        region: Some(comparison_source_region(contract)?),
-        resolution: if contract.resolution_reduction == 0 {
-            ResolutionLevel::Full
-        } else {
-            ResolutionLevel::Reduced {
-                discard_levels: contract.resolution_reduction,
-            }
-        },
-        components: ComponentSelection::Indices(vec![contract.component]),
-        target_layout: ComponentLayout::Planar,
-        ..PartialDecodeOptions::default()
+    let decoded = if contract.output_window {
+        let options = PartialDecodeOptions {
+            region: Some(comparison_source_region(contract)?),
+            resolution: if contract.resolution_reduction == 0 {
+                ResolutionLevel::Full
+            } else {
+                ResolutionLevel::Reduced {
+                    discard_levels: contract.resolution_reduction,
+                }
+            },
+            components: ComponentSelection::Indices(vec![contract.component]),
+            target_layout: ComponentLayout::Planar,
+            ..PartialDecodeOptions::default()
+        };
+        decode_partial(codestream, &options)
+    } else {
+        let options = DecodeOptions {
+            mode: DecodeMode::Components,
+            requested_components: ComponentSelection::Indices(vec![contract.component]),
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        decode(codestream, &options)
     };
-    let decoded =
-        decode_partial(codestream, &options).map_err(|error| format!("decode failed: {error}"))?;
+    let decoded = decoded.map_err(|error| format!("decode failed: {error}"))?;
     if decoded.component_info.len() != 1
         || decoded.component_info[0].source_component != Some(contract.component)
         || decoded.component_info[0].width != contract.width
@@ -485,6 +508,7 @@ mod tests {
     fn contract(width: u32, height: u32) -> ComparisonContract {
         ComparisonContract {
             component: 0,
+            output_window: false,
             resolution_reduction: 0,
             output_origin_x: 0,
             output_origin_y: 0,
@@ -547,6 +571,7 @@ mod tests {
             &codestream,
             &pgx(2, 2, &expected),
             ComparisonContract {
+                output_window: true,
                 output_origin_x: 1,
                 output_origin_y: 1,
                 ..contract(2, 2)
@@ -570,6 +595,7 @@ mod tests {
         assert!(
             validate_contract(ComparisonContract {
                 resolution_reduction: 2,
+                output_window: true,
                 ..contract(1, 1)
             })
             .is_err()
@@ -577,6 +603,7 @@ mod tests {
         assert!(
             validate_contract(ComparisonContract {
                 resolution_reduction: 1,
+                output_window: true,
                 output_origin_x: u32::MAX,
                 ..contract(1, 1)
             })

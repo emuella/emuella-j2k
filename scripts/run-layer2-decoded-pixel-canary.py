@@ -47,6 +47,7 @@ class ComparisonCase:
     input: str
     reference: str
     component: int
+    output_window: bool
     resolution_reduction: int
     output_origin_x: int
     output_origin_y: int
@@ -291,6 +292,7 @@ def comparison_from_record(
         input=input_path,
         reference=reference_path,
         component=non_negative_int(record.get("component"), "component", 65_535),
+        output_window=not scalar,
         resolution_reduction=reduction,
         output_origin_x=output_origin_x,
         output_origin_y=output_origin_y,
@@ -375,6 +377,7 @@ def run_case(
         str(pack_root / case.reference),
         "--component",
         str(case.component),
+        "--output-window" if case.output_window else "--full-component",
         "--resolution-reduction",
         str(case.resolution_reduction),
         "--output-origin-x",
