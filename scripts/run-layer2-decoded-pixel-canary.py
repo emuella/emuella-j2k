@@ -47,12 +47,24 @@ class ComparisonCase:
     input: str
     reference: str
     component: int
+    output_window: bool
+    resolution_reduction: int
+    output_origin_x: int
+    output_origin_y: int
     width: int
     height: int
     bits_per_sample: int
     signed: bool
     peak_error_limit: int
     mean_squared_error_limit: float
+
+
+@dataclasses.dataclass(frozen=True)
+class ComparisonSelection:
+    id: str
+    minimum_passing: int
+    alternatives: tuple[ComparisonCase, ...]
+    is_choice_group: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -151,6 +163,18 @@ def load_comparison_case(
     lock: common.Lock,
     case_id: str,
 ) -> ComparisonCase:
+    selection = load_comparison_selection(suite, inventory, lock, case_id)
+    if selection.is_choice_group or len(selection.alternatives) != 1:
+        raise RunnerError(f"decoded-pixel selection {case_id} is not a scalar case")
+    return selection.alternatives[0]
+
+
+def load_comparison_selection(
+    suite: dict[str, Any],
+    inventory: dict[str, Any],
+    lock: common.Lock,
+    selection_id: str,
+) -> ComparisonSelection:
     plan = suite.get("decoded_pixel_comparison")
     if not isinstance(plan, dict) or plan.get("pack_id") != lock.pack_id:
         raise RunnerError("suite lacks a decoded-pixel plan for the locked pack")
@@ -170,14 +194,74 @@ def load_comparison_case(
         or any(character not in "0123456789abcdef" for character in retrieval)
     ):
         raise RunnerError("decoded-pixel plan has an invalid retrieval revision")
-    cases = plan.get("cases")
-    if not isinstance(cases, list) or not cases:
-        raise RunnerError("decoded-pixel plan has no cases")
-    matches = [case for case in cases if isinstance(case, dict) and case.get("id") == case_id]
-    if len(matches) != 1:
-        raise RunnerError(f"expected one decoded-pixel case {case_id}, found {len(matches)}")
-    record = matches[0]
-    input_path = common.safe_relative_path(record.get("input"), "comparison input")
+    cases = plan.get("cases", [])
+    groups = plan.get("choice_groups", [])
+    if not isinstance(cases, list) or not isinstance(groups, list) or not (cases or groups):
+        raise RunnerError("decoded-pixel plan has no cases or choice groups")
+    case_matches = [
+        case for case in cases if isinstance(case, dict) and case.get("id") == selection_id
+    ]
+    group_matches = [
+        group for group in groups if isinstance(group, dict) and group.get("id") == selection_id
+    ]
+    if len(case_matches) + len(group_matches) != 1:
+        raise RunnerError(
+            f"expected one decoded-pixel case or choice group {selection_id}, "
+            f"found {len(case_matches) + len(group_matches)}"
+        )
+    paths = inventory_paths(inventory)
+    if case_matches:
+        record = case_matches[0]
+        input_path = common.safe_relative_path(record.get("input"), "comparison input")
+        comparison = comparison_from_record(
+            selection_id, input_path, record, paths, scalar=True
+        )
+        return ComparisonSelection(selection_id, 1, (comparison,), False)
+
+    group = group_matches[0]
+    input_path = common.safe_relative_path(group.get("input"), "comparison input")
+    if PurePosixPath(input_path).suffix != ".j2k" or input_path not in paths:
+        raise RunnerError("choice-group input is not an inventory-backed .j2k path")
+    alternatives = group.get("alternatives")
+    if not isinstance(alternatives, list) or not alternatives:
+        raise RunnerError("decoded-pixel choice group has no alternatives")
+    minimum = positive_int(
+        group.get("minimum_passing_alternatives"),
+        "minimum passing alternatives",
+        len(alternatives),
+    )
+    parsed: list[ComparisonCase] = []
+    alternative_ids: set[str] = set()
+    reference_paths: set[str] = set()
+    for record in alternatives:
+        if not isinstance(record, dict):
+            raise RunnerError("decoded-pixel choice group contains a non-table alternative")
+        alternative_id = record.get("id")
+        if not isinstance(alternative_id, str) or not alternative_id:
+            raise RunnerError("decoded-pixel alternative lacks an ID")
+        if alternative_id in alternative_ids:
+            raise RunnerError("decoded-pixel choice group repeats an alternative ID")
+        alternative_ids.add(alternative_id)
+        comparison = comparison_from_record(
+            alternative_id, input_path, record, paths, scalar=False
+        )
+        if comparison.reference in reference_paths:
+            raise RunnerError("decoded-pixel choice group repeats a reference")
+        reference_paths.add(comparison.reference)
+        parsed.append(comparison)
+    return ComparisonSelection(selection_id, minimum, tuple(parsed), True)
+
+
+def comparison_from_record(
+    comparison_id: str,
+    input_path: str,
+    record: dict[str, Any],
+    paths: set[str],
+    *,
+    scalar: bool,
+) -> ComparisonCase:
+    if scalar:
+        input_path = common.safe_relative_path(record.get("input"), "comparison input")
     reference_path = common.safe_relative_path(
         record.get("reference"), "comparison reference"
     )
@@ -185,19 +269,33 @@ def load_comparison_case(
         raise RunnerError("comparison input and reference paths must differ")
     if PurePosixPath(input_path).suffix != ".j2k" or PurePosixPath(reference_path).suffix != ".pgx":
         raise RunnerError("comparison requires a .j2k input and .pgx reference")
-    paths = inventory_paths(inventory)
     if input_path not in paths or reference_path not in paths:
         raise RunnerError("comparison input or reference is absent from the locked inventory")
-    if record.get("resolution_reduction") != 0:
-        raise RunnerError("the bounded canary requires full-resolution component output")
+    reduction = non_negative_int(record.get("resolution_reduction"), "resolution reduction", 1)
+    if scalar and reduction != 0:
+        raise RunnerError("scalar decoded-pixel cases require full-resolution output")
+    output_origin_x = (
+        0
+        if scalar
+        else non_negative_int(record.get("output_origin_x"), "output origin x", 0xFFFF_FFFF)
+    )
+    output_origin_y = (
+        0
+        if scalar
+        else non_negative_int(record.get("output_origin_y"), "output origin y", 0xFFFF_FFFF)
+    )
     signed = record.get("signed")
     if not isinstance(signed, bool):
         raise RunnerError("comparison signedness is not Boolean")
-    return ComparisonCase(
-        id=case_id,
+    comparison = ComparisonCase(
+        id=comparison_id,
         input=input_path,
         reference=reference_path,
         component=non_negative_int(record.get("component"), "component", 65_535),
+        output_window=not scalar,
+        resolution_reduction=reduction,
+        output_origin_x=output_origin_x,
+        output_origin_y=output_origin_y,
         width=positive_int(record.get("width"), "width", 0xFFFF_FFFF),
         height=positive_int(record.get("height"), "height", 0xFFFF_FFFF),
         bits_per_sample=positive_int(record.get("bits_per_sample"), "precision", 32),
@@ -209,6 +307,16 @@ def load_comparison_case(
             record.get("mean_squared_error_limit"), "mean-squared-error limit"
         ),
     )
+    scale = 1 << comparison.resolution_reduction
+    for value, label in (
+        (comparison.output_origin_x * scale, "scaled output origin x"),
+        (comparison.output_origin_y * scale, "scaled output origin y"),
+        (comparison.width * scale, "scaled output width"),
+        (comparison.height * scale, "scaled output height"),
+    ):
+        if value > 0xFFFF_FFFF:
+            raise RunnerError(f"{label} exceeds the codec coordinate range")
+    return comparison
 
 
 def parse_worker_output(output: str, case: ComparisonCase) -> ComparisonResult:
@@ -269,6 +377,13 @@ def run_case(
         str(pack_root / case.reference),
         "--component",
         str(case.component),
+        "--output-window" if case.output_window else "--full-component",
+        "--resolution-reduction",
+        str(case.resolution_reduction),
+        "--output-origin-x",
+        str(case.output_origin_x),
+        "--output-origin-y",
+        str(case.output_origin_y),
         "--width",
         str(case.width),
         "--height",
@@ -309,7 +424,7 @@ def execute(arguments: argparse.Namespace) -> int:
     testdata_root = arguments.testdata.resolve()
     common.verify_catalogue_checkout(testdata_root, lock)
     suite, pack, inventory, _, default_root = common.validate_contract(testdata_root, lock)
-    case = load_comparison_case(suite, inventory, lock, arguments.case)
+    selection = load_comparison_selection(suite, inventory, lock, arguments.case)
     pack_root = (arguments.pack_root or default_root).resolve()
     asset_count, byte_count = common.verify_materialisation(pack_root, pack, inventory, lock)
     codec_identity = common.inspect_codec_identity(arguments.codec, arguments.unbound_codec)
@@ -323,19 +438,44 @@ def execute(arguments: argparse.Namespace) -> int:
     )
     with common.snapshot_codec(codec_identity) as codec_snapshot:
         common.print_codec_identity(codec_identity, codec_snapshot)
-        result = run_case(
-            codec_snapshot.path, pack_root, case, arguments.timeout_seconds
-        )
+        attempted: list[tuple[ComparisonCase, ComparisonResult]] = []
+        failures: list[str] = []
+        passing = 0
+        for case in selection.alternatives:
+            try:
+                result = run_case(
+                    codec_snapshot.path, pack_root, case, arguments.timeout_seconds
+                )
+            except RunnerError as error:
+                if not selection.is_choice_group:
+                    raise
+                failures.append(f"{case.id}: {error}")
+                continue
+            attempted.append((case, result))
+            if result.passed:
+                passing += 1
+            if passing >= selection.minimum_passing:
+                break
     common.verify_codec_identity_unchanged(codec_identity)
-    print(
-        f"case={case.id} component={result.component} width={result.width} "
-        f"height={result.height} samples={result.samples} peak_error={result.peak_error} "
-        f"mean_squared_error={result.mean_squared_error:.17g} "
-        f"peak_error_limit={result.peak_error_limit} "
-        f"mean_squared_error_limit={result.mean_squared_error_limit:.17g} "
-        f"passed={str(result.passed).lower()}"
-    )
-    return 0 if result.passed else 1
+    for case, result in attempted:
+        alternative = f" alternative={case.id}" if selection.is_choice_group else ""
+        print(
+            f"case={selection.id}{alternative} component={result.component} "
+            f"width={result.width} height={result.height} samples={result.samples} "
+            f"peak_error={result.peak_error} "
+            f"mean_squared_error={result.mean_squared_error:.17g} "
+            f"peak_error_limit={result.peak_error_limit} "
+            f"mean_squared_error_limit={result.mean_squared_error_limit:.17g} "
+            f"passed={str(result.passed).lower()}"
+        )
+    if passing >= selection.minimum_passing:
+        return 0
+    if not attempted and failures:
+        raise RunnerError(
+            "no decoded-pixel choice alternative could be executed: "
+            + "; ".join(failures)
+        )
+    return 1
 
 
 def main() -> int:

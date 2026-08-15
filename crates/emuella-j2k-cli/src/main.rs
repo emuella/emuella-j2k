@@ -1,6 +1,7 @@
 use emuella_j2k_core::{
     ComponentLayout, ComponentSelection, DecodeMode, DecodeOptions, ImageData, InspectOptions,
-    SampleEndian, SampleFormat, decode, inspect,
+    PartialDecodeOptions, Region, ResolutionLevel, SampleEndian, SampleFormat, decode,
+    decode_partial, inspect,
 };
 use std::env;
 use std::ffi::OsString;
@@ -12,12 +13,16 @@ const MAX_REFERENCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_COMPARISON_SAMPLES: u64 = 100_000_000;
 
 fn usage() -> &'static str {
-    "usage:\n  emuella-j2k inspect INPUT\n  emuella-j2k compare-pgx INPUT REFERENCE --component N --width N --height N --bits-per-sample N (--signed|--unsigned) --peak-error-limit N --mean-squared-error-limit N"
+    "usage:\n  emuella-j2k inspect INPUT\n  emuella-j2k compare-pgx INPUT REFERENCE --component N (--full-component|--output-window) --resolution-reduction N --output-origin-x N --output-origin-y N --width N --height N --bits-per-sample N (--signed|--unsigned) --peak-error-limit N --mean-squared-error-limit N"
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ComparisonContract {
     component: u16,
+    output_window: bool,
+    resolution_reduction: u8,
+    output_origin_x: u32,
+    output_origin_y: u32,
     width: u32,
     height: u32,
     bits_per_sample: u8,
@@ -84,6 +89,10 @@ fn parse_comparison_arguments(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut component = None;
+    let mut output_window = None;
+    let mut resolution_reduction = None;
+    let mut output_origin_x = None;
+    let mut output_origin_y = None;
     let mut width = None;
     let mut height = None;
     let mut bits_per_sample = None;
@@ -96,6 +105,20 @@ fn parse_comparison_arguments(
             "--component" if component.is_none() => {
                 let value = take_flag_value(&arguments, &mut index, "--component")?;
                 component = Some(parse_number(&value, "component")?);
+            }
+            "--full-component" if output_window.is_none() => output_window = Some(false),
+            "--output-window" if output_window.is_none() => output_window = Some(true),
+            "--resolution-reduction" if resolution_reduction.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--resolution-reduction")?;
+                resolution_reduction = Some(parse_number(&value, "resolution reduction")?);
+            }
+            "--output-origin-x" if output_origin_x.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--output-origin-x")?;
+                output_origin_x = Some(parse_number(&value, "output origin x")?);
+            }
+            "--output-origin-y" if output_origin_y.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--output-origin-y")?;
+                output_origin_y = Some(parse_number(&value, "output origin y")?);
             }
             "--width" if width.is_none() => {
                 let value = take_flag_value(&arguments, &mut index, "--width")?;
@@ -125,6 +148,10 @@ fn parse_comparison_arguments(
     }
     let contract = ComparisonContract {
         component: component.ok_or_else(|| usage().to_owned())?,
+        output_window: output_window.ok_or_else(|| usage().to_owned())?,
+        resolution_reduction: resolution_reduction.ok_or_else(|| usage().to_owned())?,
+        output_origin_x: output_origin_x.ok_or_else(|| usage().to_owned())?,
+        output_origin_y: output_origin_y.ok_or_else(|| usage().to_owned())?,
         width: width.ok_or_else(|| usage().to_owned())?,
         height: height.ok_or_else(|| usage().to_owned())?,
         bits_per_sample: bits_per_sample.ok_or_else(|| usage().to_owned())?,
@@ -143,6 +170,17 @@ fn validate_contract(contract: ComparisonContract) -> Result<(), String> {
     if samples == 0 || samples > MAX_COMPARISON_SAMPLES {
         return Err("comparison sample count is zero or exceeds the runner bound".to_owned());
     }
+    if contract.resolution_reduction > 1 {
+        return Err("comparison resolution reduction must be zero or one".to_owned());
+    }
+    if !contract.output_window
+        && (contract.resolution_reduction != 0
+            || contract.output_origin_x != 0
+            || contract.output_origin_y != 0)
+    {
+        return Err("full-component comparison cannot select a window or reduction".to_owned());
+    }
+    comparison_source_region(contract)?;
     if !(1..=32).contains(&contract.bits_per_sample) {
         return Err("comparison precision must be in 1..=32".to_owned());
     }
@@ -150,6 +188,30 @@ fn validate_contract(contract: ComparisonContract) -> Result<(), String> {
         return Err("mean-squared-error limit must be finite and non-negative".to_owned());
     }
     Ok(())
+}
+
+fn comparison_source_region(contract: ComparisonContract) -> Result<Region, String> {
+    let scale = 1_u32
+        .checked_shl(u32::from(contract.resolution_reduction))
+        .ok_or_else(|| "comparison resolution scale overflow".to_owned())?;
+    Ok(Region {
+        x: contract
+            .output_origin_x
+            .checked_mul(scale)
+            .ok_or_else(|| "comparison output origin overflow".to_owned())?,
+        y: contract
+            .output_origin_y
+            .checked_mul(scale)
+            .ok_or_else(|| "comparison output origin overflow".to_owned())?,
+        width: contract
+            .width
+            .checked_mul(scale)
+            .ok_or_else(|| "comparison output dimensions overflow".to_owned())?,
+        height: contract
+            .height
+            .checked_mul(scale)
+            .ok_or_else(|| "comparison output dimensions overflow".to_owned())?,
+    })
 }
 
 fn read_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
@@ -172,23 +234,62 @@ fn parse_pgx(bytes: &[u8]) -> Result<PgxImage, String> {
     let header = std::str::from_utf8(&bytes[..newline])
         .map_err(|_| "PGX header is not UTF-8 text".to_owned())?
         .trim_end_matches('\r');
-    let fields = header.split_ascii_whitespace().collect::<Vec<_>>();
-    if fields.len() != 6 || fields[0] != "PG" {
-        return Err("PGX header must contain the six required fields".to_owned());
+    if header
+        .bytes()
+        .any(|byte| byte.is_ascii_whitespace() && byte != b' ')
+    {
+        return Err("PGX header fields must use spaces".to_owned());
+    }
+    let fields = header.split(' ').collect::<Vec<_>>();
+    if !(5..=6).contains(&fields.len())
+        || fields.iter().any(|field| field.is_empty())
+        || fields[0] != "PG"
+    {
+        return Err("PGX header has an unsupported field structure".to_owned());
     }
     let little_endian = match fields[1] {
         "ML" => false,
         "LM" => true,
         _ => return Err("PGX byte order must be ML or LM".to_owned()),
     };
-    let signed = match fields[2] {
-        "+" => false,
-        "-" => true,
-        _ => return Err("PGX sign field must be + or -".to_owned()),
+    let (depth_field, width_field, height_field) = match fields.as_slice() {
+        [_, _, depth, width, height] => (*depth, *width, *height),
+        [_, _, sign @ ("+" | "-"), depth, width, height] => {
+            let signed_depth = format!("{sign}{depth}");
+            return parse_pgx_fields(bytes, newline, little_endian, &signed_depth, width, height);
+        }
+        _ => return Err("PGX header has an unsupported sign and precision form".to_owned()),
     };
-    let bits_per_sample = parse_number::<u8>(fields[3], "PGX bits per sample")?;
-    let width = parse_number::<u32>(fields[4], "PGX width")?;
-    let height = parse_number::<u32>(fields[5], "PGX height")?;
+    parse_pgx_fields(
+        bytes,
+        newline,
+        little_endian,
+        depth_field,
+        width_field,
+        height_field,
+    )
+}
+
+fn parse_pgx_fields(
+    bytes: &[u8],
+    newline: usize,
+    little_endian: bool,
+    depth_field: &str,
+    width_field: &str,
+    height_field: &str,
+) -> Result<PgxImage, String> {
+    let (signed, depth_digits) = match depth_field.as_bytes().first() {
+        Some(b'-') => (true, &depth_field[1..]),
+        Some(b'+') => (false, &depth_field[1..]),
+        Some(byte) if byte.is_ascii_digit() => (false, depth_field),
+        _ => return Err("PGX precision has an unsupported sign form".to_owned()),
+    };
+    if depth_digits.is_empty() || !depth_digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("PGX precision must contain decimal digits".to_owned());
+    }
+    let bits_per_sample = parse_number::<u8>(depth_digits, "PGX bits per sample")?;
+    let width = parse_number::<u32>(width_field, "PGX width")?;
+    let height = parse_number::<u32>(height_field, "PGX height")?;
     if !(1..=32).contains(&bits_per_sample) || width == 0 || height == 0 {
         return Err("PGX dimensions or precision are outside the supported bounds".to_owned());
     }
@@ -198,7 +299,12 @@ fn parse_pgx(bytes: &[u8]) -> Result<PgxImage, String> {
     if sample_count > MAX_COMPARISON_SAMPLES {
         return Err("PGX sample count exceeds the runner bound".to_owned());
     }
-    let bytes_per_sample = usize::from(bits_per_sample).div_ceil(8);
+    let bytes_per_sample = match bits_per_sample {
+        1..=8 => 1,
+        9..=16 => 2,
+        17..=32 => 4,
+        _ => unreachable!("PGX precision was validated"),
+    };
     let payload_length = usize::try_from(sample_count)
         .ok()
         .and_then(|count| count.checked_mul(bytes_per_sample))
@@ -237,6 +343,20 @@ fn logical_sample(
     } else {
         for byte in bytes {
             raw = (raw << 8) | u64::from(*byte);
+        }
+    }
+    let storage_bits = u8::try_from(bytes.len() * 8).expect("at most four sample bytes");
+    if bits_per_sample < storage_bits {
+        let extension_bits = storage_bits - bits_per_sample;
+        let actual_extension = raw >> bits_per_sample;
+        let sign_bit_set = raw & (1_u64 << (bits_per_sample - 1)) != 0;
+        let expected_extension = if signed && sign_bit_set {
+            (1_u64 << extension_bits) - 1
+        } else {
+            0
+        };
+        if actual_extension != expected_extension {
+            return Err("sample storage does not extend its logical precision".to_owned());
         }
     }
     let mask = (1_u64 << bits_per_sample) - 1;
@@ -299,14 +419,31 @@ fn compare_j2k_to_pgx(
     {
         return Err("PGX metadata disagrees with the comparison contract".to_owned());
     }
-    let options = DecodeOptions {
-        mode: DecodeMode::Components,
-        requested_components: ComponentSelection::Indices(vec![contract.component]),
-        target_layout: ComponentLayout::Planar,
-        ..DecodeOptions::default()
+    let decoded = if contract.output_window {
+        let options = PartialDecodeOptions {
+            region: Some(comparison_source_region(contract)?),
+            resolution: if contract.resolution_reduction == 0 {
+                ResolutionLevel::Full
+            } else {
+                ResolutionLevel::Reduced {
+                    discard_levels: contract.resolution_reduction,
+                }
+            },
+            components: ComponentSelection::Indices(vec![contract.component]),
+            target_layout: ComponentLayout::Planar,
+            ..PartialDecodeOptions::default()
+        };
+        decode_partial(codestream, &options)
+    } else {
+        let options = DecodeOptions {
+            mode: DecodeMode::Components,
+            requested_components: ComponentSelection::Indices(vec![contract.component]),
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        decode(codestream, &options)
     };
-    let decoded =
-        decode(codestream, &options).map_err(|error| format!("decode failed: {error}"))?;
+    let decoded = decoded.map_err(|error| format!("decode failed: {error}"))?;
     if decoded.component_info.len() != 1
         || decoded.component_info[0].source_component != Some(contract.component)
         || decoded.component_info[0].width != contract.width
@@ -429,6 +566,10 @@ mod tests {
     fn contract(width: u32, height: u32) -> ComparisonContract {
         ComparisonContract {
             component: 0,
+            output_window: false,
+            resolution_reduction: 0,
+            output_origin_x: 0,
+            output_origin_y: 0,
             width,
             height,
             bits_per_sample: 8,
@@ -441,12 +582,25 @@ mod tests {
     #[test]
     fn parses_pgx_byte_order_and_signed_samples() {
         let parsed =
-            parse_pgx(b"PG LM - 12 2 1\n\xff\x0f\x00\x08").expect("project-authored PGX parses");
+            parse_pgx(b"PG LM -12 2 1\n\xff\xff\x00\xf8").expect("project-authored PGX parses");
         assert_eq!(parsed.width, 2);
         assert_eq!(parsed.height, 1);
         assert_eq!(parsed.bits_per_sample, 12);
         assert!(parsed.signed);
         assert_eq!(parsed.samples, [-1, -2048]);
+
+        let spaced =
+            parse_pgx(b"PG ML - 4 2 1\n\xff\xf8").expect("separated project-authored sign parses");
+        assert_eq!(spaced.samples, [-1, -8]);
+
+        let joined_unsigned =
+            parse_pgx(b"PG ML +4 1 1\r\n\x07").expect("joined unsigned precision parses");
+        assert_eq!(joined_unsigned.samples, [7]);
+        let unsigned_without_sign =
+            parse_pgx(b"PG ML 4 1 1\n\x07").expect("unsigned precision parses");
+        assert_eq!(unsigned_without_sign.samples, [7]);
+
+        parse_pgx(b"PG ML +17 1 1\n\x00\x00\x00\x01").expect("17-bit PGX uses four-byte storage");
     }
 
     #[test]
@@ -477,11 +631,58 @@ mod tests {
     }
 
     #[test]
+    fn compares_an_explicit_project_authored_output_window() {
+        let source_width = 4;
+        let source_height = 3;
+        let samples = grayscale_gradient(source_width, source_height);
+        let codestream =
+            generate_grayscale_j2k(source_width, source_height).expect("synthetic J2K encodes");
+        let expected = vec![samples[5], samples[6], samples[9], samples[10]];
+        let aggregates = compare_j2k_to_pgx(
+            &codestream,
+            &pgx(2, 2, &expected),
+            ComparisonContract {
+                output_window: true,
+                output_origin_x: 1,
+                output_origin_y: 1,
+                ..contract(2, 2)
+            },
+        )
+        .expect("synthetic output-window comparison succeeds");
+        assert_eq!(aggregates.peak_error, 0);
+        assert_eq!(aggregates.mean_squared_error, 0.0);
+    }
+
+    #[test]
     fn rejects_malformed_or_unbounded_comparison_inputs() {
         assert!(parse_pgx(b"PG ML + 8 1 1\n").is_err());
+        assert!(parse_pgx(b"PG ML -4 1 1\n\x0f").is_err());
+        assert!(parse_pgx(b"PG\tML -4 1 1\n\xff").is_err());
+        assert!(parse_pgx(b"PG ML - 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML +-4 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML --4 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML +x 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML +17 1 1\n\x00\x00\x01").is_err());
         assert!(
             validate_contract(ComparisonContract {
                 width: 0,
+                ..contract(1, 1)
+            })
+            .is_err()
+        );
+        assert!(
+            validate_contract(ComparisonContract {
+                resolution_reduction: 2,
+                output_window: true,
+                ..contract(1, 1)
+            })
+            .is_err()
+        );
+        assert!(
+            validate_contract(ComparisonContract {
+                resolution_reduction: 1,
+                output_window: true,
+                output_origin_x: u32::MAX,
                 ..contract(1, 1)
             })
             .is_err()

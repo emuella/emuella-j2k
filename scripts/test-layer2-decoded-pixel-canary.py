@@ -26,6 +26,10 @@ def comparison_case() -> runner.ComparisonCase:
         input="files/input.j2k",
         reference="files/reference.pgx",
         component=0,
+        output_window=False,
+        resolution_reduction=0,
+        output_origin_x=0,
+        output_origin_y=0,
         width=2,
         height=2,
         bits_per_sample=8,
@@ -44,6 +48,7 @@ class ContractTests(unittest.TestCase):
             "assets": [
                 {"path": "files/input.j2k"},
                 {"path": "files/reference.pgx"},
+                {"path": "files/reduced-reference.pgx"},
             ]
         }
         self.suite = {
@@ -65,6 +70,43 @@ class ContractTests(unittest.TestCase):
                         "signed": False,
                         "peak_error_limit": 0,
                         "mean_squared_error_limit": 0.0,
+                    }
+                ],
+                "choice_groups": [
+                    {
+                        "id": "project-authored/choice",
+                        "input": "files/input.j2k",
+                        "minimum_passing_alternatives": 1,
+                        "alternatives": [
+                            {
+                                "id": "window",
+                                "reference": "files/reference.pgx",
+                                "component": 0,
+                                "resolution_reduction": 0,
+                                "output_origin_x": 1,
+                                "output_origin_y": 2,
+                                "width": 2,
+                                "height": 2,
+                                "bits_per_sample": 8,
+                                "signed": False,
+                                "peak_error_limit": 0,
+                                "mean_squared_error_limit": 0.0,
+                            },
+                            {
+                                "id": "reduced",
+                                "reference": "files/reduced-reference.pgx",
+                                "component": 0,
+                                "resolution_reduction": 1,
+                                "output_origin_x": 0,
+                                "output_origin_y": 0,
+                                "width": 2,
+                                "height": 2,
+                                "bits_per_sample": 8,
+                                "signed": False,
+                                "peak_error_limit": 0,
+                                "mean_squared_error_limit": 0.0,
+                            },
+                        ],
                     }
                 ],
             }
@@ -101,6 +143,40 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.RunnerError, "finite and non-negative"):
             runner.load_comparison_case(
                 self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
+            )
+
+    def test_loads_explicit_choice_group_semantics(self) -> None:
+        selection = runner.load_comparison_selection(
+            self.suite, self.inventory, self.lock, "project-authored/choice"
+        )
+        self.assertTrue(selection.is_choice_group)
+        self.assertEqual(selection.minimum_passing, 1)
+        self.assertEqual(
+            [
+                (
+                    alternative.id,
+                    alternative.output_window,
+                    alternative.resolution_reduction,
+                    alternative.output_origin_x,
+                    alternative.output_origin_y,
+                )
+                for alternative in selection.alternatives
+            ],
+            [("window", True, 0, 1, 2), ("reduced", True, 1, 0, 0)],
+        )
+
+    def test_rejects_unbounded_choice_group(self) -> None:
+        group = self.suite["decoded_pixel_comparison"]["choice_groups"][0]
+        group["minimum_passing_alternatives"] = 3
+        with self.assertRaisesRegex(runner.RunnerError, "supported integer range"):
+            runner.load_comparison_selection(
+                self.suite, self.inventory, self.lock, "project-authored/choice"
+            )
+        group["minimum_passing_alternatives"] = 1
+        group["alternatives"][0]["resolution_reduction"] = 2
+        with self.assertRaisesRegex(runner.RunnerError, "supported integer range"):
+            runner.load_comparison_selection(
+                self.suite, self.inventory, self.lock, "project-authored/choice"
             )
 
 
