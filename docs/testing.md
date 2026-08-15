@@ -73,9 +73,10 @@ harnesses.
 
 ### Decoded-pixel canary
 
-The first decoded-pixel Layer 2 journey consumes the catalogue-owned
-`decoded_pixel_comparison` case for `p0_01.j2k` and its single PGX component
-reference:
+The decoded-pixel Layer 2 journey consumes a catalogue-owned
+`decoded_pixel_comparison` scalar case or choice group. Scalar cases bind one
+codestream to one PGX component reference. A choice group binds one codestream
+to alternative output contracts and declares how many alternatives must pass.
 
 ```sh
 cargo build -p emuella-j2k-cli
@@ -85,20 +86,30 @@ python3 scripts/run-layer2-decoded-pixel-canary.py \
 
 The outer runner applies the same pinned checkout, inventory, complete-tree,
 and executable-snapshot checks as the inspection runner. It invokes one Rust
-worker with a finite timeout. The worker decodes the selected component, parses
-the PGX reference with project-authored code, and compares logical samples in
-memory. Its output is restricted to dimensions, sample count, peak absolute
-error, mean squared error, limits, and pass/fail state; input, reference, and
-decoded pixel payloads are neither persisted nor printed.
+worker with a finite timeout for each comparison it needs to satisfy. The
+worker decodes the selected component and output window at the declared zero-
+or one-level resolution reduction, parses the PGX reference with
+project-authored code, and compares logical samples in memory. Output-window
+origins are expressed in the selected output resolution and converted through
+checked arithmetic at the worker boundary. Its output is restricted to case
+and alternative identities, dimensions, sample count, peak absolute error,
+mean squared error, limits, and pass/fail state; input, reference, and decoded
+pixel payloads are neither persisted nor printed.
 
 ISO/IEC 15444-4:2024, published conformance-testing authority, Annex B, B.2,
-PDF pages 23–27, defines the logical-output preparation and the inclusive peak
+PDF pages 23–28, defines the logical-output preparation and the inclusive peak
 and mean-squared-error comparison. Annex C, C.2.1.1–C.2.1.3 and Table C.1, PDF
 page 31, identify this Class-0/Profile-0 mapping and assign zero to both limits.
 The reviewed transcription used for the contract was retrieval revision
 `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7` (reviewed bundle
 `7b3d8d60cd4d4f6c056cd108d928b7f99f492aa9`). Exactness therefore applies to
 corresponding logical samples for this case, not to file bytes.
+
+The P0.03 choice group records two alternative component-0 outputs. One uses
+an upper-left 128 × 128 window at full resolution; the other uses a 128 × 128
+output after one resolution reduction. Both are signed 4-bit comparisons with
+inclusive limits 0/0, and the group requires at least one alternative to pass.
+Alternative outputs are choices rather than cumulative requirements.
 
 ### Component coding-style overrides
 
