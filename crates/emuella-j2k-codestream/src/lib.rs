@@ -12758,6 +12758,41 @@ mod bounded_poc_tests {
         )
     }
 
+    fn split_first_tile_part(mut codestream: Vec<u8>) -> Vec<u8> {
+        let parsed = parse(&codestream).unwrap();
+        let tile_part = parsed.tiles.first().unwrap();
+        let sot = parsed
+            .markers
+            .iter()
+            .find(|segment| segment.marker == Marker::Sot)
+            .unwrap()
+            .offset;
+        let payload_offset = tile_part.payload_offset.unwrap();
+        let payload_len = tile_part.payload_len.unwrap();
+        let payload_end = payload_offset + payload_len;
+        let split = payload_len / 2;
+        let header = codestream[sot..payload_offset].to_vec();
+
+        let mut replacement = Vec::new();
+        for (index, payload) in [
+            &codestream[payload_offset..payload_offset + split],
+            &codestream[payload_offset + split..payload_end],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut part_header = header.clone();
+            part_header[10] = u8::try_from(index).unwrap();
+            part_header[11] = 2;
+            let psot = u32::try_from(part_header.len() + payload.len()).unwrap();
+            part_header[6..10].copy_from_slice(&psot.to_be_bytes());
+            replacement.extend_from_slice(&part_header);
+            replacement.extend_from_slice(payload);
+        }
+        codestream.splice(sot..payload_end, replacement);
+        codestream
+    }
+
     fn decode_synthetic_component(codestream: &[u8]) -> Result<Vec<u8>> {
         let mut output = vec![0_u8; 256];
         decode_part1_component_request_into_with_workspace(
@@ -12884,6 +12919,49 @@ mod bounded_poc_tests {
             &parsed
         ));
         assert!(!is_supported_native_component_multitile_profile(&parsed));
+    }
+
+    #[test]
+    fn bounded_poc_inline_markers_reject_excluded_precinct_and_tile_part_combinations() {
+        let samples = (0..128 * 128)
+            .map(|sample| u8::try_from((sample * 17 + 5) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let mut explicit_precinct =
+            encode_grayscale_u8_cprl_precinct_test_fixture(GrayscaleU8Encode {
+                width: 128,
+                height: 128,
+                samples: &samples,
+                stride_bytes: 128,
+            })
+            .unwrap();
+        let cod = find_marker(&explicit_precinct, 0, Marker::Cod).unwrap();
+        let layers = read_u16(&explicit_precinct, cod + 6).unwrap();
+        explicit_precinct = insert_before_marker(
+            explicit_precinct,
+            Marker::Sot,
+            &poc_segment(&full_domain_lrcp_record(layers)),
+        );
+        let parsed = parse(&explicit_precinct).unwrap();
+        assert!(is_supported_part1_bounded_poc_component_profile(
+            &explicit_precinct,
+            &parsed
+        ));
+
+        explicit_precinct[cod + 4] |= 0x02;
+        let parsed = parse(&explicit_precinct).unwrap();
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &explicit_precinct,
+            &parsed
+        ));
+
+        let (multiple_tile_parts, _) = bounded_poc_marker_fixture(true, false);
+        let multiple_tile_parts = split_first_tile_part(multiple_tile_parts);
+        let parsed = parse(&multiple_tile_parts).unwrap();
+        assert_eq!(parsed.tiles.len(), 5);
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &multiple_tile_parts,
+            &parsed
+        ));
     }
 
     #[test]
@@ -14359,12 +14437,21 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
             "native component multi-tile decode requires at least one quality layer",
         ));
     }
-    if (coding_style.sop_markers || coding_style.eph_markers) && !allow_inline_packet_markers {
+    let inline_packet_markers = coding_style.sop_markers || coding_style.eph_markers;
+    if inline_packet_markers && !allow_inline_packet_markers {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::MarkerSegment,
             "SOP and EPH packet markers are outside native component decode",
+        ));
+    }
+    if inline_packet_markers && allow_inline_packet_markers && coding_style.precincts_declared {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "bounded POC inline-marker decode does not accept explicit precincts",
         ));
     }
     if coding_style.precincts_declared {
@@ -14397,7 +14484,11 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
             "native component decode accepts multiple component transform only for three-component rows",
         ));
     }
-    validate_retained_tile_parts_per_tile(codestream)?;
+    if inline_packet_markers && allow_inline_packet_markers {
+        validate_one_tile_part_per_tile(codestream)?;
+    } else {
+        validate_retained_tile_parts_per_tile(codestream)?;
+    }
 
     Ok(coding_style)
 }
