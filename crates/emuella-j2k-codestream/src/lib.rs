@@ -12381,7 +12381,7 @@ pub fn unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedCons
 
 fn unsupported_part1_profile_marker(
     codestream: &Codestream,
-    allow_main_header_qcc: bool,
+    allow_main_header_component_extensions: bool,
 ) -> Option<(Marker, &'static str)> {
     let first_tile_offset = codestream
         .markers
@@ -12406,14 +12406,23 @@ fn unsupported_part1_profile_marker(
             Marker::Coc => {
                 "heterogeneous multi-component COC styles are outside the current profile decoder"
             }
-            Marker::Qcc if allow_main_header_qcc && segment.offset < first_tile_offset =>
+            Marker::Qcc
+                if allow_main_header_component_extensions && segment.offset < first_tile_offset =>
             {
                 return None;
             }
-            Marker::Qcc if allow_main_header_qcc => {
+            Marker::Qcc if allow_main_header_component_extensions => {
                 "tile-part QCC precedence is outside the native Profile-0 decoder boundary"
             }
             Marker::Qcc => "QCC component quantization overrides are not consumed by the profile decoder",
+            Marker::Poc
+                if allow_main_header_component_extensions && segment.offset < first_tile_offset =>
+            {
+                return None;
+            }
+            Marker::Poc if allow_main_header_component_extensions => {
+                "tile-part POC precedence is outside the native Profile-0 decoder boundary"
+            }
             Marker::Poc => "POC progression order changes are not consumed by the profile packet walker",
             Marker::Rgn => "RGN region-of-interest scaling is not implemented in native profile decode",
             Marker::Ppm => "PPM packed packet headers are not consumed by the profile packet walker",
@@ -12427,6 +12436,454 @@ fn unsupported_part1_profile_marker(
         };
         Some((segment.marker, detail))
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BoundedMainHeaderPoc {
+    progression_order: ProgressionOrder,
+}
+
+/// Resolve the single full-domain main-header POC form used by the P0.03
+/// decoded-pixel path.
+///
+/// ISO/IEC 15444-1:2024, Annex A, A.6.6 and Annex B, B.12–B.12.3,
+/// PDF pages 54–55 and 96–99, define POC record syntax, precedence and packet
+/// volumes. This project-authored boundary deliberately accepts one record
+/// whose intersection with the actual codestream covers every packet in LRCP
+/// order. Other valid POC schedules remain unsupported. The reviewed
+/// retrieval revision is `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+fn parse_bounded_main_header_poc(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Result<Option<BoundedMainHeaderPoc>> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .unwrap_or(usize::MAX);
+    let mut main_poc = None;
+    for segment in codestream
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Poc)
+    {
+        if segment.offset >= first_tile_offset {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Poc),
+                UnsupportedConstruct::MarkerSegment,
+                "tile-part POC precedence is outside the P0.03 decoder boundary",
+            ));
+        }
+        if main_poc.replace(segment).is_some() {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Poc),
+                "main header contains more than one POC marker segment",
+            ));
+        }
+    }
+    let Some(segment) = main_poc else {
+        return Ok(None);
+    };
+    if let Some(coc) = codestream
+        .markers
+        .iter()
+        .find(|candidate| candidate.marker == Marker::Coc)
+    {
+        return Err(unsupported(
+            Some(coc.offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "POC and COC interaction is outside the P0.03 decoder boundary",
+        ));
+    }
+    let coding_style = codestream.coding_style.ok_or_else(|| {
+        invalid(
+            Some(segment.offset),
+            Some(Marker::Poc),
+            "POC requires a main-header COD marker",
+        )
+    })?;
+    let record_len = if codestream.siz.component_count() < 257 {
+        7
+    } else {
+        9
+    };
+    let data = checked_slice(input, segment.data_offset, segment.data_len)?;
+    if data.is_empty() || !data.len().is_multiple_of(record_len) {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Poc),
+            "POC marker length must contain one or more complete progression records",
+        ));
+    }
+    if data.len() != record_len {
+        return Err(unsupported(
+            Some(segment.offset),
+            Some(Marker::Poc),
+            UnsupportedConstruct::ProgressionOrder,
+            "multiple POC progression volumes are outside the P0.03 decoder boundary",
+        ));
+    }
+
+    let (component_start, layer_end_offset, resolution_end_offset, component_end, order_offset) =
+        if record_len == 7 {
+            (
+                u16::from(data[1]),
+                2,
+                4,
+                match data[5] {
+                    0 => 256,
+                    value => u16::from(value),
+                },
+                6,
+            )
+        } else {
+            let raw_end = read_u16(data, 6)?;
+            (
+                read_u16(data, 1)?,
+                3,
+                5,
+                if raw_end == 0 { 16_384 } else { raw_end },
+                8,
+            )
+        };
+    let resolution_start = data[0];
+    let layer_end = read_u16(data, layer_end_offset)?;
+    let resolution_end = data[resolution_end_offset];
+    let component_limit = if record_len == 7 { 256 } else { 16_384 };
+    if resolution_start > 32
+        || resolution_end == 0
+        || resolution_end > 33
+        || resolution_start >= resolution_end
+        || component_start >= component_limit
+        || component_end > component_limit
+        || component_start >= component_end
+        || layer_end == 0
+    {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Poc),
+            "POC progression record contains an invalid or empty range",
+        ));
+    }
+    let progression_order = match data[order_offset] {
+        0 => ProgressionOrder::Lrcp,
+        1 => ProgressionOrder::Rlcp,
+        2 => ProgressionOrder::Rpcl,
+        3 => ProgressionOrder::Pcrl,
+        4 => ProgressionOrder::Cprl,
+        _ => {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Poc),
+                UnsupportedConstruct::ProgressionOrder,
+                "POC marker declares a reserved progression order",
+            ));
+        }
+    };
+    let actual_resolution_end = coding_style
+        .decomposition_levels
+        .checked_add(1)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if progression_order != ProgressionOrder::Lrcp
+        || component_start != 0
+        || component_end < codestream.siz.component_count()
+        || resolution_start != 0
+        || resolution_end < actual_resolution_end
+        || layer_end != coding_style.layers
+    {
+        return Err(unsupported(
+            Some(segment.offset),
+            Some(Marker::Poc),
+            UnsupportedConstruct::ProgressionOrder,
+            "POC must resolve to one full-domain LRCP volume for the P0.03 decoder boundary",
+        ));
+    }
+
+    Ok(Some(BoundedMainHeaderPoc { progression_order }))
+}
+
+#[cfg(test)]
+mod bounded_poc_tests {
+    use super::*;
+
+    fn poc_segment(records: &[u8]) -> Vec<u8> {
+        let lpoc = u16::try_from(records.len() + 2).unwrap();
+        let mut marker = Marker::Poc.code().to_be_bytes().to_vec();
+        marker.extend_from_slice(&lpoc.to_be_bytes());
+        marker.extend_from_slice(records);
+        marker
+    }
+
+    fn coc_segment(parameters: &[u8]) -> Vec<u8> {
+        let lcoc = u16::try_from(parameters.len() + 4).unwrap();
+        let mut marker = Marker::Coc.code().to_be_bytes().to_vec();
+        marker.extend_from_slice(&lcoc.to_be_bytes());
+        marker.extend_from_slice(&[0, 0]);
+        marker.extend_from_slice(parameters);
+        marker
+    }
+
+    fn full_domain_lrcp_record(layers: u16) -> [u8; 7] {
+        let [layer_high, layer_low] = layers.to_be_bytes();
+        [0, 0, layer_high, layer_low, 33, 0, 0]
+    }
+
+    fn insert_before_marker(mut codestream: Vec<u8>, before: Marker, segment: &[u8]) -> Vec<u8> {
+        let position = find_marker(&codestream, 0, before).unwrap();
+        codestream.splice(position..position, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(segment.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
+    fn synthetic_multitile() -> (Vec<u8>, Vec<u8>) {
+        let samples = (0..256)
+            .map(|sample| u8::try_from((sample * 29 + 11) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let codestream = encode_grayscale_u8_two_decomp_multitile(
+            GrayscaleU8Encode {
+                width: 16,
+                height: 16,
+                samples: &samples,
+                stride_bytes: 16,
+            },
+            TileSize {
+                width: 8,
+                height: 8,
+            },
+        )
+        .unwrap();
+        (codestream, samples)
+    }
+
+    #[test]
+    fn main_poc_overrides_cod_with_one_full_domain_lrcp_volume() {
+        let (mut codestream, samples) = synthetic_multitile();
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 5] = 3;
+        let layers = read_u16(&codestream, cod + 6).unwrap();
+        let record = full_domain_lrcp_record(layers);
+        let codestream = insert_before_marker(codestream, Marker::Sot, &poc_segment(&record));
+        let parsed = parse(&codestream).unwrap();
+
+        assert_eq!(
+            parsed.coding_style.unwrap().progression_order,
+            ProgressionOrder::Pcrl
+        );
+        assert_eq!(
+            parse_bounded_main_header_poc(&codestream, &parsed).unwrap(),
+            Some(BoundedMainHeaderPoc {
+                progression_order: ProgressionOrder::Lrcp,
+            })
+        );
+        assert!(is_supported_part1_bounded_poc_component_profile(
+            &codestream,
+            &parsed
+        ));
+        assert!(!is_algorithmic_baseline_profile(&codestream));
+
+        let mut output = vec![0_u8; samples.len()];
+        decode_part1_component_request_into_with_workspace(
+            &codestream,
+            Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 16,
+                    height: 16,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+            &mut [ComponentPlaneMut {
+                samples: &mut output,
+                stride_bytes: 16,
+            }],
+            &mut Part1ComponentDecodeWorkspace::new(),
+        )
+        .unwrap();
+        assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn accepts_legal_broad_ends_by_intersecting_the_actual_domain() {
+        let (codestream, _) = synthetic_multitile();
+        let parsed = parse(&codestream).unwrap();
+        let layers = parsed.coding_style.unwrap().layers;
+        let record = full_domain_lrcp_record(layers);
+        let codestream = insert_before_marker(codestream, Marker::Sot, &poc_segment(&record));
+        let parsed = parse(&codestream).unwrap();
+
+        assert!(
+            parse_bounded_main_header_poc(&codestream, &parsed)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_duplicate_partial_and_reserved_main_poc_forms() {
+        let (codestream, _) = synthetic_multitile();
+        let parsed = parse(&codestream).unwrap();
+        let layers = parsed.coding_style.unwrap().layers;
+        let record = full_domain_lrcp_record(layers);
+
+        let truncated =
+            insert_before_marker(codestream.clone(), Marker::Sot, &poc_segment(&record[..6]));
+        let parsed = parse(&truncated).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&truncated, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &truncated, &parsed
+        ));
+
+        let segment = poc_segment(&record);
+        let duplicate = insert_before_marker(
+            insert_before_marker(codestream.clone(), Marker::Sot, &segment),
+            Marker::Sot,
+            &segment,
+        );
+        let parsed = parse(&duplicate).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&duplicate, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &duplicate, &parsed
+        ));
+
+        let mut two_records = record.to_vec();
+        two_records.extend_from_slice(&record);
+        let multiple =
+            insert_before_marker(codestream.clone(), Marker::Sot, &poc_segment(&two_records));
+        let parsed = parse(&multiple).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&multiple, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+
+        let mut partial = record;
+        partial[4] = 1;
+        let partial = insert_before_marker(codestream.clone(), Marker::Sot, &poc_segment(&partial));
+        let parsed = parse(&partial).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&partial, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+
+        let mut over_broad_layers = record;
+        over_broad_layers[2..4].copy_from_slice(&(layers + 1).to_be_bytes());
+        let over_broad_layers = insert_before_marker(
+            codestream.clone(),
+            Marker::Sot,
+            &poc_segment(&over_broad_layers),
+        );
+        let parsed = parse(&over_broad_layers).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&over_broad_layers, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+
+        let mut reserved = record;
+        reserved[6] = 5;
+        let reserved = insert_before_marker(codestream, Marker::Sot, &poc_segment(&reserved));
+        let parsed = parse(&reserved).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&reserved, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_tile_header_poc_precedence() {
+        let (codestream, _) = synthetic_multitile();
+        let parsed = parse(&codestream).unwrap();
+        let record = full_domain_lrcp_record(parsed.coding_style.unwrap().layers);
+        let codestream = insert_tile_header_segment(codestream, &poc_segment(&record));
+        let parsed = parse(&codestream).unwrap();
+
+        assert!(matches!(
+            parse_bounded_main_header_poc(&codestream, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Poc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_coc_poc_resolution_domain_interaction() {
+        let (codestream, _) = synthetic_multitile();
+        let parsed = parse(&codestream).unwrap();
+        let coding_style = parsed.coding_style.unwrap();
+        let record = full_domain_lrcp_record(coding_style.layers);
+        let record = {
+            let mut record = record;
+            record[4] = coding_style.decomposition_levels + 1;
+            record
+        };
+        let coc = coc_segment(&[
+            coding_style.decomposition_levels + 1,
+            coding_style.code_block_width_exponent - 2,
+            coding_style.code_block_height_exponent - 2,
+            coding_style.code_block_style,
+            1,
+        ]);
+        let codestream = insert_before_marker(codestream, Marker::Sot, &poc_segment(&record));
+        let codestream = insert_before_marker(codestream, Marker::Sot, &coc);
+        let parsed = parse(&codestream).unwrap();
+
+        assert!(matches!(
+            parse_bounded_main_header_poc(&codestream, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Coc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &codestream,
+            &parsed
+        ));
+    }
 }
 
 fn detail_for_marker(marker: Marker, detail: &'static str) -> String {
@@ -12624,7 +13081,27 @@ pub fn is_supported_rgb_u16_two_decomposition_encode_compatible_profile(
 /// True when parsed codestream metadata is inside the broader native
 /// component-mode multi-tile Part 1 profile used for local performance probes.
 pub fn is_supported_native_component_multitile_profile(codestream: &Codestream) -> bool {
+    !codestream
+        .markers
+        .iter()
+        .any(|segment| segment.marker == Marker::Poc)
+        && validate_supported_native_component_multitile_profile(codestream).is_ok()
+}
+
+/// True when bytes and parsed metadata satisfy the bounded main-header POC
+/// component profile used by direct selective decode.
+///
+/// The ordinary metadata-only predicate remains conservative because it
+/// cannot validate POC record fields without the marker bytes.
+pub fn is_supported_part1_bounded_poc_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> bool {
     validate_supported_native_component_multitile_profile(codestream).is_ok()
+        && matches!(
+            parse_bounded_main_header_poc(input, codestream),
+            Ok(Some(_))
+        )
 }
 
 /// True when parsed metadata is inside the bounded native-grid component
@@ -13678,14 +14155,25 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
                 | ProgressionOrder::Pcrl
                 | ProgressionOrder::Cprl
         );
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .unwrap_or(usize::MAX);
+    let has_main_header_poc = codestream
+        .markers
+        .iter()
+        .any(|segment| segment.marker == Marker::Poc && segment.offset < first_tile_offset);
     if !default_precinct_progression_order_supported(coding_style.progression_order)
         && !explicit_precinct_progression
+        && !has_main_header_poc
     {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::ProgressionOrder,
-            "native component decode accepts LRCP/RLCP default-precinct progression or any progression for an admitted explicit-precinct grid",
+            "native component decode accepts LRCP/RLCP, an admitted explicit-precinct progression, or a bounded main-header POC override",
         ));
     }
     if coding_style.transform != WaveletTransform::Reversible53 {
@@ -14066,6 +14554,7 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
     codestream: &Codestream,
     enforce_total_sample_guard: bool,
 ) -> Result<CodingStyleMarker> {
+    parse_bounded_main_header_poc(input, codestream)?;
     match uniform_effective_coding_style(codestream)?.transform {
         WaveletTransform::Irreversible97 => {
             validate_supported_native_irreversible_component_selective_profile(input, codestream)
@@ -21299,6 +21788,8 @@ fn parse_default_precinct_packets_from_source(
     selected_components: Option<&[u16]>,
 ) -> Result<ParsedPacketContributions> {
     let coding_style = uniform_effective_coding_style(codestream)?;
+    let progression_order = parse_bounded_main_header_poc(input, codestream)?
+        .map_or(coding_style.progression_order, |poc| poc.progression_order);
     if !default_precinct_layer_count_supported(coding_style.layers)
         || !coding_style_has_supported_precinct_grid(coding_style, tile_rect)
     {
@@ -21413,7 +21904,7 @@ fn parse_default_precinct_packets_from_source(
     });
     visit_default_precinct_packet_keys(
         tile_rect.tile_index,
-        coding_style.progression_order,
+        progression_order,
         coding_style.layers,
         coding_style.decomposition_levels,
         codestream.siz.component_count(),

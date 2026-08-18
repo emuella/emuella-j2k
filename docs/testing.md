@@ -154,6 +154,29 @@ out-of-range, reserved or transform-incompatible forms. Tile-header QCC
 precedence and encoder-side QCC production remain outside this decoder
 increment.
 
+### Bounded Profile-0 progression override
+
+The native component decoder accepts one main-header POC record when its
+effective intersection with the codestream covers every component, resolution
+and quality layer in LRCP order. Legal component and resolution end values may
+extend beyond the actual codestream domain; the decoder intersects those ends
+with the SIZ and COD domains. The POC order replaces COD progression for packet
+walking without changing COD's layer or decomposition counts.
+
+This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.6 including Figure
+A.15 and Table A.32, and Annex B, B.12–B.12.3 including Figures B.14–B.15,
+PDF pages 54–55 and 96–99. The canonical transcription consulted for this
+implementation was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose and
+fixtures are project-authored and do not reproduce ISO expression.
+
+Synthetic regressions cover COD override, broad legal end bounds, successful
+native multi-tile reconstruction, malformed lengths, duplicate markers,
+multiple or partial volumes, reserved orders and tile-header precedence.
+Multiple progression volumes, other POC orders, tile-part POC precedence and
+encoder-side POC production remain outside this decoder increment.
+
 ## Inline packet markers
 
 The native subsampled-component path consumes inline SOP and EPH syntax at
