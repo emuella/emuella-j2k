@@ -172,20 +172,22 @@ implementation was retrieval revision
 fixtures are project-authored and do not reproduce ISO expression.
 
 Synthetic regressions cover COD override, broad legal end bounds, successful
-native multi-tile reconstruction, malformed lengths, duplicate markers,
-multiple or partial volumes, reserved orders and tile-header precedence.
-Multiple progression volumes, other POC orders, tile-part POC precedence and
-encoder-side POC production remain outside this decoder increment.
+native multi-tile reconstruction, inline SOP/EPH combinations, malformed
+lengths, duplicate markers, multiple or partial volumes, reserved orders and
+tile-header precedence. Multiple progression volumes, other POC orders,
+tile-part POC precedence and encoder-side POC production remain outside this
+decoder increment.
 
 ## Inline packet markers
 
-The native subsampled-component path consumes inline SOP and EPH syntax at
-structurally known packet boundaries. SOP remains optional for each packet
-when COD permits it; an observed `Nsop` must equal the packet's tile-scoped
-16-bit sequence value, including packets that omit SOP. EPH is required
-immediately after every inline packet header when COD signals it. Marker
-length, sequence, placement, truncation, signalling, packet-body bounds, and
-PLT agreement are checked before Tier-1 reconstruction.
+The native subsampled-component path and the byte-verified bounded-POC
+selective component path consume inline SOP and EPH syntax at structurally
+known packet boundaries. SOP remains optional for each packet when COD permits
+it; an observed `Nsop` must equal the packet's tile-scoped 16-bit sequence
+value, including packets that omit SOP. EPH is required immediately after
+every inline packet header when COD signals it. Marker length, sequence,
+placement, truncation, signalling, packet-body bounds, and PLT agreement are
+checked before Tier-1 reconstruction.
 
 This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.1 and A.8.1–A.8.2,
 Tables A.12–A.13 and A.40–A.41, and Annex B, B.10.8, PDF pages 46–49, 60–61,
@@ -197,7 +199,10 @@ expression.
 
 Packed packet headers, multiple tile parts in this native profile, explicit
 precincts, and encoder-side SOP/EPH production remain outside this increment.
-Other decoder profiles retain their existing packet-marker support boundary.
+Synthetic bounded-POC regressions exercise SOP-only, EPH-only and combined
+signalling, fail-closed sequence and placement errors, and the requirement for
+a valid POC admission. Other decoder profiles retain their existing packet-
+marker support boundary.
 
 ## Reversible QCD magnitude planes
 

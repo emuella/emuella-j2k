@@ -12672,6 +12672,116 @@ mod bounded_poc_tests {
         (codestream, samples)
     }
 
+    fn add_inline_packet_markers(mut codestream: Vec<u8>, sop: bool, eph: bool) -> Vec<u8> {
+        let parsed = parse(&codestream).unwrap();
+        let coding_style = parsed.coding_style.unwrap();
+        assert_eq!(coding_style.layers, 1);
+        assert_eq!(parsed.siz.component_count(), 1);
+        let tile_rects = tile_rects(&parsed).unwrap();
+        let sot_offsets = parsed
+            .markers
+            .iter()
+            .filter(|segment| segment.marker == Marker::Sot)
+            .map(|segment| segment.offset)
+            .collect::<Vec<_>>();
+        assert_eq!(sot_offsets.len(), parsed.tiles.len());
+
+        let mut replacements = Vec::new();
+        for (tile_part, sot_offset) in parsed.tiles.iter().zip(sot_offsets) {
+            let payload_offset = tile_part.payload_offset.unwrap();
+            let payload_len = tile_part.payload_len.unwrap();
+            let payload = &codestream[payload_offset..payload_offset + payload_len];
+            let tile_rect = tile_rects[usize::from(tile_part.tile_index)];
+            let contributions =
+                parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)
+                    .unwrap();
+            let mut packet_start = 0_usize;
+            let mut marked_payload = Vec::new();
+            for resolution in 0..=coding_style.decomposition_levels {
+                let packet_contributions = contributions
+                    .iter()
+                    .filter(|contribution| contribution.resolution == resolution)
+                    .collect::<Vec<_>>();
+                let header_end = packet_contributions
+                    .iter()
+                    .map(|contribution| contribution.payload_offset)
+                    .min()
+                    .unwrap();
+                let packet_end = packet_contributions
+                    .iter()
+                    .map(|contribution| contribution.payload_offset + contribution.codeword_len)
+                    .max()
+                    .unwrap();
+                assert!(packet_start <= header_end);
+                assert!(header_end <= packet_end);
+
+                if sop {
+                    marked_payload.extend_from_slice(&Marker::Sop.code().to_be_bytes());
+                    marked_payload.extend_from_slice(&4_u16.to_be_bytes());
+                    marked_payload.extend_from_slice(&u16::from(resolution).to_be_bytes());
+                }
+                marked_payload.extend_from_slice(&payload[packet_start..header_end]);
+                if eph {
+                    marked_payload.extend_from_slice(&Marker::Eph.code().to_be_bytes());
+                }
+                marked_payload.extend_from_slice(&payload[header_end..packet_end]);
+                packet_start = packet_end;
+            }
+            assert_eq!(packet_start, payload.len());
+            replacements.push((sot_offset, payload_offset, payload_len, marked_payload));
+        }
+
+        for (sot_offset, payload_offset, payload_len, marked_payload) in
+            replacements.into_iter().rev()
+        {
+            let delta =
+                u32::try_from(marked_payload.len().checked_sub(payload_len).unwrap()).unwrap();
+            let psot = read_u32(&codestream, sot_offset + 6).unwrap();
+            codestream[sot_offset + 6..sot_offset + 10]
+                .copy_from_slice(&psot.checked_add(delta).unwrap().to_be_bytes());
+            codestream.splice(payload_offset..payload_offset + payload_len, marked_payload);
+        }
+        codestream
+    }
+
+    fn bounded_poc_marker_fixture(sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
+        let (codestream, samples) = synthetic_multitile();
+        let mut codestream = add_inline_packet_markers(codestream, sop, eph);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] |= (u8::from(sop) << 1) | (u8::from(eph) << 2);
+        codestream[cod + 5] = 3;
+        let layers = read_u16(&codestream, cod + 6).unwrap();
+        let record = full_domain_lrcp_record(layers);
+        (
+            insert_before_marker(codestream, Marker::Sot, &poc_segment(&record)),
+            samples,
+        )
+    }
+
+    fn decode_synthetic_component(codestream: &[u8]) -> Result<Vec<u8>> {
+        let mut output = vec![0_u8; 256];
+        decode_part1_component_request_into_with_workspace(
+            codestream,
+            Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 16,
+                    height: 16,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+            &mut [ComponentPlaneMut {
+                samples: &mut output,
+                stride_bytes: 16,
+            }],
+            &mut Part1ComponentDecodeWorkspace::new(),
+        )?;
+        Ok(output)
+    }
+
     #[test]
     fn main_poc_overrides_cod_with_one_full_domain_lrcp_volume() {
         let (mut codestream, samples) = synthetic_multitile();
@@ -12720,6 +12830,60 @@ mod bounded_poc_tests {
         )
         .unwrap();
         assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn bounded_poc_selective_decode_reuses_inline_sop_and_eph_handling() {
+        for (sop, eph) in [(true, false), (false, true), (true, true)] {
+            let (codestream, samples) = bounded_poc_marker_fixture(sop, eph);
+            let parsed = parse(&codestream).unwrap();
+            assert!(is_supported_part1_bounded_poc_component_profile(
+                &codestream,
+                &parsed
+            ));
+            assert!(!is_supported_native_component_multitile_profile(&parsed));
+            assert_eq!(decode_synthetic_component(&codestream).unwrap(), samples);
+        }
+    }
+
+    #[test]
+    fn bounded_poc_inline_markers_fail_closed_and_require_poc() {
+        let (mut wrong_sequence, _) = bounded_poc_marker_fixture(true, false);
+        let sod = find_marker(&wrong_sequence, 0, Marker::Sod).unwrap();
+        wrong_sequence[sod + 6..sod + 8].copy_from_slice(&1_u16.to_be_bytes());
+        assert!(matches!(
+            decode_synthetic_component(&wrong_sequence),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
+                ..
+            })
+        ));
+
+        let (mut missing_eph, _) = bounded_poc_marker_fixture(false, true);
+        let sot = find_marker(&missing_eph, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&missing_eph, sot, Marker::Sod).unwrap();
+        let eph = find_marker(&missing_eph, sod + 2, Marker::Eph).unwrap();
+        let psot = read_u32(&missing_eph, sot + 6).unwrap();
+        missing_eph[sot + 6..sot + 10].copy_from_slice(&psot.checked_sub(2).unwrap().to_be_bytes());
+        missing_eph.drain(eph..eph + 2);
+        assert!(matches!(
+            decode_synthetic_component(&missing_eph),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+
+        let (mut without_poc, _) = bounded_poc_marker_fixture(true, true);
+        let poc = find_marker(&without_poc, 0, Marker::Poc).unwrap();
+        let lpoc = usize::from(read_u16(&without_poc, poc + 2).unwrap());
+        without_poc.drain(poc..poc + 2 + lpoc);
+        let parsed = parse(&without_poc).unwrap();
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &without_poc,
+            &parsed
+        ));
+        assert!(!is_supported_native_component_multitile_profile(&parsed));
     }
 
     #[test]
@@ -13097,11 +13261,13 @@ pub fn is_supported_part1_bounded_poc_component_profile(
     input: &[u8],
     codestream: &Codestream,
 ) -> bool {
-    validate_supported_native_component_multitile_profile(codestream).is_ok()
-        && matches!(
-            parse_bounded_main_header_poc(input, codestream),
-            Ok(Some(_))
-        )
+    matches!(
+        parse_bounded_main_header_poc(input, codestream),
+        Ok(Some(_))
+    ) && validate_supported_native_component_multitile_profile_with_sample_guard(
+        codestream, true, true,
+    )
+    .is_ok()
 }
 
 /// True when parsed metadata is inside the bounded native-grid component
@@ -14066,12 +14232,13 @@ fn validate_supported_native_rgb_u8_two_decomp_multitile_profile(
 fn validate_supported_native_component_multitile_profile(
     codestream: &Codestream,
 ) -> Result<CodingStyleMarker> {
-    validate_supported_native_component_multitile_profile_with_sample_guard(codestream, true)
+    validate_supported_native_component_multitile_profile_with_sample_guard(codestream, true, false)
 }
 
 fn validate_supported_native_component_multitile_profile_with_sample_guard(
     codestream: &Codestream,
     enforce_total_sample_guard: bool,
+    allow_inline_packet_markers: bool,
 ) -> Result<CodingStyleMarker> {
     if codestream.kind != CodestreamKind::J2k {
         return Err(unsupported(
@@ -14192,7 +14359,7 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
             "native component multi-tile decode requires at least one quality layer",
         ));
     }
-    if coding_style.sop_markers || coding_style.eph_markers {
+    if (coding_style.sop_markers || coding_style.eph_markers) && !allow_inline_packet_markers {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
@@ -14554,7 +14721,7 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
     codestream: &Codestream,
     enforce_total_sample_guard: bool,
 ) -> Result<CodingStyleMarker> {
-    parse_bounded_main_header_poc(input, codestream)?;
+    let bounded_poc = parse_bounded_main_header_poc(input, codestream)?;
     match uniform_effective_coding_style(codestream)?.transform {
         WaveletTransform::Irreversible97 => {
             validate_supported_native_irreversible_component_selective_profile(input, codestream)
@@ -14568,6 +14735,7 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
         _ => validate_supported_native_component_multitile_profile_with_sample_guard(
             codestream,
             enforce_total_sample_guard,
+            bounded_poc.is_some(),
         ),
     }
 }
