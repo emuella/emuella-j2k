@@ -12487,6 +12487,18 @@ fn parse_bounded_main_header_poc(
     let Some(segment) = main_poc else {
         return Ok(None);
     };
+    if let Some(coc) = codestream
+        .markers
+        .iter()
+        .find(|candidate| candidate.marker == Marker::Coc)
+    {
+        return Err(unsupported(
+            Some(coc.offset),
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "POC and COC interaction is outside the P0.03 decoder boundary",
+        ));
+    }
     let coding_style = codestream.coding_style.ok_or_else(|| {
         invalid(
             Some(segment.offset),
@@ -12603,6 +12615,15 @@ mod bounded_poc_tests {
         let mut marker = Marker::Poc.code().to_be_bytes().to_vec();
         marker.extend_from_slice(&lpoc.to_be_bytes());
         marker.extend_from_slice(records);
+        marker
+    }
+
+    fn coc_segment(parameters: &[u8]) -> Vec<u8> {
+        let lcoc = u16::try_from(parameters.len() + 4).unwrap();
+        let mut marker = Marker::Coc.code().to_be_bytes().to_vec();
+        marker.extend_from_slice(&lcoc.to_be_bytes());
+        marker.extend_from_slice(&[0, 0]);
+        marker.extend_from_slice(parameters);
         marker
     }
 
@@ -12825,6 +12846,42 @@ mod bounded_poc_tests {
                 construct: UnsupportedConstruct::MarkerSegment,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn rejects_coc_poc_resolution_domain_interaction() {
+        let (codestream, _) = synthetic_multitile();
+        let parsed = parse(&codestream).unwrap();
+        let coding_style = parsed.coding_style.unwrap();
+        let record = full_domain_lrcp_record(coding_style.layers);
+        let record = {
+            let mut record = record;
+            record[4] = coding_style.decomposition_levels + 1;
+            record
+        };
+        let coc = coc_segment(&[
+            coding_style.decomposition_levels + 1,
+            coding_style.code_block_width_exponent - 2,
+            coding_style.code_block_height_exponent - 2,
+            coding_style.code_block_style,
+            1,
+        ]);
+        let codestream = insert_before_marker(codestream, Marker::Sot, &poc_segment(&record));
+        let codestream = insert_before_marker(codestream, Marker::Sot, &coc);
+        let parsed = parse(&codestream).unwrap();
+
+        assert!(matches!(
+            parse_bounded_main_header_poc(&codestream, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Coc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &codestream,
+            &parsed
         ));
     }
 }
