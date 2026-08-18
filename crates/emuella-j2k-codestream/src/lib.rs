@@ -12581,7 +12581,7 @@ fn parse_bounded_main_header_poc(
         || component_end < codestream.siz.component_count()
         || resolution_start != 0
         || resolution_end < actual_resolution_end
-        || layer_end < coding_style.layers
+        || layer_end != coding_style.layers
     {
         return Err(unsupported(
             Some(segment.offset),
@@ -12775,6 +12775,22 @@ mod bounded_poc_tests {
         let parsed = parse(&partial).unwrap();
         assert!(matches!(
             parse_bounded_main_header_poc(&partial, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+
+        let mut over_broad_layers = record;
+        over_broad_layers[2..4].copy_from_slice(&(layers + 1).to_be_bytes());
+        let over_broad_layers = insert_before_marker(
+            codestream.clone(),
+            Marker::Sot,
+            &poc_segment(&over_broad_layers),
+        );
+        let parsed = parse(&over_broad_layers).unwrap();
+        assert!(matches!(
+            parse_bounded_main_header_poc(&over_broad_layers, &parsed),
             Err(CodestreamError::Unsupported {
                 marker: Some(Marker::Poc),
                 ..
