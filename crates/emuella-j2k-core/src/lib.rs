@@ -1566,6 +1566,10 @@ fn is_direct_selective_part1_component_profile(codestream_bytes: &[u8]) -> bool 
     codestream::parse(codestream_bytes).is_ok_and(|parsed| {
         !codestream::is_supported_part1_native_subsampled_component_profile(&parsed)
             && (codestream::is_owned_baseline_profile(codestream_bytes)
+                || codestream::is_supported_part1_bounded_poc_component_profile(
+                    codestream_bytes,
+                    &parsed,
+                )
                 || codestream::is_supported_part1_selective_irreversible97_component_profile(
                     codestream_bytes,
                     &parsed,

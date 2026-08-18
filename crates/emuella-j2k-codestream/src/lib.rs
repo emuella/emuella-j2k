@@ -12671,7 +12671,11 @@ mod bounded_poc_tests {
                 progression_order: ProgressionOrder::Lrcp,
             })
         );
-        assert!(is_algorithmic_baseline_profile(&codestream));
+        assert!(is_supported_part1_bounded_poc_component_profile(
+            &codestream,
+            &parsed
+        ));
+        assert!(!is_algorithmic_baseline_profile(&codestream));
 
         let mut output = vec![0_u8; samples.len()];
         decode_part1_component_request_into_with_workspace(
@@ -12730,7 +12734,9 @@ mod bounded_poc_tests {
                 ..
             })
         ));
-        assert!(!is_algorithmic_baseline_profile(&truncated));
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &truncated, &parsed
+        ));
 
         let segment = poc_segment(&record);
         let duplicate = insert_before_marker(
@@ -12746,7 +12752,9 @@ mod bounded_poc_tests {
                 ..
             })
         ));
-        assert!(!is_algorithmic_baseline_profile(&duplicate));
+        assert!(!is_supported_part1_bounded_poc_component_profile(
+            &duplicate, &parsed
+        ));
 
         let mut two_records = record.to_vec();
         two_records.extend_from_slice(&record);
@@ -13007,12 +13015,20 @@ pub fn is_supported_native_component_multitile_profile(codestream: &Codestream) 
         && validate_supported_native_component_multitile_profile(codestream).is_ok()
 }
 
-fn is_supported_native_component_multitile_profile_with_poc(
+/// True when bytes and parsed metadata satisfy the bounded main-header POC
+/// component profile used by direct selective decode.
+///
+/// The ordinary metadata-only predicate remains conservative because it
+/// cannot validate POC record fields without the marker bytes.
+pub fn is_supported_part1_bounded_poc_component_profile(
     input: &[u8],
     codestream: &Codestream,
 ) -> bool {
     validate_supported_native_component_multitile_profile(codestream).is_ok()
-        && parse_bounded_main_header_poc(input, codestream).is_ok()
+        && matches!(
+            parse_bounded_main_header_poc(input, codestream),
+            Ok(Some(_))
+        )
 }
 
 /// True when parsed metadata is inside the bounded native-grid component
@@ -21037,7 +21053,7 @@ pub fn is_algorithmic_baseline_profile(input: &[u8]) -> bool {
                     &codestream,
                 )
                 || is_supported_part1_native_subsampled_component_profile(&codestream)
-                || is_supported_native_component_multitile_profile_with_poc(input, &codestream)
+                || is_supported_native_component_multitile_profile(&codestream)
                 || validate_supported_part1_irreversible97_default_precinct(input, &codestream)
                     .is_ok()
                 || is_supported_part1_selective_irreversible97_component_profile(input, &codestream)
