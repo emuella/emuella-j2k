@@ -137,7 +137,10 @@ The native component multi-tile decoder resolves a main-header QCC over the
 main QCD only for the component selected by QCC. Components without an
 override retain the QCD default. The resolver derives the selector width from
 the SIZ component count and applies the same checked quantization-style,
-guard-bit and step-size parsing to QCD and QCC.
+guard-bit and step-size parsing to QCD and QCC. Selective decode validates
+wavelet compatibility after QCC precedence for each requested component;
+unrequested defaults are still parsed structurally but do not widen the
+selected-component contract.
 
 This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.5.1 and A.6.4–A.6.5,
 including Tables A.9 and A.28–A.31, and Annex A, A.10, including Table A.45,
@@ -148,11 +151,11 @@ this implementation was retrieval revision
 fixtures are project-authored and do not reproduce ISO expression.
 
 Synthetic regressions cover QCC before QCD, QCD fallback for unmentioned
-components, the one-byte/two-byte selector boundary, end-to-end native
-multi-tile decode, and fail-closed handling of truncated, duplicate,
-out-of-range, reserved or transform-incompatible forms. Tile-header QCC
-precedence and encoder-side QCC production remain outside this decoder
-increment.
+components, effective selected-component compatibility, the one-byte/two-byte
+selector boundary, end-to-end native multi-tile decode, and fail-closed
+handling of truncated, duplicate, out-of-range, reserved or
+transform-incompatible forms. Tile-header QCC precedence and encoder-side QCC
+production remain outside this decoder increment.
 
 ### Bounded Profile-0 progression override
 
@@ -203,6 +206,40 @@ Synthetic bounded-POC regressions exercise SOP-only, EPH-only and combined
 signalling, fail-closed sequence and placement errors, and the requirement for
 a valid POC admission. Other decoder profiles retain their existing packet-
 marker support boundary.
+
+## Bounded tile-header Maxshift
+
+The byte-verified bounded-POC selective component path accepts the single
+tile-header RGN assignment required by P0.03: tile 0, component 0, Maxshift
+style `Srgn=0`, and `SPrgn=7`. It increases that tile-component's Tier-1
+available magnitude-plane count by seven, then realigns each signed decoded
+coefficient exactly once before coefficient placement and inverse reversible
+5/3 synthesis. Magnitudes at or above `2^7` are shifted right while their sign
+is preserved; smaller background magnitudes remain unchanged.
+
+This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.3 and Tables
+A.24–A.26; Annex A, Table A.45; Annex D, D.2.1–D.2.2; Annex E, E.1; and Annex
+H, H.1, PDF pages 51–52, 63, 119–120, 129–130, and 156. The canonical
+transcription consulted for this implementation was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose and
+synthetic fixtures are project-authored and do not reproduce ISO expression.
+
+The same bounded path recognises and validates the optional main-header CRG
+component-pair syntax as informational metadata. ISO/IEC 15444-1:2024, Annex
+A, A.9–A.9.1 and Table A.42, PDF pages 61–62, states that CRG has no effect on
+codestream decoding. The selected raw component samples therefore remain
+unchanged; rendered registration, component placement and resampling are not
+implemented.
+
+Synthetic POC-plus-SOP regressions cover signed coefficient realignment,
+windowed and full selected output, unaffected tiles, exact reconstruction, and
+fail-closed malformed lengths, selectors, reserved styles, duplicate or
+main-header assignments, shifts outside the locked path, missing POC, and
+unrepresentable plane widths. General ROI masks, main-header or multi-part RGN
+precedence, other tile/component/shift assignments, irreversible or HT paths,
+encoder-side ROI production, and other decoder profiles remain outside this
+increment.
 
 ## Reversible QCD magnitude planes
 
