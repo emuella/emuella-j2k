@@ -40,6 +40,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo fmt --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml --all -- --check
       - run: cargo check --workspace --all-targets
+      - run: cargo check -p emuella-j2k-codestream --features parallel
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml --all-targets --locked -- -D warnings

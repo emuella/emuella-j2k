@@ -17,6 +17,7 @@ cargo fmt \
   -- \
   --check
 cargo check --workspace --all-targets
+cargo check -p emuella-j2k-codestream --features parallel
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy \
