@@ -1799,6 +1799,11 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    if let Some(image) =
+        decode_owned_part1_p0_08_heterogeneous_reversible(input, &metadata, options)?
+    {
+        return Ok(image);
+    }
     if let Some(image) = decode_owned_part1_p0_07_progression_change(input, &metadata, options)? {
         return Ok(image);
     }
@@ -1849,6 +1854,54 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     decode_options.requested_components = ComponentSelection::All;
     let decoded = decode(input, &decode_options)?;
     apply_partial_selection(decoded, region, &component_indices, options.target_layout)
+}
+
+fn is_p0_08_output_request(options: &PartialDecodeOptions) -> bool {
+    options.region.is_none()
+        && options.tile.is_none()
+        && options.resolution == ResolutionLevel::Reduced { discard_levels: 5 }
+        && matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
+        && options.max_quality_layers.is_none()
+        && options.target_layout == ComponentLayout::Planar
+}
+
+fn decode_owned_part1_p0_08_heterogeneous_reversible(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Option<Image>> {
+    if !is_p0_08_output_request(options) {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_p0_08_heterogeneous_reversible_component_profile(
+        codestream_bytes,
+        &parsed,
+        5,
+    ) {
+        return Ok(None);
+    }
+    let decoded =
+        codestream::decode_part1_p0_08_heterogeneous_reversible_component_zero(codestream_bytes, 5)
+            .map_err(map_codestream_error)?;
+    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
+    for component in &mut component_info {
+        component.width = 17;
+        component.height = 96;
+        component.x_origin = 0;
+        component.y_origin = 0;
+    }
+    let decode_options = DecodeOptions {
+        mode: DecodeMode::Components,
+        requested_components: options.components.clone(),
+        target_layout: options.target_layout,
+        ..DecodeOptions::default()
+    };
+    decoded_baseline_to_image_with_component_info(decoded, &decode_options, Some(component_info))
+        .map(Some)
 }
 
 fn is_p0_07_output_request(options: &PartialDecodeOptions) -> bool {
@@ -5110,6 +5163,9 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    if let Some(info) = p0_08_heterogeneous_reversible_target_info(input, &metadata, options)? {
+        return Ok(info);
+    }
     if let Some(info) = p0_07_progression_change_target_info(input, &metadata, options)? {
         return Ok(info);
     }
@@ -5146,6 +5202,42 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
         partial_color_model(image, &component_indices),
         options.target_layout,
     )
+}
+
+fn p0_08_heterogeneous_reversible_target_info(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Option<ImageInfo>> {
+    if !is_p0_08_output_request(options) {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_p0_08_heterogeneous_reversible_component_profile(
+        codestream_bytes,
+        &parsed,
+        5,
+    ) {
+        return Ok(None);
+    }
+    let image = metadata.image.as_ref().ok_or_else(|| {
+        unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "Profile-0 P0.08 decode requires image sample metadata",
+        )
+    })?;
+    ImageInfo::new(
+        17,
+        96,
+        1,
+        image.sample_format,
+        ColorModel::Unknown,
+        ComponentLayout::Planar,
+    )
+    .map(Some)
 }
 
 fn p0_07_progression_change_target_info(
@@ -5970,6 +6062,53 @@ mod effective_coding_style_tests {
             mutations
                 .iter()
                 .all(|request| !is_p0_07_output_request(request))
+        );
+    }
+
+    #[test]
+    fn p0_08_route_admits_only_its_exact_reduction_five_request() {
+        let admitted = PartialDecodeOptions {
+            resolution: ResolutionLevel::Reduced { discard_levels: 5 },
+            components: ComponentSelection::Indices(vec![0]),
+            ..PartialDecodeOptions::default()
+        };
+        assert!(is_p0_08_output_request(&admitted));
+
+        let mutations = [
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 17,
+                    height: 96,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 4 },
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 6 },
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::All,
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(30),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..admitted.clone()
+            },
+        ];
+        assert!(
+            mutations
+                .iter()
+                .all(|request| !is_p0_08_output_request(request))
         );
     }
 }

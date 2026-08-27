@@ -274,7 +274,7 @@ def comparison_from_record(
     reduction = non_negative_int(
         record.get("resolution_reduction"),
         "resolution reduction",
-        3 if scalar else 1,
+        5 if scalar else 1,
     )
     output_window = record.get("output_window", not scalar)
     if not isinstance(output_window, bool):
