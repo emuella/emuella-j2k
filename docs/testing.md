@@ -87,8 +87,8 @@ python3 scripts/run-layer2-decoded-pixel-canary.py \
 The outer runner applies the same pinned checkout, inventory, complete-tree,
 and executable-snapshot checks as the inspection runner. It invokes one Rust
 worker with a finite timeout for each comparison it needs to satisfy. The
-worker decodes the selected component and output window at the declared zero-
-or one-level resolution reduction, parses the PGX reference with
+worker decodes the selected component and output window at the declared
+resolution reduction, parses the PGX reference with
 project-authored code, and compares logical samples in memory. Output-window
 origins are expressed in the selected output resolution and converted through
 checked arithmetic at the worker boundary. Its output is restricted to case
@@ -110,6 +110,17 @@ an upper-left 128 × 128 window at full resolution; the other uses a 128 × 128
 output after one resolution reduction. Both are signed 4-bit comparisons with
 inclusive limits 0/0, and the group requires at least one alternative to pass.
 Alternative outputs are choices rather than cumulative requirements.
+
+Scalar cases admit zero, one, or two discarded resolution levels; choice-group
+alternatives remain bounded to zero or one. P0.14 exercises the two-level
+boundary: the single-tile unsigned 8-bit codestream signals a reversible MCT
+and five reversible 5/3 decomposition levels, while the component-mode oracle
+selects transformed component 0 before inverse RCT. The decoder reconstructs
+only the selected component at 13 × 13 and leaves rendered reduced-MCT output,
+other decomposition counts, progression changes, component overrides, packet
+relocation, ROI, registration, and inline packet markers outside this bounded
+profile. Annex C, C.2.1 and Table C.1 assign the component-0 reference and
+inclusive limits 0/0.
 
 The comparison worker also accepts the unsigned PGX reference-header spacing
 variant used by the Profile-0 ETS: exactly one blank sign position may appear

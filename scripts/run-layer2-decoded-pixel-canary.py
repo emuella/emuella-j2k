@@ -271,9 +271,11 @@ def comparison_from_record(
         raise RunnerError("comparison requires a .j2k input and .pgx reference")
     if input_path not in paths or reference_path not in paths:
         raise RunnerError("comparison input or reference is absent from the locked inventory")
-    reduction = non_negative_int(record.get("resolution_reduction"), "resolution reduction", 1)
-    if scalar and reduction != 0:
-        raise RunnerError("scalar decoded-pixel cases require full-resolution output")
+    reduction = non_negative_int(
+        record.get("resolution_reduction"),
+        "resolution reduction",
+        2 if scalar else 1,
+    )
     output_origin_x = (
         0
         if scalar

@@ -170,17 +170,20 @@ fn validate_contract(contract: ComparisonContract) -> Result<(), String> {
     if samples == 0 || samples > MAX_COMPARISON_SAMPLES {
         return Err("comparison sample count is zero or exceeds the runner bound".to_owned());
     }
-    if contract.resolution_reduction > 1 {
-        return Err("comparison resolution reduction must be zero or one".to_owned());
+    let maximum_reduction = if contract.output_window { 1 } else { 2 };
+    if contract.resolution_reduction > maximum_reduction {
+        return Err(if contract.output_window {
+            "output-window comparison resolution reduction must be zero or one".to_owned()
+        } else {
+            "full-component comparison resolution reduction must be between zero and two".to_owned()
+        });
     }
-    if !contract.output_window
-        && (contract.resolution_reduction != 0
-            || contract.output_origin_x != 0
-            || contract.output_origin_y != 0)
-    {
-        return Err("full-component comparison cannot select a window or reduction".to_owned());
+    if !contract.output_window && (contract.output_origin_x != 0 || contract.output_origin_y != 0) {
+        return Err("full-component comparison cannot select an output origin".to_owned());
     }
-    comparison_source_region(contract)?;
+    if contract.output_window {
+        comparison_source_region(contract)?;
+    }
     if !(1..=32).contains(&contract.bits_per_sample) {
         return Err("comparison precision must be in 1..=32".to_owned());
     }
@@ -421,9 +424,12 @@ fn compare_j2k_to_pgx(
     {
         return Err("PGX metadata disagrees with the comparison contract".to_owned());
     }
-    let decoded = if contract.output_window {
+    let decoded = if contract.output_window || contract.resolution_reduction != 0 {
         let options = PartialDecodeOptions {
-            region: Some(comparison_source_region(contract)?),
+            region: contract
+                .output_window
+                .then(|| comparison_source_region(contract))
+                .transpose()?,
             resolution: if contract.resolution_reduction == 0 {
                 ResolutionLevel::Full
             } else {
@@ -684,6 +690,18 @@ mod tests {
             validate_contract(ComparisonContract {
                 resolution_reduction: 2,
                 output_window: true,
+                ..contract(1, 1)
+            })
+            .is_err()
+        );
+        validate_contract(ComparisonContract {
+            resolution_reduction: 2,
+            ..contract(1, 1)
+        })
+        .expect("full-component comparison admits two reduced levels");
+        assert!(
+            validate_contract(ComparisonContract {
+                resolution_reduction: 3,
                 ..contract(1, 1)
             })
             .is_err()

@@ -1799,6 +1799,9 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    if let Some(image) = decode_owned_part1_reduced_reversible_mct(input, &metadata, options)? {
+        return Ok(image);
+    }
     if let Some(image) = decode_owned_selective_part1_discard(input, &metadata, options)? {
         return Ok(image);
     }
@@ -1832,6 +1835,70 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     decode_options.requested_components = ComponentSelection::All;
     let decoded = decode(input, &decode_options)?;
     apply_partial_selection(decoded, region, &component_indices, options.target_layout)
+}
+
+fn decode_owned_part1_reduced_reversible_mct(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Option<Image>> {
+    let ResolutionLevel::Reduced { discard_levels } = options.resolution else {
+        return Ok(None);
+    };
+    if options.region.is_some()
+        || options.tile.is_some()
+        || options.target_layout != ComponentLayout::Planar
+        || options.max_quality_layers.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_reduced_reversible_mct_component_profile(
+        codestream_bytes,
+        &parsed,
+        discard_levels,
+    ) {
+        return Ok(None);
+    }
+    let component_indices = partial_component_indices(metadata, &options.components)?;
+    let decoded = codestream::decode_part1_reduced_reversible_mct_components_selected(
+        codestream_bytes,
+        &component_indices,
+        discard_levels,
+    )
+    .map_err(map_codestream_error)?;
+    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
+    let image = metadata.image.as_ref().ok_or_else(|| {
+        unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "Profile-0 reduced MCT decode requires image dimensions",
+        )
+    })?;
+    let source_region = options.region.unwrap_or(Region {
+        x: 0,
+        y: 0,
+        width: image.width,
+        height: image.height,
+    });
+    let reduced_region =
+        reduced_roi_region(source_region, discard_levels, image.width, image.height)?;
+    for component in &mut component_info {
+        component.width = reduced_region.width;
+        component.height = reduced_region.height;
+        component.x_origin = reduced_region.x;
+        component.y_origin = reduced_region.y;
+    }
+    let decode_options = DecodeOptions {
+        mode: DecodeMode::Components,
+        requested_components: options.components.clone(),
+        target_layout: options.target_layout,
+        ..DecodeOptions::default()
+    };
+    decoded_baseline_to_image_with_component_info(decoded, &decode_options, Some(component_info))
+        .map(Some)
 }
 
 /// Resolve the exact output image description for a partial decode request
@@ -4836,14 +4903,25 @@ fn selective_part1_discard_target_info(
     let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
         return Ok(None);
     };
-    if !is_direct_selective_part1_component_profile(codestream_bytes) {
-        return Ok(None);
-    }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
     let Some(coding_style) = parsed.uniform_effective_coding_style() else {
         return Ok(None);
     };
-    if coding_style.multiple_component_transform
+    let reduced_mct_component_zero = matches!(
+        &options.components,
+        ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16]
+    );
+    let reduced_mct_profile = options.region.is_none()
+        && options.max_quality_layers.is_none()
+        && reduced_mct_component_zero
+        && coding_style.multiple_component_transform
+        && codestream::is_supported_part1_reduced_reversible_mct_component_profile(
+            codestream_bytes,
+            &parsed,
+            discard_levels,
+        );
+    if (!is_direct_selective_part1_component_profile(codestream_bytes) && !reduced_mct_profile)
+        || (coding_style.multiple_component_transform && !reduced_mct_profile)
         || discard_levels > coding_style.decomposition_levels
     {
         return Ok(None);

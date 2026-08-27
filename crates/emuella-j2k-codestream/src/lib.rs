@@ -13713,6 +13713,54 @@ pub fn is_supported_u8_two_decomposition_encode_compatible_profile(
     .is_none()
 }
 
+/// True when a raw Part 1 codestream is inside the bounded reduced-resolution
+/// reversible-MCT profile qualified by Profile-0 P0.14.
+///
+/// This admission is deliberately narrower than the general component
+/// decoder: it requires the single-tile, three-component, unsigned 8-bit,
+/// five-decomposition LRCP shape and exactly two discarded resolution levels.
+pub fn is_supported_part1_reduced_reversible_mct_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+    discard_levels: u8,
+) -> bool {
+    validate_part1_reduced_reversible_mct_component_profile(input, codestream, discard_levels)
+        .is_ok()
+}
+
+#[cfg(test)]
+mod reduced_reversible_mct_component_profile_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_nearby_two_decomposition_mct_profile() {
+        let width = 16;
+        let height = 16;
+        let samples = (0..width * height * 3)
+            .map(|sample| ((sample * 29 + sample / 7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let encoded = encode_rgb_u8_two_decomp(RgbU8Encode {
+            width,
+            height,
+            samples: &samples,
+            stride_bytes: width as usize * 3,
+        })
+        .expect("project-authored RGB fixture encodes");
+        let parsed = parse(&encoded).expect("project-authored RGB fixture parses");
+
+        assert!(
+            !is_supported_part1_reduced_reversible_mct_component_profile(&encoded, &parsed, 2,)
+        );
+        assert!(matches!(
+            decode_part1_reduced_reversible_mct_components_selected(&encoded, &[0], 2),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::Transform,
+                ..
+            })
+        ));
+    }
+}
+
 /// True when parsed codestream metadata is inside the native grayscale u16
 /// one-decomposition profile emitted by the repo-owned encoder.
 pub fn is_supported_grayscale_u16_one_decomposition_encode_compatible_profile(
@@ -15327,6 +15375,95 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
     }
 }
 
+fn validate_part1_reduced_reversible_mct_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+    discard_levels: u8,
+) -> Result<CodingStyleMarker> {
+    if discard_levels != 2 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Transform,
+            "the qualified Profile-0 reduced MCT path requires exactly two discarded resolution levels",
+        ));
+    }
+    let coding_style = validate_supported_selective_native_component_profile(input, codestream)?;
+    if codestream.siz.component_count() != 3
+        || codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != 8
+                || component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "the qualified Profile-0 reduced MCT path requires three unsigned 8-bit unit-sampled components",
+        ));
+    }
+    if codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+        || tile_rects(codestream)?.len() != 1
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::MultipleTiles,
+            "the qualified Profile-0 reduced MCT path requires one origin-aligned tile",
+        ));
+    }
+    if coding_style.progression_order != ProgressionOrder::Lrcp
+        || coding_style.layers != 1
+        || !coding_style.multiple_component_transform
+        || coding_style.decomposition_levels != 5
+        || coding_style.transform != WaveletTransform::Reversible53
+        || coding_style.precincts_declared
+        || coding_style.sop_markers
+        || coding_style.eph_markers
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Transform,
+            "the qualified Profile-0 reduced MCT path requires one-layer LRCP, five-level reversible 5/3 coding with MCT and default precincts",
+        ));
+    }
+    if !codestream.component_coding_styles.is_empty()
+        || codestream.markers.iter().any(|segment| {
+            matches!(
+                segment.marker,
+                Marker::Coc
+                    | Marker::Rgn
+                    | Marker::Qcc
+                    | Marker::Poc
+                    | Marker::Tlm
+                    | Marker::Plm
+                    | Marker::Plt
+                    | Marker::Ppm
+                    | Marker::Ppt
+                    | Marker::Crg
+                    | Marker::Sop
+                    | Marker::Eph
+                    | Marker::Cap
+                    | Marker::Unknown(_)
+            )
+        })
+    {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "component overrides, progression changes, packet relocation, ROI, registration, capability extensions, and inline packet markers are outside the qualified Profile-0 reduced MCT path",
+        ));
+    }
+    Ok(coding_style)
+}
+
 fn validate_bounded_maxshift_plane_widths(
     input: &[u8],
     codestream: &Codestream,
@@ -16501,6 +16638,69 @@ pub fn decode_baseline_owned_components_selected_with_max_layers(
         &mut workspace,
         max_layers,
     )
+}
+
+/// Decode selected transformed component planes from the bounded
+/// reduced-resolution reversible-MCT profile qualified by Profile-0 P0.14.
+///
+/// Component-mode output remains before inverse RCT, matching the Part 4
+/// component oracle; rendered reduced-MCT output remains a separate feature.
+pub fn decode_part1_reduced_reversible_mct_components_selected(
+    input: &[u8],
+    component_indices: &[u16],
+    discard_levels: u8,
+) -> Result<DecodedImage> {
+    let codestream = parse(input)?;
+    validate_component_selection(&codestream, component_indices)?;
+    if component_indices != [0] {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentCount,
+            "the qualified reduced reversible-MCT component path selects component zero only",
+        ));
+    }
+    let coding_style = validate_part1_reduced_reversible_mct_component_profile(
+        input,
+        &codestream,
+        discard_levels,
+    )?;
+    let tile_rect = *tile_rects(&codestream)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut workspace = Part1ComponentDecodeWorkspace::new();
+    let mut timings = None;
+    let components = decode_multitile_tile_component_samples_selected(
+        input,
+        &codestream,
+        coding_style,
+        tile_rect,
+        component_indices,
+        &mut timings,
+        &mut workspace,
+        None,
+        discard_levels,
+    )?
+    .into_iter()
+    .map(|samples| DecodedComponent { samples })
+    .collect::<Vec<_>>();
+    let retained_resolution = coding_style
+        .decomposition_levels
+        .checked_sub(discard_levels)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let (width, height) = resolution_dimensions(
+        tile_rect.width,
+        tile_rect.height,
+        coding_style.decomposition_levels,
+        retained_resolution,
+    )?;
+    Ok(DecodedImage {
+        width,
+        height,
+        bits_per_sample: 8,
+        signed: false,
+        components,
+    })
 }
 
 /// Decode a full-resolution image-space region from only the intersecting
