@@ -118,6 +118,16 @@ class ContractTests(unittest.TestCase):
         )
         self.assertEqual(case, comparison_case())
 
+    def test_loads_two_level_reduced_scalar_case(self) -> None:
+        record = self.suite["decoded_pixel_comparison"]["cases"][0]
+        record["reference"] = "files/reduced-reference.pgx"
+        record["resolution_reduction"] = 2
+        case = runner.load_comparison_case(
+            self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
+        )
+        self.assertFalse(case.output_window)
+        self.assertEqual(case.resolution_reduction, 2)
+
     def test_rejects_missing_or_unsafe_reference(self) -> None:
         self.suite["decoded_pixel_comparison"]["cases"][0]["reference"] = (
             "../escape.pgx"
