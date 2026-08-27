@@ -105,11 +105,14 @@ The reviewed transcription used for the contract was retrieval revision
 `7b3d8d60cd4d4f6c056cd108d928b7f99f492aa9`). Exactness therefore applies to
 corresponding logical samples for this case, not to file bytes.
 
-The P0.03 choice group records two alternative component-0 outputs. One uses
-an upper-left 128 × 128 window at full resolution; the other uses a 128 × 128
-output after one resolution reduction. Both are signed 4-bit comparisons with
-inclusive limits 0/0, and the group requires at least one alternative to pass.
-Alternative outputs are choices rather than cumulative requirements.
+The P0.03 and P0.15 choice groups each record two alternative component-0
+outputs. One uses an upper-left 128 × 128 window at full resolution; the other
+uses a 128 × 128 output after one resolution reduction. Both are signed 4-bit
+comparisons with inclusive limits 0/0, and each group requires at least one
+alternative to pass. Alternative outputs are choices rather than cumulative
+requirements. P0.15 currently qualifies through its one-level-reduced
+alternative; its unsupported full-resolution multi-tile form continues to
+fail closed.
 
 Scalar cases admit zero, one, or two discarded resolution levels; choice-group
 alternatives remain bounded to zero or one. P0.14 exercises the two-level
