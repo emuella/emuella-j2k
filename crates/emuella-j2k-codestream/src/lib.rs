@@ -34752,12 +34752,19 @@ fn parse_coc(
         ));
     }
     let code_block_style = parameters[3];
-    if code_block_style & !0x3f != 0 {
+    let method_specific_style_is_valid = match code_block_style & 0xc0 {
+        0x00 => true,
+        0x40 => code_block_style & !(0x40 | 0x08) == 0,
+        0x80 => false,
+        0xc0 => code_block_style & !(0xc0 | 0x3a) == 0,
+        _ => unreachable!(),
+    };
+    if !method_specific_style_is_valid {
         return Err(unsupported(
             Some(marker_offset),
             Some(Marker::Coc),
             UnsupportedConstruct::Tier1Decode,
-            "COC code-block style requires an extended coding method",
+            "COC code-block style uses reserved bits for its coding method",
         ));
     }
     let transform = match parameters[4] {
@@ -34787,18 +34794,16 @@ fn parse_coc(
             ));
         }
         precinct_exponents[..declared.len()].copy_from_slice(declared);
-        return Err(unsupported(
-            Some(marker_offset),
-            Some(Marker::Coc),
-            UnsupportedConstruct::MarkerSegment,
-            "explicit precincts in COC are outside the current decoded-pixel boundary",
-        ));
     }
 
     Ok(ComponentCodingStyleMarker {
         component_index,
         coding_style: CodingStyleMarker {
-            entropy_coder: default.entropy_coder,
+            entropy_coder: if code_block_style & 0x40 != 0 {
+                EntropyCoder::HtBlockCoding
+            } else {
+                EntropyCoder::ClassicTier1
+            },
             sop_markers: default.sop_markers,
             eph_markers: default.eph_markers,
             progression_order: default.progression_order,
@@ -34809,9 +34814,9 @@ fn parse_coc(
             code_block_height_exponent: raw_height + 2,
             code_block_style,
             transform,
-            precincts_declared: false,
-            precinct_width_exponent: None,
-            precinct_height_exponent: None,
+            precincts_declared,
+            precinct_width_exponent: precincts_declared.then_some(precinct_exponents[0] & 0x0f),
+            precinct_height_exponent: precincts_declared.then_some(precinct_exponents[0] >> 4),
             precinct_exponents,
         },
     })
@@ -34957,7 +34962,7 @@ mod coc_marker_tests {
     }
 
     #[test]
-    fn rejects_conflicting_tile_override_and_unsupported_coc_forms() {
+    fn rejects_conflicting_tile_override_and_reserved_coc_forms() {
         let segment = coc_segment(0, 0, &[0, 2, 2, 0, 1]);
         let tile_override = insert_tile_header_segment(fixture(1), &segment);
         assert!(matches!(
@@ -35006,19 +35011,112 @@ mod coc_marker_tests {
             })
         ));
 
-        let explicit_precinct = insert_before_marker(
+        for code_block_style in [0x80, 0x41, 0x44, 0xc1, 0xc4] {
+            let reserved_code_block_style = insert_before_marker(
+                fixture(1),
+                Marker::Sot,
+                &coc_segment(0, 0, &[0, 2, 2, code_block_style, 1]),
+            );
+            assert!(matches!(
+                parse(&reserved_code_block_style),
+                Err(CodestreamError::Unsupported {
+                    marker: Some(Marker::Coc),
+                    construct: UnsupportedConstruct::Tier1Decode,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn parses_explicit_coc_precincts_before_decode_support_classification() {
+        let codestream = insert_before_marker(
             fixture(1),
             Marker::Sot,
-            &coc_segment(0, 1, &[0, 2, 2, 0, 1, 0xff]),
+            &coc_segment(0, 1, &[0, 2, 2, 0, 1, 0x11]),
         );
+        let parsed = parse(&codestream).unwrap();
+        let component_style = parsed.effective_coding_style(0).unwrap();
+
+        assert!(component_style.precincts_declared);
+        assert_eq!(component_style.precinct_width_exponent, Some(1));
+        assert_eq!(component_style.precinct_height_exponent, Some(1));
         assert!(matches!(
-            parse(&explicit_precinct),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Coc),
-                construct: UnsupportedConstruct::MarkerSegment,
-                ..
-            })
+            unsupported_construct(&parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("explicit precinct tables")
         ));
+        assert!(!is_algorithmic_baseline_profile(&codestream));
+    }
+
+    #[test]
+    fn parses_ht_coc_coding_method_before_decode_support_classification() {
+        let samples = (0..16).map(|sample| sample as u8).collect::<Vec<_>>();
+        let codestream = encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+            width: 4,
+            height: 4,
+            samples: &samples,
+            stride_bytes: 4,
+        })
+        .unwrap();
+        let default = parse(&codestream).unwrap().coding_style.unwrap();
+        let transform = match default.transform {
+            WaveletTransform::Irreversible97 => 0,
+            WaveletTransform::Reversible53 => 1,
+        };
+        let parameters = [
+            default.decomposition_levels,
+            default.code_block_width_exponent - 2,
+            default.code_block_height_exponent - 2,
+            0x40,
+            transform,
+        ];
+        let codestream =
+            insert_before_marker(codestream, Marker::Sot, &coc_segment(0, 0, &parameters));
+        let parsed = parse(&codestream).unwrap();
+
+        let component_style = parsed.effective_coding_style(0).unwrap();
+        assert_eq!(component_style.entropy_coder, EntropyCoder::HtBlockCoding);
+        assert_eq!(component_style.code_block_style, 0x40);
+        assert!(is_htj2k_lossless_profile(&codestream, &parsed));
+        let decoded = decode_htj2k_lossless_owned(&codestream).unwrap().unwrap();
+        assert_eq!(decoded.components[0].samples, samples);
+
+        for structurally_valid_style in [0x48, 0xc0, 0xfa] {
+            let parameters = [
+                default.decomposition_levels,
+                default.code_block_width_exponent - 2,
+                default.code_block_height_exponent - 2,
+                structurally_valid_style,
+                transform,
+            ];
+            let unsupported = insert_before_marker(
+                encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+                    width: 4,
+                    height: 4,
+                    samples: &samples,
+                    stride_bytes: 4,
+                })
+                .unwrap(),
+                Marker::Sot,
+                &coc_segment(0, 0, &parameters),
+            );
+            let parsed_unsupported = parse(&unsupported).unwrap();
+            let component_style = parsed_unsupported.effective_coding_style(0).unwrap();
+            assert_eq!(component_style.entropy_coder, EntropyCoder::HtBlockCoding);
+            assert_eq!(component_style.code_block_style, structurally_valid_style);
+            assert!(!is_htj2k_lossless_profile(
+                &unsupported,
+                &parsed_unsupported
+            ));
+            assert!(matches!(
+                decode_htj2k_lossless_owned(&unsupported),
+                Err(CodestreamError::Unsupported {
+                    construct: UnsupportedConstruct::HtBlockDecode,
+                    ..
+                })
+            ));
+        }
     }
 }
 
