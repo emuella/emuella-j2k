@@ -327,6 +327,31 @@ the exact raw coding and quantisation payloads, per-tile packet order, native
 component-grid stitching and the narrow public request shape without
 embedding protected conformance bytes.
 
+### Profile-0 P0.13 high-component progression and ROI component
+
+P0.13 has a named full-resolution component-zero route. It admits one exact
+1-by-1 raw codestream with 257 unsigned 8-bit unit-sampled components, thereby
+requiring the two-byte component-selector forms of COC, QCC, RGN and POC. The
+main header contains the exact component-two coding-style override,
+component-one and component-two quantisation overrides, component-three
+Maxshift assignment, and two POC records. Those records cover components
+0–127 in one RLCP volume and components 128–256 in one CPRL volume, for 514
+single-precinct packets. The public output is only transformed component zero
+before inverse RCT. Rendered output, other components, reductions, regions,
+tiles, quality-layer limits, altered marker placement and wider progression
+or ROI forms remain excluded.
+
+The two-byte selector boundary and marker fields follow ISO/IEC
+15444-1:2024, Annex A, A.5–A.6 and Tables A.9–A.32; POC precedence and packet
+progression follow Annex B. The canonical transcription consulted was
+retrieval revision `34e5d1639b9f121807e620c001893ca9d2c8f977`. ISO/IEC
+15444-4:2024, Annex C, C.2.1 and Table C.1, PDF page 31, supplies the exact
+component-zero 1-by-1 output contract; its consulted transcription was
+retrieval revision `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
+Project-owned regressions cover exact two-byte marker payloads, the 514-packet
+two-volume order and the narrow public request shape without embedding
+protected conformance bytes.
+
 ## Inline packet markers
 
 The native subsampled and unit-sampled component paths consume inline SOP and

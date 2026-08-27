@@ -17757,6 +17757,299 @@ pub fn is_supported_part1_p0_10_subsampled_reversible_mct_component_profile(
     validate_part1_p0_10_subsampled_reversible_mct_component_profile(input, codestream).is_ok()
 }
 
+fn p0_13_cod_payload_matches(data: &[u8]) -> bool {
+    data == [0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x03, 0x03, 0x10, 0x01]
+}
+
+fn p0_13_coc_payload_matches(data: &[u8]) -> bool {
+    data == [0x00, 0x02, 0x00, 0x01, 0x04, 0x04, 0x00, 0x01]
+}
+
+fn p0_13_qcd_payload_matches(data: &[u8]) -> bool {
+    data == [0x40, 0x40, 0x48, 0x48, 0x50]
+}
+
+fn p0_13_qcc_payload_matches(data: &[u8], component_index: u16) -> bool {
+    let guard = match component_index {
+        1 => 0x60,
+        2 => 0x40,
+        _ => return false,
+    };
+    data == [
+        (component_index >> 8) as u8,
+        component_index as u8,
+        guard,
+        0x48,
+        0x50,
+        0x50,
+        0x58,
+    ]
+}
+
+fn p0_13_poc_payload_matches(data: &[u8]) -> bool {
+    data == [
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00, 0x80, 0x01, 0x00, 0x00, 0x80, 0x00, 0x01, 0x21,
+        0x01, 0x01, 0x04,
+    ]
+}
+
+fn parse_p0_13_main_maxshift(input: &[u8], codestream: &Codestream) -> Result<BoundedTileMaxshift> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let segments = codestream
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Rgn)
+        .collect::<Vec<_>>();
+    let [segment] = segments.as_slice() else {
+        return Err(unsupported(
+            segments.get(1).map(|segment| segment.offset),
+            Some(Marker::Rgn),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.13 path requires exactly one main-header RGN assignment",
+        ));
+    };
+    if segment.offset >= first_tile_offset
+        || checked_slice(input, segment.data_offset, segment.data_len)? != [0x00, 0x03, 0x00, 0x0b]
+    {
+        return Err(unsupported(
+            Some(segment.offset),
+            Some(Marker::Rgn),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.13 path requires the two-byte component-three Maxshift-eleven assignment in the main header",
+        ));
+    }
+    Ok(BoundedTileMaxshift {
+        tile_index: 0,
+        component_index: 3,
+        shift: 11,
+    })
+}
+
+fn p0_13_effective_style_matches(style: CodingStyleMarker, component_index: u16) -> bool {
+    style.entropy_coder == EntropyCoder::ClassicTier1
+        && !style.sop_markers
+        && !style.eph_markers
+        && style.progression_order == ProgressionOrder::Rlcp
+        && style.layers == 1
+        && style.multiple_component_transform
+        && style.decomposition_levels == 1
+        && style.code_block_width_exponent == if component_index == 2 { 6 } else { 5 }
+        && style.code_block_height_exponent == if component_index == 2 { 6 } else { 5 }
+        && style.code_block_style == if component_index == 2 { 0 } else { 16 }
+        && style.transform == WaveletTransform::Reversible53
+        && !style.precincts_declared
+}
+
+fn validate_part1_p0_13_high_component_progression_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Result<CodingStyleMarker> {
+    if codestream.kind != CodestreamKind::J2k
+        || codestream.siz.capabilities != 1
+        || codestream.siz.reference_grid_width != 1
+        || codestream.siz.reference_grid_height != 1
+        || codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_width != 1
+        || codestream.siz.tile_height != 1
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+        || codestream.siz.components.len() != 257
+        || codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != 8
+                || component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentCount,
+            "the qualified Profile-0 P0.13 path requires one unsigned 8-bit sample in each of exactly 257 unit-sampled components",
+        ));
+    }
+    let tiles = tile_rects(codestream)?;
+    if tiles.len() != 1
+        || tiles[0].tile_index != 0
+        || tiles[0].width != 1
+        || tiles[0].height != 1
+        || !matches!(
+            codestream.tiles.as_slice(),
+            [tile] if tile.tile_index == 0
+                && tile.tile_part_index == 0
+                && tile.tile_part_count == Some(1)
+                && tile.payload_offset.is_some()
+                && tile.payload_len.is_some()
+        )
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::MultipleTiles,
+            "the qualified Profile-0 P0.13 path requires one declared tile part in one 1-by-1 tile",
+        ));
+    }
+
+    let expected_markers = [
+        Marker::Siz,
+        Marker::Cod,
+        Marker::Coc,
+        Marker::Qcd,
+        Marker::Qcc,
+        Marker::Qcc,
+        Marker::Rgn,
+        Marker::Poc,
+        Marker::Com,
+        Marker::Sot,
+        Marker::Sod,
+        Marker::Eoc,
+    ];
+    if codestream
+        .markers
+        .iter()
+        .map(|segment| segment.marker)
+        .ne(expected_markers)
+    {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.13 path requires its exact main-header marker order and an empty tile-part header",
+        ));
+    }
+    let markers = &codestream.markers;
+    if !p0_13_cod_payload_matches(checked_slice(
+        input,
+        markers[1].data_offset,
+        markers[1].data_len,
+    )?) || !p0_13_coc_payload_matches(checked_slice(
+        input,
+        markers[2].data_offset,
+        markers[2].data_len,
+    )?) || !p0_13_qcd_payload_matches(checked_slice(
+        input,
+        markers[3].data_offset,
+        markers[3].data_len,
+    )?) || !p0_13_qcc_payload_matches(
+        checked_slice(input, markers[4].data_offset, markers[4].data_len)?,
+        1,
+    ) || !p0_13_qcc_payload_matches(
+        checked_slice(input, markers[5].data_offset, markers[5].data_len)?,
+        2,
+    ) || !p0_13_poc_payload_matches(checked_slice(
+        input,
+        markers[7].data_offset,
+        markers[7].data_len,
+    )?) || markers[8].data_len != 43
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.13 path requires its exact COD, COC, QCD, QCC, POC and COM field lengths",
+        ));
+    }
+    parse_p0_13_main_maxshift(input, codestream)?;
+
+    let coding_style = codestream.coding_style.ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Cod),
+            "the qualified Profile-0 P0.13 path requires a main-header COD marker",
+        )
+    })?;
+    if codestream.component_coding_styles.len() != 1
+        || codestream.component_coding_styles[0].component_index != 2
+        || (0..codestream.siz.component_count()).any(|component_index| {
+            codestream
+                .effective_coding_style(component_index)
+                .is_none_or(|style| !p0_13_effective_style_matches(style, component_index))
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.13 path requires only the exact component-two COC override",
+        ));
+    }
+    for component_index in 0..codestream.siz.component_count() {
+        let component = codestream
+            .siz
+            .components
+            .get(usize::from(component_index))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let component_tile = component_tile_rect(codestream, tiles[0], component)?;
+        let style = codestream
+            .effective_coding_style(component_index)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        if !coding_style_has_single_precinct(style, component_tile.width, component_tile.height) {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::PacketDecode,
+                "the qualified Profile-0 P0.13 path requires one precinct in each effective component resolution",
+            ));
+        }
+    }
+
+    let component_styles = (0..codestream.siz.component_count())
+        .map(|component_index| {
+            codestream
+                .effective_coding_style(component_index)
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let subband_counts = alloc::vec![4_usize; component_styles.len()];
+    let quantization = parse_component_quantization_for_styles(
+        input,
+        codestream,
+        &component_styles,
+        &subband_counts,
+        4,
+        None,
+    )?;
+    for (component_index, component) in quantization.iter().enumerate() {
+        let (guard_bits, exponents) = match component_index {
+            1 => (3, [9, 10, 10, 11]),
+            2 => (2, [9, 10, 10, 11]),
+            _ => (2, [8, 9, 9, 10]),
+        };
+        if component.style != transform::QuantizationStyle::NoQuantization
+            || component.guard_bits != guard_bits
+            || component.steps.len() != 4
+            || component
+                .steps
+                .iter()
+                .zip(exponents)
+                .any(|(step, exponent)| step.exponent != exponent || step.mantissa != 0)
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Qcc),
+                UnsupportedConstruct::PacketDecode,
+                "the qualified Profile-0 P0.13 path requires its exact default and component-one/component-two reversible quantisation",
+            ));
+        }
+    }
+    Ok(coding_style)
+}
+
+/// True when the codestream matches the exact 257-component progression and
+/// ROI profile qualified by Profile-0 P0.13.
+pub fn is_supported_part1_p0_13_high_component_progression_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> bool {
+    validate_part1_p0_13_high_component_progression_profile(input, codestream).is_ok()
+}
+
 fn validate_bounded_maxshift_plane_widths(
     input: &[u8],
     codestream: &Codestream,
@@ -19334,6 +19627,44 @@ pub fn decode_part1_p0_10_subsampled_reversible_mct_component_zero(
         bits_per_sample: 8,
         signed: false,
         components: alloc::vec![DecodedComponent { samples: output }],
+    })
+}
+
+/// Decode transformed component zero from the exact 257-component
+/// progression and ROI profile qualified by Profile-0 P0.13.
+pub fn decode_part1_p0_13_high_component_progression_component_zero(
+    input: &[u8],
+) -> Result<DecodedImage> {
+    let codestream = parse(input)?;
+    let coding_style = validate_part1_p0_13_high_component_progression_profile(input, &codestream)?;
+    let tile_rect = tile_rects(&codestream)?
+        .into_iter()
+        .next()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut workspace = Part1ComponentDecodeWorkspace::new();
+    let mut timings = None;
+    let mut components = decode_multitile_tile_component_samples_selected(
+        input,
+        &codestream,
+        coding_style,
+        tile_rect,
+        &[0],
+        &mut timings,
+        &mut workspace,
+        None,
+        0,
+        ComponentPacketProfile::Profile0P013,
+    )?;
+    let samples = components.pop().ok_or(CodestreamError::SizeOverflow)?;
+    if !components.is_empty() || samples.len() != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    Ok(DecodedImage {
+        width: 1,
+        height: 1,
+        bits_per_sample: 8,
+        signed: false,
+        components: alloc::vec![DecodedComponent { samples }],
     })
 }
 
@@ -24057,6 +24388,7 @@ enum ComponentPacketProfile {
     Profile0P007,
     Profile0P008,
     Profile0P010,
+    Profile0P013,
 }
 
 fn decode_multitile_tile_component_samples_selected(
@@ -24371,8 +24703,11 @@ fn decode_multitile_tile_component_planes_selected(
     );
 
     let detailed_profile = timings.is_some();
-    let maxshift = parse_bounded_tile_maxshift(input, codestream)?
-        .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
+    let maxshift = match packet_profile {
+        ComponentPacketProfile::Profile0P013 => Some(parse_p0_13_main_maxshift(input, codestream)?),
+        _ => parse_bounded_tile_maxshift(input, codestream)?,
+    }
+    .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
     reconstruct_default_precinct_component_planes_selected(
         &payload,
         codestream,
@@ -25500,6 +25835,7 @@ fn parse_default_precinct_packets_from_source(
         ComponentPacketProfile::Profile0P005
             | ComponentPacketProfile::Profile0P006
             | ComponentPacketProfile::Profile0P008
+            | ComponentPacketProfile::Profile0P013
     ) {
         (0..codestream.siz.component_count())
             .map(|component_index| {
@@ -25521,7 +25857,10 @@ fn parse_default_precinct_packets_from_source(
     let coding_style = *component_styles
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
-    let progression_order = if packet_profile == ComponentPacketProfile::Profile0P007 {
+    let progression_order = if matches!(
+        packet_profile,
+        ComponentPacketProfile::Profile0P007 | ComponentPacketProfile::Profile0P013
+    ) {
         coding_style.progression_order
     } else {
         parse_bounded_main_header_poc(input, codestream)?
@@ -25532,6 +25871,7 @@ fn parse_default_precinct_packets_from_source(
         ComponentPacketProfile::Profile0P005
             | ComponentPacketProfile::Profile0P006
             | ComponentPacketProfile::Profile0P008
+            | ComponentPacketProfile::Profile0P013
     ) && component_styles
         .iter()
         .zip(&codestream.siz.components)
@@ -25582,6 +25922,7 @@ fn parse_default_precinct_packets_from_source(
         ComponentPacketProfile::Profile0P006 => {
             Some(parse_p0_06_effective_maxshift(input, codestream)?)
         }
+        ComponentPacketProfile::Profile0P013 => Some(parse_p0_13_main_maxshift(input, codestream)?),
         _ => parse_bounded_tile_maxshift(input, codestream)?,
     }
     .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
@@ -25637,24 +25978,31 @@ fn parse_default_precinct_packets_from_source(
             "maximum quality layers must retain at least one layer",
         ));
     }
-    let precinct_counts_by_component = component_states
-        .iter()
-        .zip(&component_styles)
-        .map(|(component, style)| {
-            (0..=style.decomposition_levels)
-                .map(|resolution| {
-                    let subband = component
-                        .subbands
-                        .iter()
-                        .find(|subband| subband.resolution == resolution)
-                        .ok_or(CodestreamError::SizeOverflow)?;
-                    u32::from(subband.precinct_cols)
-                        .checked_mul(u32::from(subband.precinct_rows))
-                        .ok_or(CodestreamError::SizeOverflow)
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let precinct_counts_by_component = if packet_profile == ComponentPacketProfile::Profile0P013 {
+        // P0.13's 1-by-1 components still carry an empty packet for the
+        // second declared resolution even though every high-pass subband has
+        // zero area. Preserve that resolution in the packet schedule.
+        alloc::vec![alloc::vec![1, 1]; component_states.len()]
+    } else {
+        component_states
+            .iter()
+            .zip(&component_styles)
+            .map(|(component, style)| {
+                (0..=style.decomposition_levels)
+                    .map(|resolution| {
+                        let subband = component
+                            .subbands
+                            .iter()
+                            .find(|subband| subband.resolution == resolution)
+                            .ok_or(CodestreamError::SizeOverflow)?;
+                        u32::from(subband.precinct_cols)
+                            .checked_mul(u32::from(subband.precinct_rows))
+                            .ok_or(CodestreamError::SizeOverflow)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
     let expected_packet_count = precinct_counts_by_component
         .iter()
         .flatten()
@@ -25705,6 +26053,14 @@ fn parse_default_precinct_packets_from_source(
             Some(Marker::Sot),
             UnsupportedConstruct::PacketDecode,
             "the qualified Profile-0 P0.10 path requires exactly 24 LRCP packets per tile",
+        ));
+    }
+    if packet_profile == ComponentPacketProfile::Profile0P013 && expected_packet_count != 514 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Poc),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 P0.13 path requires exactly 514 packets in its two progression volumes",
         ));
     }
     let plt_fully_covers_packets = plt_packet_lengths.as_ref().is_some_and(|plt| {
@@ -27262,6 +27618,46 @@ fn visit_profile_component_precinct_packet_keys(
     packet_profile: ComponentPacketProfile,
     mut visitor: impl FnMut(PacketKey) -> Result<()>,
 ) -> Result<()> {
+    if packet_profile == ComponentPacketProfile::Profile0P013 {
+        if tile != 0
+            || layers != 1
+            || progression_order != ProgressionOrder::Rlcp
+            || precinct_counts_by_component.len() != 257
+            || precinct_counts_by_component
+                .iter()
+                .any(|counts| counts.as_slice() != [1, 1])
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Poc),
+                UnsupportedConstruct::PacketDecode,
+                "the qualified Profile-0 P0.13 packet schedule requires tile zero, 257 components, one layer and one precinct in each of two resolutions",
+            ));
+        }
+        for resolution in 0..2_u8 {
+            for component in 0..128_u16 {
+                visitor(PacketKey {
+                    tile,
+                    layer: 0,
+                    resolution,
+                    component,
+                    precinct: 0,
+                })?;
+            }
+        }
+        for component in 128..257_u16 {
+            for resolution in 0..2_u8 {
+                visitor(PacketKey {
+                    tile,
+                    layer: 0,
+                    resolution,
+                    component,
+                    precinct: 0,
+                })?;
+            }
+        }
+        return Ok(());
+    }
     if packet_profile != ComponentPacketProfile::Profile0P007 {
         return visit_component_precinct_packet_keys(
             tile,
@@ -27701,6 +28097,66 @@ mod heterogeneous_packet_order_tests {
             ),
             (1, 3, 2),
         );
+    }
+
+    #[test]
+    fn visits_the_exact_514_packet_p0_13_two_volume_shape() {
+        let counts = vec![vec![1, 1]; 257];
+        let mut packets = Vec::new();
+        visit_profile_component_precinct_packet_keys(
+            0,
+            ProgressionOrder::Rlcp,
+            1,
+            &counts,
+            ComponentPacketProfile::Profile0P013,
+            |packet| {
+                packets.push(packet);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(packets.len(), 514);
+        for (index, resolution, component) in [
+            (0, 0, 0),
+            (127, 0, 127),
+            (128, 1, 0),
+            (255, 1, 127),
+            (256, 0, 128),
+            (257, 1, 128),
+            (513, 1, 256),
+        ] {
+            assert_eq!(
+                (packets[index].resolution, packets[index].component),
+                (resolution, component),
+            );
+        }
+    }
+
+    #[test]
+    fn p0_13_marker_payloads_require_exact_two_byte_selectors_and_fields() {
+        let cod = [0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x03, 0x03, 0x10, 0x01];
+        let coc = [0x00, 0x02, 0x00, 0x01, 0x04, 0x04, 0x00, 0x01];
+        let qcd = [0x40, 0x40, 0x48, 0x48, 0x50];
+        let qcc_one = [0x00, 0x01, 0x60, 0x48, 0x50, 0x50, 0x58];
+        let qcc_two = [0x00, 0x02, 0x40, 0x48, 0x50, 0x50, 0x58];
+        let poc = [
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00, 0x80, 0x01, 0x00, 0x00, 0x80, 0x00, 0x01,
+            0x21, 0x01, 0x01, 0x04,
+        ];
+        assert!(p0_13_cod_payload_matches(&cod));
+        assert!(p0_13_coc_payload_matches(&coc));
+        assert!(p0_13_qcd_payload_matches(&qcd));
+        assert!(p0_13_qcc_payload_matches(&qcc_one, 1));
+        assert!(p0_13_qcc_payload_matches(&qcc_two, 2));
+        assert!(p0_13_poc_payload_matches(&poc));
+
+        assert!(!p0_13_coc_payload_matches(&coc[1..]));
+        assert!(!p0_13_qcc_payload_matches(&qcc_one[1..], 1));
+        assert!(!p0_13_qcc_payload_matches(&qcc_one, 2));
+        let mut changed_poc = poc;
+        changed_poc[17] = 1;
+        assert!(!p0_13_poc_payload_matches(&changed_poc));
     }
 
     #[test]
