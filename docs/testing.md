@@ -125,6 +125,12 @@ relocation, ROI, registration, and inline packet markers outside this bounded
 profile. Annex C, C.2.1 and Table C.1 assign the component-0 reference and
 inclusive limits 0/0.
 
+P0.09 exercises the same two-level scalar boundary with an irreversible 9/7
+codestream. Its unsigned 8-bit component-0 oracle is 5 × 10 samples and uses
+the inclusive lossy limits from Table C.1: peak error 4 and mean-squared error
+1.47. The existing reduced irreversible component path satisfies that contract
+without widening decoder admission.
+
 The comparison worker also accepts the unsigned PGX reference-header spacing
 variant used by the Profile-0 ETS: exactly one blank sign position may appear
 between the byte-order field and an unsigned decimal precision. Other empty
