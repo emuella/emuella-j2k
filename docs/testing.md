@@ -255,6 +255,29 @@ tile-header precedence. Multiple progression volumes, other POC orders,
 tile-part POC precedence and encoder-side POC production remain outside this
 decoder increment.
 
+### Profile-0 P0.07 tile-part progression schedule
+
+P0.07 has a separate, exact admission path; it does not widen the bounded
+main-header POC contract above. The qualified path accepts the locked
+256-tile, signed 12-bit reversible shape with eight COD layers, SOP/EPH, one
+PLT segment per tile part, and precisely two tile-header POC records for tile
+zero. The first tile part contributes the 72 LRCP packets for resolutions zero
+through two. Tile zero's final tile part contributes the remaining 24 LRCP
+packets for resolution three. Packet-header state and SOP numbering continue
+across that tile-part boundary. Only component zero of the upper-left
+128-by-128 tile is exposed through the public bounded output-window route;
+other regions, components, layer limits and reductions remain unsupported.
+
+The POC syntax, precedence and packet-volume rules follow ISO/IEC
+15444-1:2024, Annex A, A.6.6 and Annex B, B.12–B.12.3, PDF pages 54–55 and
+96–99. The canonical transcription consulted was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. ISO/IEC 15444-4:2024, Annex C,
+C.2.1.1 and Table C.1, PDF page 31, supplies the scalar P0.07 component,
+window, precision and error limits; its consulted transcription was retrieval
+revision `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. Project-owned packet-order
+and request-shape regressions exercise the 72+24 boundary without embedding
+protected conformance bytes.
+
 ## Inline packet markers
 
 The native subsampled and unit-sampled component paths consume inline SOP and

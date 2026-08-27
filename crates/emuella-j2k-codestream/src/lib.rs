@@ -16655,6 +16655,10 @@ fn p0_06_effective_style_matches(style: CodingStyleMarker, transform: WaveletTra
         && !style.precincts_declared
 }
 
+fn p0_07_main_cod_payload_matches(data: &[u8]) -> bool {
+    data == [0x06, 0x01, 0x00, 0x08, 0x00, 0x03, 0x04, 0x04, 0x00, 0x01]
+}
+
 fn validate_part1_reduced_roi_irreversible_component_profile(
     input: &[u8],
     codestream: &Codestream,
@@ -16905,6 +16909,297 @@ fn validate_part1_reduced_roi_irreversible_component_profile(
         )?;
     }
     Ok(coding_style)
+}
+
+/// Validate the exact tile-header progression schedule qualified by
+/// Profile-0 P0.07.
+///
+/// The schedule has one LRCP volume for resolutions zero through two in tile
+/// zero's first tile part, followed by one LRCP volume for resolution three in
+/// its second tile part. The other 255 tiles use the COD-declared RLCP order.
+/// Keeping this admission separate from the general P0.03 main-header POC
+/// parser prevents either bounded contract from silently widening the other.
+fn validate_part1_p0_07_progression_change_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Result<CodingStyleMarker> {
+    if codestream.kind != CodestreamKind::J2k {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.07 path is limited to raw Part 1 codestreams",
+        ));
+    }
+    if codestream.siz.capabilities != 1
+        || codestream.siz.reference_grid_width != 2048
+        || codestream.siz.reference_grid_height != 2048
+        || codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_width != 128
+        || codestream.siz.tile_height != 128
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+        || codestream.siz.components.len() != 3
+        || codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != 12
+                || !component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "the qualified Profile-0 P0.07 path requires a 2048-by-2048 signed 12-bit three-component image on a 128-by-128 origin-aligned tile grid",
+        ));
+    }
+
+    let coding_style = codestream.coding_style.ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Cod),
+            "the qualified Profile-0 P0.07 path requires a main-header COD marker",
+        )
+    })?;
+    if !coding_style.sop_markers
+        || !coding_style.eph_markers
+        || coding_style.progression_order != ProgressionOrder::Rlcp
+        || coding_style.layers != 8
+        || coding_style.multiple_component_transform
+        || coding_style.decomposition_levels != 3
+        || coding_style.code_block_width_exponent != 6
+        || coding_style.code_block_height_exponent != 6
+        || coding_style.code_block_style != 0
+        || coding_style.transform != WaveletTransform::Reversible53
+        || coding_style.entropy_coder != EntropyCoder::ClassicTier1
+        || coding_style.precincts_declared
+        || !codestream.component_coding_styles.is_empty()
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::ProgressionOrder,
+            "the qualified Profile-0 P0.07 path requires eight-layer RLCP reversible coding with SOP, EPH, three decomposition levels, 64-by-64 code-blocks and default precincts",
+        ));
+    }
+
+    let tile_rects = tile_rects(codestream)?;
+    if tile_rects.len() != 256 || codestream.tiles.len() != 257 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::MultipleTiles,
+            "the qualified Profile-0 P0.07 path requires 256 tiles and 257 retained tile parts",
+        ));
+    }
+    for (position, tile_part) in codestream.tiles.iter().enumerate() {
+        let expected = match position {
+            0 => (0_u16, 0_u8, None),
+            1..=255 => (
+                u16::try_from(position).map_err(|_| CodestreamError::SizeOverflow)?,
+                0,
+                Some(1),
+            ),
+            256 => (0, 1, Some(2)),
+            _ => return Err(CodestreamError::SizeOverflow),
+        };
+        if (
+            tile_part.tile_index,
+            tile_part.tile_part_index,
+            tile_part.tile_part_count,
+        ) != expected
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Sot),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 P0.07 path requires tile zero part zero, tiles one through 255, then tile zero part one, with its exact declared part counts",
+            ));
+        }
+    }
+    for tile_index in 0..256_u16 {
+        validate_retained_tile_parts_for_tile(codestream, tile_index)?;
+    }
+
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut main_siz = 0_u8;
+    let mut main_cod = 0_u8;
+    let mut main_qcd = 0_u8;
+    for segment in codestream
+        .markers
+        .iter()
+        .take_while(|segment| segment.offset < first_tile_offset)
+    {
+        match segment.marker {
+            Marker::Soc | Marker::Com => {}
+            Marker::Siz => main_siz = main_siz.saturating_add(1),
+            Marker::Cod => main_cod = main_cod.saturating_add(1),
+            Marker::Qcd => main_qcd = main_qcd.saturating_add(1),
+            marker => {
+                return Err(unsupported(
+                    Some(segment.offset),
+                    Some(marker),
+                    UnsupportedConstruct::MarkerSegment,
+                    "marker is outside the qualified Profile-0 P0.07 main header",
+                ));
+            }
+        }
+    }
+    if (main_siz, main_cod, main_qcd) != (1, 1, 1) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcd),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.07 path requires exactly one main-header SIZ, COD and QCD",
+        ));
+    }
+    let main_cod_segment = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Cod && segment.offset < first_tile_offset)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if !p0_07_main_cod_payload_matches(checked_slice(
+        input,
+        main_cod_segment.data_offset,
+        main_cod_segment.data_len,
+    )?) {
+        return Err(unsupported(
+            Some(main_cod_segment.offset),
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 P0.07 path requires its exact ten-byte COD payload with no reserved Scod bits",
+        ));
+    }
+    if codestream.markers.iter().any(|segment| {
+        segment.offset >= first_tile_offset
+            && !matches!(
+                segment.marker,
+                Marker::Sot | Marker::Poc | Marker::Plt | Marker::Sod | Marker::Eoc
+            )
+    }) {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "marker is outside the qualified Profile-0 P0.07 tile headers",
+        ));
+    }
+
+    for tile_part in &codestream.tiles {
+        let payload_offset = tile_part
+            .payload_offset
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let sod_index = codestream
+            .markers
+            .iter()
+            .position(|segment| {
+                segment.marker == Marker::Sod && segment.data_offset == payload_offset
+            })
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let sot_index = codestream.markers[..sod_index]
+            .iter()
+            .rposition(|segment| segment.marker == Marker::Sot)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let header = &codestream.markers[sot_index..=sod_index];
+        let expected_poc = match (tile_part.tile_index, tile_part.tile_part_index) {
+            (0, 0) => Some([0_u8, 0, 0, 9, 3, 3, 0]),
+            (0, 1) => Some([0_u8, 0, 0, 9, 8, 3, 0]),
+            _ => None,
+        };
+        let expected_markers: &[Marker] = if expected_poc.is_some() {
+            &[Marker::Sot, Marker::Poc, Marker::Plt, Marker::Sod]
+        } else {
+            &[Marker::Sot, Marker::Plt, Marker::Sod]
+        };
+        if header
+            .iter()
+            .map(|segment| segment.marker)
+            .ne(expected_markers.iter().copied())
+        {
+            return Err(unsupported(
+                header.first().map(|segment| segment.offset),
+                Some(Marker::Poc),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 P0.07 path requires one PLT per tile part and POC only in tile zero's two parts",
+            ));
+        }
+        if let Some(expected_poc) = expected_poc {
+            let poc = header
+                .iter()
+                .find(|segment| segment.marker == Marker::Poc)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if checked_slice(input, poc.data_offset, poc.data_len)? != expected_poc {
+                return Err(unsupported(
+                    Some(poc.offset),
+                    Some(Marker::Poc),
+                    UnsupportedConstruct::ProgressionOrder,
+                    "the qualified Profile-0 P0.07 path requires its exact two LRCP progression volumes",
+                ));
+            }
+        }
+        let (packet_lengths, _) = tile_part_packet_lengths_from_plt(input, codestream, tile_part)?
+            .ok_or_else(|| {
+                invalid(
+                    Some(payload_offset),
+                    Some(Marker::Plt),
+                    "the qualified Profile-0 P0.07 path requires PLT packet lengths",
+                )
+            })?;
+        let expected_packets = if tile_part.tile_index == 0 && tile_part.tile_part_index == 0 {
+            72
+        } else if tile_part.tile_index == 0 && tile_part.tile_part_index == 1 {
+            24
+        } else {
+            96
+        };
+        if packet_lengths.len() != expected_packets {
+            return Err(unsupported(
+                Some(payload_offset),
+                Some(Marker::Plt),
+                UnsupportedConstruct::PacketDecode,
+                "the qualified Profile-0 P0.07 path requires a 72+24 tile-zero packet split and 96 packets in every other tile",
+            ));
+        }
+    }
+
+    let quantization = parse_component_quantization(input, codestream, 10)?;
+    let expected_exponents = [14_u8, 15, 15, 16, 15, 15, 16, 15, 15, 16];
+    if quantization.len() != 3
+        || quantization.iter().any(|component| {
+            component.style != transform::QuantizationStyle::NoQuantization
+                || component.guard_bits != 1
+                || component.steps.len() != expected_exponents.len()
+                || component
+                    .steps
+                    .iter()
+                    .zip(expected_exponents)
+                    .any(|(step, exponent)| step.exponent != exponent || step.mantissa != 0)
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcd),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 P0.07 path requires its exact reversible QCD exponents",
+        ));
+    }
+    Ok(coding_style)
+}
+
+/// True when the codestream matches the exact tile-header POC profile
+/// qualified by Profile-0 P0.07.
+pub fn is_supported_part1_p0_07_progression_change_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> bool {
+    validate_part1_p0_07_progression_change_component_profile(input, codestream).is_ok()
 }
 
 fn validate_bounded_maxshift_plane_widths(
@@ -18311,6 +18606,46 @@ pub fn decode_part1_reduced_roi_irreversible_component_zero(
         height,
         bits_per_sample: 12,
         signed: false,
+        components,
+    })
+}
+
+/// Decode the upper-left tile's component zero from the exact tile-header POC
+/// schedule qualified by Profile-0 P0.07.
+///
+/// Only tile zero is reconstructed. Its two tile parts form one logical packet
+/// sequence, so SOP numbering and packet state continue across the 72+24
+/// progression-volume boundary.
+pub fn decode_part1_p0_07_progression_change_component_zero(input: &[u8]) -> Result<DecodedImage> {
+    let codestream = parse(input)?;
+    let coding_style =
+        validate_part1_p0_07_progression_change_component_profile(input, &codestream)?;
+    let tile_rect = *tile_rects(&codestream)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let component_indices = [0_u16];
+    let mut workspace = Part1ComponentDecodeWorkspace::new();
+    let mut timings = None;
+    let components = decode_multitile_tile_component_samples_selected(
+        input,
+        &codestream,
+        coding_style,
+        tile_rect,
+        &component_indices,
+        &mut timings,
+        &mut workspace,
+        None,
+        0,
+        ComponentPacketProfile::Profile0P007,
+    )?
+    .into_iter()
+    .map(|samples| DecodedComponent { samples })
+    .collect::<Vec<_>>();
+    Ok(DecodedImage {
+        width: tile_rect.width,
+        height: tile_rect.height,
+        bits_per_sample: 12,
+        signed: true,
         components,
     })
 }
@@ -23032,6 +23367,7 @@ enum ComponentPacketProfile {
     Profile0P004,
     Profile0P005,
     Profile0P006,
+    Profile0P007,
 }
 
 fn decode_multitile_tile_component_samples_selected(
@@ -23100,6 +23436,7 @@ fn decode_multitile_tile_component_samples_selected(
         workspace,
         max_layers,
         discard_levels,
+        packet_profile,
     )?;
     if planes.len() != component_indices.len() {
         return Err(CodestreamError::SizeOverflow);
@@ -23282,6 +23619,7 @@ fn decode_multitile_tile_component_planes_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
+    packet_profile: ComponentPacketProfile,
 ) -> Result<Vec<Vec<i32>>> {
     let max_resolution = coding_style
         .decomposition_levels
@@ -23310,7 +23648,7 @@ fn decode_multitile_tile_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
-        ComponentPacketProfile::Default,
+        packet_profile,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -24492,8 +24830,12 @@ fn parse_default_precinct_packets_from_source(
     let coding_style = *component_styles
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
-    let progression_order = parse_bounded_main_header_poc(input, codestream)?
-        .map_or(coding_style.progression_order, |poc| poc.progression_order);
+    let progression_order = if packet_profile == ComponentPacketProfile::Profile0P007 {
+        coding_style.progression_order
+    } else {
+        parse_bounded_main_header_poc(input, codestream)?
+            .map_or(coding_style.progression_order, |poc| poc.progression_order)
+    };
     let bounded_heterogeneous_single_precincts = matches!(
         packet_profile,
         ComponentPacketProfile::Profile0P005 | ComponentPacketProfile::Profile0P006
@@ -24648,6 +24990,14 @@ fn parse_default_precinct_packets_from_source(
             "the qualified Profile-0 P0.06 path requires exactly 112 single-precinct RPCL packets",
         ));
     }
+    if packet_profile == ComponentPacketProfile::Profile0P007 && expected_packet_count != 96 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Poc),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 P0.07 path requires exactly 96 tile-zero packets",
+        ));
+    }
     let plt_fully_covers_packets = plt_packet_lengths.as_ref().is_some_and(|plt| {
         if plt.lengths.len() != expected_packet_count
             || plt.logical_offsets.len() != expected_packet_count
@@ -24666,11 +25016,12 @@ fn parse_default_precinct_packets_from_source(
         }
         expected_offset == payload.len()
     });
-    visit_component_precinct_packet_keys(
+    visit_profile_component_precinct_packet_keys(
         tile_rect.tile_index,
         progression_order,
         coding_style.layers,
         &precinct_counts_by_component,
+        packet_profile,
         |packet_cursor| {
             let packet_start = packet_offset;
             let declared_packet_len = plt_packet_lengths.as_ref().and_then(|plt| {
@@ -26161,6 +26512,58 @@ fn visit_component_precinct_packet_keys(
     Ok(())
 }
 
+fn visit_profile_component_precinct_packet_keys(
+    tile: u16,
+    progression_order: ProgressionOrder,
+    layers: u16,
+    precinct_counts_by_component: &[Vec<u32>],
+    packet_profile: ComponentPacketProfile,
+    mut visitor: impl FnMut(PacketKey) -> Result<()>,
+) -> Result<()> {
+    if packet_profile != ComponentPacketProfile::Profile0P007 {
+        return visit_component_precinct_packet_keys(
+            tile,
+            progression_order,
+            layers,
+            precinct_counts_by_component,
+            visitor,
+        );
+    }
+    if tile != 0
+        || layers != 8
+        || precinct_counts_by_component.len() != 3
+        || precinct_counts_by_component
+            .iter()
+            .any(|counts| counts.as_slice() != [1, 1, 1, 1])
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Poc),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 P0.07 packet schedule requires tile zero, three components, eight layers and one precinct in each of four resolutions",
+        ));
+    }
+
+    let mut visit_volume = |resolution_start: u8, resolution_end: u8| -> Result<()> {
+        for layer in 0..layers {
+            for resolution in resolution_start..resolution_end {
+                for component in 0..3_u16 {
+                    visitor(PacketKey {
+                        tile,
+                        layer,
+                        resolution,
+                        component,
+                        precinct: 0,
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    };
+    visit_volume(0, 3)?;
+    visit_volume(3, 4)
+}
+
 #[cfg(test)]
 fn default_precinct_packet_order(
     tile: u16,
@@ -26295,6 +26698,103 @@ mod heterogeneous_packet_order_tests {
             ),
             (6, 3, 3),
         );
+    }
+
+    #[test]
+    fn visits_the_exact_p0_07_two_volume_lrcp_shape_without_duplicates() {
+        let counts = vec![vec![1; 4]; 3];
+        let mut packets = Vec::new();
+        visit_profile_component_precinct_packet_keys(
+            0,
+            ProgressionOrder::Rlcp,
+            8,
+            &counts,
+            ComponentPacketProfile::Profile0P007,
+            |packet| {
+                packets.push(packet);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(packets.len(), 96);
+        assert_eq!(
+            packets
+                .iter()
+                .take(72)
+                .filter(|packet| packet.resolution < 3)
+                .count(),
+            72
+        );
+        assert!(packets.iter().skip(72).all(|packet| packet.resolution == 3));
+        assert_eq!(
+            packets[71],
+            PacketKey {
+                tile: 0,
+                layer: 7,
+                resolution: 2,
+                component: 2,
+                precinct: 0,
+            }
+        );
+        assert_eq!(
+            packets[72],
+            PacketKey {
+                tile: 0,
+                layer: 0,
+                resolution: 3,
+                component: 0,
+                precinct: 0,
+            }
+        );
+        let unique = packets
+            .iter()
+            .map(|packet| {
+                (
+                    packet.layer,
+                    packet.resolution,
+                    packet.component,
+                    packet.precinct,
+                )
+            })
+            .collect::<alloc::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), packets.len());
+    }
+
+    #[test]
+    fn rejects_any_wider_p0_07_packet_shape() {
+        for (tile, layers, counts) in [
+            (1, 8, vec![vec![1; 4]; 3]),
+            (0, 7, vec![vec![1; 4]; 3]),
+            (0, 8, vec![vec![1; 5]; 3]),
+            (0, 8, vec![vec![1; 4]; 2]),
+        ] {
+            assert!(
+                visit_profile_component_precinct_packet_keys(
+                    tile,
+                    ProgressionOrder::Rlcp,
+                    layers,
+                    &counts,
+                    ComponentPacketProfile::Profile0P007,
+                    |_| Ok(()),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_reserved_scod_bits_and_trailing_p0_07_cod_data() {
+        let exact = [0x06, 0x01, 0x00, 0x08, 0x00, 0x03, 0x04, 0x04, 0x00, 0x01];
+        assert!(p0_07_main_cod_payload_matches(&exact));
+
+        let mut reserved_scod = exact;
+        reserved_scod[0] |= 0x08;
+        assert!(!p0_07_main_cod_payload_matches(&reserved_scod));
+
+        let mut trailing = exact.to_vec();
+        trailing.push(0);
+        assert!(!p0_07_main_cod_payload_matches(&trailing));
     }
 }
 
