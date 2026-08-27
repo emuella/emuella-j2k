@@ -114,7 +114,7 @@ requirements. P0.15 currently qualifies through its one-level-reduced
 alternative; its unsupported full-resolution multi-tile form continues to
 fail closed.
 
-Scalar cases admit zero, one, or two discarded resolution levels; choice-group
+Scalar cases admit zero through three discarded resolution levels; choice-group
 alternatives remain bounded to zero or one. P0.14 exercises the two-level
 boundary: the single-tile unsigned 8-bit codestream signals a reversible MCT
 and five reversible 5/3 decomposition levels, while the component-mode oracle
@@ -124,6 +124,15 @@ other decomposition counts, progression changes, component overrides, packet
 relocation, ROI, registration, and inline packet markers outside this bounded
 profile. Annex C, C.2.1 and Table C.1 assign the component-0 reference and
 inclusive limits 0/0.
+
+P0.04 exercises the scalar three-level boundary: an origin-aligned, one-tile,
+three-component unsigned 8-bit J2K codestream uses irreversible 9/7 coding,
+MCT, six decomposition levels, 20-layer RLCP, 128 × 128 precincts,
+vertical-causal classic Tier-1 coding, and main-header QCD/QCC. Its component-0
+comparison remains before inverse ICT. The admitted path rejects other
+precinct, layer, code-block-style, component-coding, tile-header quantisation,
+ROI, packet-relocation, inline-marker, sampling, component-selection,
+reduction, tile, and coding-style shapes.
 
 P0.09 exercises the same two-level scalar boundary with an irreversible 9/7
 codestream. Its unsigned 8-bit component-0 oracle is 5 × 10 samples and uses
