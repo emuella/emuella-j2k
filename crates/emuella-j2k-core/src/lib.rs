@@ -1105,6 +1105,11 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
         return Ok(image);
     }
     if let Some(image) =
+        decode_owned_part1_p0_13_high_component_progression(input, &metadata, options)?
+    {
+        return Ok(image);
+    }
+    if let Some(image) =
         decode_owned_part1_p0_10_subsampled_reversible_mct(input, &metadata, options)?
     {
         return Ok(image);
@@ -1213,6 +1218,9 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     reject_unsupported_rendered_projection(&metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
 
+    if let Some(shape) = p0_13_high_component_progression_decode_shape(input, &metadata, options)? {
+        return Ok(shape);
+    }
     if let Some(shape) = p0_10_subsampled_reversible_mct_decode_shape(input, &metadata, options)? {
         return Ok(shape);
     }
@@ -1334,6 +1342,77 @@ fn p0_10_subsampled_reversible_mct_decode_shape(
         height: 64,
         codestream_components: 3,
         colour_channels: 3,
+        output_components: 1,
+        sample_format,
+        layout: ComponentLayout::Planar,
+        byte_order: sample_format.byte_order,
+        color_model: ColorModel::Unknown,
+        mode: DecodeMode::Components,
+    }))
+}
+
+fn is_p0_13_decode_request(options: &DecodeOptions) -> bool {
+    !options.allow_best_effort_backend_decode
+        && options.mode == DecodeMode::Components
+        && matches!(&options.requested_components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
+        && options.max_quality_layers.is_none()
+        && options.target_layout == ComponentLayout::Planar
+}
+
+fn decode_owned_part1_p0_13_high_component_progression(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &DecodeOptions,
+) -> Result<Option<Image>> {
+    if !is_p0_13_decode_request(options) {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_p0_13_high_component_progression_profile(
+        codestream_bytes,
+        &parsed,
+    ) {
+        return Ok(None);
+    }
+    let decoded =
+        codestream::decode_part1_p0_13_high_component_progression_component_zero(codestream_bytes)
+            .map_err(map_codestream_error)?;
+    let component_info =
+        part1_component_info(codestream_bytes, &options.requested_components, None)?;
+    decoded_baseline_to_image_with_component_info(decoded, options, Some(component_info)).map(Some)
+}
+
+fn p0_13_high_component_progression_decode_shape(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &DecodeOptions,
+) -> Result<Option<DecodeShape>> {
+    if !is_p0_13_decode_request(options) {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_p0_13_high_component_progression_profile(
+        codestream_bytes,
+        &parsed,
+    ) {
+        return Ok(None);
+    }
+    let sample_format = metadata
+        .image
+        .as_ref()
+        .map(|image| image.sample_format)
+        .ok_or_else(sample_size_overflow)?;
+    Ok(Some(DecodeShape {
+        width: 1,
+        height: 1,
+        codestream_components: 257,
+        colour_channels: 257,
         output_components: 1,
         sample_format,
         layout: ComponentLayout::Planar,
@@ -6235,6 +6314,52 @@ mod effective_coding_style_tests {
             mutations
                 .iter()
                 .all(|request| !is_p0_10_decode_request(request))
+        );
+    }
+
+    #[test]
+    fn p0_13_route_admits_only_component_zero_planar_full_decode() {
+        let admitted = DecodeOptions {
+            mode: DecodeMode::Components,
+            requested_components: ComponentSelection::Indices(vec![0]),
+            ..DecodeOptions::default()
+        };
+        assert!(is_p0_13_decode_request(&admitted));
+
+        let mutations = [
+            DecodeOptions {
+                allow_best_effort_backend_decode: true,
+                ..admitted.clone()
+            },
+            DecodeOptions {
+                mode: DecodeMode::Rendered,
+                ..admitted.clone()
+            },
+            DecodeOptions {
+                requested_components: ComponentSelection::All,
+                ..admitted.clone()
+            },
+            DecodeOptions {
+                requested_components: ComponentSelection::Indices(vec![1]),
+                ..admitted.clone()
+            },
+            DecodeOptions {
+                requested_components: ComponentSelection::Indices(vec![0, 1]),
+                ..admitted.clone()
+            },
+            DecodeOptions {
+                max_quality_layers: Some(1),
+                ..admitted.clone()
+            },
+            DecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..admitted.clone()
+            },
+        ];
+        assert!(
+            mutations
+                .iter()
+                .all(|request| !is_p0_13_decode_request(request))
         );
     }
 }
