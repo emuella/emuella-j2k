@@ -13939,6 +13939,18 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
         codestream
     }
 
+    fn insert_tile_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let tile_part_length = read_u32(&codestream, sot + 6).unwrap();
+        let extended_length = tile_part_length
+            .checked_add(u32::try_from(segment.len()).unwrap())
+            .unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(&extended_length.to_be_bytes());
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
     fn quantization_segment(marker: Marker, component: Option<u8>, payload: &[u8]) -> Vec<u8> {
         let mut data = component.into_iter().collect::<Vec<_>>();
         data.extend_from_slice(payload);
@@ -13961,6 +13973,10 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
         let mut codestream = encode_planar_u8_no_decomp_test_fixture(64, 64, &views).unwrap();
 
         let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 6..siz + 10].copy_from_slice(&1024_u32.to_be_bytes());
+        codestream[siz + 10..siz + 14].copy_from_slice(&1024_u32.to_be_bytes());
+        codestream[siz + 22..siz + 26].copy_from_slice(&1024_u32.to_be_bytes());
+        codestream[siz + 26..siz + 30].copy_from_slice(&1024_u32.to_be_bytes());
         codestream[siz + 47] = 2;
         codestream[siz + 48] = 2;
         codestream[siz + 50] = 2;
@@ -14081,6 +14097,42 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
                 &wrong_qcc, &parsed, 3,
             )
         );
+
+        let mut wrong_geometry = codestream.clone();
+        let siz = find_marker(&wrong_geometry, 0, Marker::Siz).unwrap();
+        wrong_geometry[siz + 6..siz + 10].copy_from_slice(&2048_u32.to_be_bytes());
+        wrong_geometry[siz + 22..siz + 26].copy_from_slice(&2048_u32.to_be_bytes());
+        let parsed = parse(&wrong_geometry).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &wrong_geometry,
+                &parsed,
+                3,
+            )
+        );
+
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        let lsiz = usize::from(read_u16(&codestream, siz + 2).unwrap());
+        let siz_segment = codestream[siz..siz + 2 + lsiz].to_vec();
+        let duplicate_main_siz =
+            insert_before_marker(codestream.clone(), Marker::Sot, &siz_segment);
+        let parsed = parse(&duplicate_main_siz).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &duplicate_main_siz,
+                &parsed,
+                3,
+            )
+        );
+
+        let tile_siz = insert_tile_header_segment(codestream.clone(), &siz_segment);
+        if let Ok(parsed) = parse(&tile_siz) {
+            assert!(
+                !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                    &tile_siz, &parsed, 3,
+                )
+            );
+        }
 
         let with_rgn = insert_before_marker(codestream, Marker::Sot, &[0xff, 0x5e, 0, 5, 0, 0, 1]);
         let parsed = parse(&with_rgn).unwrap();
@@ -16007,6 +16059,10 @@ fn validate_part1_reduced_heterogeneous_irreversible_component_profile(
     }
     let expected_sampling = [(1_u8, 1_u8), (1, 1), (2, 2), (2, 2)];
     if codestream.siz.components.len() != expected_sampling.len()
+        || codestream.siz.reference_grid_width != 1024
+        || codestream.siz.reference_grid_height != 1024
+        || codestream.siz.tile_width != 1024
+        || codestream.siz.tile_height != 1024
         || codestream
             .siz
             .components
@@ -16025,7 +16081,7 @@ fn validate_part1_reduced_heterogeneous_irreversible_component_profile(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::ComponentSampling,
-            "the qualified Profile-0 heterogeneous component path requires four unsigned 8-bit components with its bounded 1x1/1x1/2x2/2x2 sampling",
+            "the qualified Profile-0 heterogeneous component path requires one 1024x1024 tile and four unsigned 8-bit components with its bounded 1x1/1x1/2x2/2x2 sampling",
         ));
     }
     if codestream.siz.image_origin_x != 0
@@ -16123,6 +16179,7 @@ fn validate_part1_reduced_heterogeneous_irreversible_component_profile(
         .map(|segment| segment.offset)
         .ok_or(CodestreamError::SizeOverflow)?;
     let mut main_cod_seen = false;
+    let mut main_siz_seen = false;
     let mut qcc_components = Vec::new();
     for segment in &codestream.markers {
         match segment.marker {
@@ -16154,6 +16211,16 @@ fn validate_part1_reduced_heterogeneous_irreversible_component_profile(
                 Some(Marker::Cod),
                 UnsupportedConstruct::MarkerSegment,
                 "the qualified Profile-0 heterogeneous component path requires exactly one main-header COD",
+            ));
+        }
+        if segment.marker == Marker::Siz
+            && (segment.offset >= first_tile_offset || core::mem::replace(&mut main_siz_seen, true))
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Siz),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 heterogeneous component path requires exactly one main-header SIZ",
             ));
         }
         if matches!(
