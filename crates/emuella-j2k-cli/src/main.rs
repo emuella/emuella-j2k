@@ -390,6 +390,22 @@ fn decoded_logical_samples(samples: &[u8], format: SampleFormat) -> Result<Vec<i
         .collect()
 }
 
+/// Apply the arithmetic bit-depth scaling required by ISO/IEC 15444-4:2024,
+/// B.2.3.1.5 after decode and clipping, without changing codec output.
+fn scale_decoded_samples_to_reference_precision(
+    samples: Vec<i64>,
+    decoded_bits_per_sample: u8,
+    reference_bits_per_sample: u8,
+) -> Result<Vec<i64>, String> {
+    let shift = decoded_bits_per_sample
+        .checked_sub(reference_bits_per_sample)
+        .ok_or_else(|| "decoded precision is lower than the comparison reference".to_owned())?;
+    if shift == 0 {
+        return Ok(samples);
+    }
+    Ok(samples.into_iter().map(|sample| sample >> shift).collect())
+}
+
 fn compare_samples(decoded: &[i64], reference: &[i64]) -> Result<ErrorAggregates, String> {
     if decoded.len() != reference.len() || decoded.is_empty() {
         return Err("decoded and reference sample counts differ or are empty".to_owned());
@@ -457,7 +473,7 @@ fn compare_j2k_to_pgx(
         || decoded.component_info[0].source_component != Some(contract.component)
         || decoded.component_info[0].width != contract.width
         || decoded.component_info[0].height != contract.height
-        || decoded.component_info[0].sample_format.bits_per_sample != contract.bits_per_sample
+        || decoded.component_info[0].sample_format.bits_per_sample < contract.bits_per_sample
         || decoded.component_info[0].sample_format.signed != contract.signed
     {
         return Err("decoded component metadata disagrees with the comparison contract".to_owned());
@@ -466,7 +482,13 @@ fn compare_j2k_to_pgx(
         ImageData::Planes(planes) if planes.len() == 1 => planes,
         _ => return Err("component decode did not produce exactly one planar buffer".to_owned()),
     };
-    let samples = decoded_logical_samples(&planes[0], decoded.component_info[0].sample_format)?;
+    let decoded_format = decoded.component_info[0].sample_format;
+    let samples = decoded_logical_samples(&planes[0], decoded_format)?;
+    let samples = scale_decoded_samples_to_reference_precision(
+        samples,
+        decoded_format.bits_per_sample,
+        contract.bits_per_sample,
+    )?;
     compare_samples(&samples, &reference.samples)
 }
 
@@ -613,6 +635,19 @@ mod tests {
         assert_eq!(blank_separated_sign.samples, [7]);
 
         parse_pgx(b"PG ML +17 1 1\n\x00\x00\x00\x01").expect("17-bit PGX uses four-byte storage");
+    }
+
+    #[test]
+    fn scales_decoded_precision_with_arithmetic_shifts() {
+        assert_eq!(
+            scale_decoded_samples_to_reference_precision(vec![0, 15, 16, 4095], 12, 8).unwrap(),
+            [0, 0, 1, 255]
+        );
+        assert_eq!(
+            scale_decoded_samples_to_reference_precision(vec![-16, -1, 0, 15], 12, 8).unwrap(),
+            [-1, -1, 0, 0]
+        );
+        assert!(scale_decoded_samples_to_reference_precision(vec![0], 8, 12).is_err());
     }
 
     #[test]
