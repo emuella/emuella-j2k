@@ -1,9 +1,9 @@
 schema_version = 1
-catalogue_commit = "bf86dd9c6dc5021941501e0374bf02025b7e2244"
+catalogue_commit = "ddbcc9c495bd8cd2355228a70cb777c60f7b8ee5"
 
 [suite]
 id = "layer2/conformance-jpeg-2000"
-revision = 11
+revision = 12
 
 [pack]
 id = "jpeg-2000/conformance"

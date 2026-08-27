@@ -274,7 +274,7 @@ def comparison_from_record(
     reduction = non_negative_int(
         record.get("resolution_reduction"),
         "resolution reduction",
-        2 if scalar else 1,
+        3 if scalar else 1,
     )
     output_origin_x = (
         0
