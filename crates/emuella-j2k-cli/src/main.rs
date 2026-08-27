@@ -170,8 +170,13 @@ fn validate_contract(contract: ComparisonContract) -> Result<(), String> {
     if samples == 0 || samples > MAX_COMPARISON_SAMPLES {
         return Err("comparison sample count is zero or exceeds the runner bound".to_owned());
     }
-    if contract.resolution_reduction > 2 {
-        return Err("comparison resolution reduction must be between zero and two".to_owned());
+    let maximum_reduction = if contract.output_window { 1 } else { 2 };
+    if contract.resolution_reduction > maximum_reduction {
+        return Err(if contract.output_window {
+            "output-window comparison resolution reduction must be zero or one".to_owned()
+        } else {
+            "full-component comparison resolution reduction must be between zero and two".to_owned()
+        });
     }
     if !contract.output_window && (contract.output_origin_x != 0 || contract.output_origin_y != 0) {
         return Err("full-component comparison cannot select an output origin".to_owned());
@@ -683,7 +688,7 @@ mod tests {
         );
         assert!(
             validate_contract(ComparisonContract {
-                resolution_reduction: 3,
+                resolution_reduction: 2,
                 output_window: true,
                 ..contract(1, 1)
             })
@@ -694,6 +699,13 @@ mod tests {
             ..contract(1, 1)
         })
         .expect("full-component comparison admits two reduced levels");
+        assert!(
+            validate_contract(ComparisonContract {
+                resolution_reduction: 3,
+                ..contract(1, 1)
+            })
+            .is_err()
+        );
         assert!(
             validate_contract(ComparisonContract {
                 resolution_reduction: 1,
