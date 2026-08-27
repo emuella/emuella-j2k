@@ -134,6 +134,17 @@ precinct, layer, code-block-style, component-coding, tile-header quantisation,
 ROI, packet-relocation, inline-marker, sampling, component-selection,
 reduction, tile, and coding-style shapes.
 
+P0.05 exercises a separate scalar three-level boundary with heterogeneous
+component coding styles. Its one origin-aligned tile has four unsigned 8-bit
+components, bounded 1×1/2×2 sampling, seven-layer PCRL progression, default
+precincts, no MCT, and main-header COC plus QCD/QCC. Packet traversal resolves
+each component's effective decomposition count and quantisation while still
+reconstructing only irreversible component 0. The qualified shape contains
+exactly 175 packet headers; other COC patterns, multiple precincts, POC, ROI,
+tile-header overrides, regions, quality-layer limits, component selections,
+and reductions remain excluded. Its 128 × 128 oracle uses the inclusive lossy
+limits from Table C.1: peak error 54 and mean-squared error 68.
+
 P0.09 exercises the same two-level scalar boundary with an irreversible 9/7
 codestream. Its unsigned 8-bit component-0 oracle is 5 × 10 samples and uses
 the inclusive lossy limits from Table C.1: peak error 4 and mean-squared error
