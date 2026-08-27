@@ -13806,8 +13806,8 @@ mod reduced_irreversible_mct_component_profile_tests {
     }
 
     fn fixture() -> Vec<u8> {
-        let width = 128;
-        let height = 128;
+        let width = 256;
+        let height = 256;
         let samples = (0..width * height * 3)
             .map(|sample| ((sample * 29 + sample / 7) & 0xff) as u8)
             .collect::<Vec<_>>();
@@ -13841,7 +13841,8 @@ mod reduced_irreversible_mct_component_profile_tests {
         let style = parsed.coding_style.expect("COD marker is present");
         let tile = tile_rects(&parsed).unwrap()[0];
 
-        assert!(coding_style_has_supported_precinct_grid(style, tile));
+        assert!(!coding_style_has_supported_precinct_grid(style, tile));
+        assert!(coding_style_has_supported_p0_04_precinct_grid(style, tile));
         assert!(
             is_supported_part1_reduced_irreversible_mct_component_profile(&codestream, &parsed, 3,)
         );
@@ -13884,11 +13885,27 @@ mod reduced_irreversible_mct_component_profile_tests {
             !is_supported_part1_reduced_irreversible_mct_component_profile(&with_coc, &parsed, 3,)
         );
 
-        let tile_qcc = insert_tile_header_segment(codestream, &qcc_segment(8));
+        let tile_qcc = insert_tile_header_segment(codestream.clone(), &qcc_segment(8));
         let parsed = parse(&tile_qcc).unwrap();
         assert!(
             !is_supported_part1_reduced_irreversible_mct_component_profile(&tile_qcc, &parsed, 3,)
         );
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        let cod_segment = codestream[cod..cod + 2 + lcod].to_vec();
+        let duplicate_cod = insert_before_marker(codestream.clone(), Marker::Sot, &cod_segment);
+        let parsed = parse(&duplicate_cod).unwrap();
+        assert!(
+            !is_supported_part1_reduced_irreversible_mct_component_profile(
+                &duplicate_cod,
+                &parsed,
+                3,
+            )
+        );
+
+        let tile_cod = insert_tile_header_segment(codestream, &cod_segment);
+        assert!(parse(&tile_cod).is_err());
     }
 }
 
@@ -15695,7 +15712,7 @@ fn validate_part1_reduced_irreversible_mct_component_profile(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::Transform,
-            "the qualified Profile-0 reduced irreversible MCT path requires 20-layer RLCP irreversible 9/7 MCT with six decomposition levels, 128-by-128 precincts, vertical-causal classic Tier-1 coding, and no SOP/EPH",
+            "the qualified Profile-0 reduced irreversible MCT path requires 20-layer RLCP irreversible 9/7 MCT with six decomposition levels, 128-by-128 precincts, termination on every classic Tier-1 coding pass, and no SOP/EPH",
         ));
     }
     validate_irreversible97_zero_origin_aligned_tile_grid(codestream, coding_style)?;
@@ -15713,6 +15730,7 @@ fn validate_part1_reduced_irreversible_mct_component_profile(
                 "the qualified Profile-0 reduced irreversible MCT path requires a tile-part header",
             )
         })?;
+    let mut main_cod_seen = false;
     for segment in &codestream.markers {
         match segment.marker {
             Marker::Soc
@@ -15732,6 +15750,16 @@ fn validate_part1_reduced_irreversible_mct_component_profile(
                     "marker is outside the qualified Profile-0 reduced irreversible MCT path",
                 ));
             }
+        }
+        if segment.marker == Marker::Cod
+            && (segment.offset >= first_tile_offset || core::mem::replace(&mut main_cod_seen, true))
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Cod),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 reduced irreversible MCT path requires exactly one main-header COD and no tile-header COD overrides",
+            ));
         }
         if matches!(segment.marker, Marker::Qcd | Marker::Qcc) && segment.offset > first_tile_offset
         {
@@ -16970,6 +16998,7 @@ pub fn decode_part1_reduced_reversible_mct_components_selected(
         &mut workspace,
         None,
         discard_levels,
+        false,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -17025,6 +17054,7 @@ pub fn decode_part1_reduced_irreversible_mct_component_zero(
         &mut workspace,
         None,
         discard_levels,
+        true,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -17147,6 +17177,7 @@ pub fn decode_baseline_owned_component_region_selected_with_max_layers(
             &mut workspace,
             max_layers,
             0,
+            false,
         )?;
         for (((output, tile_samples), bytes_per_sample), _) in components
             .iter_mut()
@@ -21641,6 +21672,7 @@ fn decode_multitile_components_selected_validated(
             workspace,
             max_layers,
             0,
+            false,
         )?;
         let components = samples
             .into_iter()
@@ -21720,6 +21752,7 @@ fn decode_multitile_components_selected_validated(
             workspace,
             max_layers,
             0,
+            false,
         )?;
         if tile_components.len() != component_indices.len() {
             return Err(CodestreamError::SizeOverflow);
@@ -21764,6 +21797,7 @@ fn decode_multitile_tile_component_samples_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
+    allow_p0_04_precinct_grid: bool,
 ) -> Result<Vec<Vec<u8>>> {
     if coding_style.transform == WaveletTransform::Irreversible97 {
         let planes = decode_multitile_tile_irreversible_component_planes_selected(
@@ -21776,6 +21810,7 @@ fn decode_multitile_tile_component_samples_selected(
             workspace,
             max_layers,
             discard_levels,
+            allow_p0_04_precinct_grid,
         )?;
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
@@ -21901,6 +21936,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
+    allow_p0_04_precinct_grid: bool,
 ) -> Result<Vec<Vec<f32>>> {
     let max_resolution = coding_style
         .decomposition_levels
@@ -21929,6 +21965,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
+        allow_p0_04_precinct_grid,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -22018,6 +22055,7 @@ fn decode_multitile_tile_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
+        false,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -22786,12 +22824,8 @@ fn coding_style_has_supported_precinct_grid(
     if coding_style_has_single_precinct(coding_style, tile_rect.width, tile_rect.height) {
         return true;
     }
-    let bounded_p0_04_grid = coding_style.decomposition_levels == 6
-        && coding_style.precinct_exponents[..=6]
-            .iter()
-            .all(|&packed| packed == 0x77);
     if coding_style.entropy_coder != EntropyCoder::ClassicTier1
-        || (coding_style.decomposition_levels > 1 && !bounded_p0_04_grid)
+        || coding_style.decomposition_levels > 1
         || tile_rect.x != 0
         || tile_rect.y != 0
     {
@@ -22816,6 +22850,36 @@ fn coding_style_has_supported_precinct_grid(
                 height_exponent,
             )
     })
+}
+
+fn coding_style_has_supported_p0_04_precinct_grid(
+    coding_style: CodingStyleMarker,
+    tile_rect: TileRect,
+) -> bool {
+    coding_style.entropy_coder == EntropyCoder::ClassicTier1
+        && coding_style.decomposition_levels == 6
+        && tile_rect.x == 0
+        && tile_rect.y == 0
+        && coding_style.precinct_exponents[..=6]
+            .iter()
+            .all(|&packed| packed == 0x77)
+        && (0..=coding_style.decomposition_levels).all(|resolution| {
+            let Some((width_exponent, height_exponent)) = precinct_subband_exponents(
+                resolution,
+                coding_style.precinct_exponents[usize::from(resolution)],
+            ) else {
+                return false;
+            };
+            width_exponent >= coding_style.code_block_width_exponent
+                && height_exponent >= coding_style.code_block_height_exponent
+                && resolution_subbands_share_precinct_grid(
+                    coding_style,
+                    tile_rect,
+                    resolution,
+                    width_exponent,
+                    height_exponent,
+                )
+        })
 }
 
 fn resolution_subbands_share_precinct_grid(
@@ -22946,7 +23010,7 @@ pub fn parse_default_precinct_lrcp_packets(
 ) -> Result<Vec<PacketCodeBlockContribution>> {
     let source = ContiguousPacketSource { bytes: payload };
     parse_default_precinct_packets_from_source(
-        input, codestream, tile_rect, &source, None, None, None,
+        input, codestream, tile_rect, &source, None, None, None, false,
     )
     .map(|parsed| parsed.contributions)
 }
@@ -23139,13 +23203,15 @@ fn parse_default_precinct_packets_from_source(
     max_layers: Option<u16>,
     max_resolution: Option<u8>,
     selected_components: Option<&[u16]>,
+    allow_p0_04_precinct_grid: bool,
 ) -> Result<ParsedPacketContributions> {
     let coding_style = uniform_effective_coding_style(codestream)?;
     let progression_order = parse_bounded_main_header_poc(input, codestream)?
         .map_or(coding_style.progression_order, |poc| poc.progression_order);
-    if !default_precinct_layer_count_supported(coding_style.layers)
-        || !coding_style_has_supported_precinct_grid(coding_style, tile_rect)
-    {
+    let supported_precinct_grid = coding_style_has_supported_precinct_grid(coding_style, tile_rect)
+        || (allow_p0_04_precinct_grid
+            && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect));
+    if !default_precinct_layer_count_supported(coding_style.layers) || !supported_precinct_grid {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
@@ -32727,6 +32793,7 @@ fn parse_prepared_payload_packets(
             max_layers,
             Some(max_resolution),
             Some(component_indices),
+            false,
         ),
         PreparedTilePayload::Source(source_payload) => {
             let buffered = BufferedSourcePacketPayload::new(source_payload);
@@ -32738,6 +32805,7 @@ fn parse_prepared_payload_packets(
                 max_layers,
                 Some(max_resolution),
                 Some(component_indices),
+                false,
             );
             if let Some(error) = buffered.take_error() {
                 Err(source_error_in_phase(error, "packet-header preparation"))

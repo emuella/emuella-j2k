@@ -127,8 +127,8 @@ inclusive limits 0/0.
 
 P0.04 exercises the scalar three-level boundary: an origin-aligned, one-tile,
 three-component unsigned 8-bit J2K codestream uses irreversible 9/7 coding,
-MCT, six decomposition levels, 20-layer RLCP, 128 × 128 precincts,
-vertical-causal classic Tier-1 coding, and main-header QCD/QCC. Its component-0
+MCT, six decomposition levels, 20-layer RLCP, 128 × 128 precincts, termination
+on every classic Tier-1 coding pass, and main-header QCD/QCC. Its component-0
 comparison remains before inverse ICT. The admitted path rejects other
 precinct, layer, code-block-style, component-coding, tile-header quantisation,
 ROI, packet-relocation, inline-marker, sampling, component-selection,
