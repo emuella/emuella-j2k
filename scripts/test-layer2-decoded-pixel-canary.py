@@ -134,6 +134,34 @@ class ContractTests(unittest.TestCase):
                 self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
             )
 
+    def test_loads_explicit_scalar_output_window(self) -> None:
+        record = self.suite["decoded_pixel_comparison"]["cases"][0]
+        record["output_window"] = True
+        record["output_origin_x"] = 7
+        record["output_origin_y"] = 9
+        case = runner.load_comparison_case(
+            self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
+        )
+        self.assertTrue(case.output_window)
+        self.assertEqual((case.output_origin_x, case.output_origin_y), (7, 9))
+
+    def test_rejects_scalar_origin_without_output_window(self) -> None:
+        record = self.suite["decoded_pixel_comparison"]["cases"][0]
+        record["output_origin_x"] = 1
+        with self.assertRaisesRegex(
+            runner.RunnerError, "full-component comparison cannot select an output origin"
+        ):
+            runner.load_comparison_case(
+                self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
+            )
+
+        record["output_origin_x"] = 0
+        record["output_window"] = "true"
+        with self.assertRaisesRegex(runner.RunnerError, "flag is not Boolean"):
+            runner.load_comparison_case(
+                self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
+            )
+
     def test_rejects_missing_or_unsafe_reference(self) -> None:
         self.suite["decoded_pixel_comparison"]["cases"][0]["reference"] = (
             "../escape.pgx"

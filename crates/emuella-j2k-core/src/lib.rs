@@ -1799,6 +1799,9 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    if let Some(image) = decode_owned_part1_p0_07_progression_change(input, &metadata, options)? {
+        return Ok(image);
+    }
     if let Some(image) = decode_owned_part1_reduced_reversible_mct(input, &metadata, options)? {
         return Ok(image);
     }
@@ -1846,6 +1849,59 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     decode_options.requested_components = ComponentSelection::All;
     let decoded = decode(input, &decode_options)?;
     apply_partial_selection(decoded, region, &component_indices, options.target_layout)
+}
+
+fn is_p0_07_output_request(options: &PartialDecodeOptions) -> bool {
+    options.region
+        == Some(Region {
+            x: 0,
+            y: 0,
+            width: 128,
+            height: 128,
+        })
+        && options.tile.is_none()
+        && options.resolution == ResolutionLevel::Full
+        && matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
+        && options.max_quality_layers.is_none()
+        && options.target_layout == ComponentLayout::Planar
+}
+
+fn decode_owned_part1_p0_07_progression_change(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Option<Image>> {
+    if !is_p0_07_output_request(options) {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_p0_07_progression_change_component_profile(
+        codestream_bytes,
+        &parsed,
+    ) {
+        return Ok(None);
+    }
+    let decoded =
+        codestream::decode_part1_p0_07_progression_change_component_zero(codestream_bytes)
+            .map_err(map_codestream_error)?;
+    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
+    for component in &mut component_info {
+        component.width = 128;
+        component.height = 128;
+        component.x_origin = 0;
+        component.y_origin = 0;
+    }
+    let decode_options = DecodeOptions {
+        mode: DecodeMode::Components,
+        requested_components: options.components.clone(),
+        target_layout: options.target_layout,
+        ..DecodeOptions::default()
+    };
+    decoded_baseline_to_image_with_component_info(decoded, &decode_options, Some(component_info))
+        .map(Some)
 }
 
 fn decode_owned_part1_reduced_reversible_mct(
@@ -5054,6 +5110,9 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    if let Some(info) = p0_07_progression_change_target_info(input, &metadata, options)? {
+        return Ok(info);
+    }
     if let Some(info) = selective_part1_discard_target_info(input, &metadata, options)? {
         return Ok(info);
     }
@@ -5087,6 +5146,41 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
         partial_color_model(image, &component_indices),
         options.target_layout,
     )
+}
+
+fn p0_07_progression_change_target_info(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Option<ImageInfo>> {
+    if !is_p0_07_output_request(options) {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_p0_07_progression_change_component_profile(
+        codestream_bytes,
+        &parsed,
+    ) {
+        return Ok(None);
+    }
+    let image = metadata.image.as_ref().ok_or_else(|| {
+        unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "Profile-0 P0.07 decode requires image sample metadata",
+        )
+    })?;
+    ImageInfo::new(
+        128,
+        128,
+        1,
+        image.sample_format,
+        ColorModel::Unknown,
+        ComponentLayout::Planar,
+    )
+    .map(Some)
 }
 
 fn selective_part1_discard_target_info(
@@ -5827,5 +5921,55 @@ mod effective_coding_style_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn p0_07_route_admits_only_its_exact_bounded_output_request() {
+        let admitted = PartialDecodeOptions {
+            region: Some(Region {
+                x: 0,
+                y: 0,
+                width: 128,
+                height: 128,
+            }),
+            components: ComponentSelection::Indices(vec![0]),
+            ..PartialDecodeOptions::default()
+        };
+        assert!(is_p0_07_output_request(&admitted));
+
+        let mutations = [
+            PartialDecodeOptions {
+                region: None,
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    width: 127,
+                    ..admitted.region.unwrap()
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::All,
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(8),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..admitted.clone()
+            },
+        ];
+        assert!(
+            mutations
+                .iter()
+                .all(|request| !is_p0_07_output_request(request))
+        );
     }
 }

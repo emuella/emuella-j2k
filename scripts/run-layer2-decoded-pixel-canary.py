@@ -276,16 +276,17 @@ def comparison_from_record(
         "resolution reduction",
         3 if scalar else 1,
     )
-    output_origin_x = (
-        0
-        if scalar
-        else non_negative_int(record.get("output_origin_x"), "output origin x", 0xFFFF_FFFF)
+    output_window = record.get("output_window", not scalar)
+    if not isinstance(output_window, bool):
+        raise RunnerError("comparison output-window flag is not Boolean")
+    output_origin_x = non_negative_int(
+        record.get("output_origin_x", 0), "output origin x", 0xFFFF_FFFF
     )
-    output_origin_y = (
-        0
-        if scalar
-        else non_negative_int(record.get("output_origin_y"), "output origin y", 0xFFFF_FFFF)
+    output_origin_y = non_negative_int(
+        record.get("output_origin_y", 0), "output origin y", 0xFFFF_FFFF
     )
+    if not output_window and (output_origin_x != 0 or output_origin_y != 0):
+        raise RunnerError("full-component comparison cannot select an output origin")
     signed = record.get("signed")
     if not isinstance(signed, bool):
         raise RunnerError("comparison signedness is not Boolean")
@@ -294,7 +295,7 @@ def comparison_from_record(
         input=input_path,
         reference=reference_path,
         component=non_negative_int(record.get("component"), "component", 65_535),
-        output_window=not scalar,
+        output_window=output_window,
         resolution_reduction=reduction,
         output_origin_x=output_origin_x,
         output_origin_y=output_origin_y,
