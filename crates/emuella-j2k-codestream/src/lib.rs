@@ -12581,6 +12581,96 @@ fn parse_bounded_tile_maxshift(
     }))
 }
 
+/// Resolve the exact main-header and tile-header Maxshift precedence carried
+/// by Profile-0 P0.06.
+///
+/// The main header assigns component zero a shift of eleven. Tile zero then
+/// overrides that assignment with shift nine, which is the effective value
+/// used for both packet bit-plane planning and coefficient realignment. Other
+/// ROI assignments and general RGN precedence remain outside this route.
+fn parse_p0_06_effective_maxshift(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Result<BoundedTileMaxshift> {
+    if codestream.siz.component_count() >= 257 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Rgn),
+            UnsupportedConstruct::ComponentCount,
+            "the qualified P0.06 RGN path requires one-byte component selectors",
+        ));
+    }
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let rgn_segments = codestream
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Rgn)
+        .collect::<Vec<_>>();
+    if rgn_segments.len() != 2 {
+        return Err(unsupported(
+            rgn_segments.get(2).map(|segment| segment.offset),
+            Some(Marker::Rgn),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified P0.06 path requires one main-header and one tile-header RGN assignment",
+        ));
+    }
+
+    let main = rgn_segments[0];
+    let tile = rgn_segments[1];
+    if main.offset >= first_tile_offset || tile.offset <= first_tile_offset {
+        return Err(unsupported(
+            Some(tile.offset),
+            Some(Marker::Rgn),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified P0.06 path requires main-header RGN followed by a tile-header override",
+        ));
+    }
+    let main_data = checked_slice(input, main.data_offset, main.data_len)?;
+    let tile_data = checked_slice(input, tile.data_offset, tile.data_len)?;
+    if main_data != [0, 0, 11] || tile_data != [0, 0, 9] {
+        return Err(unsupported(
+            Some(tile.offset),
+            Some(Marker::Rgn),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified P0.06 path requires component-zero Maxshift eleven overridden by tile-zero Maxshift nine",
+        ));
+    }
+
+    let mut header_tile = None;
+    for candidate in &codestream.markers {
+        if candidate.offset > tile.offset {
+            break;
+        }
+        match candidate.marker {
+            Marker::Sot => {
+                let data = checked_slice(input, candidate.data_offset, candidate.data_len)?;
+                header_tile = Some(read_u16(data, 0)?);
+            }
+            Marker::Sod => header_tile = None,
+            _ => {}
+        }
+    }
+    if header_tile != Some(0) {
+        return Err(unsupported(
+            Some(tile.offset),
+            Some(Marker::Rgn),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified P0.06 RGN override must occur in the tile-zero header before SOD",
+        ));
+    }
+    validate_one_tile_part_per_tile(codestream)?;
+    Ok(BoundedTileMaxshift {
+        tile_index: 0,
+        component_index: 0,
+        shift: 9,
+    })
+}
+
 /// Validate the informational CRG form carried by the locked P0.03 path.
 ///
 /// ISO/IEC 15444-1:2024, Annex A, A.9–A.9.1 and Table A.42 (PDF pages
@@ -13764,6 +13854,22 @@ pub fn is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
     .is_ok()
 }
 
+/// True when a raw Part 1 codestream is inside the bounded reduced-resolution
+/// ROI profile qualified by Profile-0 P0.06.
+///
+/// This admission is limited to component zero at three discarded resolution
+/// levels in the exact one-tile, four-component RPCL shape. COC, QCC and RGN
+/// precedence are resolved for packet traversal and coefficient realignment;
+/// other ROI assignments and heterogeneous profiles remain outside it.
+pub fn is_supported_part1_reduced_roi_irreversible_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+    discard_levels: u8,
+) -> bool {
+    validate_part1_reduced_roi_irreversible_component_profile(input, codestream, discard_levels)
+        .is_ok()
+}
+
 #[cfg(test)]
 mod reduced_reversible_mct_component_profile_tests {
     use super::*;
@@ -14139,6 +14245,261 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
         assert!(
             !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
                 &with_rgn, &parsed, 3,
+            )
+        );
+    }
+}
+
+#[cfg(test)]
+mod reduced_roi_irreversible_component_profile_tests {
+    use super::*;
+
+    fn insert_before_marker(mut codestream: Vec<u8>, before: Marker, segment: &[u8]) -> Vec<u8> {
+        let position = find_marker(&codestream, 0, before).unwrap();
+        codestream.splice(position..position, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let tile_part_length = read_u32(&codestream, sot + 6).unwrap();
+        let extended_length = tile_part_length
+            .checked_add(u32::try_from(segment.len()).unwrap())
+            .unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(&extended_length.to_be_bytes());
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
+    fn quantization_segment(marker: Marker, component: Option<u8>, payload: &[u8]) -> Vec<u8> {
+        let mut data = component.into_iter().collect::<Vec<_>>();
+        data.extend_from_slice(payload);
+        let length = u16::try_from(data.len() + 2).unwrap();
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.extend_from_slice(&data);
+        segment
+    }
+
+    fn irreversible_quantization() -> Vec<u8> {
+        let mut payload = vec![(2 << 5) | 2];
+        for _ in 0..19 {
+            payload.extend_from_slice(&(9_u16 << 11).to_be_bytes());
+        }
+        payload
+    }
+
+    fn fixture() -> Vec<u8> {
+        let planes = (0..4)
+            .map(|component| {
+                (0..64 * 64)
+                    .map(|sample| ((sample * 17 + component * 53) & 0xff) as u8)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut codestream = encode_planar_u8_no_decomp_test_fixture(64, 64, &views).unwrap();
+
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 4..siz + 6].copy_from_slice(&2_u16.to_be_bytes());
+        codestream[siz + 6..siz + 10].copy_from_slice(&513_u32.to_be_bytes());
+        codestream[siz + 10..siz + 14].copy_from_slice(&129_u32.to_be_bytes());
+        codestream[siz + 22..siz + 26].copy_from_slice(&513_u32.to_be_bytes());
+        codestream[siz + 26..siz + 30].copy_from_slice(&129_u32.to_be_bytes());
+        for component in 0..4 {
+            codestream[siz + 40 + component * 3] = 11;
+        }
+        for (component, (horizontal, vertical)) in [(1_u8, 1_u8), (2, 1), (1, 2), (2, 2)]
+            .into_iter()
+            .enumerate()
+        {
+            codestream[siz + 41 + component * 3] = horizontal;
+            codestream[siz + 42 + component * 3] = vertical;
+        }
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream.splice(
+            cod..cod + 2 + lcod,
+            [0xff, 0x52, 0, 12, 0, 2, 0, 4, 0, 6, 4, 4, 0, 0],
+        );
+
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&codestream, qcd + 2).unwrap());
+        codestream.splice(
+            qcd..qcd + 2 + lqcd,
+            quantization_segment(Marker::Qcd, None, &irreversible_quantization()),
+        );
+
+        codestream = insert_before_marker(
+            codestream,
+            Marker::Sot,
+            &[0xff, 0x53, 0, 9, 3, 0, 6, 4, 4, 0, 1],
+        );
+        for component in [1, 2] {
+            codestream = insert_before_marker(
+                codestream,
+                Marker::Sot,
+                &quantization_segment(Marker::Qcc, Some(component), &irreversible_quantization()),
+            );
+        }
+        let mut reversible_quantization = vec![2 << 5];
+        reversible_quantization.extend(core::iter::repeat_n(9 << 3, 19));
+        codestream = insert_before_marker(
+            codestream,
+            Marker::Sot,
+            &quantization_segment(Marker::Qcc, Some(3), &reversible_quantization),
+        );
+        codestream = insert_before_marker(codestream, Marker::Sot, &[0xff, 0x5e, 0, 5, 0, 0, 11]);
+        insert_tile_header_segment(codestream, &[0xff, 0x5e, 0, 5, 0, 0, 9])
+    }
+
+    #[test]
+    fn admits_only_the_exact_p0_06_effective_style_quantisation_and_roi_shape() {
+        let codestream = fixture();
+        let parsed = parse(&codestream).expect("project-authored P0.06 shape parses");
+
+        assert!(
+            is_supported_part1_reduced_roi_irreversible_component_profile(&codestream, &parsed, 3,)
+        );
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(&codestream, &parsed, 2,)
+        );
+        assert_eq!(
+            (0..4)
+                .map(|component| {
+                    let style = parsed.effective_coding_style(component).unwrap();
+                    (style.decomposition_levels, style.transform)
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (6, WaveletTransform::Irreversible97),
+                (6, WaveletTransform::Irreversible97),
+                (6, WaveletTransform::Irreversible97),
+                (6, WaveletTransform::Reversible53),
+            ],
+        );
+        let styles = (0..4)
+            .map(|component| parsed.effective_coding_style(component).unwrap())
+            .collect::<Vec<_>>();
+        let quantization = parse_component_quantization_for_styles(
+            &codestream,
+            &parsed,
+            &styles,
+            &[19; 4],
+            19,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            quantization
+                .iter()
+                .map(|value| value.steps.len())
+                .collect::<Vec<_>>(),
+            [19; 4],
+        );
+        assert_eq!(
+            quantization[3].style,
+            transform::QuantizationStyle::NoQuantization,
+        );
+        assert_eq!(
+            parse_p0_06_effective_maxshift(&codestream, &parsed).unwrap(),
+            BoundedTileMaxshift {
+                tile_index: 0,
+                component_index: 0,
+                shift: 9,
+            },
+        );
+
+        let mut wrong_precision = codestream.clone();
+        let siz = find_marker(&wrong_precision, 0, Marker::Siz).unwrap();
+        wrong_precision[siz + 40] = 7;
+        let parsed = parse(&wrong_precision).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &wrong_precision,
+                &parsed,
+                3,
+            )
+        );
+
+        let mut wrong_sampling = codestream.clone();
+        let siz = find_marker(&wrong_sampling, 0, Marker::Siz).unwrap();
+        wrong_sampling[siz + 44] = 1;
+        let parsed = parse(&wrong_sampling).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &wrong_sampling,
+                &parsed,
+                3,
+            )
+        );
+
+        let mut wrong_qcc_selector = codestream.clone();
+        let qcc = find_marker(&wrong_qcc_selector, 0, Marker::Qcc).unwrap();
+        wrong_qcc_selector[qcc + 4] = 0;
+        let parsed = parse(&wrong_qcc_selector).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &wrong_qcc_selector,
+                &parsed,
+                3,
+            )
+        );
+
+        let mut missing_qcc = codestream.clone();
+        let qcc = find_marker(&missing_qcc, 0, Marker::Qcc).unwrap();
+        let lqcc = usize::from(read_u16(&missing_qcc, qcc + 2).unwrap());
+        missing_qcc.drain(qcc..qcc + 2 + lqcc);
+        let parsed = parse(&missing_qcc).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &missing_qcc,
+                &parsed,
+                3,
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_changed_p0_06_rgn_precedence() {
+        let codestream = fixture();
+
+        let mut missing_main = codestream.clone();
+        let main = find_marker(&missing_main, 0, Marker::Rgn).unwrap();
+        missing_main.drain(main..main + 7);
+        let parsed = parse(&missing_main).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &missing_main,
+                &parsed,
+                3,
+            )
+        );
+
+        let mut changed_main = codestream.clone();
+        let main = find_marker(&changed_main, 0, Marker::Rgn).unwrap();
+        changed_main[main + 6] = 10;
+        let parsed = parse(&changed_main).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &changed_main,
+                &parsed,
+                3,
+            )
+        );
+
+        let mut changed_tile = codestream;
+        let main = find_marker(&changed_tile, 0, Marker::Rgn).unwrap();
+        let tile = find_marker(&changed_tile, main + 2, Marker::Rgn).unwrap();
+        changed_tile[tile + 6] = 8;
+        let parsed = parse(&changed_tile).unwrap();
+        assert!(
+            !is_supported_part1_reduced_roi_irreversible_component_profile(
+                &changed_tile,
+                &parsed,
+                3,
             )
         );
     }
@@ -16279,6 +16640,273 @@ fn validate_part1_reduced_heterogeneous_irreversible_component_profile(
     Ok(coding_style)
 }
 
+fn p0_06_effective_style_matches(style: CodingStyleMarker, transform: WaveletTransform) -> bool {
+    style.entropy_coder == EntropyCoder::ClassicTier1
+        && !style.sop_markers
+        && !style.eph_markers
+        && style.progression_order == ProgressionOrder::Rpcl
+        && style.layers == 4
+        && !style.multiple_component_transform
+        && style.decomposition_levels == 6
+        && style.code_block_width_exponent == 6
+        && style.code_block_height_exponent == 6
+        && style.code_block_style == 0
+        && style.transform == transform
+        && !style.precincts_declared
+}
+
+fn validate_part1_reduced_roi_irreversible_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+    discard_levels: u8,
+) -> Result<CodingStyleMarker> {
+    if discard_levels != 3 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Transform,
+            "the qualified Profile-0 ROI component path requires exactly three discarded resolution levels",
+        ));
+    }
+    if codestream.kind != CodestreamKind::J2k {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 ROI component path is limited to raw Part 1 codestreams",
+        ));
+    }
+    let expected_sampling = [(1_u8, 1_u8), (2, 1), (1, 2), (2, 2)];
+    if codestream.siz.capabilities != 2
+        || codestream.siz.components.len() != expected_sampling.len()
+        || codestream.siz.reference_grid_width != 513
+        || codestream.siz.reference_grid_height != 129
+        || codestream.siz.tile_width != 513
+        || codestream.siz.tile_height != 129
+        || codestream
+            .siz
+            .components
+            .iter()
+            .zip(expected_sampling)
+            .any(|(component, sampling)| {
+                component.bits_per_sample != 12
+                    || component.signed
+                    || (
+                        component.horizontal_separation,
+                        component.vertical_separation,
+                    ) != sampling
+            })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "the qualified Profile-0 ROI path requires one 513x129 tile and four unsigned 12-bit components with its bounded 1x1/2x1/1x2/2x2 sampling",
+        ));
+    }
+    if codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::WaveletTransform,
+            "the qualified Profile-0 ROI path requires zero image and tile origins",
+        ));
+    }
+    let tiles = tile_rects(codestream)?;
+    if tiles.len() != 1
+        || !matches!(
+            codestream.tiles.as_slice(),
+            [tile] if tile.tile_index == 0
+                && tile.tile_part_index == 0
+                && tile.tile_part_count == Some(1)
+        )
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::MultipleTiles,
+            "the qualified Profile-0 ROI path requires one declared first tile part in one tile",
+        ));
+    }
+
+    let coding_style = codestream.coding_style.ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Cod),
+            "the qualified Profile-0 ROI path requires a main-header COD marker",
+        )
+    })?;
+    let expected_styles = [
+        (0_u16, WaveletTransform::Irreversible97),
+        (1, WaveletTransform::Irreversible97),
+        (2, WaveletTransform::Irreversible97),
+        (3, WaveletTransform::Reversible53),
+    ];
+    if codestream.component_coding_styles.len() != 1
+        || codestream.component_coding_styles[0].component_index != 3
+        || expected_styles.iter().any(|(component, transform)| {
+            codestream
+                .effective_coding_style(*component)
+                .is_none_or(|style| !p0_06_effective_style_matches(style, *transform))
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 ROI path requires one reversible component-three COC override over the bounded RPCL style",
+        ));
+    }
+    validate_irreversible97_zero_origin_aligned_tile_grid(codestream, coding_style)?;
+    for component_index in 0..codestream.siz.component_count() {
+        let style = codestream
+            .effective_coding_style(component_index)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let component = codestream
+            .siz
+            .components
+            .get(usize::from(component_index))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let component_tile = component_tile_rect(codestream, tiles[0], component)?;
+        if !coding_style_has_single_precinct(style, component_tile.width, component_tile.height) {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::PacketDecode,
+                "the qualified Profile-0 ROI path requires one effective precinct per component resolution",
+            ));
+        }
+    }
+
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut main_siz_seen = false;
+    let mut main_cod_seen = false;
+    let mut main_qcd_seen = false;
+    let mut qcc_components = Vec::new();
+    for segment in &codestream.markers {
+        match segment.marker {
+            Marker::Soc
+            | Marker::Sot
+            | Marker::Sod
+            | Marker::Eoc
+            | Marker::Siz
+            | Marker::Cod
+            | Marker::Coc
+            | Marker::Qcd
+            | Marker::Qcc
+            | Marker::Rgn
+            | Marker::Tlm
+            | Marker::Com => {}
+            marker => {
+                return Err(unsupported(
+                    Some(segment.offset),
+                    Some(marker),
+                    UnsupportedConstruct::MarkerSegment,
+                    "marker is outside the qualified Profile-0 ROI component path",
+                ));
+            }
+        }
+        if segment.marker == Marker::Siz
+            && (segment.offset >= first_tile_offset || core::mem::replace(&mut main_siz_seen, true))
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Siz),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 ROI path requires exactly one main-header SIZ",
+            ));
+        }
+        if segment.marker == Marker::Cod
+            && (segment.offset >= first_tile_offset || core::mem::replace(&mut main_cod_seen, true))
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Cod),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 ROI path requires exactly one main-header COD",
+            ));
+        }
+        if segment.marker == Marker::Qcd
+            && (segment.offset >= first_tile_offset || core::mem::replace(&mut main_qcd_seen, true))
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Qcd),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 ROI path requires exactly one main-header QCD",
+            ));
+        }
+        if matches!(segment.marker, Marker::Coc | Marker::Qcc | Marker::Tlm)
+            && segment.offset >= first_tile_offset
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(segment.marker),
+                UnsupportedConstruct::MarkerSegment,
+                "component, quantisation, and tile-length overrides are accepted only in the main header",
+            ));
+        }
+        if segment.marker == Marker::Qcc {
+            let data = checked_slice(input, segment.data_offset, segment.data_len)?;
+            qcc_components.push(data.first().copied().map(u16::from).ok_or_else(|| {
+                invalid(
+                    Some(segment.offset),
+                    Some(Marker::Qcc),
+                    "QCC marker omits its component selector",
+                )
+            })?);
+        }
+    }
+    qcc_components.sort_unstable();
+    if qcc_components != [1, 2, 3] {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcc),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 ROI path requires QCC overrides for components one, two and three",
+        ));
+    }
+    let effective_maxshift = parse_p0_06_effective_maxshift(input, codestream)?;
+
+    let component_styles = expected_styles
+        .iter()
+        .map(|(component, _)| {
+            codestream
+                .effective_coding_style(*component)
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let subband_counts = component_styles
+        .iter()
+        .map(|style| 1usize + usize::from(style.decomposition_levels) * 3)
+        .collect::<Vec<_>>();
+    let quantization = parse_component_quantization_for_styles(
+        input,
+        codestream,
+        &component_styles,
+        &subband_counts,
+        19,
+        None,
+    )?;
+    let component_zero = quantization.first().ok_or(CodestreamError::SizeOverflow)?;
+    for subband in 0..19 {
+        bounded_maxshift_available_bitplanes(
+            component_zero.available_bitplanes(subband, coding_style.entropy_coder)?,
+            Some(effective_maxshift.shift),
+        )?;
+    }
+    Ok(coding_style)
+}
+
 fn validate_bounded_maxshift_plane_widths(
     input: &[u8],
     codestream: &Codestream,
@@ -17625,6 +18253,63 @@ pub fn decode_part1_reduced_heterogeneous_irreversible_component_zero(
         width,
         height,
         bits_per_sample: 8,
+        signed: false,
+        components,
+    })
+}
+
+/// Decode component zero from the bounded reduced-resolution ROI profile
+/// qualified by Profile-0 P0.06.
+///
+/// Packet headers for every component are traversed using their effective COC
+/// style. Tile-header RGN precedence is applied to component zero before
+/// irreversible dequantisation, and the returned plane retains its native
+/// unsigned 12-bit sample precision.
+pub fn decode_part1_reduced_roi_irreversible_component_zero(
+    input: &[u8],
+    discard_levels: u8,
+) -> Result<DecodedImage> {
+    let codestream = parse(input)?;
+    let component_indices = [0_u16];
+    let coding_style = validate_part1_reduced_roi_irreversible_component_profile(
+        input,
+        &codestream,
+        discard_levels,
+    )?;
+    let tile_rect = *tile_rects(&codestream)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut workspace = Part1ComponentDecodeWorkspace::new();
+    let mut timings = None;
+    let components = decode_multitile_tile_component_samples_selected(
+        input,
+        &codestream,
+        coding_style,
+        tile_rect,
+        &component_indices,
+        &mut timings,
+        &mut workspace,
+        None,
+        discard_levels,
+        ComponentPacketProfile::Profile0P006,
+    )?
+    .into_iter()
+    .map(|samples| DecodedComponent { samples })
+    .collect::<Vec<_>>();
+    let retained_resolution = coding_style
+        .decomposition_levels
+        .checked_sub(discard_levels)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let (width, height) = resolution_dimensions(
+        tile_rect.width,
+        tile_rect.height,
+        coding_style.decomposition_levels,
+        retained_resolution,
+    )?;
+    Ok(DecodedImage {
+        width,
+        height,
+        bits_per_sample: 12,
         signed: false,
         components,
     })
@@ -19719,6 +20404,7 @@ fn decode_prepared_part1_tile_component(
             Some(&tile.synthesis_window),
             &selected_component,
             None,
+            tile.maxshift,
             detailed_profile,
             coarse_stage_timings,
             timing_target.as_deref_mut(),
@@ -21598,6 +22284,7 @@ fn decode_prepared_part1_tile_component_samples(
             Some(&tile.synthesis_window),
             &prepared.component_indices,
             Some(&prepared.source_to_output),
+            tile.maxshift,
             detailed_profile,
             coarse_stage_timings,
             timings.as_deref_mut(),
@@ -22344,6 +23031,7 @@ enum ComponentPacketProfile {
     Default,
     Profile0P004,
     Profile0P005,
+    Profile0P006,
 }
 
 fn decode_multitile_tile_component_samples_selected(
@@ -22558,6 +23246,13 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
     );
 
     let detailed_profile = timings.is_some();
+    let maxshift = match packet_profile {
+        ComponentPacketProfile::Profile0P006 => {
+            Some(parse_p0_06_effective_maxshift(input, codestream)?)
+        }
+        _ => None,
+    }
+    .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
     reconstruct_irreversible_component_planes_selected(
         &payload,
         codestream,
@@ -22568,6 +23263,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         None,
         component_indices,
         None,
+        maxshift,
         detailed_profile,
         false,
         timings.as_deref_mut(),
@@ -23772,7 +24468,10 @@ fn parse_default_precinct_packets_from_source(
     packet_profile: ComponentPacketProfile,
 ) -> Result<ParsedPacketContributions> {
     let component_count = usize::from(codestream.siz.component_count());
-    let component_styles = if packet_profile == ComponentPacketProfile::Profile0P005 {
+    let component_styles = if matches!(
+        packet_profile,
+        ComponentPacketProfile::Profile0P005 | ComponentPacketProfile::Profile0P006
+    ) {
         (0..codestream.siz.component_count())
             .map(|component_index| {
                 codestream
@@ -23795,23 +24494,25 @@ fn parse_default_precinct_packets_from_source(
         .ok_or(CodestreamError::SizeOverflow)?;
     let progression_order = parse_bounded_main_header_poc(input, codestream)?
         .map_or(coding_style.progression_order, |poc| poc.progression_order);
-    let p0_05_single_precincts = packet_profile == ComponentPacketProfile::Profile0P005
-        && component_styles
-            .iter()
-            .zip(&codestream.siz.components)
-            .all(|(style, component)| {
-                component_tile_rect(codestream, tile_rect, component).is_ok_and(|component_tile| {
-                    coding_style_has_single_precinct(
-                        *style,
-                        component_tile.width,
-                        component_tile.height,
-                    )
-                })
-            });
+    let bounded_heterogeneous_single_precincts = matches!(
+        packet_profile,
+        ComponentPacketProfile::Profile0P005 | ComponentPacketProfile::Profile0P006
+    ) && component_styles
+        .iter()
+        .zip(&codestream.siz.components)
+        .all(|(style, component)| {
+            component_tile_rect(codestream, tile_rect, component).is_ok_and(|component_tile| {
+                coding_style_has_single_precinct(
+                    *style,
+                    component_tile.width,
+                    component_tile.height,
+                )
+            })
+        });
     let supported_precinct_grid = coding_style_has_supported_precinct_grid(coding_style, tile_rect)
         || (packet_profile == ComponentPacketProfile::Profile0P004
             && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
-        || p0_05_single_precincts;
+        || bounded_heterogeneous_single_precincts;
     if !default_precinct_layer_count_supported(coding_style.layers) || !supported_precinct_grid {
         return Err(unsupported(
             None,
@@ -23842,8 +24543,13 @@ fn parse_default_precinct_packets_from_source(
         1usize + usize::from(coding_style.decomposition_levels) * 3,
         selected_components,
     )?;
-    let tile_maxshift = parse_bounded_tile_maxshift(input, codestream)?
-        .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
+    let tile_maxshift = match packet_profile {
+        ComponentPacketProfile::Profile0P006 => {
+            Some(parse_p0_06_effective_maxshift(input, codestream)?)
+        }
+        _ => parse_bounded_tile_maxshift(input, codestream)?,
+    }
+    .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
     let mut component_states = component_quantization
         .iter()
         .enumerate()
@@ -23932,6 +24638,14 @@ fn parse_default_precinct_packets_from_source(
             Some(Marker::Coc),
             UnsupportedConstruct::PacketDecode,
             "the qualified Profile-0 P0.05 path requires exactly 175 single-precinct PCRL packets",
+        ));
+    }
+    if packet_profile == ComponentPacketProfile::Profile0P006 && expected_packet_count != 112 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Rgn),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 P0.06 path requires exactly 112 single-precinct RPCL packets",
         ));
     }
     let plt_fully_covers_packets = plt_packet_lengths.as_ref().is_some_and(|plt| {
@@ -25533,6 +26247,53 @@ mod heterogeneous_packet_order_tests {
             packets
                 .iter()
                 .all(|packet| packet.component != 1 || packet.resolution <= 3)
+        );
+    }
+
+    #[test]
+    fn visits_the_bounded_112_packet_p0_06_rpcl_shape() {
+        let counts = vec![vec![1; 7]; 4];
+        let mut packets = Vec::new();
+        visit_component_precinct_packet_keys(0, ProgressionOrder::Rpcl, 4, &counts, |packet| {
+            packets.push(packet);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(packets.len(), 112);
+        assert_eq!(
+            packets[0],
+            PacketKey {
+                tile: 0,
+                layer: 0,
+                resolution: 0,
+                component: 0,
+                precinct: 0,
+            },
+        );
+        assert_eq!(
+            (
+                packets[15].resolution,
+                packets[15].component,
+                packets[15].layer,
+            ),
+            (0, 3, 3),
+        );
+        assert_eq!(
+            (
+                packets[16].resolution,
+                packets[16].component,
+                packets[16].layer,
+            ),
+            (1, 0, 0),
+        );
+        assert_eq!(
+            (
+                packets[111].resolution,
+                packets[111].component,
+                packets[111].layer,
+            ),
+            (6, 3, 3),
         );
     }
 }
@@ -28136,6 +28897,7 @@ fn reconstruct_irreversible_component_planes_selected(
     synthesis_window: Option<&SynthesisWindowPlan>,
     component_indices: &[u16],
     source_to_output: Option<&[u16]>,
+    maxshift: Option<BoundedTileMaxshift>,
     detailed_profile: bool,
     coarse_stage_timings: bool,
     mut timings: Option<&mut DecodeStageTimings>,
@@ -28358,6 +29120,16 @@ fn reconstruct_irreversible_component_planes_selected(
                 DecodeStage::Tier1Decode,
                 stage_started.elapsed(),
             );
+        }
+
+        if maxshift.is_some_and(|maxshift| {
+            maxshift.tile_index == tile_rect.tile_index
+                && maxshift.component_index == contribution.component_index
+        }) {
+            realign_bounded_maxshift_coefficients(
+                coefficients,
+                maxshift.ok_or(CodestreamError::SizeOverflow)?.shift,
+            )?;
         }
 
         let gain = match contribution.subband {

@@ -145,6 +145,21 @@ tile-header overrides, regions, quality-layer limits, component selections,
 and reductions remain excluded. Its 128 × 128 oracle uses the inclusive lossy
 limits from Table C.1: peak error 54 and mean-squared error 68.
 
+P0.06 extends that scalar three-level boundary to the exact four-component
+RPCL shape carrying both heterogeneous coding styles and ROI precedence. Its
+one 513 × 129 tile has unsigned 12-bit components with 1×1/2×1/1×2/2×2
+sampling, four layers, six decomposition levels, default precincts, no MCT,
+main-header COC plus QCD/QCC, and a component-0 Maxshift assignment of eleven
+overridden by tile zero with the effective shift nine. Packet traversal uses
+the component-specific styles and quantisation across exactly 112 packet
+headers, and component-0 coefficients are realigned before irreversible
+dequantisation. The decoded native 12-bit plane is reduced to the 8-bit PGX
+comparison precision with the simple arithmetic bit-depth scaling required by
+ISO/IEC 15444-4:2024, B.2.3.1.5. Other RGN assignments or precedence, COC/QCC
+patterns, packet shapes, component selections, reductions and quality-layer
+limits remain excluded. Its 65 × 17 oracle uses the inclusive Table C.1 limits:
+peak error 109 and mean-squared error 743.
+
 P0.09 exercises the same two-level scalar boundary with an irreversible 9/7
 codestream. Its unsigned 8-bit component-0 oracle is 5 × 10 samples and uses
 the inclusive lossy limits from Table C.1: peak error 4 and mean-squared error

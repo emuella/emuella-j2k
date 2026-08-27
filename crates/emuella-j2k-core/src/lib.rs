@@ -1810,6 +1810,9 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     {
         return Ok(image);
     }
+    if let Some(image) = decode_owned_part1_reduced_roi_irreversible(input, &metadata, options)? {
+        return Ok(image);
+    }
     if let Some(image) = decode_owned_selective_part1_discard(input, &metadata, options)? {
         return Ok(image);
     }
@@ -2012,6 +2015,72 @@ fn decode_owned_part1_reduced_heterogeneous_irreversible(
         unsupported(
             UnsupportedFeature::PartialDecodeMode,
             "Profile-0 reduced heterogeneous component decode requires image dimensions",
+        )
+    })?;
+    let reduced_region = reduced_roi_region(
+        Region {
+            x: 0,
+            y: 0,
+            width: image.width,
+            height: image.height,
+        },
+        discard_levels,
+        image.width,
+        image.height,
+    )?;
+    for component in &mut component_info {
+        component.width = reduced_region.width;
+        component.height = reduced_region.height;
+        component.x_origin = reduced_region.x;
+        component.y_origin = reduced_region.y;
+    }
+    let decode_options = DecodeOptions {
+        mode: DecodeMode::Components,
+        requested_components: options.components.clone(),
+        target_layout: options.target_layout,
+        ..DecodeOptions::default()
+    };
+    decoded_baseline_to_image_with_component_info(decoded, &decode_options, Some(component_info))
+        .map(Some)
+}
+
+fn decode_owned_part1_reduced_roi_irreversible(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Option<Image>> {
+    let ResolutionLevel::Reduced { discard_levels } = options.resolution else {
+        return Ok(None);
+    };
+    if options.region.is_some()
+        || options.tile.is_some()
+        || options.target_layout != ComponentLayout::Planar
+        || options.max_quality_layers.is_some()
+        || !matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
+    {
+        return Ok(None);
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if !codestream::is_supported_part1_reduced_roi_irreversible_component_profile(
+        codestream_bytes,
+        &parsed,
+        discard_levels,
+    ) {
+        return Ok(None);
+    }
+    let decoded = codestream::decode_part1_reduced_roi_irreversible_component_zero(
+        codestream_bytes,
+        discard_levels,
+    )
+    .map_err(map_codestream_error)?;
+    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
+    let image = metadata.image.as_ref().ok_or_else(|| {
+        unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "Profile-0 reduced ROI component decode requires image dimensions",
         )
     })?;
     let reduced_region = reduced_roi_region(
@@ -5056,8 +5125,16 @@ fn selective_part1_discard_target_info(
             &parsed,
             discard_levels,
         );
+    let reduced_roi_profile = options.region.is_none()
+        && options.max_quality_layers.is_none()
+        && reduced_mct_component_zero
+        && codestream::is_supported_part1_reduced_roi_irreversible_component_profile(
+            codestream_bytes,
+            &parsed,
+            discard_levels,
+        );
     let Some(coding_style) = parsed.uniform_effective_coding_style().or_else(|| {
-        reduced_heterogeneous_profile
+        (reduced_heterogeneous_profile || reduced_roi_profile)
             .then(|| parsed.effective_coding_style(0))
             .flatten()
     }) else {
@@ -5076,7 +5153,8 @@ fn selective_part1_discard_target_info(
             &parsed,
             discard_levels,
         ));
-    let reduced_profile = reduced_mct_profile || reduced_heterogeneous_profile;
+    let reduced_profile =
+        reduced_mct_profile || reduced_heterogeneous_profile || reduced_roi_profile;
     if (!is_direct_selective_part1_component_profile(codestream_bytes) && !reduced_profile)
         || (coding_style.multiple_component_transform && !reduced_mct_profile)
         || discard_levels > coding_style.decomposition_levels
