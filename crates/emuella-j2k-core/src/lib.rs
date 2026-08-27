@@ -5417,13 +5417,20 @@ fn checked_public_row_bytes(
 mod effective_coding_style_tests {
     use super::*;
 
-    fn insert_main_coc(mut codestream: Vec<u8>, parameters: [u8; 5]) -> Vec<u8> {
+    fn insert_main_coc(codestream: Vec<u8>, parameters: [u8; 5]) -> Vec<u8> {
+        insert_main_coc_with_scoc(codestream, 0, &parameters)
+    }
+
+    fn insert_main_coc_with_scoc(mut codestream: Vec<u8>, scoc: u8, parameters: &[u8]) -> Vec<u8> {
         let sot = codestream
             .windows(2)
             .position(|bytes| bytes == [0xff, 0x90])
             .unwrap();
-        let mut coc = vec![0xff, 0x53, 0, 9, 0, 0];
-        coc.extend_from_slice(&parameters);
+        let lcoc = u16::try_from(parameters.len() + 4).unwrap();
+        let mut coc = vec![0xff, 0x53];
+        coc.extend_from_slice(&lcoc.to_be_bytes());
+        coc.extend_from_slice(&[0, scoc]);
+        coc.extend_from_slice(parameters);
         codestream.splice(sot..sot, coc);
         codestream
     }
@@ -5483,5 +5490,29 @@ mod effective_coding_style_tests {
         .unwrap();
         assert_eq!(decoded.info.width, 32);
         assert_eq!(decoded.info.height, 32);
+    }
+
+    #[test]
+    fn inspect_classifies_structural_coc_precincts_before_decode_admission() {
+        let samples = (0..16).map(|sample| sample as u8).collect::<Vec<_>>();
+        let codestream =
+            codestream::encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let codestream = insert_main_coc_with_scoc(codestream, 1, &[0, 2, 2, 0, 1, 0x11]);
+
+        let metadata = inspect(&codestream, &InspectOptions::default()).unwrap();
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::MarkerSegment,
+                ref detail,
+            } if detail.contains("explicit precinct tables")
+        ));
+        assert!(matches!(
+            decode(&codestream, &DecodeOptions::default()),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::MarkerSegment,
+                ..
+            })
+        ));
     }
 }

@@ -124,12 +124,20 @@ this implementation was retrieval revision
 fixtures are project-authored and do not reproduce ISO expression.
 
 The parser rejects malformed lengths, duplicate or out-of-range component
-selectors, reserved forms, unsupported explicit precinct forms, and tile-part
-COD or COC precedence that the current decoder cannot safely resolve. Decoder
-classification, packet parsing, code-block reconstruction, quantisation, and
-synthesis all consume the same resolved style; a parsed COC is therefore
-exposed only when its effective component style is unambiguous within the
-supported main-header boundary.
+selectors, reserved forms, and tile-part COD or COC precedence that it cannot
+resolve unambiguously. It retains structurally valid explicit precincts and the
+HT coding-method bit so metadata inspection can report them independently of
+native decode admission. Decoder classification, packet parsing, code-block
+reconstruction, quantisation, and synthesis all consume the same resolved
+style and continue to reject combinations outside their supported profiles.
+
+HT COC coding-method signalling follows ISO/IEC 15444-15:2019, Annex A,
+A.3.2 and A.4, including Tables A.3–A.4, PDF pages 36–38. Bit 6 identifies an
+HT-capable tile-component; bit 7 in combination with bit 6 admits mixed classic
+and HT code-blocks. The parser retains both forms, while the current native HT
+decoder continues to admit only the homogeneous HT form without additional
+style flags. The canonical transcription consulted for this boundary was
+retrieval revision `10baf9472429d52f5d6b5f9b7a892dbed395b1db`.
 
 ### Profile-0 component quantization overrides
 
