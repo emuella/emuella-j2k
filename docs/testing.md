@@ -301,6 +301,32 @@ geometry and error limits; its consulted transcription was retrieval revision
 the packet-order boundaries, exact quantisation payloads and the narrow public
 request shape without embedding protected conformance bytes.
 
+### Profile-0 P0.10 subsampled reversible MCT component
+
+P0.10 has a named full-resolution component-zero route. It admits one exact
+256-by-256 reference grid split into four 128-by-128 tiles, with three unsigned
+8-bit components sampled 4 by 4. The main header contains only the exact COD
+and QCD defaults: two-layer LRCP, reversible 5/3, three decompositions, MCT
+signalling, default precincts and no inline packet markers. Nine empty-header
+tile parts form dense logical payloads for the four tiles, and each logical
+tile contains exactly 24 packets. The public output is only the transformed
+component-zero plane before inverse RCT, stitched on its native 64-by-64
+component grid. Rendered output, other component selections, quality-layer
+limits, regions, reductions, tile selection, marker overrides and other
+tile-part topologies remain excluded.
+
+The component sampling, MCT and coding-style rules follow ISO/IEC
+15444-1:2024, Annex A, A.5–A.6 and Tables A.9–A.20; packet progression and
+Profile-0 tile-part ordering follow Annex B and Annex C. The canonical
+transcription consulted was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. ISO/IEC 15444-4:2024, Annex C,
+C.2.1 and Table C.1, PDF page 31, supplies the component-zero geometry and
+error limits; its consulted transcription was retrieval revision
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. Project-owned regressions cover
+the exact raw coding and quantisation payloads, per-tile packet order, native
+component-grid stitching and the narrow public request shape without
+embedding protected conformance bytes.
+
 ## Inline packet markers
 
 The native subsampled and unit-sampled component paths consume inline SOP and
