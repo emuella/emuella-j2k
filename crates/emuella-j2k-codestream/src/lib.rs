@@ -13411,7 +13411,7 @@ mod bounded_poc_tests {
     }
 
     #[test]
-    fn bounded_poc_inline_markers_reject_excluded_precinct_and_tile_part_combinations() {
+    fn bounded_poc_inline_markers_reject_unqualified_precinct_and_tile_part_combinations() {
         let samples = (0..128 * 128)
             .map(|sample| u8::try_from((sample * 17 + 5) % 256).unwrap())
             .collect::<Vec<_>>();
@@ -14796,15 +14796,12 @@ fn validate_supported_native_rgb_u8_two_decomp_multitile_profile(
 fn validate_supported_native_component_multitile_profile(
     codestream: &Codestream,
 ) -> Result<CodingStyleMarker> {
-    validate_supported_native_component_multitile_profile_with_sample_guard(
-        codestream, true, false, false,
-    )
+    validate_supported_native_component_multitile_profile_with_sample_guard(codestream, true, false)
 }
 
 fn validate_supported_native_component_multitile_profile_with_sample_guard(
     codestream: &Codestream,
     enforce_total_sample_guard: bool,
-    allow_inline_packet_markers: bool,
     allow_bounded_tile_maxshift: bool,
 ) -> Result<CodingStyleMarker> {
     if codestream.kind != CodestreamKind::J2k {
@@ -14929,20 +14926,12 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
         ));
     }
     let inline_packet_markers = coding_style.sop_markers || coding_style.eph_markers;
-    if inline_packet_markers && !allow_inline_packet_markers {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "SOP and EPH packet markers are outside native component decode",
-        ));
-    }
-    if inline_packet_markers && allow_inline_packet_markers && coding_style.precincts_declared {
+    if coding_style.precincts_declared && coding_style.sop_markers {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::PacketDecode,
-            "bounded POC inline-marker decode does not accept explicit precincts",
+            "SOP with explicit precincts is outside the qualified native component profile",
         ));
     }
     if coding_style.precincts_declared {
@@ -14975,7 +14964,7 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
             "native component decode accepts multiple component transform only for three-component rows",
         ));
     }
-    if inline_packet_markers && allow_inline_packet_markers {
+    if inline_packet_markers {
         validate_one_tile_part_per_tile(codestream)?;
     } else {
         validate_retained_tile_parts_per_tile(codestream)?;
@@ -15332,7 +15321,6 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
             validate_supported_native_component_multitile_profile_with_sample_guard(
                 codestream,
                 enforce_total_sample_guard,
-                bounded_poc.is_some(),
                 bounded_poc.is_some() && bounded_maxshift.is_some(),
             )
         }
@@ -23224,16 +23212,26 @@ mod inline_packet_marker_tests {
     }
 
     fn marker_fixture(sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
+        marker_fixture_with_sampling(sop, eph, true)
+    }
+
+    fn unit_sampled_marker_fixture(sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
+        marker_fixture_with_sampling(sop, eph, false)
+    }
+
+    fn marker_fixture_with_sampling(sop: bool, eph: bool, subsampled: bool) -> (Vec<u8>, Vec<u8>) {
         let samples = vec![3, 17, 129, 250];
         let mut codestream = encode_planar_u8_no_decomp_test_fixture(2, 2, &[&samples]).unwrap();
 
-        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
-        codestream[siz + 6..siz + 10].copy_from_slice(&4_u32.to_be_bytes());
-        codestream[siz + 10..siz + 14].copy_from_slice(&4_u32.to_be_bytes());
-        codestream[siz + 22..siz + 26].copy_from_slice(&4_u32.to_be_bytes());
-        codestream[siz + 26..siz + 30].copy_from_slice(&4_u32.to_be_bytes());
-        codestream[siz + 41] = 2;
-        codestream[siz + 42] = 2;
+        if subsampled {
+            let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+            codestream[siz + 6..siz + 10].copy_from_slice(&4_u32.to_be_bytes());
+            codestream[siz + 10..siz + 14].copy_from_slice(&4_u32.to_be_bytes());
+            codestream[siz + 22..siz + 26].copy_from_slice(&4_u32.to_be_bytes());
+            codestream[siz + 26..siz + 30].copy_from_slice(&4_u32.to_be_bytes());
+            codestream[siz + 41] = 2;
+            codestream[siz + 42] = 2;
+        }
 
         let expected = decode_baseline_owned_components(&codestream)
             .unwrap()
@@ -23267,6 +23265,50 @@ mod inline_packet_marker_tests {
         (codestream, expected)
     }
 
+    fn explicit_precinct_eph_fixture() -> (Vec<u8>, Vec<u8>) {
+        let samples = (0..128 * 128)
+            .map(|sample| u8::try_from((sample * 17 + 5) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let mut codestream = encode_grayscale_u8_cprl_precinct_test_fixture(GrayscaleU8Encode {
+            width: 128,
+            height: 128,
+            samples: &samples,
+            stride_bytes: 128,
+        })
+        .unwrap();
+        let parsed = parse(&codestream).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let tile_part = &parsed.tiles[0];
+        let payload_offset = tile_part.payload_offset.unwrap();
+        let payload_len = tile_part.payload_len.unwrap();
+        let payload = &codestream[payload_offset..payload_offset + payload_len];
+        let contributions =
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload).unwrap();
+        assert_eq!(contributions.len(), 4);
+
+        let mut packet_start = 0_usize;
+        let mut marked_payload = Vec::new();
+        for contribution in &contributions {
+            assert!(packet_start <= contribution.payload_offset);
+            marked_payload.extend_from_slice(&payload[packet_start..contribution.payload_offset]);
+            marked_payload.extend_from_slice(&Marker::Eph.code().to_be_bytes());
+            let packet_end = contribution.payload_offset + contribution.codeword_len;
+            marked_payload.extend_from_slice(&payload[contribution.payload_offset..packet_end]);
+            packet_start = packet_end;
+        }
+        assert_eq!(packet_start, payload.len());
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] |= 0x04;
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &(psot + u32::try_from(contributions.len() * 2).unwrap()).to_be_bytes(),
+        );
+        codestream.splice(payload_offset..payload_offset + payload_len, marked_payload);
+        (codestream, samples)
+    }
+
     fn add_to_psot(codestream: &mut [u8], delta: u32) {
         let sot = find_marker(codestream, 0, Marker::Sot).unwrap();
         let psot = read_u32(codestream, sot + 6).unwrap();
@@ -23295,6 +23337,97 @@ mod inline_packet_marker_tests {
             assert_eq!(decoded.height, 4);
             assert_eq!(decoded.components[0].samples, samples);
         }
+    }
+
+    #[test]
+    fn consumes_supported_sop_and_eph_in_native_component_decode() {
+        for (sop, eph) in [(true, false), (false, true), (true, true)] {
+            let (codestream, samples) = unit_sampled_marker_fixture(sop, eph);
+            let parsed = parse(&codestream).unwrap();
+            assert!(is_supported_native_component_multitile_profile(&parsed));
+            assert!(is_algorithmic_baseline_profile(&codestream));
+            let decoded = decode_baseline_owned_components(&codestream).unwrap();
+            assert_eq!(decoded.width, 2);
+            assert_eq!(decoded.height, 2);
+            assert_eq!(decoded.components[0].samples, samples);
+        }
+    }
+
+    #[test]
+    fn consumes_supported_eph_with_explicit_precincts() {
+        let (codestream, samples) = explicit_precinct_eph_fixture();
+        let parsed = parse(&codestream).unwrap();
+        assert!(parsed.coding_style.unwrap().precincts_declared);
+        assert!(is_supported_native_component_multitile_profile(&parsed));
+        assert!(is_algorithmic_baseline_profile(&codestream));
+        let decoded = decode_baseline_owned_components(&codestream).unwrap();
+        assert_eq!(decoded.width, 128);
+        assert_eq!(decoded.height, 128);
+        assert_eq!(decoded.components[0].samples, samples);
+    }
+
+    #[test]
+    fn clips_nominal_code_blocks_before_accepting_smaller_precinct_dimensions() {
+        let mut subbands = Vec::new();
+        push_default_precinct_subband(
+            &mut subbands,
+            0,
+            0,
+            PacketSubbandKind::LowLow,
+            0,
+            0,
+            128,
+            1,
+            64,
+            64,
+            8,
+            None,
+            Some(0x17),
+        )
+        .unwrap();
+        assert_eq!(subbands[0].precinct_cols, 1);
+        assert_eq!(subbands[0].precinct_rows, 1);
+        assert_eq!(subbands[0].code_block_rows, 1);
+
+        push_default_precinct_subband(
+            &mut subbands,
+            1,
+            1,
+            PacketSubbandKind::HighLow,
+            1,
+            0,
+            0,
+            1,
+            64,
+            64,
+            8,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(subbands.len(), 1);
+
+        assert!(matches!(
+            push_default_precinct_subband(
+                &mut Vec::new(),
+                0,
+                0,
+                PacketSubbandKind::LowLow,
+                0,
+                0,
+                128,
+                3,
+                64,
+                64,
+                8,
+                None,
+                Some(0x17),
+            ),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -25091,6 +25224,9 @@ fn push_default_precinct_subband(
     irreversible_quantization_step: Option<transform::IrreversibleQuantizationStep>,
     precinct_exponents: Option<u8>,
 ) -> Result<()> {
+    if width == 0 || height == 0 {
+        return Ok(());
+    }
     let code_block_cols = u16::try_from(ceil_div(width, code_block_width)?)
         .map_err(|_| CodestreamError::SizeOverflow)?;
     let code_block_rows = u16::try_from(ceil_div(height, code_block_height)?)
@@ -25117,13 +25253,14 @@ fn push_default_precinct_subband(
         None => (width.max(1), height.max(1)),
     };
     if precinct_exponents.is_some()
-        && (precinct_width < code_block_width || precinct_height < code_block_height)
+        && ((precinct_width < code_block_width && width > precinct_width)
+            || (precinct_height < code_block_height && height > precinct_height))
     {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::PacketDecode,
-            "explicit precinct dimensions must not be smaller than the admitted code-block dimensions",
+            "explicit precinct partitions must not split an admitted code-block dimension",
         ));
     }
     let precinct_cols = u16::try_from(ceil_div(width, precinct_width)?)

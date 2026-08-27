@@ -202,14 +202,22 @@ decoder increment.
 
 ## Inline packet markers
 
-The native subsampled-component path and the byte-verified bounded-POC
-selective component path consume inline SOP and EPH syntax at structurally
-known packet boundaries. SOP remains optional for each packet when COD permits
-it; an observed `Nsop` must equal the packet's tile-scoped 16-bit sequence
-value, including packets that omit SOP. EPH is required immediately after
-every inline packet header when COD signals it. Marker length, sequence,
+The native subsampled and unit-sampled component paths consume inline SOP and
+EPH syntax at structurally known packet boundaries. The unit-sampled profile
+admits the same validated default or explicit precinct geometry with and
+without a bounded POC override. SOP remains optional for each packet when COD
+permits it; an observed `Nsop` must equal the packet's tile-scoped 16-bit
+sequence value, including packets that omit SOP. EPH is required immediately
+after every inline packet header when COD signals it. Marker length, sequence,
 placement, truncation, signalling, packet-body bounds, and PLT agreement are
 checked before Tier-1 reconstruction.
+
+An explicit precinct dimension may be nominally smaller than the declared
+code-block dimension only when the actual sub-band boundary clips the
+code-block to one precinct in that axis. Geometry that would let a code-block
+cross an actual precinct boundary remains unsupported. Empty high-frequency
+sub-bands produced when a decomposition reaches a very small component extent
+have no code-block or packet-header state.
 
 This behaviour follows ISO/IEC 15444-1:2024, Annex A, A.6.1 and A.8.1–A.8.2,
 Tables A.12–A.13 and A.40–A.41, and Annex B, B.10.8, PDF pages 46–49, 60–61,
@@ -219,12 +227,15 @@ bundle `1a7a03799078b476bf38e91786b979059b4c533d`). The implementation prose
 and synthetic fixtures are project-authored and do not reproduce ISO
 expression.
 
-Packed packet headers, multiple tile parts in this native profile, explicit
-precincts, and encoder-side SOP/EPH production remain outside this increment.
-Synthetic bounded-POC regressions exercise SOP-only, EPH-only and combined
-signalling, fail-closed sequence and placement errors, and the requirement for
-a valid POC admission. Other decoder profiles retain their existing packet-
-marker support boundary.
+Packed packet headers, SOP with explicit precincts, multiple tile parts in this
+inline-marker profile, and encoder-side SOP/EPH production remain outside this
+increment. Synthetic default-precinct regressions exercise SOP-only, EPH-only
+and combined signalling both with and without the bounded POC path. A separate
+decoded regression covers EPH with explicit precincts. The suite also
+preserves fail-closed handling of malformed lengths, sequence and placement
+errors, duplicate or unsignalled markers, missing required EPH, unqualified
+SOP/precinct combinations, and unsupported tile-part topology. Other decoder
+profiles retain their existing packet-marker support boundary.
 
 ## Bounded tile-header Maxshift
 
