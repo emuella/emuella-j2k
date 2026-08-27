@@ -13744,6 +13744,26 @@ pub fn is_supported_part1_reduced_irreversible_mct_component_profile(
         .is_ok()
 }
 
+/// True when a raw Part 1 codestream is inside the bounded reduced-resolution
+/// heterogeneous component profile qualified by Profile-0 P0.05.
+///
+/// This admission is limited to component zero at three discarded resolution
+/// levels in the one-tile, four-component PCRL shape. COC and QCC are resolved
+/// per component for packet traversal, while ROI, POC, tile-header overrides,
+/// and other heterogeneous profiles remain outside the boundary.
+pub fn is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+    discard_levels: u8,
+) -> bool {
+    validate_part1_reduced_heterogeneous_irreversible_component_profile(
+        input,
+        codestream,
+        discard_levels,
+    )
+    .is_ok()
+}
+
 #[cfg(test)]
 mod reduced_reversible_mct_component_profile_tests {
     use super::*;
@@ -13906,6 +13926,169 @@ mod reduced_irreversible_mct_component_profile_tests {
 
         let tile_cod = insert_tile_header_segment(codestream, &cod_segment);
         assert!(parse(&tile_cod).is_err());
+    }
+}
+
+#[cfg(test)]
+mod reduced_heterogeneous_irreversible_component_profile_tests {
+    use super::*;
+
+    fn insert_before_marker(mut codestream: Vec<u8>, before: Marker, segment: &[u8]) -> Vec<u8> {
+        let position = find_marker(&codestream, 0, before).unwrap();
+        codestream.splice(position..position, segment.iter().copied());
+        codestream
+    }
+
+    fn quantization_segment(marker: Marker, component: Option<u8>, payload: &[u8]) -> Vec<u8> {
+        let mut data = component.into_iter().collect::<Vec<_>>();
+        data.extend_from_slice(payload);
+        let length = u16::try_from(data.len() + 2).unwrap();
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.extend_from_slice(&data);
+        segment
+    }
+
+    fn fixture() -> Vec<u8> {
+        let planes = (0..4)
+            .map(|component| {
+                (0..64 * 64)
+                    .map(|sample| ((sample * 13 + component * 41) & 0xff) as u8)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut codestream = encode_planar_u8_no_decomp_test_fixture(64, 64, &views).unwrap();
+
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 47] = 2;
+        codestream[siz + 48] = 2;
+        codestream[siz + 50] = 2;
+        codestream[siz + 51] = 2;
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream.splice(
+            cod..cod + 2 + lcod,
+            [0xff, 0x52, 0, 12, 0, 3, 0, 7, 0, 6, 3, 3, 0, 0],
+        );
+
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&codestream, qcd + 2).unwrap());
+        let mut qcd_payload = vec![(2 << 5) | 2];
+        for _ in 0..19 {
+            qcd_payload.extend_from_slice(&(9_u16 << 11).to_be_bytes());
+        }
+        let qcd_segment = quantization_segment(Marker::Qcd, None, &qcd_payload);
+        codestream.splice(qcd..qcd + 2 + lqcd, qcd_segment);
+
+        let coc_1 = [0xff, 0x53, 0, 9, 1, 0, 3, 3, 3, 0, 0];
+        let coc_3 = [0xff, 0x53, 0, 9, 3, 0, 6, 3, 3, 0, 1];
+        codestream = insert_before_marker(codestream, Marker::Sot, &coc_1);
+        codestream = insert_before_marker(codestream, Marker::Sot, &coc_3);
+        codestream = insert_before_marker(
+            codestream,
+            Marker::Sot,
+            &quantization_segment(Marker::Qcc, Some(0), &[(2 << 5) | 1, 9 << 3, 0]),
+        );
+        let mut reversible_qcc = vec![2 << 5];
+        reversible_qcc.extend(core::iter::repeat_n(8 << 3, 19));
+        insert_before_marker(
+            codestream,
+            Marker::Sot,
+            &quantization_segment(Marker::Qcc, Some(3), &reversible_qcc),
+        )
+    }
+
+    #[test]
+    fn admits_only_the_bounded_effective_style_and_quantisation_shape() {
+        let codestream = fixture();
+        let parsed = parse(&codestream).expect("project-authored heterogeneous fixture parses");
+        assert!(parsed.uniform_effective_coding_style().is_none());
+        assert_eq!(
+            (0..4)
+                .map(|component| {
+                    let style = parsed.effective_coding_style(component).unwrap();
+                    (style.decomposition_levels, style.transform)
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (6, WaveletTransform::Irreversible97),
+                (3, WaveletTransform::Irreversible97),
+                (6, WaveletTransform::Irreversible97),
+                (6, WaveletTransform::Reversible53),
+            ]
+        );
+        assert!(
+            is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &codestream,
+                &parsed,
+                3,
+            )
+        );
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &codestream,
+                &parsed,
+                2,
+            )
+        );
+
+        let styles = (0..4)
+            .map(|component| parsed.effective_coding_style(component).unwrap())
+            .collect::<Vec<_>>();
+        let counts = styles
+            .iter()
+            .map(|style| 1 + usize::from(style.decomposition_levels) * 3)
+            .collect::<Vec<_>>();
+        let quantization = parse_component_quantization_for_styles(
+            &codestream,
+            &parsed,
+            &styles,
+            &counts,
+            19,
+            Some(&[0]),
+        )
+        .unwrap();
+        assert_eq!(
+            quantization
+                .iter()
+                .map(|value| value.steps.len())
+                .collect::<Vec<_>>(),
+            vec![19, 10, 19, 19]
+        );
+        assert_eq!(
+            quantization[3].style,
+            transform::QuantizationStyle::NoQuantization
+        );
+
+        let mut wrong_coc = codestream.clone();
+        let coc = find_marker(&wrong_coc, 0, Marker::Coc).unwrap();
+        wrong_coc[coc + 6] = 4;
+        let parsed = parse(&wrong_coc).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &wrong_coc, &parsed, 3,
+            )
+        );
+
+        let mut wrong_qcc = codestream.clone();
+        let qcc = find_marker(&wrong_qcc, 0, Marker::Qcc).unwrap();
+        wrong_qcc[qcc + 5] = 2 << 5;
+        let parsed = parse(&wrong_qcc).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &wrong_qcc, &parsed, 3,
+            )
+        );
+
+        let with_rgn = insert_before_marker(codestream, Marker::Sot, &[0xff, 0x5e, 0, 5, 0, 0, 1]);
+        let parsed = parse(&with_rgn).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &with_rgn, &parsed, 3,
+            )
+        );
     }
 }
 
@@ -15782,6 +15965,253 @@ fn validate_part1_reduced_irreversible_mct_component_profile(
     Ok(coding_style)
 }
 
+fn p0_05_effective_style_matches(
+    style: CodingStyleMarker,
+    decomposition_levels: u8,
+    transform: WaveletTransform,
+) -> bool {
+    style.entropy_coder == EntropyCoder::ClassicTier1
+        && !style.sop_markers
+        && !style.eph_markers
+        && style.progression_order == ProgressionOrder::Pcrl
+        && style.layers == 7
+        && !style.multiple_component_transform
+        && style.decomposition_levels == decomposition_levels
+        && style.code_block_width_exponent == 5
+        && style.code_block_height_exponent == 5
+        && style.code_block_style == 0
+        && style.transform == transform
+        && !style.precincts_declared
+}
+
+fn validate_part1_reduced_heterogeneous_irreversible_component_profile(
+    input: &[u8],
+    codestream: &Codestream,
+    discard_levels: u8,
+) -> Result<CodingStyleMarker> {
+    if discard_levels != 3 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Transform,
+            "the qualified Profile-0 heterogeneous component path requires exactly three discarded resolution levels",
+        ));
+    }
+    if codestream.kind != CodestreamKind::J2k {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 heterogeneous component path is limited to raw Part 1 codestreams",
+        ));
+    }
+    let expected_sampling = [(1_u8, 1_u8), (1, 1), (2, 2), (2, 2)];
+    if codestream.siz.components.len() != expected_sampling.len()
+        || codestream
+            .siz
+            .components
+            .iter()
+            .zip(expected_sampling)
+            .any(|(component, sampling)| {
+                component.bits_per_sample != 8
+                    || component.signed
+                    || (
+                        component.horizontal_separation,
+                        component.vertical_separation,
+                    ) != sampling
+            })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "the qualified Profile-0 heterogeneous component path requires four unsigned 8-bit components with its bounded 1x1/1x1/2x2/2x2 sampling",
+        ));
+    }
+    if codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::WaveletTransform,
+            "the qualified Profile-0 heterogeneous component path requires zero image and tile origins",
+        ));
+    }
+    let tiles = tile_rects(codestream)?;
+    if tiles.len() != 1
+        || !matches!(
+            codestream.tiles.as_slice(),
+            [tile] if tile.tile_index == 0
+                && tile.tile_part_index == 0
+                && !matches!(tile.tile_part_count, Some(count) if count != 1)
+        )
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::MultipleTiles,
+            "the qualified Profile-0 heterogeneous component path requires one first tile part in one tile",
+        ));
+    }
+
+    let coding_style = codestream.coding_style.ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Cod),
+            "the qualified Profile-0 heterogeneous component path requires a main-header COD marker",
+        )
+    })?;
+    let expected_styles = [
+        (0_u16, 6_u8, WaveletTransform::Irreversible97),
+        (1, 3, WaveletTransform::Irreversible97),
+        (2, 6, WaveletTransform::Irreversible97),
+        (3, 6, WaveletTransform::Reversible53),
+    ];
+    if codestream.component_coding_styles.len() != 2
+        || !codestream
+            .component_coding_styles
+            .iter()
+            .any(|style| style.component_index == 1)
+        || !codestream
+            .component_coding_styles
+            .iter()
+            .any(|style| style.component_index == 3)
+        || expected_styles
+            .iter()
+            .any(|(component, levels, transform)| {
+                codestream
+                    .effective_coding_style(*component)
+                    .is_none_or(|style| !p0_05_effective_style_matches(style, *levels, *transform))
+            })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "the qualified Profile-0 heterogeneous component path requires the bounded component-1 and component-3 COC styles",
+        ));
+    }
+    validate_irreversible97_zero_origin_aligned_tile_grid(codestream, coding_style)?;
+    for (component_index, style) in (0..codestream.siz.component_count()).filter_map(|component| {
+        codestream
+            .effective_coding_style(component)
+            .map(|style| (component, style))
+    }) {
+        let component = codestream
+            .siz
+            .components
+            .get(usize::from(component_index))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let component_tile = component_tile_rect(codestream, tiles[0], component)?;
+        if !coding_style_has_single_precinct(style, component_tile.width, component_tile.height) {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::PacketDecode,
+                "the qualified Profile-0 heterogeneous component path requires one effective precinct per component resolution",
+            ));
+        }
+    }
+
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut main_cod_seen = false;
+    let mut qcc_components = Vec::new();
+    for segment in &codestream.markers {
+        match segment.marker {
+            Marker::Soc
+            | Marker::Sot
+            | Marker::Sod
+            | Marker::Eoc
+            | Marker::Siz
+            | Marker::Cod
+            | Marker::Coc
+            | Marker::Qcd
+            | Marker::Qcc
+            | Marker::Tlm
+            | Marker::Com => {}
+            marker => {
+                return Err(unsupported(
+                    Some(segment.offset),
+                    Some(marker),
+                    UnsupportedConstruct::MarkerSegment,
+                    "marker is outside the qualified Profile-0 heterogeneous component path",
+                ));
+            }
+        }
+        if segment.marker == Marker::Cod
+            && (segment.offset >= first_tile_offset || core::mem::replace(&mut main_cod_seen, true))
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(Marker::Cod),
+                UnsupportedConstruct::MarkerSegment,
+                "the qualified Profile-0 heterogeneous component path requires exactly one main-header COD",
+            ));
+        }
+        if matches!(
+            segment.marker,
+            Marker::Coc | Marker::Qcd | Marker::Qcc | Marker::Tlm
+        ) && segment.offset >= first_tile_offset
+        {
+            return Err(unsupported(
+                Some(segment.offset),
+                Some(segment.marker),
+                UnsupportedConstruct::MarkerSegment,
+                "component, quantisation, and tile-length overrides are accepted only in the main header",
+            ));
+        }
+        if segment.marker == Marker::Qcc {
+            let data = checked_slice(input, segment.data_offset, segment.data_len)?;
+            qcc_components.push(data.first().copied().map(u16::from).ok_or_else(|| {
+                invalid(
+                    Some(segment.offset),
+                    Some(Marker::Qcc),
+                    "QCC marker omits its component selector",
+                )
+            })?);
+        }
+    }
+    qcc_components.sort_unstable();
+    if qcc_components != [0, 3] {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcc),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 heterogeneous component path requires QCC overrides for components zero and three",
+        ));
+    }
+
+    let component_styles = expected_styles
+        .iter()
+        .map(|(component, _, _)| {
+            codestream
+                .effective_coding_style(*component)
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let subband_counts = component_styles
+        .iter()
+        .map(|style| 1usize + usize::from(style.decomposition_levels) * 3)
+        .collect::<Vec<_>>();
+    parse_component_quantization_for_styles(
+        input,
+        codestream,
+        &component_styles,
+        &subband_counts,
+        19,
+        None,
+    )?;
+    Ok(coding_style)
+}
+
 fn validate_bounded_maxshift_plane_widths(
     input: &[u8],
     codestream: &Codestream,
@@ -16998,7 +17428,7 @@ pub fn decode_part1_reduced_reversible_mct_components_selected(
         &mut workspace,
         None,
         discard_levels,
-        false,
+        ComponentPacketProfile::Default,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -17054,7 +17484,62 @@ pub fn decode_part1_reduced_irreversible_mct_component_zero(
         &mut workspace,
         None,
         discard_levels,
-        true,
+        ComponentPacketProfile::Profile0P004,
+    )?
+    .into_iter()
+    .map(|samples| DecodedComponent { samples })
+    .collect::<Vec<_>>();
+    let retained_resolution = coding_style
+        .decomposition_levels
+        .checked_sub(discard_levels)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let (width, height) = resolution_dimensions(
+        tile_rect.width,
+        tile_rect.height,
+        coding_style.decomposition_levels,
+        retained_resolution,
+    )?;
+    Ok(DecodedImage {
+        width,
+        height,
+        bits_per_sample: 8,
+        signed: false,
+        components,
+    })
+}
+
+/// Decode component zero from the bounded reduced-resolution heterogeneous
+/// component profile qualified by Profile-0 P0.05.
+///
+/// Packet headers for every component are traversed using their effective COC
+/// style, but only component zero is reconstructed and returned.
+pub fn decode_part1_reduced_heterogeneous_irreversible_component_zero(
+    input: &[u8],
+    discard_levels: u8,
+) -> Result<DecodedImage> {
+    let codestream = parse(input)?;
+    let component_indices = [0_u16];
+    let coding_style = validate_part1_reduced_heterogeneous_irreversible_component_profile(
+        input,
+        &codestream,
+        discard_levels,
+    )?;
+    let tile_rect = *tile_rects(&codestream)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut workspace = Part1ComponentDecodeWorkspace::new();
+    let mut timings = None;
+    let components = decode_multitile_tile_component_samples_selected(
+        input,
+        &codestream,
+        coding_style,
+        tile_rect,
+        &component_indices,
+        &mut timings,
+        &mut workspace,
+        None,
+        discard_levels,
+        ComponentPacketProfile::Profile0P005,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -17177,7 +17662,7 @@ pub fn decode_baseline_owned_component_region_selected_with_max_layers(
             &mut workspace,
             max_layers,
             0,
-            false,
+            ComponentPacketProfile::Default,
         )?;
         for (((output, tile_samples), bytes_per_sample), _) in components
             .iter_mut()
@@ -21672,7 +22157,7 @@ fn decode_multitile_components_selected_validated(
             workspace,
             max_layers,
             0,
-            false,
+            ComponentPacketProfile::Default,
         )?;
         let components = samples
             .into_iter()
@@ -21752,7 +22237,7 @@ fn decode_multitile_components_selected_validated(
             workspace,
             max_layers,
             0,
-            false,
+            ComponentPacketProfile::Default,
         )?;
         if tile_components.len() != component_indices.len() {
             return Err(CodestreamError::SizeOverflow);
@@ -21787,6 +22272,13 @@ fn decode_multitile_components_selected_validated(
 }
 
 #[cfg_attr(not(feature = "std"), allow(unused_mut, unused_variables))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComponentPacketProfile {
+    Default,
+    Profile0P004,
+    Profile0P005,
+}
+
 fn decode_multitile_tile_component_samples_selected(
     input: &[u8],
     codestream: &Codestream,
@@ -21797,7 +22289,7 @@ fn decode_multitile_tile_component_samples_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
-    allow_p0_04_precinct_grid: bool,
+    packet_profile: ComponentPacketProfile,
 ) -> Result<Vec<Vec<u8>>> {
     if coding_style.transform == WaveletTransform::Irreversible97 {
         let planes = decode_multitile_tile_irreversible_component_planes_selected(
@@ -21810,7 +22302,7 @@ fn decode_multitile_tile_component_samples_selected(
             workspace,
             max_layers,
             discard_levels,
-            allow_p0_04_precinct_grid,
+            packet_profile,
         )?;
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
@@ -21936,7 +22428,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
-    allow_p0_04_precinct_grid: bool,
+    packet_profile: ComponentPacketProfile,
 ) -> Result<Vec<Vec<f32>>> {
     let max_resolution = coding_style
         .decomposition_levels
@@ -21965,7 +22457,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
-        allow_p0_04_precinct_grid,
+        packet_profile,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -22055,7 +22547,7 @@ fn decode_multitile_tile_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
-        false,
+        ComponentPacketProfile::Default,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -23010,7 +23502,14 @@ pub fn parse_default_precinct_lrcp_packets(
 ) -> Result<Vec<PacketCodeBlockContribution>> {
     let source = ContiguousPacketSource { bytes: payload };
     parse_default_precinct_packets_from_source(
-        input, codestream, tile_rect, &source, None, None, None, false,
+        input,
+        codestream,
+        tile_rect,
+        &source,
+        None,
+        None,
+        None,
+        ComponentPacketProfile::Default,
     )
     .map(|parsed| parsed.contributions)
 }
@@ -23203,14 +23702,49 @@ fn parse_default_precinct_packets_from_source(
     max_layers: Option<u16>,
     max_resolution: Option<u8>,
     selected_components: Option<&[u16]>,
-    allow_p0_04_precinct_grid: bool,
+    packet_profile: ComponentPacketProfile,
 ) -> Result<ParsedPacketContributions> {
-    let coding_style = uniform_effective_coding_style(codestream)?;
+    let component_count = usize::from(codestream.siz.component_count());
+    let component_styles = if packet_profile == ComponentPacketProfile::Profile0P005 {
+        (0..codestream.siz.component_count())
+            .map(|component_index| {
+                codestream
+                    .effective_coding_style(component_index)
+                    .ok_or_else(|| {
+                        invalid(
+                            None,
+                            Some(Marker::Cod),
+                            "packet parsing requires an effective coding style for every component",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        let uniform = uniform_effective_coding_style(codestream)?;
+        alloc::vec![uniform; component_count]
+    };
+    let coding_style = *component_styles
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
     let progression_order = parse_bounded_main_header_poc(input, codestream)?
         .map_or(coding_style.progression_order, |poc| poc.progression_order);
+    let p0_05_single_precincts = packet_profile == ComponentPacketProfile::Profile0P005
+        && component_styles
+            .iter()
+            .zip(&codestream.siz.components)
+            .all(|(style, component)| {
+                component_tile_rect(codestream, tile_rect, component).is_ok_and(|component_tile| {
+                    coding_style_has_single_precinct(
+                        *style,
+                        component_tile.width,
+                        component_tile.height,
+                    )
+                })
+            });
     let supported_precinct_grid = coding_style_has_supported_precinct_grid(coding_style, tile_rect)
-        || (allow_p0_04_precinct_grid
-            && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect));
+        || (packet_profile == ComponentPacketProfile::Profile0P004
+            && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
+        || p0_05_single_precincts;
     if !default_precinct_layer_count_supported(coding_style.layers) || !supported_precinct_grid {
         return Err(unsupported(
             None,
@@ -23221,17 +23755,24 @@ fn parse_default_precinct_packets_from_source(
     }
 
     let plt_packet_lengths = tile_packet_lengths_from_plt(input, codestream, tile_rect.tile_index)?;
-    let subband_count = 1usize
-        .checked_add(
-            usize::from(coding_style.decomposition_levels)
-                .checked_mul(3)
-                .ok_or(CodestreamError::SizeOverflow)?,
-        )
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let component_quantization = parse_component_quantization_for_selection(
+    let subband_counts = component_styles
+        .iter()
+        .map(|style| {
+            1usize
+                .checked_add(
+                    usize::from(style.decomposition_levels)
+                        .checked_mul(3)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let component_quantization = parse_component_quantization_for_styles(
         input,
         codestream,
-        subband_count,
+        &component_styles,
+        &subband_counts,
+        1usize + usize::from(coding_style.decomposition_levels) * 3,
         selected_components,
     )?;
     let tile_maxshift = parse_bounded_tile_maxshift(input, codestream)?
@@ -23246,10 +23787,13 @@ fn parse_default_precinct_packets_from_source(
                 .get(component_index)
                 .ok_or(CodestreamError::SizeOverflow)?;
             let component_tile = component_tile_rect(codestream, tile_rect, component)?;
+            let component_style = *component_styles
+                .get(component_index)
+                .ok_or(CodestreamError::SizeOverflow)?;
             default_precinct_subbands(
                 component_tile.width,
                 component_tile.height,
-                coding_style,
+                component_style,
                 quantization,
                 tile_maxshift
                     .filter(|maxshift| usize::from(maxshift.component_index) == component_index)
@@ -23285,24 +23829,27 @@ fn parse_default_precinct_packets_from_source(
             "maximum quality layers must retain at least one layer",
         ));
     }
-    let precinct_counts = (0..=coding_style.decomposition_levels)
-        .map(|resolution| {
-            let subband = component_states
-                .first()
-                .and_then(|component| {
-                    component
+    let precinct_counts_by_component = component_states
+        .iter()
+        .zip(&component_styles)
+        .map(|(component, style)| {
+            (0..=style.decomposition_levels)
+                .map(|resolution| {
+                    let subband = component
                         .subbands
                         .iter()
                         .find(|subband| subband.resolution == resolution)
+                        .ok_or(CodestreamError::SizeOverflow)?;
+                    u32::from(subband.precinct_cols)
+                        .checked_mul(u32::from(subband.precinct_rows))
+                        .ok_or(CodestreamError::SizeOverflow)
                 })
-                .ok_or(CodestreamError::SizeOverflow)?;
-            u32::from(subband.precinct_cols)
-                .checked_mul(u32::from(subband.precinct_rows))
-                .ok_or(CodestreamError::SizeOverflow)
+                .collect::<Result<Vec<_>>>()
         })
         .collect::<Result<Vec<_>>>()?;
-    let expected_packet_count = precinct_counts
+    let expected_packet_count = precinct_counts_by_component
         .iter()
+        .flatten()
         .try_fold(0_usize, |total, precinct_count| {
             total
                 .checked_add(
@@ -23311,8 +23858,15 @@ fn parse_default_precinct_packets_from_source(
                 .ok_or(CodestreamError::SizeOverflow)
         })?
         .checked_mul(usize::from(coding_style.layers))
-        .and_then(|count| count.checked_mul(usize::from(codestream.siz.component_count())))
         .ok_or(CodestreamError::SizeOverflow)?;
+    if packet_profile == ComponentPacketProfile::Profile0P005 && expected_packet_count != 175 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::PacketDecode,
+            "the qualified Profile-0 P0.05 path requires exactly 175 single-precinct PCRL packets",
+        ));
+    }
     let plt_fully_covers_packets = plt_packet_lengths.as_ref().is_some_and(|plt| {
         if plt.lengths.len() != expected_packet_count
             || plt.logical_offsets.len() != expected_packet_count
@@ -23331,13 +23885,11 @@ fn parse_default_precinct_packets_from_source(
         }
         expected_offset == payload.len()
     });
-    visit_default_precinct_packet_keys(
+    visit_component_precinct_packet_keys(
         tile_rect.tile_index,
         progression_order,
         coding_style.layers,
-        coding_style.decomposition_levels,
-        codestream.siz.component_count(),
-        &precinct_counts,
+        &precinct_counts_by_component,
         |packet_cursor| {
             let packet_start = packet_offset;
             let declared_packet_len = plt_packet_lengths.as_ref().and_then(|plt| {
@@ -23381,10 +23933,13 @@ fn parse_default_precinct_packets_from_source(
                 return Ok(());
             }
             packet_count = packet_count.saturating_add(1);
+            let packet_style = *component_styles
+                .get(usize::from(packet_cursor.component))
+                .ok_or(CodestreamError::SizeOverflow)?;
             packet_offset = consume_inline_sop(
                 payload,
                 packet_offset,
-                coding_style.sop_markers,
+                packet_style.sop_markers,
                 expected_sop_sequence,
             )?;
             expected_sop_sequence = next_sop_sequence(expected_sop_sequence);
@@ -23477,7 +24032,7 @@ fn parse_default_precinct_packets_from_source(
                                 ht_missing_bitplanes,
                                 ht_coding_set,
                                 ht_coded,
-                            ) = if coding_style.code_block_style & 0x40 != 0 {
+                            ) = if packet_style.code_block_style & 0x40 != 0 {
                                 if aggregate_quality_layers {
                                     let (codeword_len, coding_segments, coding_passes, cleanup_set) =
                                         read_layered_ht_codeword_lengths(
@@ -23550,7 +24105,7 @@ fn parse_default_precinct_packets_from_source(
                                         subband.l_block[code_block_index],
                                         first_coding_pass,
                                         announced_coding_passes,
-                                        coding_style.code_block_style,
+                                        packet_style.code_block_style,
                                     )?;
                                 (
                                     codeword_len,
@@ -23615,7 +24170,7 @@ fn parse_default_precinct_packets_from_source(
                 .checked_add(header_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
             let mut segment_offset =
-                consume_inline_eph(payload, header_end, coding_style.eph_markers)?;
+                consume_inline_eph(payload, header_end, packet_style.eph_markers)?;
             for pending in packet_contributions {
                 payload.require_range(segment_offset, pending.codeword_len)?;
                 let codeword_len = pending.codeword_len;
@@ -24673,6 +25228,7 @@ fn push_default_precinct_contribution(
     Ok(())
 }
 
+#[cfg(test)]
 fn visit_default_precinct_packet_keys(
     tile: u16,
     progression_order: ProgressionOrder,
@@ -24680,28 +25236,63 @@ fn visit_default_precinct_packet_keys(
     decomposition_levels: u8,
     component_count: u16,
     precinct_counts: &[u32],
-    mut visitor: impl FnMut(PacketKey) -> Result<()>,
+    visitor: impl FnMut(PacketKey) -> Result<()>,
 ) -> Result<()> {
     if precinct_counts.len() != usize::from(decomposition_levels) + 1
         || precinct_counts.contains(&0)
     {
         return Err(CodestreamError::SizeOverflow);
     }
-    let mut visit = |layer, resolution, component, precinct| {
+    let precinct_counts_by_component =
+        alloc::vec![precinct_counts.to_vec(); usize::from(component_count)];
+    visit_component_precinct_packet_keys(
+        tile,
+        progression_order,
+        layers,
+        &precinct_counts_by_component,
+        visitor,
+    )
+}
+
+fn visit_component_precinct_packet_keys(
+    tile: u16,
+    progression_order: ProgressionOrder,
+    layers: u16,
+    precinct_counts_by_component: &[Vec<u32>],
+    mut visitor: impl FnMut(PacketKey) -> Result<()>,
+) -> Result<()> {
+    if precinct_counts_by_component.is_empty()
+        || precinct_counts_by_component
+            .iter()
+            .any(|counts| counts.is_empty() || counts.contains(&0))
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let max_resolution = precinct_counts_by_component
+        .iter()
+        .map(|counts| counts.len() - 1)
+        .max()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut visit = |layer, resolution: usize, component: usize, precinct| {
         visitor(PacketKey {
             tile,
             layer,
-            resolution,
-            component,
+            resolution: u8::try_from(resolution).map_err(|_| CodestreamError::SizeOverflow)?,
+            component: u16::try_from(component).map_err(|_| CodestreamError::SizeOverflow)?,
             precinct,
         })
     };
     match progression_order {
         ProgressionOrder::Lrcp => {
             for layer in 0..layers {
-                for resolution in 0..=decomposition_levels {
-                    for component in 0..component_count {
-                        for precinct in 0..precinct_counts[usize::from(resolution)] {
+                for resolution in 0..=max_resolution {
+                    for (component, precinct_counts) in
+                        precinct_counts_by_component.iter().enumerate()
+                    {
+                        let Some(&precinct_count) = precinct_counts.get(resolution) else {
+                            continue;
+                        };
+                        for precinct in 0..precinct_count {
                             visit(layer, resolution, component, precinct)?;
                         }
                     }
@@ -24709,10 +25300,15 @@ fn visit_default_precinct_packet_keys(
             }
         }
         ProgressionOrder::Rlcp => {
-            for resolution in 0..=decomposition_levels {
+            for resolution in 0..=max_resolution {
                 for layer in 0..layers {
-                    for component in 0..component_count {
-                        for precinct in 0..precinct_counts[usize::from(resolution)] {
+                    for (component, precinct_counts) in
+                        precinct_counts_by_component.iter().enumerate()
+                    {
+                        let Some(&precinct_count) = precinct_counts.get(resolution) else {
+                            continue;
+                        };
+                        for precinct in 0..precinct_count {
                             visit(layer, resolution, component, precinct)?;
                         }
                     }
@@ -24720,9 +25316,23 @@ fn visit_default_precinct_packet_keys(
             }
         }
         ProgressionOrder::Rpcl => {
-            for resolution in 0..=decomposition_levels {
-                for precinct in 0..precinct_counts[usize::from(resolution)] {
-                    for component in 0..component_count {
+            for resolution in 0..=max_resolution {
+                let max_precincts = precinct_counts_by_component
+                    .iter()
+                    .filter_map(|counts| counts.get(resolution))
+                    .copied()
+                    .max()
+                    .unwrap_or(0);
+                for precinct in 0..max_precincts {
+                    for (component, precinct_counts) in
+                        precinct_counts_by_component.iter().enumerate()
+                    {
+                        if precinct_counts
+                            .get(resolution)
+                            .is_none_or(|count| precinct >= *count)
+                        {
+                            continue;
+                        }
                         for layer in 0..layers {
                             visit(layer, resolution, component, precinct)?;
                         }
@@ -24731,11 +25341,17 @@ fn visit_default_precinct_packet_keys(
             }
         }
         ProgressionOrder::Pcrl => {
-            let max_precincts = precinct_counts.iter().copied().max().unwrap_or(0);
+            let max_precincts = precinct_counts_by_component
+                .iter()
+                .flatten()
+                .copied()
+                .max()
+                .unwrap_or(0);
             for precinct in 0..max_precincts {
-                for component in 0..component_count {
-                    for resolution in 0..=decomposition_levels {
-                        if precinct >= precinct_counts[usize::from(resolution)] {
+                for (component, precinct_counts) in precinct_counts_by_component.iter().enumerate()
+                {
+                    for (resolution, precinct_count) in precinct_counts.iter().enumerate() {
+                        if precinct >= *precinct_count {
                             continue;
                         }
                         for layer in 0..layers {
@@ -24746,11 +25362,11 @@ fn visit_default_precinct_packet_keys(
             }
         }
         ProgressionOrder::Cprl => {
-            for component in 0..component_count {
+            for (component, precinct_counts) in precinct_counts_by_component.iter().enumerate() {
                 let max_precincts = precinct_counts.iter().copied().max().unwrap_or(0);
                 for precinct in 0..max_precincts {
-                    for resolution in 0..=decomposition_levels {
-                        if precinct >= precinct_counts[usize::from(resolution)] {
+                    for (resolution, precinct_count) in precinct_counts.iter().enumerate() {
+                        if precinct >= *precinct_count {
                             continue;
                         }
                         for layer in 0..layers {
@@ -24787,6 +25403,71 @@ fn default_precinct_packet_order(
         },
     )?;
     Ok(packets)
+}
+
+#[cfg(test)]
+mod heterogeneous_packet_order_tests {
+    use super::*;
+
+    #[test]
+    fn visits_the_bounded_175_packet_pcrl_shape_by_effective_component_style() {
+        let counts = vec![vec![1; 7], vec![1; 4], vec![1; 7], vec![1; 7]];
+        let mut packets = Vec::new();
+        visit_component_precinct_packet_keys(0, ProgressionOrder::Pcrl, 7, &counts, |packet| {
+            packets.push(packet);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(packets.len(), 175);
+        assert_eq!(
+            packets[0],
+            PacketKey {
+                tile: 0,
+                layer: 0,
+                resolution: 0,
+                component: 0,
+                precinct: 0,
+            }
+        );
+        assert_eq!(
+            (
+                packets[48].component,
+                packets[48].resolution,
+                packets[48].layer
+            ),
+            (0, 6, 6)
+        );
+        assert_eq!(
+            (
+                packets[49].component,
+                packets[49].resolution,
+                packets[49].layer
+            ),
+            (1, 0, 0)
+        );
+        assert_eq!(
+            (
+                packets[76].component,
+                packets[76].resolution,
+                packets[76].layer
+            ),
+            (1, 3, 6)
+        );
+        assert_eq!(
+            (
+                packets[77].component,
+                packets[77].resolution,
+                packets[77].layer
+            ),
+            (2, 0, 0)
+        );
+        assert!(
+            packets
+                .iter()
+                .all(|packet| packet.component != 1 || packet.resolution <= 3)
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25145,6 +25826,40 @@ fn parse_component_quantization_for_selection(
     selected_components: Option<&[u16]>,
 ) -> Result<Vec<ComponentQuantization>> {
     let coding_style = uniform_effective_coding_style(codestream)?;
+    let component_styles = alloc::vec![coding_style; usize::from(codestream.siz.component_count())];
+    let expected_subbands_by_component =
+        alloc::vec![expected_subbands; usize::from(codestream.siz.component_count())];
+    parse_component_quantization_for_styles(
+        input,
+        codestream,
+        &component_styles,
+        &expected_subbands_by_component,
+        expected_subbands,
+        selected_components,
+    )
+}
+
+fn parse_component_quantization_for_styles(
+    input: &[u8],
+    codestream: &Codestream,
+    component_styles: &[CodingStyleMarker],
+    expected_subbands_by_component: &[usize],
+    default_expected_subbands: usize,
+    selected_components: Option<&[u16]>,
+) -> Result<Vec<ComponentQuantization>> {
+    let component_count = usize::from(codestream.siz.component_count());
+    if component_styles.len() != component_count
+        || expected_subbands_by_component.len() != component_count
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let default_style = codestream.coding_style.ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Cod),
+            "QCD/QCC resolution requires a main-header COD marker",
+        )
+    })?;
     let first_tile_offset = codestream
         .markers
         .iter()
@@ -25165,15 +25880,32 @@ fn parse_component_quantization_for_selection(
     };
     let default = parse_quantization_marker_payload(
         checked_slice(input, qcd.data_offset, qcd.data_len)?,
-        expected_subbands,
-        coding_style.transform,
-        coding_style.entropy_coder,
+        default_expected_subbands,
+        default_style.transform,
+        default_style.entropy_coder,
         Marker::Qcd,
         qcd.offset,
         selected_components.is_none(),
     )?;
-    let component_count = usize::from(codestream.siz.component_count());
-    let mut components = alloc::vec![default; component_count];
+    let mut components = component_styles
+        .iter()
+        .zip(expected_subbands_by_component)
+        .map(|(style, expected_subbands)| {
+            if default.steps.len() < *expected_subbands {
+                return Err(invalid(
+                    Some(qcd.offset),
+                    Some(Marker::Qcd),
+                    "QCD marker does not provide every effective component subband",
+                ));
+            }
+            let mut quantization = default.clone();
+            quantization.steps.truncate(*expected_subbands);
+            for subband_index in 0..*expected_subbands {
+                quantization.available_bitplanes(subband_index, style.entropy_coder)?;
+            }
+            Ok(quantization)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut overridden = alloc::vec![false; component_count];
     let component_index_bytes = if component_count <= 256 { 1 } else { 2 };
 
@@ -25209,9 +25941,10 @@ fn parse_component_quantization_for_selection(
                 "duplicate main-header QCC override for one component",
             ));
         }
+        let coding_style = component_styles[component_index];
         components[component_index] = parse_quantization_marker_payload(
             &segment[component_index_bytes..],
-            expected_subbands,
+            expected_subbands_by_component[component_index],
             coding_style.transform,
             coding_style.entropy_coder,
             Marker::Qcc,
@@ -25227,6 +25960,9 @@ fn parse_component_quantization_for_selection(
         for component_index in selected_components {
             let component_index = usize::from(*component_index);
             let quantization = components
+                .get(component_index)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let coding_style = component_styles
                 .get(component_index)
                 .ok_or(CodestreamError::SizeOverflow)?;
             let (marker, marker_offset) = codestream
@@ -32793,7 +33529,7 @@ fn parse_prepared_payload_packets(
             max_layers,
             Some(max_resolution),
             Some(component_indices),
-            false,
+            ComponentPacketProfile::Default,
         ),
         PreparedTilePayload::Source(source_payload) => {
             let buffered = BufferedSourcePacketPayload::new(source_payload);
@@ -32805,7 +33541,7 @@ fn parse_prepared_payload_packets(
                 max_layers,
                 Some(max_resolution),
                 Some(component_indices),
-                false,
+                ComponentPacketProfile::Default,
             );
             if let Some(error) = buffered.take_error() {
                 Err(source_error_in_phase(error, "packet-header preparation"))
