@@ -278,6 +278,29 @@ revision `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. Project-owned packet-order
 and request-shape regressions exercise the 72+24 boundary without embedding
 protected conformance bytes.
 
+### Profile-0 P0.08 heterogeneous reversible component
+
+P0.08 has a named reduction-five component route. It admits one origin-aligned
+513-by-3072 tile with three signed 12-bit unit-sampled components, exactly
+three COC assignments, QCC overrides for components zero and two, thirty-layer
+CPRL reversible coding, default precincts, and required SOP/EPH packet
+markers. The effective component resolution counts are seven, eight and nine,
+forming one exact 720-packet CPRL sequence. The public route exposes only the
+full reduced component zero as planar signed 12-bit output at 17 by 96; the
+comparison runner applies the existing signed arithmetic conversion to the
+signed 8-bit oracle. Other reductions, regions, components, layouts, layer
+limits, tile parts, progression changes and marker overrides remain excluded.
+
+The coding-style and component-override rules follow ISO/IEC 15444-1:2024,
+Annex A, A.6.1–A.6.2 and Tables A.13–A.20, and the packet progression rules in
+Annex B. The canonical transcription consulted was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. ISO/IEC 15444-4:2024, Annex C,
+C.2.1 and Table C.1, PDF page 31, supplies the component-zero reduction-five
+geometry and error limits; its consulted transcription was retrieval revision
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. Project-owned regressions cover
+the packet-order boundaries, exact quantisation payloads and the narrow public
+request shape without embedding protected conformance bytes.
+
 ## Inline packet markers
 
 The native subsampled and unit-sampled component paths consume inline SOP and

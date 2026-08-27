@@ -118,17 +118,17 @@ class ContractTests(unittest.TestCase):
         )
         self.assertEqual(case, comparison_case())
 
-    def test_loads_three_level_reduced_scalar_case(self) -> None:
+    def test_loads_five_level_reduced_scalar_case(self) -> None:
         record = self.suite["decoded_pixel_comparison"]["cases"][0]
         record["reference"] = "files/reduced-reference.pgx"
-        record["resolution_reduction"] = 3
+        record["resolution_reduction"] = 5
         case = runner.load_comparison_case(
             self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
         )
         self.assertFalse(case.output_window)
-        self.assertEqual(case.resolution_reduction, 3)
+        self.assertEqual(case.resolution_reduction, 5)
 
-        record["resolution_reduction"] = 4
+        record["resolution_reduction"] = 6
         with self.assertRaisesRegex(runner.RunnerError, "supported integer range"):
             runner.load_comparison_case(
                 self.suite, self.inventory, self.lock, runner.DEFAULT_CASE
