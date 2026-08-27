@@ -111,6 +111,17 @@ output after one resolution reduction. Both are signed 4-bit comparisons with
 inclusive limits 0/0, and the group requires at least one alternative to pass.
 Alternative outputs are choices rather than cumulative requirements.
 
+The comparison worker also accepts the unsigned PGX reference-header spacing
+variant used by the Profile-0 ETS: exactly one blank sign position may appear
+between the byte-order field and an unsigned decimal precision. Other empty
+fields, repeated separators, tabs and malformed numeric fields remain invalid;
+this is a bounded ETS compatibility rule rather than general whitespace
+normalisation. The canonical PGX grammar is ISO/IEC 15444-4:2024, Annex B,
+B.2.6–B.2.6.1, PDF pages 26–27. P0.16's component-0 reference and exact limits
+are defined by Annex C, C.2.1 and Table C.1, PDF page 31. The reviewed
+transcription was retrieval revision
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
+
 ### Component coding-style overrides
 
 The main-header COC parser and its project-authored synthetic fixtures follow

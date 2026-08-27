@@ -241,10 +241,7 @@ fn parse_pgx(bytes: &[u8]) -> Result<PgxImage, String> {
         return Err("PGX header fields must use spaces".to_owned());
     }
     let fields = header.split(' ').collect::<Vec<_>>();
-    if !(5..=6).contains(&fields.len())
-        || fields.iter().any(|field| field.is_empty())
-        || fields[0] != "PG"
-    {
+    if !(5..=6).contains(&fields.len()) || fields[0] != "PG" {
         return Err("PGX header has an unsupported field structure".to_owned());
     }
     let little_endian = match fields[1] {
@@ -254,6 +251,11 @@ fn parse_pgx(bytes: &[u8]) -> Result<PgxImage, String> {
     };
     let (depth_field, width_field, height_field) = match fields.as_slice() {
         [_, _, depth, width, height] => (*depth, *width, *height),
+        [_, _, "", depth, width, height]
+            if depth.as_bytes().first().is_some_and(u8::is_ascii_digit) =>
+        {
+            (*depth, *width, *height)
+        }
         [_, _, sign @ ("+" | "-"), depth, width, height] => {
             let signed_depth = format!("{sign}{depth}");
             return parse_pgx_fields(bytes, newline, little_endian, &signed_depth, width, height);
@@ -599,6 +601,9 @@ mod tests {
         let unsigned_without_sign =
             parse_pgx(b"PG ML 4 1 1\n\x07").expect("unsigned precision parses");
         assert_eq!(unsigned_without_sign.samples, [7]);
+        let blank_separated_sign =
+            parse_pgx(b"PG ML  8 1 1\n\x07").expect("blank sign position parses as unsigned");
+        assert_eq!(blank_separated_sign.samples, [7]);
 
         parse_pgx(b"PG ML +17 1 1\n\x00\x00\x00\x01").expect("17-bit PGX uses four-byte storage");
     }
@@ -662,6 +667,11 @@ mod tests {
         assert!(parse_pgx(b"PG ML +-4 1 1\n\x00").is_err());
         assert!(parse_pgx(b"PG ML --4 1 1\n\x00").is_err());
         assert!(parse_pgx(b"PG ML +x 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG  ML 8 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML 8  1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML   8 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML  +8 1 1\n\x00").is_err());
+        assert!(parse_pgx(b"PG ML  -8 1 1\n\x00").is_err());
         assert!(parse_pgx(b"PG ML +17 1 1\n\x00\x00\x01").is_err());
         assert!(
             validate_contract(ComparisonContract {
