@@ -15216,12 +15216,7 @@ fn validate_supported_part1_reversible53_default_precinct(
         ));
     }
 
-    let coding_style = uniform_effective_coding_style(codestream)?;
-    validate_topology_zero_origin_synthesis_phase(
-        codestream,
-        &alloc::vec![coding_style; usize::from(codestream.siz.component_count())],
-    )?;
-    Ok(coding_style)
+    uniform_effective_coding_style(codestream)
 }
 
 fn validate_supported_part1_irreversible97_default_precinct(
@@ -15901,11 +15896,6 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
     } else {
         validate_retained_tile_parts_per_tile(codestream)?;
     }
-
-    validate_topology_zero_origin_synthesis_phase(
-        codestream,
-        &alloc::vec![coding_style; usize::from(component_count)],
-    )?;
 
     Ok(coding_style)
 }
@@ -25653,10 +25643,18 @@ fn resolution_subbands_share_precinct_grid(
 fn precinct_lattice_cohort_matches_current_spatial_walker(
     lattices: &[Part1ReferencePrecinctLattice],
 ) -> bool {
-    lattices.iter().all(|lattice| lattice.count <= 1)
-        || lattices
-            .first()
-            .is_some_and(|first| lattices.iter().all(|lattice| lattice == first))
+    if lattices.iter().all(|lattice| lattice.count <= 1) {
+        let mut positions = lattices
+            .iter()
+            .filter(|lattice| lattice.count == 1)
+            .map(|lattice| (lattice.first_x, lattice.first_y));
+        return positions
+            .next()
+            .is_none_or(|first| positions.all(|position| position == first));
+    }
+    lattices
+        .first()
+        .is_some_and(|first| lattices.iter().all(|lattice| lattice == first))
 }
 
 fn topologies_have_supported_spatial_precinct_order(
@@ -25743,29 +25741,31 @@ fn topologies_have_supported_spatial_precinct_order(
     Ok(true)
 }
 
-fn validate_topology_zero_origin_synthesis_phase(
-    codestream: &Codestream,
+fn validate_tile_reversible_topology_zero_origin_synthesis_phase(
+    siz: &SizMarker,
+    tile: TileRect,
     coding_styles: &[CodingStyleMarker],
 ) -> Result<()> {
-    if coding_styles.len() != usize::from(codestream.siz.component_count()) {
+    if coding_styles.len() != usize::from(siz.component_count()) {
         return Err(CodestreamError::SizeOverflow);
     }
-    for tile in tile_rects(codestream)? {
-        for (component, style) in coding_styles.iter().enumerate() {
-            let topology = Part1PrecinctTopology::new(
-                &codestream.siz,
-                tile,
-                u16::try_from(component).map_err(|_| CodestreamError::SizeOverflow)?,
-                *style,
-            )?;
-            if !topology.has_zero_origin_synthesis_phase() {
-                return Err(unsupported(
-                    None,
-                    Some(Marker::Siz),
-                    UnsupportedConstruct::Transform,
-                    "native inverse synthesis requires an even absolute tile-component origin at every decomposed resolution",
-                ));
-            }
+    for (component, style) in coding_styles.iter().enumerate() {
+        if style.transform != WaveletTransform::Reversible53 {
+            continue;
+        }
+        let topology = Part1PrecinctTopology::new(
+            siz,
+            tile,
+            u16::try_from(component).map_err(|_| CodestreamError::SizeOverflow)?,
+            *style,
+        )?;
+        if !topology.has_zero_origin_synthesis_phase() {
+            return Err(unsupported(
+                None,
+                Some(Marker::Siz),
+                UnsupportedConstruct::Transform,
+                "native inverse synthesis requires an even absolute tile-component origin at every decomposed resolution",
+            ));
         }
     }
     Ok(())
@@ -26030,6 +26030,11 @@ fn parse_default_precinct_packets_from_source(
     let coding_style = *component_styles
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
+    validate_tile_reversible_topology_zero_origin_synthesis_phase(
+        &codestream.siz,
+        tile_rect,
+        &component_styles,
+    )?;
     let progression_order = if matches!(
         packet_profile,
         ComponentPacketProfile::Profile0P007 | ComponentPacketProfile::Profile0P013
@@ -26949,7 +26954,7 @@ mod inline_packet_marker_tests {
         }
     }
 
-    fn shift_single_tile_fixture_origin_x(codestream: &mut [u8], origin_x: u32) {
+    fn shift_fixture_origin_x(codestream: &mut [u8], origin_x: u32) {
         let siz = find_marker(codestream, 0, Marker::Siz).unwrap();
         let reference_width = read_u32(codestream, siz + 6).unwrap();
         codestream[siz + 6..siz + 10]
@@ -27445,7 +27450,7 @@ mod inline_packet_marker_tests {
                 stride_bytes: 256,
             })
             .unwrap();
-        shift_single_tile_fixture_origin_x(&mut codestream, 2);
+        shift_fixture_origin_x(&mut codestream, 2);
         let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
         let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
         codestream[cod + lcod] = 0x77;
@@ -27491,6 +27496,64 @@ mod inline_packet_marker_tests {
     }
 
     #[test]
+    fn rejects_singleton_precincts_at_distinct_absolute_spatial_positions() {
+        let samples = [3_u8, 17, 41, 89];
+        let mut codestream = encode_grayscale_u8_one_decomp(GrayscaleU8Encode {
+            width: 2,
+            height: 2,
+            samples: &samples,
+            stride_bytes: 2,
+        })
+        .unwrap();
+        shift_fixture_origin_x(&mut codestream, 4);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream[cod + 2..cod + 4]
+            .copy_from_slice(&u16::try_from(lcod + 2).unwrap().to_be_bytes());
+        codestream[cod + 4] |= 0x01;
+        codestream[cod + 5] = 4;
+        codestream.splice(cod + 2 + lcod..cod + 2 + lcod, [0x11, 0x13]);
+
+        let parsed = parse(&codestream).unwrap();
+        let style = parsed.effective_coding_style(0).unwrap();
+        assert_eq!(style.progression_order, ProgressionOrder::Cprl);
+        assert_eq!(&style.precinct_exponents[..2], &[0x11, 0x13]);
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let topology = Part1PrecinctTopology::new(&parsed.siz, tile, 0, style).unwrap();
+        assert_eq!(topology.tile_component.x0, 4);
+        assert_eq!(topology.tile_component.x1, 6);
+        assert!(topology.has_zero_origin_synthesis_phase());
+        let low = topology
+            .reference_precinct_lattice(&parsed.siz, style, 0)
+            .unwrap();
+        let full = topology
+            .reference_precinct_lattice(&parsed.siz, style, 1)
+            .unwrap();
+        assert_eq!((low.count, low.first_x), (1, 4));
+        assert_eq!((full.count, full.first_x), (1, 0));
+        assert!(
+            !topologies_have_supported_spatial_precinct_order(
+                &parsed.siz,
+                tile,
+                &[style],
+                style.progression_order,
+            )
+            .unwrap()
+        );
+
+        let tile_part = &parsed.tiles[0];
+        let payload = tile_payload(&codestream, tile_part).unwrap();
+        assert!(matches!(
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn rejects_nonzero_inverse_synthesis_phase_after_structural_parse() {
         let samples = (0..16 * 12)
             .map(|sample| u8::try_from((sample * 13 + 3) % 256).unwrap())
@@ -27502,7 +27565,7 @@ mod inline_packet_marker_tests {
             stride_bytes: 16,
         })
         .unwrap();
-        shift_single_tile_fixture_origin_x(&mut codestream, 1);
+        shift_fixture_origin_x(&mut codestream, 1);
 
         let parsed = parse(&codestream).unwrap();
         let style = parsed.effective_coding_style(0).unwrap();
@@ -27511,6 +27574,42 @@ mod inline_packet_marker_tests {
         assert!(!topology.has_zero_origin_synthesis_phase());
         assert!(matches!(
             decode_baseline_owned_components(&codestream),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Siz),
+                construct: UnsupportedConstruct::Transform,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_nonzero_synthesis_phase_in_specialised_multitile_dwt2_decode() {
+        let samples = (0..16 * 16)
+            .map(|sample| u8::try_from((sample * 31 + 5) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let mut codestream = encode_grayscale_u8_two_decomp_multitile(
+            GrayscaleU8Encode {
+                width: 16,
+                height: 16,
+                samples: &samples,
+                stride_bytes: 16,
+            },
+            TileSize {
+                width: 8,
+                height: 8,
+            },
+        )
+        .unwrap();
+        shift_fixture_origin_x(&mut codestream, 1);
+
+        let parsed = parse(&codestream).unwrap();
+        let style =
+            validate_supported_native_grayscale_u8_two_decomp_multitile_profile(&parsed).unwrap();
+        let first_tile = tile_rects(&parsed).unwrap()[0];
+        let topology = Part1PrecinctTopology::new(&parsed.siz, first_tile, 0, style).unwrap();
+        assert!(!topology.has_zero_origin_synthesis_phase());
+        assert!(matches!(
+            decode_native_grayscale_u8_two_decomp_multitile(&codestream, &parsed),
             Err(CodestreamError::Unsupported {
                 marker: Some(Marker::Siz),
                 construct: UnsupportedConstruct::Transform,
