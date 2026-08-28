@@ -414,6 +414,90 @@ pub struct TilePartState {
     pub payload_len: Option<usize>,
 }
 
+/// Codestream-private main-header and tile-part state.
+///
+/// Declarations are retained sparsely and resolved on demand so memory grows
+/// with marker and component counts, rather than with their product across
+/// every tile part. This state deliberately remains behind the marker parser;
+/// public metadata and native decoder admission continue to use their existing
+/// boundaries until the shared packet pipeline consumes it.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EffectiveHeaderState {
+    main: MainHeaderState,
+    tiles: BTreeMap<u16, TileHeaderState>,
+    tile_parts: Vec<EffectiveTilePartState>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MainHeaderState {
+    cod: CodingStyleMarker,
+    coc: Vec<ComponentCodingStyleMarker>,
+    qcd: QuantizationDeclaration,
+    qcc: Vec<ComponentQuantizationDeclaration>,
+    poc: Option<ProgressionChangeSegment>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TileHeaderState {
+    cod: Option<CodingStyleMarker>,
+    coc: Vec<ComponentCodingStyleMarker>,
+    qcd: Option<QuantizationDeclaration>,
+    qcc: Vec<ComponentQuantizationDeclaration>,
+    poc: Vec<ProgressionChangeSegment>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EffectiveTilePartState {
+    tile_index: u16,
+    tile_part_index: u8,
+    available_tile_poc_segments: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuantizationDeclaration {
+    marker: Marker,
+    marker_offset: usize,
+    quantization: ComponentQuantization,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComponentQuantizationDeclaration {
+    component_index: u16,
+    declaration: QuantizationDeclaration,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProgressionChangeSegment {
+    marker_offset: usize,
+    records: Vec<ProgressionChangeRecord>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgressionChangeRecord {
+    resolution_start: u8,
+    component_start: u16,
+    layer_end: u16,
+    resolution_end: u8,
+    component_end: u16,
+    progression_order: ProgressionOrder,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectiveProgressionChanges<'a> {
+    Cod,
+    Main(&'a ProgressionChangeSegment),
+    Tile(&'a [ProgressionChangeSegment]),
+}
+
 /// One TLM-declared tile part in codestream order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TilePartLengthEntry {
@@ -7397,6 +7481,7 @@ fn scan_part1_source_headers(
     {
         style.entropy_coder = EntropyCoder::HtBlockCoding;
     }
+    let _header_state = resolve_effective_header_state(&marker_bytes, &siz, kind, &markers)?;
     let component_coding_styles = parse_main_component_coding_styles(
         &marker_bytes,
         &siz,
@@ -7681,10 +7766,14 @@ fn parse_with_selected_region(
         message: "codestream main header must contain SIZ marker",
     })?;
     validate_siz(&siz)?;
+    let selected_via_tlm = tile_part_lengths_override.is_some();
     let tile_part_lengths = match tile_part_lengths_override {
         Some(table) => Some(table),
         None => parse_tile_part_length_table(input, &siz, &markers, &tiles)?,
     };
+    if !selected_via_tlm {
+        validate_indexed_tile_part_sequence(&siz, &tiles)?;
+    }
     let main_header_end = markers
         .iter()
         .find(|segment| segment.marker == Marker::Sot)
@@ -7699,6 +7788,7 @@ fn parse_with_selected_region(
     {
         coding_style.entropy_coder = EntropyCoder::HtBlockCoding;
     }
+    let _header_state = resolve_effective_header_state(input, &siz, kind, &markers)?;
     let component_coding_styles =
         parse_main_component_coding_styles(input, &siz, coding_style, &markers, main_header_end)?;
     let progression = ProgressionState {
@@ -7896,25 +7986,21 @@ fn validate_indexed_tile_part_sequence(siz: &SizMarker, tiles: &[TilePartState])
         declared_total: Option<u8>,
     }
 
-    let mut states = alloc::vec![
-        TilePartSequenceState::default();
-        usize::try_from(tile_count).map_err(|_| CodestreamError::SizeOverflow)?
-    ];
+    let mut states = BTreeMap::<u16, TilePartSequenceState>::new();
     for tile in tiles {
-        let state = states
-            .get_mut(usize::from(tile.tile_index))
-            .ok_or_else(|| {
-                invalid(
-                    None,
-                    Some(Marker::Sot),
-                    "TLM-indexed tile part is outside the SIZ tile grid",
-                )
-            })?;
+        if u32::from(tile.tile_index) >= tile_count {
+            return Err(invalid(
+                None,
+                Some(Marker::Sot),
+                "SOT tile index is outside the SIZ tile grid",
+            ));
+        }
+        let state = states.entry(tile.tile_index).or_default();
         if usize::from(tile.tile_part_index) != state.observed {
             return Err(invalid(
                 None,
                 Some(Marker::Sot),
-                "TLM-indexed tile parts require dense TPsot values per tile",
+                "SOT tile parts require dense TPsot values per tile",
             ));
         }
         state.observed = state
@@ -7929,22 +8015,21 @@ fn validate_indexed_tile_part_sequence(siz: &SizMarker, tiles: &[TilePartState])
                 return Err(invalid(
                     None,
                     Some(Marker::Sot),
-                    "TLM-indexed TNsot must be consistent for every tile part",
+                    "SOT TNsot must be consistent for every tile part",
                 ));
             }
             state.declared_total = Some(count);
         }
     }
 
-    for state in states {
-        if state.observed == 0 {
-            return Err(unsupported(
-                None,
-                Some(Marker::Tlm),
-                UnsupportedConstruct::MarkerSegment,
-                "complete TLM coverage requires at least one tile part for every SIZ tile",
-            ));
-        }
+    if u32::try_from(states.len()).map_err(|_| CodestreamError::SizeOverflow)? != tile_count {
+        return Err(invalid(
+            None,
+            Some(Marker::Sot),
+            "codestream must contain at least one tile part for every SIZ tile",
+        ));
+    }
+    for state in states.into_values() {
         if state
             .declared_total
             .is_some_and(|count| usize::from(count) != state.observed)
@@ -7952,7 +8037,7 @@ fn validate_indexed_tile_part_sequence(siz: &SizMarker, tiles: &[TilePartState])
             return Err(invalid(
                 None,
                 Some(Marker::Sot),
-                "TLM-indexed TNsot must match the observed tile-part count",
+                "SOT TNsot must match the observed tile-part count",
             ));
         }
     }
@@ -12401,12 +12486,21 @@ fn unsupported_part1_profile_marker(
             | Marker::Sod
             | Marker::Eoc
             | Marker::Siz
-            | Marker::Cod
-            | Marker::Qcd
             | Marker::Tlm
             | Marker::Plm
             | Marker::Plt
             | Marker::Com => return None,
+            Marker::Cod if segment.offset >= first_tile_offset => {
+                "tile-part COD precedence is outside the native decoder boundary"
+            }
+            Marker::Cod => return None,
+            Marker::Qcd if segment.offset >= first_tile_offset => {
+                "tile-part QCD precedence is outside the native decoder boundary"
+            }
+            Marker::Qcd => return None,
+            Marker::Coc if segment.offset >= first_tile_offset => {
+                "tile-part COC precedence is outside the native decoder boundary"
+            }
             Marker::Coc if codestream.siz.component_count() == 1 => return None,
             Marker::Coc => {
                 "heterogeneous multi-component COC styles are outside the current profile decoder"
@@ -13568,16 +13662,12 @@ mod bounded_poc_tests {
 
         let truncated =
             insert_before_marker(codestream.clone(), Marker::Sot, &poc_segment(&record[..6]));
-        let parsed = parse(&truncated).unwrap();
         assert!(matches!(
-            parse_bounded_main_header_poc(&truncated, &parsed),
+            parse(&truncated),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Poc),
                 ..
             })
-        ));
-        assert!(!is_supported_part1_bounded_poc_component_profile(
-            &truncated, &parsed
         ));
 
         let segment = poc_segment(&record);
@@ -13586,16 +13676,12 @@ mod bounded_poc_tests {
             Marker::Sot,
             &segment,
         );
-        let parsed = parse(&duplicate).unwrap();
         assert!(matches!(
-            parse_bounded_main_header_poc(&duplicate, &parsed),
+            parse(&duplicate),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Poc),
                 ..
             })
-        ));
-        assert!(!is_supported_part1_bounded_poc_component_profile(
-            &duplicate, &parsed
         ));
 
         let mut two_records = record.to_vec();
@@ -13642,10 +13728,9 @@ mod bounded_poc_tests {
         let mut reserved = record;
         reserved[6] = 5;
         let reserved = insert_before_marker(codestream, Marker::Sot, &poc_segment(&reserved));
-        let parsed = parse(&reserved).unwrap();
         assert!(matches!(
-            parse_bounded_main_header_poc(&reserved, &parsed),
-            Err(CodestreamError::Unsupported {
+            parse(&reserved),
+            Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Poc),
                 ..
             })
@@ -13690,19 +13775,12 @@ mod bounded_poc_tests {
         ]);
         let codestream = insert_before_marker(codestream, Marker::Sot, &poc_segment(&record));
         let codestream = insert_before_marker(codestream, Marker::Sot, &coc);
-        let parsed = parse(&codestream).unwrap();
-
         assert!(matches!(
-            parse_bounded_main_header_poc(&codestream, &parsed),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Coc),
-                construct: UnsupportedConstruct::MarkerSegment,
+            parse(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcd),
                 ..
             })
-        ));
-        assert!(!is_supported_part1_bounded_poc_component_profile(
-            &codestream,
-            &parsed
         ));
     }
 }
@@ -13995,14 +14073,13 @@ mod reduced_irreversible_mct_component_profile_tests {
         );
 
         let duplicate_qcc = insert_before_marker(codestream.clone(), Marker::Sot, &qcc_segment(8));
-        let parsed = parse(&duplicate_qcc).unwrap();
-        assert!(
-            !is_supported_part1_reduced_irreversible_mct_component_profile(
-                &duplicate_qcc,
-                &parsed,
-                3,
-            )
-        );
+        assert!(matches!(
+            parse(&duplicate_qcc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
 
         let coc = [0xff, 0x53, 0, 9, 0, 0, 6, 4, 4, 4, 0];
         let with_coc = insert_before_marker(codestream.clone(), Marker::Sot, &coc);
@@ -14021,17 +14098,19 @@ mod reduced_irreversible_mct_component_profile_tests {
         let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
         let cod_segment = codestream[cod..cod + 2 + lcod].to_vec();
         let duplicate_cod = insert_before_marker(codestream.clone(), Marker::Sot, &cod_segment);
-        let parsed = parse(&duplicate_cod).unwrap();
-        assert!(
-            !is_supported_part1_reduced_irreversible_mct_component_profile(
-                &duplicate_cod,
-                &parsed,
-                3,
-            )
-        );
+        assert!(matches!(
+            parse(&duplicate_cod),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
 
         let tile_cod = insert_tile_header_segment(codestream, &cod_segment);
-        assert!(parse(&tile_cod).is_err());
+        let parsed = parse(&tile_cod).unwrap();
+        assert!(
+            !is_supported_part1_reduced_irreversible_mct_component_profile(&tile_cod, &parsed, 3,)
+        );
     }
 }
 
@@ -14197,12 +14276,13 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
         let mut wrong_qcc = codestream.clone();
         let qcc = find_marker(&wrong_qcc, 0, Marker::Qcc).unwrap();
         wrong_qcc[qcc + 5] = 2 << 5;
-        let parsed = parse(&wrong_qcc).unwrap();
-        assert!(
-            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
-                &wrong_qcc, &parsed, 3,
-            )
-        );
+        assert!(matches!(
+            parse(&wrong_qcc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
 
         let mut wrong_geometry = codestream.clone();
         let siz = find_marker(&wrong_geometry, 0, Marker::Siz).unwrap();
@@ -14289,22 +14369,12 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
         let component_three_qcc = find_marker(&codestream, first_qcc + 2, Marker::Qcc).unwrap();
         let qcc_length = usize::from(read_u16(&codestream, component_three_qcc + 2).unwrap());
         codestream.drain(component_three_qcc..component_three_qcc + 2 + qcc_length);
-        let parsed = parse(&codestream).unwrap();
-        let error = parse_component_quantization_for_styles(
-            &codestream,
-            &parsed,
-            &styles,
-            &counts,
-            19,
-            Some(&[0]),
-        )
-        .unwrap_err();
         assert!(matches!(
-            error,
-            CodestreamError::InvalidMarker {
+            parse(&codestream),
+            Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Qcd),
                 ..
-            }
+            })
         ));
     }
 }
@@ -38919,6 +38989,29 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
     }
 
     let scod = segment[0];
+    if scod & !0x07 != 0 {
+        return Err(unsupported(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "COD Scod uses reserved coding-style bits",
+        ));
+    }
+    let layers = read_u16(segment, 2)?;
+    if layers == 0 {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            "COD marker must declare at least one quality layer",
+        ));
+    }
+    if segment[4] > 1 {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            "COD multiple-component transform field uses a reserved value",
+        ));
+    }
     let progression_order = match segment[1] {
         0 => ProgressionOrder::Lrcp,
         1 => ProgressionOrder::Rlcp,
@@ -38952,6 +39045,21 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
     let code_block_height_exponent = segment[7]
         .checked_add(2)
         .ok_or(CodestreamError::SizeOverflow)?;
+    if segment[5] > 32 {
+        return Err(unsupported(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "COD marker declares more than 32 wavelet decomposition levels",
+        ));
+    }
+    if segment[6] > 8 || segment[7] > 8 || u16::from(segment[6]) + u16::from(segment[7]) > 8 {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            "COD code-block exponents are outside the Part 1 bounds",
+        ));
+    }
     let precincts_declared = (scod & 0x01) != 0;
     let mut precinct_exponents = [0_u8; 33];
     let precinct = if precincts_declared {
@@ -38973,11 +39081,36 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
                 "COD marker omits one or more declared precinct exponents",
             )
         })?;
+        if declared
+            .iter()
+            .skip(1)
+            .any(|packed| packed & 0x0f == 0 || packed >> 4 == 0)
+        {
+            return Err(invalid(
+                Some(marker_offset),
+                Some(Marker::Cod),
+                "COD precinct exponents may be zero only at the lowest resolution",
+            ));
+        }
         precinct_exponents[..precinct_count].copy_from_slice(declared);
         declared.first().copied()
     } else {
         None
     };
+    let expected_len = if precincts_declared {
+        10_usize
+            .checked_add(usize::from(segment[5]) + 1)
+            .ok_or(CodestreamError::SizeOverflow)?
+    } else {
+        10
+    };
+    if segment.len() != expected_len {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            "COD marker length does not match Scod and the decomposition count",
+        ));
+    }
 
     Ok(CodingStyleMarker {
         entropy_coder: EntropyCoder::ClassicTier1,
@@ -38988,7 +39121,7 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
         precinct_height_exponent: precinct.map(|value| value >> 4),
         precinct_exponents,
         progression_order,
-        layers: read_u16(segment, 2)?,
+        layers,
         multiple_component_transform: segment[4] != 0,
         decomposition_levels: segment[5],
         code_block_width_exponent,
@@ -39005,34 +39138,12 @@ fn parse_main_component_coding_styles(
     markers: &[MarkerSegment],
     main_header_end: usize,
 ) -> Result<Vec<ComponentCodingStyleMarker>> {
-    if let Some(tile_cod) = markers
-        .iter()
-        .find(|segment| segment.marker == Marker::Cod && segment.offset >= main_header_end)
-    {
-        return Err(unsupported(
-            Some(tile_cod.offset),
-            Some(Marker::Cod),
-            UnsupportedConstruct::MarkerSegment,
-            "tile-part COD precedence is outside the current decoder coding-style boundary",
-        ));
-    }
     let coc_markers = markers
         .iter()
-        .filter(|segment| segment.marker == Marker::Coc)
+        .filter(|segment| segment.marker == Marker::Coc && segment.offset < main_header_end)
         .collect::<Vec<_>>();
     if coc_markers.is_empty() {
         return Ok(Vec::new());
-    }
-    if let Some(tile_coc) = coc_markers
-        .iter()
-        .find(|segment| segment.offset >= main_header_end)
-    {
-        return Err(unsupported(
-            Some(tile_coc.offset),
-            Some(Marker::Coc),
-            UnsupportedConstruct::MarkerSegment,
-            "tile-part COC precedence is outside the current main-header component override boundary",
-        ));
     }
     let default = default.ok_or_else(|| {
         invalid(
@@ -39202,6 +39313,575 @@ fn parse_coc(
     })
 }
 
+impl MainHeaderState {
+    fn coding_style(&self, component_index: u16) -> CodingStyleMarker {
+        self.coc
+            .iter()
+            .find(|style| style.component_index == component_index)
+            .map_or(self.cod, |style| style.coding_style)
+    }
+
+    fn quantization(&self, component_index: u16) -> &QuantizationDeclaration {
+        self.qcc
+            .iter()
+            .find(|quantization| quantization.component_index == component_index)
+            .map_or(&self.qcd, |quantization| &quantization.declaration)
+    }
+}
+
+impl EffectiveHeaderState {
+    fn coding_style(&self, tile_index: u16, component_index: u16) -> CodingStyleMarker {
+        let Some(tile) = self.tiles.get(&tile_index) else {
+            return self.main.coding_style(component_index);
+        };
+        tile.coc
+            .iter()
+            .find(|style| style.component_index == component_index)
+            .map(|style| style.coding_style)
+            .or(tile.cod)
+            .unwrap_or_else(|| self.main.coding_style(component_index))
+    }
+
+    fn quantization(&self, tile_index: u16, component_index: u16) -> &QuantizationDeclaration {
+        let Some(tile) = self.tiles.get(&tile_index) else {
+            return self.main.quantization(component_index);
+        };
+        tile.qcc
+            .iter()
+            .find(|quantization| quantization.component_index == component_index)
+            .map(|quantization| &quantization.declaration)
+            .or(tile.qcd.as_ref())
+            .unwrap_or_else(|| self.main.quantization(component_index))
+    }
+
+    #[allow(dead_code)]
+    fn progression_changes(
+        &self,
+        tile_part: EffectiveTilePartState,
+    ) -> EffectiveProgressionChanges<'_> {
+        let Some(tile) = self.tiles.get(&tile_part.tile_index) else {
+            return self.main.poc.as_ref().map_or(
+                EffectiveProgressionChanges::Cod,
+                EffectiveProgressionChanges::Main,
+            );
+        };
+        if tile_part.available_tile_poc_segments != 0 {
+            return EffectiveProgressionChanges::Tile(
+                &tile.poc[..tile_part.available_tile_poc_segments],
+            );
+        }
+        self.main.poc.as_ref().map_or(
+            EffectiveProgressionChanges::Cod,
+            EffectiveProgressionChanges::Main,
+        )
+    }
+}
+
+fn coding_style_subband_count(style: CodingStyleMarker) -> Result<usize> {
+    usize::from(style.decomposition_levels)
+        .checked_mul(3)
+        .and_then(|count| count.checked_add(1))
+        .ok_or(CodestreamError::SizeOverflow)
+}
+
+fn component_selector(
+    segment: &[u8],
+    marker_offset: usize,
+    marker: Marker,
+    siz: &SizMarker,
+) -> Result<(u16, usize)> {
+    let selector_len = if siz.component_count() < 257 { 1 } else { 2 };
+    if segment.len() <= selector_len {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(marker),
+            "component marker is truncated before its marker-specific payload",
+        ));
+    }
+    let component_index = if selector_len == 1 {
+        u16::from(segment[0])
+    } else {
+        read_u16(segment, 0)?
+    };
+    if component_index >= siz.component_count() {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(marker),
+            "component selector is outside the SIZ component range",
+        ));
+    }
+    Ok((component_index, selector_len))
+}
+
+fn parse_quantization_declaration(
+    input: &[u8],
+    segment: &MarkerSegment,
+    payload_offset: usize,
+    expected_subbands: usize,
+    coding_style: CodingStyleMarker,
+) -> Result<QuantizationDeclaration> {
+    let payload = checked_slice(input, segment.data_offset, segment.data_len)?;
+    let payload = payload.get(payload_offset..).ok_or_else(|| {
+        invalid(
+            Some(segment.offset),
+            Some(segment.marker),
+            "quantization marker is truncated before its payload",
+        )
+    })?;
+    let validated = parse_quantization_marker_payload(
+        payload,
+        expected_subbands,
+        coding_style.transform,
+        coding_style.entropy_coder,
+        segment.marker,
+        segment.offset,
+        false,
+    )?;
+    // Scalar-derived declarations can serve a later tile COD with more
+    // resolutions. Retain their fully expanded Part 1 range after validating
+    // the declaration against its own header context.
+    let quantization = if validated.style == transform::QuantizationStyle::ScalarDerived {
+        parse_quantization_marker_payload(
+            payload,
+            97,
+            coding_style.transform,
+            coding_style.entropy_coder,
+            segment.marker,
+            segment.offset,
+            false,
+        )?
+    } else {
+        validated
+    };
+    Ok(QuantizationDeclaration {
+        marker: segment.marker,
+        marker_offset: segment.offset,
+        quantization,
+    })
+}
+
+fn parse_progression_change_segment(
+    input: &[u8],
+    segment: &MarkerSegment,
+    siz: &SizMarker,
+) -> Result<ProgressionChangeSegment> {
+    let data = checked_slice(input, segment.data_offset, segment.data_len)?;
+    let record_len = if siz.component_count() < 257 { 7 } else { 9 };
+    if data.is_empty() || !data.len().is_multiple_of(record_len) {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Poc),
+            "POC marker length must contain one or more complete progression records",
+        ));
+    }
+    let record_count = data.len() / record_len;
+    let mut records = Vec::with_capacity(record_count);
+    for record in data.chunks_exact(record_len) {
+        let (component_start, layer_end_offset, resolution_end_offset, component_end, order_offset) =
+            if record_len == 7 {
+                (
+                    u16::from(record[1]),
+                    2,
+                    4,
+                    match record[5] {
+                        0 => 256,
+                        value => u16::from(value),
+                    },
+                    6,
+                )
+            } else {
+                let raw_end = read_u16(record, 6)?;
+                (
+                    read_u16(record, 1)?,
+                    3,
+                    5,
+                    if raw_end == 0 { 16_384 } else { raw_end },
+                    8,
+                )
+            };
+        let resolution_start = record[0];
+        let layer_end = read_u16(record, layer_end_offset)?;
+        let resolution_end = record[resolution_end_offset];
+        let component_limit = if record_len == 7 { 256 } else { 16_384 };
+        if resolution_start > 32
+            || resolution_end == 0
+            || resolution_end > 33
+            || resolution_start >= resolution_end
+            || component_start >= component_limit
+            || component_start >= siz.component_count()
+            || component_end > component_limit
+            || component_start >= component_end
+            || layer_end == 0
+        {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Poc),
+                "POC progression record contains an invalid or empty range",
+            ));
+        }
+        let progression_order = match record[order_offset] {
+            0 => ProgressionOrder::Lrcp,
+            1 => ProgressionOrder::Rlcp,
+            2 => ProgressionOrder::Rpcl,
+            3 => ProgressionOrder::Pcrl,
+            4 => ProgressionOrder::Cprl,
+            _ => {
+                return Err(invalid(
+                    Some(segment.offset),
+                    Some(Marker::Poc),
+                    "POC marker declares a reserved progression order",
+                ));
+            }
+        };
+        records.push(ProgressionChangeRecord {
+            resolution_start,
+            component_start,
+            layer_end,
+            resolution_end,
+            component_end,
+            progression_order,
+        });
+    }
+    Ok(ProgressionChangeSegment {
+        marker_offset: segment.offset,
+        records,
+    })
+}
+
+fn parse_single_marker<'a>(
+    markers: impl Iterator<Item = &'a MarkerSegment>,
+    marker: Marker,
+    required: bool,
+    scope: &'static str,
+) -> Result<Option<&'a MarkerSegment>> {
+    let found = markers
+        .filter(|segment| segment.marker == marker)
+        .collect::<Vec<_>>();
+    if found.len() > 1 || (required && found.len() != 1) {
+        return Err(invalid(
+            found.get(1).or(found.first()).map(|segment| segment.offset),
+            Some(marker),
+            scope,
+        ));
+    }
+    Ok(found.first().copied())
+}
+
+fn parse_component_quantization_declarations(
+    input: &[u8],
+    markers: &[&MarkerSegment],
+    siz: &SizMarker,
+    style_for_component: impl Fn(u16) -> CodingStyleMarker,
+    scope: &'static str,
+) -> Result<Vec<ComponentQuantizationDeclaration>> {
+    let mut seen = alloc::vec![false; usize::from(siz.component_count())];
+    let mut declarations = Vec::with_capacity(markers.len());
+    for segment in markers {
+        let data = checked_slice(input, segment.data_offset, segment.data_len)?;
+        let (component_index, selector_len) =
+            component_selector(data, segment.offset, Marker::Qcc, siz)?;
+        if core::mem::replace(&mut seen[usize::from(component_index)], true) {
+            return Err(invalid(Some(segment.offset), Some(Marker::Qcc), scope));
+        }
+        let style = style_for_component(component_index);
+        declarations.push(ComponentQuantizationDeclaration {
+            component_index,
+            declaration: parse_quantization_declaration(
+                input,
+                segment,
+                selector_len,
+                coding_style_subband_count(style)?,
+                style,
+            )?,
+        });
+    }
+    Ok(declarations)
+}
+
+fn resolve_effective_header_state(
+    input: &[u8],
+    siz: &SizMarker,
+    kind: CodestreamKind,
+    markers: &[MarkerSegment],
+) -> Result<EffectiveHeaderState> {
+    let first_sot_index = markers
+        .iter()
+        .position(|segment| segment.marker == Marker::Sot)
+        .unwrap_or(markers.len());
+    let main_markers = &markers[..first_sot_index];
+    let main_cod_segment = parse_single_marker(
+        main_markers.iter(),
+        Marker::Cod,
+        true,
+        "codestream main header must contain exactly one COD marker",
+    )?
+    .ok_or(CodestreamError::SizeOverflow)?;
+    let mut main_cod = parse_cod(
+        checked_slice(
+            input,
+            main_cod_segment.data_offset,
+            main_cod_segment.data_len,
+        )?,
+        main_cod_segment.offset,
+    )?;
+    if kind == CodestreamKind::Htj2k {
+        main_cod.entropy_coder = EntropyCoder::HtBlockCoding;
+    }
+
+    let mut seen_coc = alloc::vec![false; usize::from(siz.component_count())];
+    let mut main_coc = Vec::new();
+    for segment in main_markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Coc)
+    {
+        let parsed = parse_coc(
+            checked_slice(input, segment.data_offset, segment.data_len)?,
+            segment.offset,
+            siz,
+            main_cod,
+        )?;
+        if core::mem::replace(&mut seen_coc[usize::from(parsed.component_index)], true) {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Coc),
+                "main header repeats a COC override for one component",
+            ));
+        }
+        main_coc.push(parsed);
+    }
+    let main_style = |component_index| {
+        main_coc
+            .iter()
+            .find(|style| style.component_index == component_index)
+            .map_or(main_cod, |style| style.coding_style)
+    };
+    let main_qcc_markers = main_markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Qcc)
+        .collect::<Vec<_>>();
+    let main_qcc = parse_component_quantization_declarations(
+        input,
+        &main_qcc_markers,
+        siz,
+        main_style,
+        "main header repeats a QCC override for one component",
+    )?;
+    let main_qcd_segment = parse_single_marker(
+        main_markers.iter(),
+        Marker::Qcd,
+        true,
+        "codestream main header must contain exactly one QCD marker",
+    )?
+    .ok_or(CodestreamError::SizeOverflow)?;
+    let main_qcd_expected = (0..siz.component_count())
+        .filter(|component_index| {
+            !main_qcc
+                .iter()
+                .any(|qcc| qcc.component_index == *component_index)
+        })
+        .map(|component_index| coding_style_subband_count(main_style(component_index)))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .max()
+        .unwrap_or(coding_style_subband_count(main_cod)?);
+    let main_qcd =
+        parse_quantization_declaration(input, main_qcd_segment, 0, main_qcd_expected, main_cod)?;
+    let main_poc_segment = parse_single_marker(
+        main_markers.iter(),
+        Marker::Poc,
+        false,
+        "main header contains more than one POC marker segment",
+    )?;
+    let main_poc = main_poc_segment
+        .map(|segment| parse_progression_change_segment(input, segment, siz))
+        .transpose()?;
+    let main = MainHeaderState {
+        cod: main_cod,
+        coc: main_coc,
+        qcd: main_qcd,
+        qcc: main_qcc,
+        poc: main_poc,
+    };
+
+    let mut state = EffectiveHeaderState {
+        main,
+        tiles: BTreeMap::new(),
+        tile_parts: Vec::new(),
+    };
+    let mut marker_index = first_sot_index;
+    while marker_index < markers.len() {
+        if markers[marker_index].marker != Marker::Sot {
+            marker_index += 1;
+            continue;
+        }
+        let sot_segment = &markers[marker_index];
+        let tile_part = parse_sot(
+            checked_slice(input, sot_segment.data_offset, sot_segment.data_len)?,
+            sot_segment.offset,
+        )?;
+        let header_start = marker_index + 1;
+        let header_end = markers[header_start..]
+            .iter()
+            .position(|segment| matches!(segment.marker, Marker::Sod | Marker::Sot | Marker::Eoc))
+            .map_or(markers.len(), |relative| header_start + relative);
+        let header_markers = &markers[header_start..header_end];
+        let late_override = header_markers.iter().find(|segment| {
+            tile_part.tile_part_index != 0
+                && matches!(
+                    segment.marker,
+                    Marker::Cod | Marker::Coc | Marker::Qcd | Marker::Qcc
+                )
+        });
+        if let Some(segment) = late_override {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(segment.marker),
+                "COD, COC, QCD and QCC tile overrides are confined to tile part zero",
+            ));
+        }
+
+        let tile_state = state.tiles.entry(tile_part.tile_index).or_default();
+        if tile_part.tile_part_index == 0 {
+            let tile_cod_segment = parse_single_marker(
+                header_markers.iter(),
+                Marker::Cod,
+                false,
+                "tile part zero contains more than one COD marker",
+            )?;
+            if let Some(segment) = tile_cod_segment {
+                let mut cod = parse_cod(
+                    checked_slice(input, segment.data_offset, segment.data_len)?,
+                    segment.offset,
+                )?;
+                if kind == CodestreamKind::Htj2k {
+                    cod.entropy_coder = EntropyCoder::HtBlockCoding;
+                }
+                tile_state.cod = Some(cod);
+            }
+            let coc_default = tile_state.cod.unwrap_or(state.main.cod);
+            let mut seen = alloc::vec![false; usize::from(siz.component_count())];
+            for segment in header_markers
+                .iter()
+                .filter(|segment| segment.marker == Marker::Coc)
+            {
+                let parsed = parse_coc(
+                    checked_slice(input, segment.data_offset, segment.data_len)?,
+                    segment.offset,
+                    siz,
+                    coc_default,
+                )?;
+                if core::mem::replace(&mut seen[usize::from(parsed.component_index)], true) {
+                    return Err(invalid(
+                        Some(segment.offset),
+                        Some(Marker::Coc),
+                        "tile part zero repeats a COC override for one component",
+                    ));
+                }
+                tile_state.coc.push(parsed);
+            }
+            let effective_style = |component_index| {
+                tile_state
+                    .coc
+                    .iter()
+                    .find(|style| style.component_index == component_index)
+                    .map(|style| style.coding_style)
+                    .or(tile_state.cod)
+                    .unwrap_or_else(|| state.main.coding_style(component_index))
+            };
+            let tile_qcc_markers = header_markers
+                .iter()
+                .filter(|segment| segment.marker == Marker::Qcc)
+                .collect::<Vec<_>>();
+            tile_state.qcc = parse_component_quantization_declarations(
+                input,
+                &tile_qcc_markers,
+                siz,
+                effective_style,
+                "tile part zero repeats a QCC override for one component",
+            )?;
+            let tile_qcd_segment = parse_single_marker(
+                header_markers.iter(),
+                Marker::Qcd,
+                false,
+                "tile part zero contains more than one QCD marker",
+            )?;
+            if let Some(segment) = tile_qcd_segment {
+                let expected_subbands = (0..siz.component_count())
+                    .filter(|component_index| {
+                        !tile_state
+                            .qcc
+                            .iter()
+                            .any(|qcc| qcc.component_index == *component_index)
+                    })
+                    .map(|component_index| {
+                        coding_style_subband_count(effective_style(component_index))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .max()
+                    .unwrap_or(coding_style_subband_count(coc_default)?);
+                tile_state.qcd = Some(parse_quantization_declaration(
+                    input,
+                    segment,
+                    0,
+                    expected_subbands,
+                    coc_default,
+                )?);
+            }
+        }
+
+        let tile_poc_segment = parse_single_marker(
+            header_markers.iter(),
+            Marker::Poc,
+            false,
+            "tile-part header contains more than one POC marker segment",
+        )?;
+        if let Some(segment) = tile_poc_segment {
+            if tile_part.tile_part_index != 0 && tile_state.poc.is_empty() {
+                return Err(invalid(
+                    Some(segment.offset),
+                    Some(Marker::Poc),
+                    "tile POC declarations must begin in tile part zero",
+                ));
+            }
+            tile_state
+                .poc
+                .push(parse_progression_change_segment(input, segment, siz)?);
+        }
+        let available_tile_poc_segments = tile_state.poc.len();
+        state.tile_parts.push(EffectiveTilePartState {
+            tile_index: tile_part.tile_index,
+            tile_part_index: tile_part.tile_part_index,
+            available_tile_poc_segments,
+        });
+        marker_index = if header_end < markers.len() && markers[header_end].marker == Marker::Sod {
+            header_end + 1
+        } else {
+            header_end
+        };
+    }
+
+    for tile_part in &state.tile_parts {
+        if tile_part.tile_part_index != 0 {
+            continue;
+        }
+        for component_index in 0..siz.component_count() {
+            let expected = coding_style_subband_count(
+                state.coding_style(tile_part.tile_index, component_index),
+            )?;
+            let quantization = state.quantization(tile_part.tile_index, component_index);
+            if quantization.quantization.steps.len() < expected {
+                return Err(invalid(
+                    Some(quantization.marker_offset),
+                    Some(quantization.marker),
+                    "effective quantization declaration does not provide every tile-component subband",
+                ));
+            }
+        }
+    }
+    Ok(state)
+}
+
 #[cfg(test)]
 mod coc_marker_tests {
     use super::*;
@@ -39342,16 +40022,14 @@ mod coc_marker_tests {
     }
 
     #[test]
-    fn rejects_conflicting_tile_override_and_reserved_coc_forms() {
+    fn retains_legal_tile_overrides_without_widening_decoder_admission() {
         let segment = coc_segment(0, 0, &[0, 2, 2, 0, 1]);
         let tile_override = insert_tile_header_segment(fixture(1), &segment);
+        let parsed = parse(&tile_override).unwrap();
         assert!(matches!(
-            parse(&tile_override),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Coc),
-                construct: UnsupportedConstruct::MarkerSegment,
-                ..
-            })
+            unsupported_construct(&parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("tile-part COC")
         ));
 
         let main_codestream = fixture(1);
@@ -39369,13 +40047,11 @@ mod coc_marker_tests {
             &coc_segment(0, 0, &[0, 2, 2, 0, 1]),
         );
         let tile_cod_override = insert_tile_header_segment(main_coc, &tile_cod);
+        let parsed = parse(&tile_cod_override).unwrap();
         assert!(matches!(
-            parse(&tile_cod_override),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Cod),
-                construct: UnsupportedConstruct::MarkerSegment,
-                ..
-            })
+            unsupported_construct(&parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("tile-part COD")
         ));
 
         let reserved_scoc = insert_before_marker(
@@ -39500,6 +40176,441 @@ mod coc_marker_tests {
     }
 }
 
+#[cfg(test)]
+mod effective_header_state_tests {
+    use super::*;
+
+    fn fixture(component_count: usize) -> Vec<u8> {
+        let planes = (0..component_count)
+            .map(|component| vec![u8::try_from(component % 251).unwrap(); 16])
+            .collect::<Vec<_>>();
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        encode_planar_u8_no_decomp_test_fixture(4, 4, &views).unwrap()
+    }
+
+    fn insert_before_marker(mut codestream: Vec<u8>, before: Marker, segment: &[u8]) -> Vec<u8> {
+        let position = find_marker(&codestream, 0, before).unwrap();
+        codestream.splice(position..position, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header_segments(mut codestream: Vec<u8>, segments: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(segments.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.splice(sod..sod, segments.iter().copied());
+        codestream
+    }
+
+    fn marker_segment(codestream: &[u8], marker: Marker) -> Vec<u8> {
+        let offset = find_marker(codestream, 0, marker).unwrap();
+        let length = usize::from(read_u16(codestream, offset + 2).unwrap());
+        codestream[offset..offset + 2 + length].to_vec()
+    }
+
+    fn coc_segment(component: u8, parameters: &[u8]) -> Vec<u8> {
+        let length = u16::try_from(2 + parameters.len() + 2).unwrap();
+        let mut segment = Marker::Coc.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.push(component);
+        segment.push(0);
+        segment.extend_from_slice(parameters);
+        segment
+    }
+
+    fn quantization_segment(marker: Marker, component: Option<&[u8]>, exponent: u8) -> Vec<u8> {
+        let mut payload = component.unwrap_or_default().to_vec();
+        payload.extend_from_slice(&[2 << 5, exponent << 3]);
+        let length = u16::try_from(payload.len() + 2).unwrap();
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.extend_from_slice(&payload);
+        segment
+    }
+
+    fn poc_segment(order: u8, component_end: u8, layers: u16) -> Vec<u8> {
+        let mut segment = Marker::Poc.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&9_u16.to_be_bytes());
+        segment.extend_from_slice(&[0, 0]);
+        segment.extend_from_slice(&layers.to_be_bytes());
+        segment.extend_from_slice(&[1, component_end, order]);
+        segment
+    }
+
+    fn split_with_headers(
+        mut codestream: Vec<u8>,
+        first_header: &[u8],
+        later_header: &[u8],
+    ) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        let sot_segment = codestream[sot..sot + 12].to_vec();
+        let payload = codestream[sod + 2..eoc].to_vec();
+        codestream.truncate(sot);
+
+        let mut first_sot = sot_segment.clone();
+        let first_length = 14_u32
+            .checked_add(u32::try_from(first_header.len()).unwrap())
+            .unwrap();
+        first_sot[6..10].copy_from_slice(&first_length.to_be_bytes());
+        first_sot[10] = 0;
+        first_sot[11] = 2;
+        codestream.extend_from_slice(&first_sot);
+        codestream.extend_from_slice(first_header);
+        codestream.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+
+        let mut second_sot = sot_segment;
+        let second_length = 14_u32
+            .checked_add(u32::try_from(later_header.len()).unwrap())
+            .and_then(|length| length.checked_add(u32::try_from(payload.len()).unwrap()))
+            .unwrap();
+        second_sot[6..10].copy_from_slice(&second_length.to_be_bytes());
+        second_sot[10] = 1;
+        second_sot[11] = 2;
+        codestream.extend_from_slice(&second_sot);
+        codestream.extend_from_slice(later_header);
+        codestream.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        codestream.extend_from_slice(&payload);
+        codestream.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
+        codestream
+    }
+
+    fn private_state(codestream: &[u8]) -> EffectiveHeaderState {
+        let parsed = parse(codestream).unwrap();
+        resolve_effective_header_state(codestream, &parsed.siz, parsed.kind, &parsed.markers)
+            .unwrap()
+    }
+
+    fn fixture_with_257_components() -> Vec<u8> {
+        let mut codestream = fixture(255);
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        let old_length = usize::from(read_u16(&codestream, siz + 2).unwrap());
+        let old_end = siz + 2 + old_length;
+        codestream.splice(old_end..old_end, [7, 1, 1, 7, 1, 1]);
+        codestream[siz + 2..siz + 4]
+            .copy_from_slice(&u16::try_from(old_length + 6).unwrap().to_be_bytes());
+        codestream[siz + 38..siz + 40].copy_from_slice(&257_u16.to_be_bytes());
+        codestream
+    }
+
+    #[test]
+    fn resolves_distinct_main_and_first_tile_part_precedence_without_public_widening() {
+        let base = fixture(2);
+        let default = parse(&base).unwrap().coding_style.unwrap();
+        let main_coc = coc_segment(
+            0,
+            &[
+                0,
+                default.code_block_width_exponent - 2,
+                default.code_block_height_exponent - 2,
+                default.code_block_style,
+                0,
+            ],
+        );
+        let main_qcc = quantization_segment(Marker::Qcc, Some(&[0]), 7);
+        let codestream = insert_before_marker(base, Marker::Sot, &main_coc);
+        let codestream = insert_before_marker(codestream, Marker::Sot, &main_qcc);
+
+        let mut tile_cod = marker_segment(&codestream, Marker::Cod);
+        tile_cod[5] = 1;
+        let tile_coc = coc_segment(
+            1,
+            &[
+                0,
+                default.code_block_width_exponent - 2,
+                default.code_block_height_exponent - 2,
+                default.code_block_style,
+                0,
+            ],
+        );
+        let tile_qcd = quantization_segment(Marker::Qcd, None, 6);
+        let tile_qcc = quantization_segment(Marker::Qcc, Some(&[1]), 5);
+        let tile_header = [tile_cod, tile_coc, tile_qcd, tile_qcc].concat();
+        let codestream = insert_tile_header_segments(codestream, &tile_header);
+
+        let parsed = parse(&codestream).unwrap();
+        let state = private_state(&codestream);
+        let tile_component_zero = state.coding_style(0, 0);
+        let tile_component_one = state.coding_style(0, 1);
+        assert_eq!(
+            tile_component_zero.progression_order,
+            ProgressionOrder::Rlcp
+        );
+        assert_eq!(tile_component_zero.transform, default.transform);
+        assert_eq!(tile_component_one.progression_order, ProgressionOrder::Rlcp);
+        assert_eq!(
+            tile_component_one.transform,
+            WaveletTransform::Irreversible97
+        );
+        assert_eq!(state.quantization(0, 0).quantization.steps[0].exponent, 6);
+        assert_eq!(state.quantization(0, 1).quantization.steps[0].exponent, 5);
+        assert_eq!(state.main.quantization(0).quantization.steps[0].exponent, 7);
+
+        assert_eq!(parsed.coding_style, Some(default));
+        assert_eq!(parsed.component_coding_styles.len(), 1);
+        assert!(matches!(
+            unsupported_construct(&parsed),
+            Some((UnsupportedConstruct::MarkerSegment, _))
+        ));
+    }
+
+    #[test]
+    fn first_and_later_tile_part_poc_declarations_accumulate_before_use() {
+        let base = fixture(2);
+        let layers = parse(&base).unwrap().coding_style.unwrap().layers;
+        let codestream = insert_before_marker(base, Marker::Sot, &poc_segment(0, 2, layers));
+        let codestream = split_with_headers(
+            codestream,
+            &poc_segment(1, 2, layers),
+            &poc_segment(2, 2, layers),
+        );
+        let state = private_state(&codestream);
+
+        assert_eq!(state.tile_parts.len(), 2);
+        assert_eq!(state.tile_parts[0].available_tile_poc_segments, 1);
+        assert_eq!(state.tile_parts[1].available_tile_poc_segments, 2);
+        assert!(matches!(
+            state.progression_changes(state.tile_parts[0]),
+            EffectiveProgressionChanges::Tile(segments)
+                if segments.len() == 1
+                    && segments[0].records[0].progression_order == ProgressionOrder::Rlcp
+        ));
+        assert!(matches!(
+            state.progression_changes(state.tile_parts[1]),
+            EffectiveProgressionChanges::Tile(segments)
+                if segments.len() == 2
+                    && segments[1].records[0].progression_order == ProgressionOrder::Rpcl
+        ));
+    }
+
+    #[test]
+    fn rejects_a_later_tile_part_poc_without_a_part_zero_tile_poc() {
+        let base = fixture(2);
+        let layers = parse(&base).unwrap().coding_style.unwrap().layers;
+        let codestream = split_with_headers(base, &[], &poc_segment(1, 2, layers));
+
+        assert!(matches!(
+            parse(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_late_overrides_duplicates_and_invalid_sot_sequences() {
+        let base = fixture(1);
+        let cod = marker_segment(&base, Marker::Cod);
+        let qcd = marker_segment(&base, Marker::Qcd);
+        for (segment, marker) in [(&cod, Marker::Cod), (&qcd, Marker::Qcd)] {
+            let duplicate = insert_before_marker(base.clone(), Marker::Sot, segment);
+            assert!(matches!(
+                parse(&duplicate),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(found),
+                    ..
+                }) if found == marker
+            ));
+        }
+
+        let coc = coc_segment(0, &[0, 2, 2, 0, 1]);
+        let duplicate_coc =
+            insert_tile_header_segments(base.clone(), &[&coc[..], &coc[..]].concat());
+        assert!(matches!(
+            parse(&duplicate_coc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Coc),
+                ..
+            })
+        ));
+
+        let layers = parse(&base).unwrap().coding_style.unwrap().layers;
+        let poc = poc_segment(0, 1, layers);
+        let duplicate_poc =
+            insert_tile_header_segments(base.clone(), &[&poc[..], &poc[..]].concat());
+        assert!(matches!(
+            parse(&duplicate_poc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+        let mut out_of_range_poc = poc.clone();
+        out_of_range_poc[5] = 1;
+        let out_of_range_poc = insert_tile_header_segments(base.clone(), &out_of_range_poc);
+        assert!(matches!(
+            parse(&out_of_range_poc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Poc),
+                ..
+            })
+        ));
+
+        let late_cod = split_with_headers(base.clone(), &[], &cod);
+        assert!(matches!(
+            parse(&late_cod),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+
+        let mut wrong_first_index = base.clone();
+        let sot = find_marker(&wrong_first_index, 0, Marker::Sot).unwrap();
+        wrong_first_index[sot + 10] = 1;
+        assert!(matches!(
+            parse(&wrong_first_index),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sot),
+                ..
+            })
+        ));
+
+        let mut out_of_grid = base;
+        let sot = find_marker(&out_of_grid, 0, Marker::Sot).unwrap();
+        out_of_grid[sot + 4..sot + 6].copy_from_slice(&1_u16.to_be_bytes());
+        assert!(matches!(
+            parse(&out_of_grid),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sot),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_reserved_sot_large_grid_and_tile_part_endpoints() {
+        let mut sot = [0_u8; 8];
+        sot[2..6].copy_from_slice(&14_u32.to_be_bytes());
+
+        sot[..2].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert!(matches!(
+            parse_sot(&sot, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sot),
+                ..
+            })
+        ));
+        sot[..2].copy_from_slice(&(u16::MAX - 1).to_be_bytes());
+        assert_eq!(parse_sot(&sot, 0).unwrap().tile_index, u16::MAX - 1);
+
+        sot[6] = u8::MAX;
+        assert!(matches!(
+            parse_sot(&sot, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sot),
+                ..
+            })
+        ));
+        sot[6] = u8::MAX - 1;
+        sot[7] = u8::MAX;
+        let boundary = parse_sot(&sot, 0).unwrap();
+        assert_eq!(boundary.tile_part_index, u8::MAX - 1);
+        assert_eq!(boundary.tile_part_count, Some(u8::MAX));
+    }
+
+    #[test]
+    fn rejects_zero_layers_reserved_mct_and_nonlowest_zero_precinct_exponents() {
+        let codestream = fixture(1);
+        let cod = marker_segment(&codestream, Marker::Cod);
+        let payload = &cod[4..];
+
+        let mut zero_layers = payload.to_vec();
+        zero_layers[2..4].copy_from_slice(&0_u16.to_be_bytes());
+        assert!(matches!(
+            parse_cod(&zero_layers, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+
+        let mut reserved_mct = payload.to_vec();
+        reserved_mct[4] = 2;
+        assert!(matches!(
+            parse_cod(&reserved_mct, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+
+        let mut explicit_precincts = payload.to_vec();
+        explicit_precincts[0] |= 1;
+        explicit_precincts[5] = 1;
+        explicit_precincts.extend_from_slice(&[0, 0x11]);
+        assert!(parse_cod(&explicit_precincts, 0).is_ok());
+        for invalid_r1 in [0x01, 0x10] {
+            let mut invalid = explicit_precincts.clone();
+            *invalid.last_mut().unwrap() = invalid_r1;
+            assert!(matches!(
+                parse_cod(&invalid, 0),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cod),
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn checks_selector_width_truncation_overflow_and_preallocation_bounds() {
+        let wide = fixture_with_257_components();
+        let valid_qcc = quantization_segment(Marker::Qcc, Some(&256_u16.to_be_bytes()), 7);
+        let valid_qcc = insert_before_marker(wide.clone(), Marker::Sot, &valid_qcc);
+        let state = private_state(&valid_qcc);
+        assert_eq!(state.main.qcc[0].component_index, 256);
+
+        let out_of_range = quantization_segment(Marker::Qcc, Some(&257_u16.to_be_bytes()), 7);
+        let out_of_range = insert_before_marker(wide, Marker::Sot, &out_of_range);
+        assert!(matches!(
+            parse(&out_of_range),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+
+        let truncated_qcc = [0xff, 0x5d, 0xff, 0xff, 0];
+        let truncated = insert_before_marker(fixture(1), Marker::Sot, &truncated_qcc);
+        assert!(matches!(
+            parse(&truncated),
+            Err(CodestreamError::TruncatedInput { .. })
+        ));
+
+        let mut impossible_component_allocation = fixture(1);
+        let siz = find_marker(&impossible_component_allocation, 0, Marker::Siz).unwrap();
+        impossible_component_allocation[siz + 38..siz + 40]
+            .copy_from_slice(&u16::MAX.to_be_bytes());
+        assert!(matches!(
+            parse(&impossible_component_allocation),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Siz),
+                ..
+            })
+        ));
+
+        let mut overflowing_tile_grid = fixture(1);
+        let siz = find_marker(&overflowing_tile_grid, 0, Marker::Siz).unwrap();
+        overflowing_tile_grid[siz + 6..siz + 10].copy_from_slice(&u32::MAX.to_be_bytes());
+        overflowing_tile_grid[siz + 10..siz + 14].copy_from_slice(&u32::MAX.to_be_bytes());
+        overflowing_tile_grid[siz + 22..siz + 26].copy_from_slice(&1_u32.to_be_bytes());
+        overflowing_tile_grid[siz + 26..siz + 30].copy_from_slice(&1_u32.to_be_bytes());
+        assert!(matches!(
+            parse(&overflowing_tile_grid),
+            Err(CodestreamError::SizeOverflow)
+        ));
+    }
+}
+
 fn parse_cap(segment: &[u8], marker_offset: usize) -> Result<CapabilityMarker> {
     if segment.len() < 4 {
         return Err(invalid(
@@ -39597,6 +40708,22 @@ fn parse_sot(segment: &[u8], marker_offset: usize) -> Result<TilePartState> {
             "SOT marker payload must be exactly eight bytes",
         ));
     }
+    let tile_index = read_u16(segment, 0)?;
+    if tile_index == u16::MAX {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Sot),
+            "SOT tile index uses the reserved Isot value",
+        ));
+    }
+    let tile_part_index = segment[6];
+    if tile_part_index == u8::MAX {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Sot),
+            "SOT tile-part index uses the reserved TPsot value",
+        ));
+    }
 
     let tile_part_length = match read_u32(segment, 2)? {
         0 => None,
@@ -39608,9 +40735,9 @@ fn parse_sot(segment: &[u8], marker_offset: usize) -> Result<TilePartState> {
     };
 
     Ok(TilePartState {
-        tile_index: read_u16(segment, 0)?,
+        tile_index,
         tile_part_length,
-        tile_part_index: segment[6],
+        tile_part_index,
         tile_part_count,
         payload_offset: None,
         payload_len: None,
