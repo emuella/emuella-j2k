@@ -38997,6 +38997,21 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
             "COD Scod uses reserved coding-style bits",
         ));
     }
+    let layers = read_u16(segment, 2)?;
+    if layers == 0 {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            "COD marker must declare at least one quality layer",
+        ));
+    }
+    if segment[4] > 1 {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cod),
+            "COD multiple-component transform field uses a reserved value",
+        ));
+    }
     let progression_order = match segment[1] {
         0 => ProgressionOrder::Lrcp,
         1 => ProgressionOrder::Rlcp,
@@ -39066,6 +39081,17 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
                 "COD marker omits one or more declared precinct exponents",
             )
         })?;
+        if declared
+            .iter()
+            .skip(1)
+            .any(|packed| packed & 0x0f == 0 || packed >> 4 == 0)
+        {
+            return Err(invalid(
+                Some(marker_offset),
+                Some(Marker::Cod),
+                "COD precinct exponents may be zero only at the lowest resolution",
+            ));
+        }
         precinct_exponents[..precinct_count].copy_from_slice(declared);
         declared.first().copied()
     } else {
@@ -39095,7 +39121,7 @@ fn parse_cod(segment: &[u8], marker_offset: usize) -> Result<CodingStyleMarker> 
         precinct_height_exponent: precinct.map(|value| value >> 4),
         precinct_exponents,
         progression_order,
-        layers: read_u16(segment, 2)?,
+        layers,
         multiple_component_transform: segment[4] != 0,
         decomposition_levels: segment[5],
         code_block_width_exponent,
@@ -39811,6 +39837,13 @@ fn resolve_effective_header_state(
             "tile-part header contains more than one POC marker segment",
         )?;
         if let Some(segment) = tile_poc_segment {
+            if tile_part.tile_part_index != 0 && tile_state.poc.is_empty() {
+                return Err(invalid(
+                    Some(segment.offset),
+                    Some(Marker::Poc),
+                    "tile POC declarations must begin in tile part zero",
+                ));
+            }
             tile_state
                 .poc
                 .push(parse_progression_change_segment(input, segment, siz)?);
@@ -40210,7 +40243,11 @@ mod effective_header_state_tests {
         segment
     }
 
-    fn split_with_later_header(mut codestream: Vec<u8>, later_header: &[u8]) -> Vec<u8> {
+    fn split_with_headers(
+        mut codestream: Vec<u8>,
+        first_header: &[u8],
+        later_header: &[u8],
+    ) -> Vec<u8> {
         let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
         let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
         let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
@@ -40219,10 +40256,14 @@ mod effective_header_state_tests {
         codestream.truncate(sot);
 
         let mut first_sot = sot_segment.clone();
-        first_sot[6..10].copy_from_slice(&14_u32.to_be_bytes());
+        let first_length = 14_u32
+            .checked_add(u32::try_from(first_header.len()).unwrap())
+            .unwrap();
+        first_sot[6..10].copy_from_slice(&first_length.to_be_bytes());
         first_sot[10] = 0;
         first_sot[11] = 2;
         codestream.extend_from_slice(&first_sot);
+        codestream.extend_from_slice(first_header);
         codestream.extend_from_slice(&Marker::Sod.code().to_be_bytes());
 
         let mut second_sot = sot_segment;
@@ -40321,26 +40362,46 @@ mod effective_header_state_tests {
     }
 
     #[test]
-    fn later_tile_part_poc_becomes_available_without_a_first_part_only_rule() {
+    fn first_and_later_tile_part_poc_declarations_accumulate_before_use() {
         let base = fixture(2);
         let layers = parse(&base).unwrap().coding_style.unwrap().layers;
         let codestream = insert_before_marker(base, Marker::Sot, &poc_segment(0, 2, layers));
-        let codestream = split_with_later_header(codestream, &poc_segment(1, 2, layers));
+        let codestream = split_with_headers(
+            codestream,
+            &poc_segment(1, 2, layers),
+            &poc_segment(2, 2, layers),
+        );
         let state = private_state(&codestream);
 
         assert_eq!(state.tile_parts.len(), 2);
-        assert_eq!(state.tile_parts[0].available_tile_poc_segments, 0);
-        assert_eq!(state.tile_parts[1].available_tile_poc_segments, 1);
+        assert_eq!(state.tile_parts[0].available_tile_poc_segments, 1);
+        assert_eq!(state.tile_parts[1].available_tile_poc_segments, 2);
         assert!(matches!(
             state.progression_changes(state.tile_parts[0]),
-            EffectiveProgressionChanges::Main(segment)
-                if segment.records[0].progression_order == ProgressionOrder::Lrcp
+            EffectiveProgressionChanges::Tile(segments)
+                if segments.len() == 1
+                    && segments[0].records[0].progression_order == ProgressionOrder::Rlcp
         ));
         assert!(matches!(
             state.progression_changes(state.tile_parts[1]),
             EffectiveProgressionChanges::Tile(segments)
-                if segments.len() == 1
-                    && segments[0].records[0].progression_order == ProgressionOrder::Rlcp
+                if segments.len() == 2
+                    && segments[1].records[0].progression_order == ProgressionOrder::Rpcl
+        ));
+    }
+
+    #[test]
+    fn rejects_a_later_tile_part_poc_without_a_part_zero_tile_poc() {
+        let base = fixture(2);
+        let layers = parse(&base).unwrap().coding_style.unwrap().layers;
+        let codestream = split_with_headers(base, &[], &poc_segment(1, 2, layers));
+
+        assert!(matches!(
+            parse(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Poc),
+                ..
+            })
         ));
     }
 
@@ -40393,7 +40454,7 @@ mod effective_header_state_tests {
             })
         ));
 
-        let late_cod = split_with_later_header(base.clone(), &cod);
+        let late_cod = split_with_headers(base.clone(), &[], &cod);
         assert!(matches!(
             parse(&late_cod),
             Err(CodestreamError::InvalidMarker {
@@ -40423,6 +40484,81 @@ mod effective_header_state_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn rejects_reserved_sot_large_grid_and_tile_part_endpoints() {
+        let mut sot = [0_u8; 8];
+        sot[2..6].copy_from_slice(&14_u32.to_be_bytes());
+
+        sot[..2].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert!(matches!(
+            parse_sot(&sot, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sot),
+                ..
+            })
+        ));
+        sot[..2].copy_from_slice(&(u16::MAX - 1).to_be_bytes());
+        assert_eq!(parse_sot(&sot, 0).unwrap().tile_index, u16::MAX - 1);
+
+        sot[6] = u8::MAX;
+        assert!(matches!(
+            parse_sot(&sot, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sot),
+                ..
+            })
+        ));
+        sot[6] = u8::MAX - 1;
+        sot[7] = u8::MAX;
+        let boundary = parse_sot(&sot, 0).unwrap();
+        assert_eq!(boundary.tile_part_index, u8::MAX - 1);
+        assert_eq!(boundary.tile_part_count, Some(u8::MAX));
+    }
+
+    #[test]
+    fn rejects_zero_layers_reserved_mct_and_nonlowest_zero_precinct_exponents() {
+        let codestream = fixture(1);
+        let cod = marker_segment(&codestream, Marker::Cod);
+        let payload = &cod[4..];
+
+        let mut zero_layers = payload.to_vec();
+        zero_layers[2..4].copy_from_slice(&0_u16.to_be_bytes());
+        assert!(matches!(
+            parse_cod(&zero_layers, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+
+        let mut reserved_mct = payload.to_vec();
+        reserved_mct[4] = 2;
+        assert!(matches!(
+            parse_cod(&reserved_mct, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+
+        let mut explicit_precincts = payload.to_vec();
+        explicit_precincts[0] |= 1;
+        explicit_precincts[5] = 1;
+        explicit_precincts.extend_from_slice(&[0, 0x11]);
+        assert!(parse_cod(&explicit_precincts, 0).is_ok());
+        for invalid_r1 in [0x01, 0x10] {
+            let mut invalid = explicit_precincts.clone();
+            *invalid.last_mut().unwrap() = invalid_r1;
+            assert!(matches!(
+                parse_cod(&invalid, 0),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cod),
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
@@ -40572,6 +40708,22 @@ fn parse_sot(segment: &[u8], marker_offset: usize) -> Result<TilePartState> {
             "SOT marker payload must be exactly eight bytes",
         ));
     }
+    let tile_index = read_u16(segment, 0)?;
+    if tile_index == u16::MAX {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Sot),
+            "SOT tile index uses the reserved Isot value",
+        ));
+    }
+    let tile_part_index = segment[6];
+    if tile_part_index == u8::MAX {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Sot),
+            "SOT tile-part index uses the reserved TPsot value",
+        ));
+    }
 
     let tile_part_length = match read_u32(segment, 2)? {
         0 => None,
@@ -40583,9 +40735,9 @@ fn parse_sot(segment: &[u8], marker_offset: usize) -> Result<TilePartState> {
     };
 
     Ok(TilePartState {
-        tile_index: read_u16(segment, 0)?,
+        tile_index,
         tile_part_length,
-        tile_part_index: segment[6],
+        tile_part_index,
         tile_part_count,
         payload_offset: None,
         payload_len: None,
