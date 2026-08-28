@@ -27022,10 +27022,38 @@ fn parse_default_precinct_packets_from_source(
                     .as_ref()
                     .and_then(|lengths| lengths.tile_parts.get(packet_length_cursor).copied())
             });
-            let physical_tile_part = payload
-                .packet_tile_part_at(packet_start)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            if declared_tile_part.is_some_and(|declared| declared != physical_tile_part) {
+            let physical_tile_part = payload.packet_tile_part_at(packet_start);
+            let packed_scope_tile_part = match packed_headers {
+                Some(packed) if packed.kind == PacketHeaderSourceKind::Ppm => {
+                    header_payload.packet_tile_part_at(header_offset)
+                }
+                Some(packed) if packed.kind == PacketHeaderSourceKind::Ppt => packed
+                    .available_tile_part_at(header_offset)
+                    .filter(|available| {
+                        tile_part_order
+                            .iter()
+                            .filter(|entry| entry.tile_index == tile_rect.tile_index)
+                            .count()
+                            .checked_sub(1)
+                            == Some(*available)
+                    }),
+                _ => None,
+            };
+            let packet_tile_part = if declared_packet_len == Some(0) {
+                declared_tile_part.ok_or(CodestreamError::SizeOverflow)?
+            } else if declared_packet_len.is_none() && packed_scope_tile_part.is_some() {
+                // An active Nppm collection is exact. A PPT declaration in
+                // the final tile-part is also exact because no later packet
+                // body scope exists. Either can disambiguate a header-only
+                // packet at a shared empty-span offset; any subsequently
+                // parsed non-empty body is checked against the physical span.
+                packed_scope_tile_part.ok_or(CodestreamError::SizeOverflow)?
+            } else {
+                physical_tile_part.ok_or(CodestreamError::SizeOverflow)?
+            };
+            if declared_packet_len.is_some_and(|length| length != 0)
+                && declared_tile_part.is_some_and(|declared| declared != packet_tile_part)
+            {
                 let lengths = packet_lengths
                     .as_ref()
                     .ok_or(CodestreamError::SizeOverflow)?;
@@ -27035,7 +27063,7 @@ fn parse_default_precinct_packets_from_source(
                     "packet-length marker tile-part ordinal disagrees with the physical packet body",
                 ));
             }
-            validate_scheduled_packet_start(payload, scheduled, packet_start)?;
+            validate_scheduled_packet_start(scheduled, packet_tile_part)?;
             if let Some(lengths) = &packet_lengths
                 && lengths
                     .logical_offsets
@@ -27093,8 +27121,7 @@ fn parse_default_precinct_packets_from_source(
                 .ok_or(CodestreamError::SizeOverflow)?;
             let packet_header_start = header_offset;
             if packet_header_source.kind() == PacketHeaderSourceKind::Ppm
-                && header_payload.packet_tile_part_at(packet_header_start)
-                    != Some(physical_tile_part)
+                && header_payload.packet_tile_part_at(packet_header_start) != Some(packet_tile_part)
             {
                 return Err(invalid(
                     None,
@@ -27106,7 +27133,7 @@ fn parse_default_precinct_packets_from_source(
                 && packed.kind == PacketHeaderSourceKind::Ppt
                 && packed
                     .available_tile_part_at(packet_header_start)
-                    .is_some_and(|available| available > physical_tile_part)
+                    .is_some_and(|available| available > packet_tile_part)
             {
                 return Err(invalid(
                     None,
@@ -27380,10 +27407,23 @@ fn parse_default_precinct_packets_from_source(
                     .checked_add(codeword_len)
                     .ok_or(CodestreamError::SizeOverflow)?;
             }
+            let parsed_packet_len = segment_offset
+                .checked_sub(packet_start)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if parsed_packet_len != 0
+                && physical_tile_part.is_some_and(|physical| physical != packet_tile_part)
+            {
+                return Err(invalid(
+                    None,
+                    Some(match packet_header_source.kind() {
+                        PacketHeaderSourceKind::Inline => Marker::Sod,
+                        PacketHeaderSourceKind::Ppm => Marker::Ppm,
+                        PacketHeaderSourceKind::Ppt => Marker::Ppt,
+                    }),
+                    "non-empty packet body disagrees with its resolved tile-part scope",
+                ));
+            }
             if let Some(declared_packet_len) = declared_packet_len {
-                let parsed_packet_len = segment_offset
-                    .checked_sub(packet_start)
-                    .ok_or(CodestreamError::SizeOverflow)?;
                 if parsed_packet_len != declared_packet_len {
                     let lengths = packet_lengths
                         .as_ref()
@@ -27510,13 +27550,9 @@ fn validate_packet_tile_part_boundary(
 }
 
 fn validate_scheduled_packet_start(
-    payload: &dyn PacketByteSource,
     scheduled: ScheduledPacket,
-    packet_start: usize,
+    packet_tile_part: usize,
 ) -> Result<()> {
-    let packet_tile_part = payload
-        .packet_tile_part_at(packet_start)
-        .ok_or(CodestreamError::SizeOverflow)?;
     if packet_tile_part < scheduled.declared_tile_part {
         return Err(invalid(
             scheduled.marker_offset,
@@ -27757,6 +27793,149 @@ mod packed_packet_header_tests {
         };
         codestream.splice(insertion..insertion, packed_segment);
         codestream
+    }
+
+    fn zero_body_packed_fixture(kind: PacketHeaderSourceKind) -> Vec<u8> {
+        let mut codestream = packed_fixture(kind, false, false);
+        match kind {
+            PacketHeaderSourceKind::Ppm => {
+                let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+                let old_len = usize::from(read_u16(&codestream, ppm + 2).unwrap());
+                let header_start = ppm + 9;
+                let header_end = ppm + 2 + old_len;
+                let removed = header_end - header_start;
+                codestream.splice(header_start..header_end, [0]);
+                codestream[ppm + 5..ppm + 9].copy_from_slice(&1_u32.to_be_bytes());
+                codestream[ppm + 2..ppm + 4]
+                    .copy_from_slice(&u16::try_from(old_len - removed + 1).unwrap().to_be_bytes());
+            }
+            PacketHeaderSourceKind::Ppt => {
+                let ppt = find_marker(&codestream, 0, Marker::Ppt).unwrap();
+                let old_len = usize::from(read_u16(&codestream, ppt + 2).unwrap());
+                let header_start = ppt + 5;
+                let header_end = ppt + 2 + old_len;
+                let removed = header_end - header_start;
+                codestream.splice(header_start..header_end, [0]);
+                codestream[ppt + 2..ppt + 4]
+                    .copy_from_slice(&u16::try_from(old_len - removed + 1).unwrap().to_be_bytes());
+                let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10]
+                    .copy_from_slice(&(psot - u32::try_from(removed - 1).unwrap()).to_be_bytes());
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        let body_len = eoc - (sod + 2);
+        codestream.drain(sod + 2..eoc);
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot - u32::try_from(body_len).unwrap()).to_be_bytes());
+        codestream
+    }
+
+    fn ppm_zero_body_in_final_empty_part(with_plm: bool) -> Vec<u8> {
+        let mut codestream =
+            with_empty_first_tile_part(zero_body_packed_fixture(PacketHeaderSourceKind::Ppm));
+        let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+        let lppm = read_u16(&codestream, ppm + 2).unwrap();
+        codestream.splice(ppm + 5..ppm + 5, 0_u32.to_be_bytes());
+        codestream[ppm + 2..ppm + 4].copy_from_slice(&(lppm + 4).to_be_bytes());
+        if with_plm {
+            codestream = with_plm_collections(codestream, &[Vec::new(), vec![0]]);
+        }
+        codestream
+    }
+
+    fn ppt_plt_zero_body_in_final_empty_part(with_plt: bool) -> Vec<u8> {
+        let mut codestream =
+            with_empty_first_tile_part(zero_body_packed_fixture(PacketHeaderSourceKind::Ppt));
+        if with_plt {
+            let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+            let second_sot =
+                first_sot + usize::try_from(read_u32(&codestream, first_sot + 6).unwrap()).unwrap();
+            let sod = find_marker(&codestream, second_sot, Marker::Sod).unwrap();
+            let plt = marker_segment(Marker::Plt, &[0, 0]);
+            let psot = read_u32(&codestream, second_sot + 6).unwrap();
+            codestream[second_sot + 6..second_sot + 10]
+                .copy_from_slice(&(psot + u32::try_from(plt.len()).unwrap()).to_be_bytes());
+            codestream.splice(sod..sod, plt);
+        }
+        codestream
+    }
+
+    fn ppt_zero_body_with_ambiguous_later_empty_part() -> Vec<u8> {
+        let mut codestream = zero_body_packed_fixture(PacketHeaderSourceKind::Ppt);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream[sot + 11] = 2;
+        let mut empty = Marker::Sot.code().to_be_bytes().to_vec();
+        empty.extend_from_slice(&10_u16.to_be_bytes());
+        empty.extend_from_slice(&0_u16.to_be_bytes());
+        empty.extend_from_slice(&14_u32.to_be_bytes());
+        empty.push(1);
+        empty.push(2);
+        empty.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
+        codestream.splice(eoc..eoc, empty);
+        codestream
+    }
+
+    fn assert_zero_body_slice_and_positioned(codestream: &[u8]) {
+        assert!(contributions_result(codestream).unwrap().is_empty());
+        let source = source::SliceSource::new(codestream);
+        let request = TileRegionRequest {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let mut scan = scan_part1_source_headers(&source, request).unwrap();
+        let tile = tile_rects_for_siz(&scan.codestream.siz).unwrap()[0];
+        let mut spans = scan.payload_spans.remove(&tile.tile_index).unwrap();
+        let mut logical_offset = 0_usize;
+        for span in &mut spans {
+            span.logical_offset = logical_offset;
+            logical_offset = logical_offset.checked_add(span.len).unwrap();
+        }
+        let source_payload = SourceTilePartPayload {
+            source: &source,
+            spans,
+            len: logical_offset,
+        };
+        let buffered = BufferedSourcePacketPayload::new(&source_payload);
+        let parsed = parse_default_precinct_packets_from_source(
+            &scan.marker_bytes,
+            &scan.codestream,
+            tile,
+            &buffered,
+            None,
+            None,
+            None,
+            ComponentPacketProfile::Default,
+            Some(&scan.work.tile_part_order),
+        )
+        .unwrap();
+        assert!(parsed.contributions.is_empty());
+        assert!(buffered.take_error().is_none());
+    }
+
+    #[test]
+    fn ppm_plm_zero_body_uses_declared_final_empty_tile_part_for_slice_and_source() {
+        assert_zero_body_slice_and_positioned(&ppm_zero_body_in_final_empty_part(true));
+    }
+
+    #[test]
+    fn ppt_plt_zero_body_uses_declared_final_empty_tile_part_for_slice_and_source() {
+        assert_zero_body_slice_and_positioned(&ppt_plt_zero_body_in_final_empty_part(true));
+    }
+
+    #[test]
+    fn zero_body_without_lengths_requires_an_exact_packed_header_scope() {
+        assert_zero_body_slice_and_positioned(&ppm_zero_body_in_final_empty_part(false));
+        assert_zero_body_slice_and_positioned(&ppt_plt_zero_body_in_final_empty_part(false));
+        assert!(contributions_result(&ppt_zero_body_with_ambiguous_later_empty_part()).is_err());
     }
 
     fn contributions(codestream: &[u8]) -> Vec<(usize, u16, u8, Vec<u8>)> {
@@ -31523,8 +31702,8 @@ mod progression_volume_scheduler_tests {
             declared_tile_part: 2,
             marker_offset: Some(41),
         };
-        assert!(validate_scheduled_packet_start(&payload, later, 0).is_err());
-        validate_scheduled_packet_start(&payload, later, 2).unwrap();
+        assert!(validate_scheduled_packet_start(later, 0).is_err());
+        validate_scheduled_packet_start(later, 2).unwrap();
         validate_packet_tile_part_boundary(&payload, 0, 1, 2).unwrap();
         validate_packet_tile_part_boundary(&payload, 2, 3, 4).unwrap();
     }
