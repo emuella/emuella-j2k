@@ -7254,15 +7254,23 @@ pub struct CodestreamBoundary {
 
 /// Parse marker-level codestream metadata from a byte slice.
 pub fn parse(input: &[u8]) -> Result<Codestream> {
-    let (codestream, _) = parse_with_selected_region(input, None)?;
-    validate_packet_organisation_markers(input, &codestream)?;
+    let (codestream, work) = parse_with_selected_region(input, None)?;
+    validate_packet_organisation_markers(input, &codestream, &work.tile_part_order)?;
     Ok(codestream)
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TilePartParseWork {
     tile_parts_skipped_via_tlm: u64,
     tile_part_bytes_skipped_via_tlm: u64,
+    tile_part_order: Vec<TilePartOrderEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TilePartOrderEntry {
+    tile_index: u16,
+    tile_part_index: u8,
+    payload_len: Option<usize>,
 }
 
 struct SourceHeaderScan {
@@ -7455,6 +7463,7 @@ fn scan_part1_source_headers(
             .get(usize::from(tile.tile_index))
             .copied()
             .unwrap_or(false);
+        let retained_payload_len;
         if selected {
             let (selected_tile, span) = scan_selected_source_tile_part_header(
                 source,
@@ -7463,9 +7472,11 @@ fn scan_part1_source_headers(
                 &mut marker_bytes,
                 &mut markers,
             )?;
+            retained_payload_len = Some(span.len);
             selected_tile_states.push(selected_tile);
             payload_spans.entry(tile.tile_index).or_default().push(span);
         } else {
+            retained_payload_len = None;
             let unread = u64::from(psot).saturating_sub(sot_bytes.len() as u64);
             source.record_bytes_not_read(unread, 0);
             if declared.is_some() {
@@ -7486,6 +7497,11 @@ fn scan_part1_source_headers(
                 selected_tile_states.push(metadata_only);
             }
         }
+        work.tile_part_order.push(TilePartOrderEntry {
+            tile_index: tile.tile_index,
+            tile_part_index: tile.tile_part_index,
+            payload_len: retained_payload_len,
+        });
         next_source_offset = next_source_offset
             .checked_add(u64::from(psot))
             .ok_or(CodestreamError::SizeOverflow)?;
@@ -7803,6 +7819,14 @@ fn parse_with_selected_region(
     };
     if !selected_via_tlm {
         validate_indexed_tile_part_sequence(&siz, &tiles)?;
+        parse_work.tile_part_order = tiles
+            .iter()
+            .map(|tile| TilePartOrderEntry {
+                tile_index: tile.tile_index,
+                tile_part_index: tile.tile_part_index,
+                payload_len: tile.payload_len,
+            })
+            .collect();
     }
     let main_header_end = markers
         .iter()
@@ -7972,8 +7996,18 @@ fn parse_selected_tile_parts_from_tlm(
             }
             tile.payload_offset = Some(payload_offset);
             tile.payload_len = Some(tile_part_end - payload_offset);
+            work.tile_part_order.push(TilePartOrderEntry {
+                tile_index: tile.tile_index,
+                tile_part_index: tile.tile_part_index,
+                payload_len: tile.payload_len,
+            });
             tiles.push(tile);
         } else {
+            work.tile_part_order.push(TilePartOrderEntry {
+                tile_index: tile.tile_index,
+                tile_part_index: tile.tile_part_index,
+                payload_len: None,
+            });
             work.tile_parts_skipped_via_tlm = work.tile_parts_skipped_via_tlm.saturating_add(1);
             work.tile_part_bytes_skipped_via_tlm = work
                 .tile_part_bytes_skipped_via_tlm
@@ -20313,6 +20347,7 @@ where
             request.max_layers,
             max_resolution,
             &component_indices,
+            &parse_work.tile_part_order,
         )?;
         timings.packets_parsed = timings
             .packets_parsed
@@ -24674,6 +24709,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         Some(max_resolution),
         Some(component_indices),
         packet_profile,
+        None,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -24773,6 +24809,7 @@ fn decode_multitile_tile_component_planes_selected(
         Some(max_resolution),
         Some(component_indices),
         packet_profile,
+        None,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -25835,6 +25872,7 @@ pub fn parse_default_precinct_lrcp_packets(
         None,
         None,
         ComponentPacketProfile::Default,
+        None,
     )
     .map(|parsed| parsed.contributions)
 }
@@ -25869,6 +25907,17 @@ struct PackedPacketHeaderSource {
     segment_ends: Vec<usize>,
     /// PPM Nppm collection ends for the selected tile, one per tile-part.
     tile_part_ends: Vec<usize>,
+    /// Ends of PPT byte ranges paired with the selected tile-part ordinal at
+    /// which each range becomes available.
+    availability_ends: Vec<(usize, usize)>,
+}
+
+impl PackedPacketHeaderSource {
+    fn available_tile_part_at(&self, offset: usize) -> Option<usize> {
+        self.availability_ends
+            .iter()
+            .find_map(|(end, tile_part)| (offset < *end).then_some(*tile_part))
+    }
 }
 
 impl PacketByteSource for PackedPacketHeaderSource {
@@ -26003,6 +26052,7 @@ fn packed_packet_header_source(
     input: &[u8],
     codestream: &Codestream,
     tile_index: u16,
+    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<PacketHeaderSource> {
     let first_sot = codestream
         .markers
@@ -26068,7 +26118,7 @@ fn packed_packet_header_source(
         let mut tile_part_ends = Vec::new();
         let mut cursor = 0_usize;
         let mut segment_cursor = 0_usize;
-        for tile_part in &codestream.tiles {
+        for tile_part in tile_part_order {
             require(&packed, cursor, 4).map_err(|_| {
                 invalid(
                     ppm_segments.first().map(|segment| segment.offset),
@@ -26130,6 +26180,7 @@ fn packed_packet_header_source(
             bytes: output,
             segment_ends,
             tile_part_ends,
+            availability_ends: Vec::new(),
         }));
     }
 
@@ -26156,6 +26207,7 @@ fn packed_packet_header_source(
 
     let mut output = Vec::new();
     let mut segment_ends = Vec::new();
+    let mut availability_ends = Vec::new();
     for (start, end) in ranges {
         let sot = &codestream.markers[start];
         let tile = parse_sot(
@@ -26169,6 +26221,17 @@ fn packed_packet_header_source(
         if tile.tile_index != tile_index {
             continue;
         }
+        let tile_part_ordinal = tile_part_order
+            .iter()
+            .filter(|entry| entry.tile_index == tile_index)
+            .position(|entry| entry.tile_part_index == tile.tile_part_index)
+            .ok_or_else(|| {
+                invalid(
+                    Some(sot.offset),
+                    Some(Marker::Sot),
+                    "retained tile-part header is absent from physical codestream order",
+                )
+            })?;
         for (index, fragment) in indexed_marker_fragments(input, &ppt_segments, Marker::Ppt)?
             .into_iter()
             .enumerate()
@@ -26182,6 +26245,7 @@ fn packed_packet_header_source(
             }
             append_bounded_marker_bytes(&mut output, fragment, Marker::Ppt)?;
             segment_ends.push(output.len());
+            availability_ends.push((output.len(), tile_part_ordinal));
         }
     }
     Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
@@ -26189,6 +26253,7 @@ fn packed_packet_header_source(
         bytes: output,
         segment_ends,
         tile_part_ends: Vec::new(),
+        availability_ends,
     }))
 }
 
@@ -26243,6 +26308,7 @@ fn decode_packet_lengths(bytes: &[u8], marker: Marker, marker_offset: usize) -> 
 fn packet_lengths_from_plm(
     input: &[u8],
     codestream: &Codestream,
+    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<Option<Vec<(Vec<usize>, usize)>>> {
     let first_sot = codestream
         .markers
@@ -26271,9 +26337,9 @@ fn packet_lengths_from_plm(
         fragment_ends.push(packed.len());
     }
     let mut completed_length_ends = Vec::new();
-    let mut entries = Vec::with_capacity(codestream.tiles.len());
+    let mut entries = Vec::with_capacity(tile_part_order.len());
     let mut cursor = 0_usize;
-    for _tile_part in &codestream.tiles {
+    for tile_part in tile_part_order {
         let encoded_len = usize::from(*packed.get(cursor).ok_or_else(|| {
             invalid(
                 Some(first_offset),
@@ -26297,6 +26363,20 @@ fn packet_lengths_from_plm(
             }
         }
         let lengths = decode_packet_lengths(encoded, Marker::Plm, first_offset)?;
+        if let Some(payload_len) = tile_part.payload_len {
+            let declared_payload_len = lengths.iter().try_fold(0_usize, |total, length| {
+                total
+                    .checked_add(*length)
+                    .ok_or(CodestreamError::SizeOverflow)
+            })?;
+            if declared_payload_len != payload_len {
+                return Err(invalid(
+                    Some(first_offset),
+                    Some(Marker::Plm),
+                    "PLM packet lengths do not span the corresponding tile-part payload",
+                ));
+            }
+        }
         entries.push((lengths, first_offset));
         cursor = cursor
             .checked_add(encoded_len)
@@ -26327,15 +26407,15 @@ fn tile_packet_lengths(
     input: &[u8],
     codestream: &Codestream,
     tile_index: u16,
+    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<Option<PacketLengths>> {
-    let plm = packet_lengths_from_plm(input, codestream)?;
+    let plm = packet_lengths_from_plm(input, codestream, tile_part_order)?;
     let mut tile_parts = codestream
         .tiles
         .iter()
-        .enumerate()
-        .filter(|(_, tile_part)| tile_part.tile_index == tile_index)
+        .filter(|tile_part| tile_part.tile_index == tile_index)
         .collect::<Vec<_>>();
-    tile_parts.sort_by_key(|(_, tile_part)| tile_part.tile_part_index);
+    tile_parts.sort_by_key(|tile_part| tile_part.tile_part_index);
 
     let mut all_lengths = Vec::new();
     let mut logical_offsets = Vec::new();
@@ -26343,7 +26423,40 @@ fn tile_packet_lengths(
     let mut markers = Vec::new();
     let mut packet_tile_parts = Vec::new();
     let mut logical_tile_offset = 0_usize;
-    for (tile_part_ordinal, (codestream_index, tile_part)) in tile_parts.iter().enumerate() {
+    let mut saw_length_declaration = false;
+    for tile_part in tile_parts {
+        let matching_order = tile_part_order
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.tile_index == tile_part.tile_index
+                    && entry.tile_part_index == tile_part.tile_part_index
+            })
+            .collect::<Vec<_>>();
+        let [(codestream_index, order_entry)] = matching_order.as_slice() else {
+            return Err(invalid(
+                None,
+                Some(Marker::Sot),
+                "retained tile-part ordinal disagrees with physical codestream order",
+            ));
+        };
+        let tile_part_ordinal = tile_part_order[..=*codestream_index]
+            .iter()
+            .filter(|entry| entry.tile_index == tile_index)
+            .count()
+            .checked_sub(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let payload_len = tile_part.payload_len.ok_or(CodestreamError::SizeOverflow)?;
+        if order_entry
+            .payload_len
+            .is_some_and(|physical| physical != payload_len)
+        {
+            return Err(invalid(
+                None,
+                Some(Marker::Sot),
+                "retained tile-part payload span disagrees with physical codestream order",
+            ));
+        }
         let plt = tile_part_packet_lengths_from_plt(input, codestream, tile_part)?;
         let plm_entry = plm
             .as_ref()
@@ -26365,10 +26478,11 @@ fn tile_packet_lengths(
         };
         let Some((mut lengths, marker_offset)) = plt.or(plm_entry) else {
             logical_tile_offset = logical_tile_offset
-                .checked_add(tile_part.payload_len.ok_or(CodestreamError::SizeOverflow)?)
+                .checked_add(payload_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
             continue;
         };
+        saw_length_declaration = true;
         let mut packet_offset = logical_tile_offset;
         for packet_len in &lengths {
             logical_offsets.push(packet_offset);
@@ -26383,7 +26497,7 @@ fn tile_packet_lengths(
         all_lengths.append(&mut lengths);
     }
 
-    if all_lengths.is_empty() {
+    if !saw_length_declaration {
         return Ok(None);
     }
     Ok(Some(PacketLengths {
@@ -26395,7 +26509,11 @@ fn tile_packet_lengths(
     }))
 }
 
-fn validate_packet_organisation_markers(input: &[u8], codestream: &Codestream) -> Result<()> {
+fn validate_packet_organisation_markers(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_part_order: &[TilePartOrderEntry],
+) -> Result<()> {
     let first_sot = codestream
         .markers
         .iter()
@@ -26421,7 +26539,7 @@ fn validate_packet_organisation_markers(input: &[u8], codestream: &Codestream) -
             "PLM is confined to the main header",
         ));
     }
-    let _plm = packet_lengths_from_plm(input, codestream)?;
+    let _plm = packet_lengths_from_plm(input, codestream, tile_part_order)?;
     let ranges = tile_part_header_marker_ranges(&codestream.markers);
     for (start, end) in &ranges {
         let header = &codestream.markers[*start + 1..*end];
@@ -26464,7 +26582,8 @@ fn validate_packet_organisation_markers(input: &[u8], codestream: &Codestream) -
         // One construction validates the entire main-header PPM series and
         // global PPM/PPT exclusivity. PPT series were checked once per header
         // above, avoiding quadratic work across large tile grids.
-        let _headers = packed_packet_header_source(input, codestream, tile.tile_index)?;
+        let _headers =
+            packed_packet_header_source(input, codestream, tile.tile_index, tile_part_order)?;
     }
     Ok(())
 }
@@ -26575,6 +26694,7 @@ fn parse_default_precinct_packets_from_source(
     max_resolution: Option<u8>,
     selected_components: Option<&[u16]>,
     packet_profile: ComponentPacketProfile,
+    physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
     let component_count = usize::from(codestream.siz.component_count());
     let component_styles = if matches!(
@@ -26755,8 +26875,24 @@ fn parse_default_precinct_packets_from_source(
         max_resolution_end,
     )?;
 
+    let retained_tile_part_order;
+    let tile_part_order = match physical_tile_part_order {
+        Some(order) => order,
+        None => {
+            retained_tile_part_order = codestream
+                .tiles
+                .iter()
+                .map(|tile| TilePartOrderEntry {
+                    tile_index: tile.tile_index,
+                    tile_part_index: tile.tile_part_index,
+                    payload_len: tile.payload_len,
+                })
+                .collect::<Vec<_>>();
+            &retained_tile_part_order
+        }
+    };
     let packet_header_source =
-        packed_packet_header_source(input, codestream, tile_rect.tile_index)?;
+        packed_packet_header_source(input, codestream, tile_rect.tile_index, tile_part_order)?;
     let packed_headers = match &packet_header_source {
         PacketHeaderSource::Inline => None,
         PacketHeaderSource::Packed(source) => Some(source),
@@ -26764,7 +26900,8 @@ fn parse_default_precinct_packets_from_source(
     let header_payload: &dyn PacketByteSource = packed_headers
         .map(|source| source as &dyn PacketByteSource)
         .unwrap_or(payload);
-    let packet_lengths = tile_packet_lengths(input, codestream, tile_rect.tile_index)?;
+    let packet_lengths =
+        tile_packet_lengths(input, codestream, tile_rect.tile_index, tile_part_order)?;
     let subband_counts = component_styles
         .iter()
         .map(|style| {
@@ -26885,7 +27022,20 @@ fn parse_default_precinct_packets_from_source(
                     .as_ref()
                     .and_then(|lengths| lengths.tile_parts.get(packet_length_cursor).copied())
             });
-            validate_scheduled_packet_start(payload, scheduled, packet_start, declared_tile_part)?;
+            let physical_tile_part = payload
+                .packet_tile_part_at(packet_start)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if declared_tile_part.is_some_and(|declared| declared != physical_tile_part) {
+                let lengths = packet_lengths
+                    .as_ref()
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                return Err(invalid(
+                    lengths.marker_offsets.get(packet_length_cursor).copied(),
+                    lengths.markers.get(packet_length_cursor).copied(),
+                    "packet-length marker tile-part ordinal disagrees with the physical packet body",
+                ));
+            }
+            validate_scheduled_packet_start(payload, scheduled, packet_start)?;
             if let Some(lengths) = &packet_lengths
                 && lengths
                     .logical_offsets
@@ -26944,12 +27094,24 @@ fn parse_default_precinct_packets_from_source(
             let packet_header_start = header_offset;
             if packet_header_source.kind() == PacketHeaderSourceKind::Ppm
                 && header_payload.packet_tile_part_at(packet_header_start)
-                    != declared_tile_part.or_else(|| payload.packet_tile_part_at(packet_start))
+                    != Some(physical_tile_part)
             {
                 return Err(invalid(
                     None,
                     Some(Marker::Ppm),
                     "PPM Nppm collections disagree with packet-body tile-part boundaries",
+                ));
+            }
+            if let Some(packed) = packed_headers
+                && packed.kind == PacketHeaderSourceKind::Ppt
+                && packed
+                    .available_tile_part_at(packet_header_start)
+                    .is_some_and(|available| available > physical_tile_part)
+            {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Ppt),
+                    "PPT packet-header bytes are consumed before their tile-part header is available",
                 ));
             }
             let mut reader = PacketBitReader::at(header_payload, packet_header_start)?;
@@ -27351,10 +27513,9 @@ fn validate_scheduled_packet_start(
     payload: &dyn PacketByteSource,
     scheduled: ScheduledPacket,
     packet_start: usize,
-    declared_tile_part: Option<usize>,
 ) -> Result<()> {
-    let packet_tile_part = declared_tile_part
-        .or_else(|| payload.packet_tile_part_at(packet_start))
+    let packet_tile_part = payload
+        .packet_tile_part_at(packet_start)
         .ok_or(CodestreamError::SizeOverflow)?;
     if packet_tile_part < scheduled.declared_tile_part {
         return Err(invalid(
@@ -27495,6 +27656,53 @@ mod packed_packet_header_tests {
         encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap()
     }
 
+    fn encode_test_packet_length(mut value: usize) -> Vec<u8> {
+        if value == 0 {
+            return vec![0];
+        }
+        let mut digits = Vec::new();
+        while value != 0 {
+            digits.push(u8::try_from(value & 0x7f).unwrap());
+            value >>= 7;
+        }
+        digits.reverse();
+        let last = digits.len() - 1;
+        for digit in &mut digits[..last] {
+            *digit |= 0x80;
+        }
+        digits
+    }
+
+    fn with_plm_collections(mut codestream: Vec<u8>, collections: &[Vec<usize>]) -> Vec<u8> {
+        let mut data = vec![0];
+        for collection in collections {
+            let encoded = collection
+                .iter()
+                .flat_map(|length| encode_test_packet_length(*length))
+                .collect::<Vec<_>>();
+            data.push(u8::try_from(encoded.len()).unwrap());
+            data.extend_from_slice(&encoded);
+        }
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream.splice(sot..sot, marker_segment(Marker::Plm, &data));
+        codestream
+    }
+
+    fn with_empty_first_tile_part(mut codestream: Vec<u8>) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream[sot + 10] = 1;
+        codestream[sot + 11] = 2;
+        let mut empty_tile_part = Marker::Sot.code().to_be_bytes().to_vec();
+        empty_tile_part.extend_from_slice(&10_u16.to_be_bytes());
+        empty_tile_part.extend_from_slice(&0_u16.to_be_bytes());
+        empty_tile_part.extend_from_slice(&14_u32.to_be_bytes());
+        empty_tile_part.push(0);
+        empty_tile_part.push(2);
+        empty_tile_part.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        codestream.splice(sot..sot, empty_tile_part);
+        codestream
+    }
+
     fn packed_fixture(kind: PacketHeaderSourceKind, sop: bool, eph: bool) -> Vec<u8> {
         let mut codestream = fixture();
         let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
@@ -27564,6 +27772,7 @@ mod packed_packet_header_tests {
             None,
             None,
             ComponentPacketProfile::Default,
+            None,
         )
         .unwrap()
         .contributions;
@@ -27653,6 +27862,149 @@ mod packed_packet_header_tests {
     }
 
     #[test]
+    fn plm_only_collections_match_physical_tile_part_payloads() {
+        let base = fixture();
+        let sot = find_marker(&base, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&base, sot, Marker::Sod).unwrap();
+        let payload_len =
+            usize::try_from(read_u32(&base, sot + 6).unwrap()).unwrap() - (sod + 2 - sot);
+
+        parse(&with_plm_collections(base.clone(), &[vec![payload_len]])).unwrap();
+        for mismatched in [payload_len - 1, payload_len + 1] {
+            assert!(matches!(
+                parse(&with_plm_collections(base.clone(), &[vec![mismatched]])),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Plm),
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            parse(&with_plm_collections(base.clone(), &[Vec::new()])),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plm),
+                ..
+            })
+        ));
+
+        let two_parts = with_empty_first_tile_part(base);
+        parse(&with_plm_collections(
+            two_parts.clone(),
+            &[Vec::new(), vec![payload_len]],
+        ))
+        .unwrap();
+        assert!(matches!(
+            parse(&with_plm_collections(
+                two_parts,
+                &[vec![payload_len], Vec::new()],
+            )),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plm),
+                ..
+            })
+        ));
+    }
+
+    fn ppt_with_empty_other_tile_part(ppt_is_earlier: bool) -> Vec<u8> {
+        let mut codestream = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let ppt = find_marker(&codestream, sot, Marker::Ppt).unwrap();
+        let ppt_end = ppt + 2 + usize::from(read_u16(&codestream, ppt + 2).unwrap());
+        let ppt_segment = codestream[ppt..ppt_end].to_vec();
+        codestream.drain(ppt..ppt_end);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot - u32::try_from(ppt_segment.len()).unwrap()).to_be_bytes());
+        codestream[sot + 11] = 2;
+
+        let empty_index = if ppt_is_earlier { 0 } else { 1 };
+        let mut empty = Marker::Sot.code().to_be_bytes().to_vec();
+        empty.extend_from_slice(&10_u16.to_be_bytes());
+        empty.extend_from_slice(&0_u16.to_be_bytes());
+        empty.extend_from_slice(&u32::try_from(14 + ppt_segment.len()).unwrap().to_be_bytes());
+        empty.push(empty_index);
+        empty.push(2);
+        empty.extend_from_slice(&ppt_segment);
+        empty.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+
+        if ppt_is_earlier {
+            codestream[sot + 10] = 1;
+            codestream.splice(sot..sot, empty);
+        } else {
+            codestream[sot + 10] = 0;
+            let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
+            codestream.splice(eoc..eoc, empty);
+        }
+        codestream
+    }
+
+    #[test]
+    fn ppt_headers_obey_tile_part_availability_including_empty_parts() {
+        assert!(
+            !contributions(&packed_fixture(PacketHeaderSourceKind::Ppt, false, false,)).is_empty()
+        );
+        assert!(!contributions(&ppt_with_empty_other_tile_part(true)).is_empty());
+        assert!(matches!(
+            contributions_result(&ppt_with_empty_other_tile_part(false)),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Ppt),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn positioned_tlm_plm_regional_preparation_maps_global_order_to_selected_payload() {
+        let mut codestream = fixture();
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 6..siz + 10].copy_from_slice(&8_u32.to_be_bytes());
+        let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let eoc = find_marker(&codestream, first_sot, Marker::Eoc).unwrap();
+        let mut second_tile_part = codestream[first_sot..eoc].to_vec();
+        second_tile_part[4..6].copy_from_slice(&1_u16.to_be_bytes());
+        codestream.splice(eoc..eoc, second_tile_part);
+
+        let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, first_sot + 6).unwrap();
+        let sod = find_marker(&codestream, first_sot, Marker::Sod).unwrap();
+        let payload_len = usize::try_from(psot).unwrap() - (sod + 2 - first_sot);
+        let mut tlm_data = vec![0, 0x10];
+        for tile_index in [0_u8, 1] {
+            tlm_data.push(tile_index);
+            tlm_data.extend_from_slice(&u16::try_from(psot).unwrap().to_be_bytes());
+        }
+        let tlm = marker_segment(Marker::Tlm, &tlm_data);
+        let mut plm_data = vec![0];
+        for _ in 0..2 {
+            let encoded = encode_test_packet_length(payload_len);
+            plm_data.push(u8::try_from(encoded.len()).unwrap());
+            plm_data.extend_from_slice(&encoded);
+        }
+        let plm = marker_segment(Marker::Plm, &plm_data);
+        codestream.splice(first_sot..first_sot, tlm.into_iter().chain(plm));
+
+        let source = source::SliceSource::new(&codestream);
+        let prepared = prepare_part1_component_decode_from_source(
+            &source,
+            Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: TileRegionRequest {
+                    x: 4,
+                    y: 0,
+                    width: 4,
+                    height: 4,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(prepared.output_dimensions(), (4, 4));
+        assert_eq!(prepared.preparation_timings().tile_parts_skipped_via_tlm, 1);
+    }
+
+    #[test]
     fn packed_headers_keep_sop_in_the_body_and_eph_with_the_header() {
         for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
             assert!(!contributions(&packed_fixture(kind, true, true)).is_empty());
@@ -27682,6 +28034,7 @@ mod packed_packet_header_tests {
             None,
             None,
             ComponentPacketProfile::Default,
+            None,
         )
         .map(|parsed| parsed.contributions)
     }
@@ -27752,8 +28105,13 @@ mod packed_packet_header_tests {
         let mut mismatch = matching.clone();
         let plm_offset = find_marker(&mismatch, 0, Marker::Plm).unwrap();
         mismatch[plm_offset + 6] = packet_len - 1;
-        parse(&mismatch).unwrap();
-        assert!(contributions_result(&mismatch).is_err());
+        assert!(matches!(
+            parse(&mismatch),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plm),
+                ..
+            })
+        ));
 
         assert!(decode_packet_lengths(&[0xff; 64], Marker::Plm, 0).is_err());
         assert_eq!(
@@ -27798,6 +28156,7 @@ mod packed_packet_header_tests {
             bytes: vec![1, 2, 3, 4],
             segment_ends: vec![2, 4],
             tile_part_ends: vec![0, 2, 4],
+            availability_ends: Vec::new(),
         };
         assert_eq!(
             (0..4)
@@ -31164,8 +31523,8 @@ mod progression_volume_scheduler_tests {
             declared_tile_part: 2,
             marker_offset: Some(41),
         };
-        assert!(validate_scheduled_packet_start(&payload, later, 0, None).is_err());
-        validate_scheduled_packet_start(&payload, later, 2, None).unwrap();
+        assert!(validate_scheduled_packet_start(&payload, later, 0).is_err());
+        validate_scheduled_packet_start(&payload, later, 2).unwrap();
         validate_packet_tile_part_boundary(&payload, 0, 1, 2).unwrap();
         validate_packet_tile_part_boundary(&payload, 2, 3, 4).unwrap();
     }
@@ -39649,6 +40008,7 @@ fn parse_prepared_payload_packets(
     max_layers: Option<u16>,
     max_resolution: u8,
     component_indices: &[u16],
+    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<ParsedPacketContributions> {
     match payload {
         PreparedTilePayload::Slice(_) => parse_default_precinct_packets_from_source(
@@ -39660,6 +40020,7 @@ fn parse_prepared_payload_packets(
             Some(max_resolution),
             Some(component_indices),
             ComponentPacketProfile::Default,
+            Some(tile_part_order),
         ),
         PreparedTilePayload::Source(source_payload) => {
             let buffered = BufferedSourcePacketPayload::new(source_payload);
@@ -39672,6 +40033,7 @@ fn parse_prepared_payload_packets(
                 Some(max_resolution),
                 Some(component_indices),
                 ComponentPacketProfile::Default,
+                Some(tile_part_order),
             );
             if let Some(error) = buffered.take_error() {
                 Err(source_error_in_phase(error, "packet-header preparation"))
