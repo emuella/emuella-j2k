@@ -59,6 +59,9 @@ const fn parallel_decode_dispatch_available() -> bool {
 const MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES: u64 = 16 * 1024 * 1024;
 const MAX_NATIVE_PART1_COMPONENT_DECODE_SAMPLES: u64 = 64 * 1024 * 1024;
 const MAX_NATIVE_PART1_TOTAL_DECODE_SAMPLES: u64 = 256 * 1024 * 1024;
+const MAX_PACKET_PRECINCTS_PER_RESOLUTION: u64 = 1_048_576;
+const MAX_PACKET_CODE_BLOCKS_PER_SUBBAND: u64 = 1_048_576;
+const MAX_PACKETS_PER_TILE: usize = 4_194_304;
 
 /// Raw codestream family identified by marker-level classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15195,19 +15198,16 @@ fn validate_irreversible97_zero_origin_aligned_tile_grid(
 fn validate_supported_part1_reversible53_default_precinct(
     codestream: &Codestream,
 ) -> Result<CodingStyleMarker> {
-    if is_supported_no_decomposition_encode_compatible_profile(codestream)
+    let encode_compatible = is_supported_no_decomposition_encode_compatible_profile(codestream)
         || is_supported_one_decomposition_encode_compatible_profile(codestream)
         || is_supported_rgb_u8_one_decomposition_encode_compatible_profile(codestream)
         || is_supported_u8_two_decomposition_encode_compatible_profile(codestream)
         || is_supported_grayscale_u16_one_decomposition_encode_compatible_profile(codestream)
         || is_supported_rgb_u16_one_decomposition_encode_compatible_profile(codestream)
         || is_supported_grayscale_u16_two_decomposition_encode_compatible_profile(codestream)
-        || is_supported_rgb_u16_two_decomposition_encode_compatible_profile(codestream)
-    {
-        return uniform_effective_coding_style(codestream);
-    }
+        || is_supported_rgb_u16_two_decomposition_encode_compatible_profile(codestream);
 
-    if let Some((construct, _message)) = unsupported_construct(codestream) {
+    if !encode_compatible && let Some((construct, _message)) = unsupported_construct(codestream) {
         return Err(unsupported(
             None,
             None,
@@ -15857,15 +15857,21 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
     }
     if coding_style.precincts_declared {
         let tile_rects = tile_rects(codestream)?;
+        let component_styles = alloc::vec![coding_style; usize::from(component_count)];
         if tile_rects.len() != 1
             || !coding_style_has_supported_precinct_grid(coding_style, tile_rects[0])
-            || !coding_style_has_supported_spatial_precinct_order(coding_style, tile_rects[0])
+            || !topologies_have_supported_spatial_precinct_order(
+                &codestream.siz,
+                tile_rects[0],
+                &component_styles,
+                coding_style.progression_order,
+            )?
         {
             return Err(unsupported(
                 None,
                 Some(Marker::Cod),
                 UnsupportedConstruct::PacketDecode,
-                "explicit precinct decode currently requires one origin-aligned tile with valid precinct/code-block geometry and an aligned reference-grid lattice for CPRL/PCRL",
+                "explicit precinct decode currently requires one tile with valid precinct/code-block geometry and absolute precinct positions aligned with the bounded spatial-order walker",
             ));
         }
     }
@@ -25634,38 +25640,135 @@ fn resolution_subbands_share_precinct_grid(
         && ceil_div(high_height, precinct_height).ok() == Some(expected_rows)
 }
 
-fn coding_style_has_supported_spatial_precinct_order(
-    coding_style: CodingStyleMarker,
-    tile_rect: TileRect,
+fn precinct_lattice_cohort_matches_current_spatial_walker(
+    lattices: &[Part1ReferencePrecinctLattice],
 ) -> bool {
+    if lattices.iter().all(|lattice| lattice.count <= 1) {
+        let mut positions = lattices
+            .iter()
+            .filter(|lattice| lattice.count == 1)
+            .map(|lattice| (lattice.first_x, lattice.first_y));
+        return positions
+            .next()
+            .is_none_or(|first| positions.all(|position| position == first));
+    }
+    lattices
+        .first()
+        .is_some_and(|first| lattices.iter().all(|lattice| lattice == first))
+}
+
+fn topologies_have_supported_spatial_precinct_order(
+    siz: &SizMarker,
+    tile_rect: TileRect,
+    coding_styles: &[CodingStyleMarker],
+    progression_order: ProgressionOrder,
+) -> Result<bool> {
     if !matches!(
-        coding_style.progression_order,
-        ProgressionOrder::Pcrl | ProgressionOrder::Cprl
-    ) || coding_style_has_single_precinct(coding_style, tile_rect.width, tile_rect.height)
-    {
-        return true;
+        progression_order,
+        ProgressionOrder::Rpcl | ProgressionOrder::Pcrl | ProgressionOrder::Cprl
+    ) {
+        return Ok(true);
     }
 
-    let decomposition_levels = coding_style.decomposition_levels;
-    let mut reference_grid_exponents = None;
-    (0..=decomposition_levels).all(|resolution| {
-        let packed = coding_style.precinct_exponents[usize::from(resolution)];
-        let scale_shift = decomposition_levels - resolution;
-        let Some(reference_width_exponent) = (packed & 0x0f).checked_add(scale_shift) else {
-            return false;
-        };
-        let Some(reference_height_exponent) = (packed >> 4).checked_add(scale_shift) else {
-            return false;
-        };
-        let current = (reference_width_exponent, reference_height_exponent);
-        match reference_grid_exponents {
-            Some(expected) => current == expected,
-            None => {
-                reference_grid_exponents = Some(current);
-                true
+    let topologies = coding_styles
+        .iter()
+        .enumerate()
+        .map(|(component, style)| {
+            Part1PrecinctTopology::new(
+                siz,
+                tile_rect,
+                u16::try_from(component).map_err(|_| CodestreamError::SizeOverflow)?,
+                *style,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let lattice = |component: usize, resolution: u8| -> Result<_> {
+        topologies
+            .get(component)
+            .ok_or(CodestreamError::SizeOverflow)?
+            .reference_precinct_lattice(
+                siz,
+                *coding_styles
+                    .get(component)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                resolution,
+            )
+    };
+
+    match progression_order {
+        ProgressionOrder::Rpcl => {
+            let max_resolution = coding_styles
+                .iter()
+                .map(|style| style.decomposition_levels)
+                .max()
+                .ok_or(CodestreamError::SizeOverflow)?;
+            for resolution in 0..=max_resolution {
+                let mut cohort = Vec::new();
+                for (component, style) in coding_styles.iter().enumerate() {
+                    if resolution <= style.decomposition_levels {
+                        cohort.push(lattice(component, resolution)?);
+                    }
+                }
+                if !precinct_lattice_cohort_matches_current_spatial_walker(&cohort) {
+                    return Ok(false);
+                }
             }
         }
-    })
+        ProgressionOrder::Pcrl => {
+            let mut cohort = Vec::new();
+            for (component, style) in coding_styles.iter().enumerate() {
+                for resolution in 0..=style.decomposition_levels {
+                    cohort.push(lattice(component, resolution)?);
+                }
+            }
+            if !precinct_lattice_cohort_matches_current_spatial_walker(&cohort) {
+                return Ok(false);
+            }
+        }
+        ProgressionOrder::Cprl => {
+            for (component, style) in coding_styles.iter().enumerate() {
+                let mut cohort = Vec::new();
+                for resolution in 0..=style.decomposition_levels {
+                    cohort.push(lattice(component, resolution)?);
+                }
+                if !precinct_lattice_cohort_matches_current_spatial_walker(&cohort) {
+                    return Ok(false);
+                }
+            }
+        }
+        ProgressionOrder::Lrcp | ProgressionOrder::Rlcp => unreachable!(),
+    }
+    Ok(true)
+}
+
+fn validate_tile_reversible_topology_zero_origin_synthesis_phase(
+    siz: &SizMarker,
+    tile: TileRect,
+    coding_styles: &[CodingStyleMarker],
+) -> Result<()> {
+    if coding_styles.len() != usize::from(siz.component_count()) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    for (component, style) in coding_styles.iter().enumerate() {
+        if style.transform != WaveletTransform::Reversible53 {
+            continue;
+        }
+        let topology = Part1PrecinctTopology::new(
+            siz,
+            tile,
+            u16::try_from(component).map_err(|_| CodestreamError::SizeOverflow)?,
+            *style,
+        )?;
+        if !topology.has_zero_origin_synthesis_phase() {
+            return Err(unsupported(
+                None,
+                Some(Marker::Siz),
+                UnsupportedConstruct::Transform,
+                "native inverse synthesis requires an even absolute tile-component origin at every decomposed resolution",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn precinct_subband_exponents(resolution: u8, packed: u8) -> Option<(u8, u8)> {
@@ -25927,6 +26030,11 @@ fn parse_default_precinct_packets_from_source(
     let coding_style = *component_styles
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
+    validate_tile_reversible_topology_zero_origin_synthesis_phase(
+        &codestream.siz,
+        tile_rect,
+        &component_styles,
+    )?;
     let progression_order = if matches!(
         packet_profile,
         ComponentPacketProfile::Profile0P007 | ComponentPacketProfile::Profile0P013
@@ -25967,112 +26075,51 @@ fn parse_default_precinct_packets_from_source(
         ));
     }
 
-    let plt_packet_lengths = tile_packet_lengths_from_plt(input, codestream, tile_rect.tile_index)?;
-    let subband_counts = component_styles
-        .iter()
-        .map(|style| {
-            1usize
-                .checked_add(
-                    usize::from(style.decomposition_levels)
-                        .checked_mul(3)
-                        .ok_or(CodestreamError::SizeOverflow)?,
-                )
-                .ok_or(CodestreamError::SizeOverflow)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let component_quantization = parse_component_quantization_for_styles(
-        input,
-        codestream,
-        &component_styles,
-        &subband_counts,
-        1usize + usize::from(coding_style.decomposition_levels) * 3,
-        selected_components,
-    )?;
-    let tile_maxshift = match packet_profile {
-        ComponentPacketProfile::Profile0P006 => {
-            Some(parse_p0_06_effective_maxshift(input, codestream)?)
-        }
-        ComponentPacketProfile::Profile0P013 => Some(parse_p0_13_main_maxshift(input, codestream)?),
-        _ => parse_bounded_tile_maxshift(input, codestream)?,
-    }
-    .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
-    let mut component_states = component_quantization
+    let component_topologies = component_styles
         .iter()
         .enumerate()
-        .map(|(component_index, quantization)| {
-            let component = codestream
-                .siz
-                .components
-                .get(component_index)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            let component_tile = component_tile_rect(codestream, tile_rect, component)?;
-            let component_style = *component_styles
-                .get(component_index)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            default_precinct_subbands(
-                component_tile.width,
-                component_tile.height,
-                component_style,
-                quantization,
-                tile_maxshift
-                    .filter(|maxshift| usize::from(maxshift.component_index) == component_index)
-                    .map(|maxshift| maxshift.shift),
+        .map(|(component_index, style)| {
+            Part1PrecinctTopology::new(
+                &codestream.siz,
+                tile_rect,
+                u16::try_from(component_index).map_err(|_| CodestreamError::SizeOverflow)?,
+                *style,
             )
-            .and_then(|subbands| {
-                Ok(DefaultPrecinctComponentState {
-                    component_index: u16::try_from(component_index)
-                        .map_err(|_| CodestreamError::SizeOverflow)?,
-                    subbands,
-                })
-            })
         })
         .collect::<Result<Vec<_>>>()?;
-
-    let mut packet_offset = 0usize;
-    let mut contributions = Vec::new();
-    let mut contribution_indices = BTreeMap::new();
-    let mut excluded_body_bytes = 0_u64;
-    let mut packet_count = 0_u64;
-    let mut expected_sop_sequence = 0_u16;
-    let mut packets_skipped_via_plt = 0_u64;
-    let mut packet_bytes_skipped_via_plt = 0_u64;
-    let mut plt_packet_cursor = 0_usize;
-    let aggregate_quality_layers = coding_style.layers > 1;
-    let retained_layers = max_layers
-        .unwrap_or(coding_style.layers)
-        .min(coding_style.layers);
-    if retained_layers == 0 {
-        return Err(invalid(
+    if !topologies_have_supported_spatial_precinct_order(
+        &codestream.siz,
+        tile_rect,
+        &component_styles,
+        progression_order,
+    )? {
+        return Err(unsupported(
             None,
             Some(Marker::Cod),
-            "maximum quality layers must retain at least one layer",
+            UnsupportedConstruct::PacketDecode,
+            "bounded packet parsing cannot assign raster precinct indices across distinct absolute spatial positions",
         ));
     }
-    let precinct_counts_by_component = if packet_profile == ComponentPacketProfile::Profile0P013 {
-        // P0.13's 1-by-1 components still carry an empty packet for the
-        // second declared resolution even though every high-pass subband has
-        // zero area. Preserve that resolution in the packet schedule.
-        alloc::vec![alloc::vec![1, 1]; component_states.len()]
-    } else {
-        component_states
-            .iter()
-            .zip(&component_styles)
-            .map(|(component, style)| {
-                (0..=style.decomposition_levels)
-                    .map(|resolution| {
-                        let subband = component
-                            .subbands
-                            .iter()
-                            .find(|subband| subband.resolution == resolution)
-                            .ok_or(CodestreamError::SizeOverflow)?;
-                        u32::from(subband.precinct_cols)
-                            .checked_mul(u32::from(subband.precinct_rows))
-                            .ok_or(CodestreamError::SizeOverflow)
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
+    let precinct_counts_by_component = component_topologies
+        .iter()
+        .map(|topology| {
+            topology
+                .resolutions
+                .iter()
+                .map(|resolution| {
+                    if u64::from(resolution.precinct_count) > MAX_PACKET_PRECINCTS_PER_RESOLUTION {
+                        return Err(unsupported(
+                            None,
+                            Some(Marker::Cod),
+                            UnsupportedConstruct::PacketDecode,
+                            "precinct count exceeds the bounded packet parser state",
+                        ));
+                    }
+                    Ok(resolution.precinct_count)
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
     let expected_packet_count = precinct_counts_by_component
         .iter()
         .flatten()
@@ -26085,6 +26132,14 @@ fn parse_default_precinct_packets_from_source(
         })?
         .checked_mul(usize::from(coding_style.layers))
         .ok_or(CodestreamError::SizeOverflow)?;
+    if expected_packet_count > MAX_PACKETS_PER_TILE {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "packet count exceeds the bounded tile parser state",
+        ));
+    }
     if packet_profile == ComponentPacketProfile::Profile0P005 && expected_packet_count != 175 {
         return Err(unsupported(
             None,
@@ -26131,6 +26186,82 @@ fn parse_default_precinct_packets_from_source(
             Some(Marker::Poc),
             UnsupportedConstruct::PacketDecode,
             "the qualified Profile-0 P0.13 path requires exactly 514 packets in its two progression volumes",
+        ));
+    }
+
+    let plt_packet_lengths = tile_packet_lengths_from_plt(input, codestream, tile_rect.tile_index)?;
+    let subband_counts = component_styles
+        .iter()
+        .map(|style| {
+            1usize
+                .checked_add(
+                    usize::from(style.decomposition_levels)
+                        .checked_mul(3)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let component_quantization = parse_component_quantization_for_styles(
+        input,
+        codestream,
+        &component_styles,
+        &subband_counts,
+        1usize + usize::from(coding_style.decomposition_levels) * 3,
+        selected_components,
+    )?;
+    let tile_maxshift = match packet_profile {
+        ComponentPacketProfile::Profile0P006 => {
+            Some(parse_p0_06_effective_maxshift(input, codestream)?)
+        }
+        ComponentPacketProfile::Profile0P013 => Some(parse_p0_13_main_maxshift(input, codestream)?),
+        _ => parse_bounded_tile_maxshift(input, codestream)?,
+    }
+    .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
+    let mut component_states = component_quantization
+        .iter()
+        .zip(&component_topologies)
+        .enumerate()
+        .map(|(component_index, (quantization, topology))| {
+            let component_style = *component_styles
+                .get(component_index)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            default_precinct_subbands(
+                topology,
+                component_style,
+                quantization,
+                tile_maxshift
+                    .filter(|maxshift| usize::from(maxshift.component_index) == component_index)
+                    .map(|maxshift| maxshift.shift),
+            )
+            .and_then(|subbands| {
+                Ok(DefaultPrecinctComponentState {
+                    component_index: u16::try_from(component_index)
+                        .map_err(|_| CodestreamError::SizeOverflow)?,
+                    subbands,
+                })
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut packet_offset = 0usize;
+    let mut contributions = Vec::new();
+    let mut contribution_indices = BTreeMap::new();
+    let mut excluded_body_bytes = 0_u64;
+    let mut packet_count = 0_u64;
+    let mut expected_sop_sequence = 0_u16;
+    let mut packets_skipped_via_plt = 0_u64;
+    let mut packet_bytes_skipped_via_plt = 0_u64;
+    let mut plt_packet_cursor = 0_usize;
+    let aggregate_quality_layers = coding_style.layers > 1;
+    let retained_layers = max_layers
+        .unwrap_or(coding_style.layers)
+        .min(coding_style.layers);
+    if retained_layers == 0 {
+        return Err(invalid(
+            None,
+            Some(Marker::Cod),
+            "maximum quality layers must retain at least one layer",
         ));
     }
     let plt_fully_covers_packets = plt_packet_lengths.as_ref().is_some_and(|plt| {
@@ -26255,20 +26386,28 @@ fn parse_default_precinct_packets_from_source(
                                     .precincts
                                     .get_mut(precinct_index)
                                     .ok_or(CodestreamError::SizeOverflow)?;
-                                let included = precinct.inclusion.decode(
-                                    &mut reader,
-                                    local_code_block_x,
-                                    local_code_block_y,
-                                    u32::from(packet_cursor.layer) + 1,
-                                )?;
-                                if included.is_none() {
-                                    false
-                                } else {
-                                    let missing = precinct.missing_bitplanes.decode_required(
+                                let included = precinct
+                                    .inclusion
+                                    .as_mut()
+                                    .ok_or(CodestreamError::SizeOverflow)?
+                                    .decode(
                                         &mut reader,
                                         local_code_block_x,
                                         local_code_block_y,
+                                        u32::from(packet_cursor.layer) + 1,
                                     )?;
+                                if included.is_none() {
+                                    false
+                                } else {
+                                    let missing = precinct
+                                        .missing_bitplanes
+                                        .as_mut()
+                                        .ok_or(CodestreamError::SizeOverflow)?
+                                        .decode_required(
+                                            &mut reader,
+                                            local_code_block_x,
+                                            local_code_block_y,
+                                        )?;
                                     subband.missing_most_significant_bitplanes[code_block_index] =
                                         u8::try_from(missing)
                                             .map_err(|_| CodestreamError::SizeOverflow)?;
@@ -26397,22 +26536,8 @@ fn parse_default_precinct_packets_from_source(
                                 resolution: packet_cursor.resolution,
                                 code_block_x,
                                 code_block_y,
-                                x: subband
-                                    .x
-                                    .checked_add(
-                                        u32::from(code_block_x)
-                                            .checked_mul(subband.code_block_width)
-                                            .ok_or(CodestreamError::SizeOverflow)?,
-                                    )
-                                    .ok_or(CodestreamError::SizeOverflow)?,
-                                y: subband
-                                    .y
-                                    .checked_add(
-                                        u32::from(code_block_y)
-                                            .checked_mul(subband.code_block_height)
-                                            .ok_or(CodestreamError::SizeOverflow)?,
-                                    )
-                                    .ok_or(CodestreamError::SizeOverflow)?,
+                                x: subband.code_block_sample_x(code_block_x)?,
+                                y: subband.code_block_sample_y(code_block_y)?,
                                 width: subband.code_block_sample_width(code_block_x)?,
                                 height: subband.code_block_sample_height(code_block_y)?,
                                 available_bitplanes: subband.available_bitplanes,
@@ -26794,6 +26919,50 @@ mod inline_packet_marker_tests {
         codestream
     }
 
+    fn topology_style(decomposition_levels: u8, precincts: &[u8]) -> CodingStyleMarker {
+        let mut style = parse(&explicit_precinct_eph_fixture().0)
+            .unwrap()
+            .coding_style
+            .unwrap();
+        style.decomposition_levels = decomposition_levels;
+        style.precincts_declared = true;
+        style.precinct_exponents = [0; 33];
+        style.precinct_exponents[..precincts.len()].copy_from_slice(precincts);
+        style.precinct_width_exponent = precincts.first().map(|packed| packed & 0x0f);
+        style.precinct_height_exponent = precincts.first().map(|packed| packed >> 4);
+        style
+    }
+
+    fn topology_siz(
+        width: u32,
+        height: u32,
+        origin_x: u32,
+        origin_y: u32,
+        components: Vec<ComponentParameters>,
+    ) -> SizMarker {
+        SizMarker {
+            capabilities: 0,
+            reference_grid_width: width,
+            reference_grid_height: height,
+            image_origin_x: origin_x,
+            image_origin_y: origin_y,
+            tile_width: width,
+            tile_height: height,
+            tile_origin_x: 0,
+            tile_origin_y: 0,
+            components,
+        }
+    }
+
+    fn shift_fixture_origin_x(codestream: &mut [u8], origin_x: u32) {
+        let siz = find_marker(codestream, 0, Marker::Siz).unwrap();
+        let reference_width = read_u32(codestream, siz + 6).unwrap();
+        codestream[siz + 6..siz + 10]
+            .copy_from_slice(&reference_width.checked_add(origin_x).unwrap().to_be_bytes());
+        codestream[siz + 14..siz + 18].copy_from_slice(&origin_x.to_be_bytes());
+        codestream[siz + 30..siz + 34].copy_from_slice(&origin_x.to_be_bytes());
+    }
+
     #[test]
     fn consumes_supported_sop_and_eph_in_native_subsampled_decode() {
         for (sop, eph) in [(true, false), (false, true), (true, true)] {
@@ -26838,63 +27007,612 @@ mod inline_packet_marker_tests {
 
     #[test]
     fn clips_nominal_code_blocks_before_accepting_smaller_precinct_dimensions() {
+        let mut coding_style = parse(&explicit_precinct_eph_fixture().0)
+            .unwrap()
+            .coding_style
+            .unwrap();
+        coding_style.decomposition_levels = 0;
+        coding_style.code_block_width_exponent = 6;
+        coding_style.code_block_height_exponent = 6;
+        coding_style.precinct_exponents[0] = 0x17;
+        let subband = Part1SubbandTopology {
+            kind: PacketSubbandKind::LowLow,
+            bounds: Part1GridRect {
+                x0: 0,
+                y0: 0,
+                x1: 128,
+                y1: 3,
+            },
+            layout_x: 0,
+            layout_y: 0,
+            precinct_width_exponent: 7,
+            precinct_height_exponent: 1,
+        };
+        let (block_width, block_height) = subband.code_block_dimensions(coding_style).unwrap();
+        assert_eq!((block_width, block_height), (64, 2));
+        assert_eq!(
+            subband
+                .code_block_range(subband.bounds, block_width, block_height)
+                .unwrap(),
+            Part1CodeBlockRange {
+                first_x: 0,
+                first_y: 0,
+                end_x: 2,
+                end_y: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn derives_component_resolution_and_precinct_bounds_from_absolute_siz_coordinates() {
+        let siz = SizMarker {
+            capabilities: 0,
+            reference_grid_width: 101,
+            reference_grid_height: 83,
+            image_origin_x: 5,
+            image_origin_y: 7,
+            tile_width: 64,
+            tile_height: 48,
+            tile_origin_x: 1,
+            tile_origin_y: 2,
+            components: alloc::vec![
+                ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                },
+                ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 3,
+                    vertical_separation: 2,
+                },
+            ],
+        };
+        let tile = tile_rects_for_siz(&siz).unwrap()[0];
+        let default_style = topology_style(2, &[0x22, 0x33, 0x44]);
+        let override_style = topology_style(2, &[0x11, 0x22, 0x22]);
+        let unit = Part1PrecinctTopology::new(&siz, tile, 0, default_style).unwrap();
+        let sampled = Part1PrecinctTopology::new(&siz, tile, 1, override_style).unwrap();
+
+        assert_eq!(
+            sampled.tile_component,
+            Part1GridRect {
+                x0: 2,
+                y0: 4,
+                x1: 22,
+                y1: 25,
+            }
+        );
+        assert_eq!(
+            sampled
+                .resolutions
+                .iter()
+                .map(|resolution| (
+                    resolution.bounds,
+                    resolution.first_precinct_x,
+                    resolution.first_precinct_y,
+                    resolution.precinct_cols,
+                    resolution.precinct_rows,
+                ))
+                .collect::<Vec<_>>(),
+            alloc::vec![
+                (
+                    Part1GridRect {
+                        x0: 1,
+                        y0: 1,
+                        x1: 6,
+                        y1: 7,
+                    },
+                    0,
+                    0,
+                    3,
+                    4,
+                ),
+                (
+                    Part1GridRect {
+                        x0: 1,
+                        y0: 2,
+                        x1: 11,
+                        y1: 13,
+                    },
+                    0,
+                    0,
+                    3,
+                    4,
+                ),
+                (
+                    Part1GridRect {
+                        x0: 2,
+                        y0: 4,
+                        x1: 22,
+                        y1: 25,
+                    },
+                    0,
+                    1,
+                    6,
+                    6,
+                ),
+            ]
+        );
+        assert_ne!(
+            unit.resolutions[2].precinct_count,
+            sampled.resolutions[2].precinct_count
+        );
+        assert_eq!(sampled.resolutions[2].precinct(0).unwrap().grid_y, 1);
+        assert_eq!(sampled.resolutions[2].precinct(0).unwrap().bounds.y0, 4);
+    }
+
+    #[test]
+    fn retains_a_packet_identity_for_a_resolution_with_no_high_pass_blocks() {
+        let siz = topology_siz(
+            1,
+            1,
+            0,
+            0,
+            alloc::vec![ComponentParameters {
+                bits_per_sample: 8,
+                signed: false,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+            }],
+        );
+        let tile = tile_rects_for_siz(&siz).unwrap()[0];
+        let topology =
+            Part1PrecinctTopology::new(&siz, tile, 0, topology_style(1, &[0x00, 0x11])).unwrap();
+
+        assert_eq!(topology.resolutions[0].precinct_count, 1);
+        assert_eq!(topology.resolutions[1].precinct_count, 1);
+        assert!(topology.subbands(1).unwrap().is_empty());
+
+        let quantization = ComponentQuantization {
+            style: transform::QuantizationStyle::NoQuantization,
+            guard_bits: 1,
+            steps: (0..4)
+                .map(|_| transform::IrreversibleQuantizationStep::new(8, 0).unwrap())
+                .collect(),
+        };
+        let states = default_precinct_subbands(
+            &topology,
+            topology_style(1, &[0x00, 0x11]),
+            &quantization,
+            None,
+        )
+        .unwrap();
+        assert!(states.iter().all(|subband| subband.resolution == 0));
+    }
+
+    #[test]
+    fn precinct_rasters_are_unique_bounded_and_conserve_resolution_area() {
+        for (origin_x, origin_y, separation_x, separation_y, width, height) in [
+            (0, 0, 1, 1, 33, 19),
+            (3, 5, 2, 3, 70, 51),
+            (17, 9, 5, 2, 129, 97),
+        ] {
+            let siz = topology_siz(
+                width,
+                height,
+                origin_x,
+                origin_y,
+                alloc::vec![ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: separation_x,
+                    vertical_separation: separation_y,
+                }],
+            );
+            let tile = tile_rects_for_siz(&siz).unwrap()[0];
+            let topology = Part1PrecinctTopology::new(
+                &siz,
+                tile,
+                0,
+                topology_style(3, &[0x11, 0x22, 0x33, 0x44]),
+            )
+            .unwrap();
+            for resolution in topology.resolutions {
+                let mut cells = BTreeMap::new();
+                let mut area = 0_u64;
+                for raster_index in 0..resolution.precinct_count {
+                    let precinct = resolution.precinct(raster_index).unwrap();
+                    assert_eq!(precinct.raster_index, raster_index);
+                    assert!(
+                        cells
+                            .insert((precinct.grid_x, precinct.grid_y), raster_index)
+                            .is_none()
+                    );
+                    assert!(precinct.bounds.x0 >= resolution.bounds.x0);
+                    assert!(precinct.bounds.y0 >= resolution.bounds.y0);
+                    assert!(precinct.bounds.x1 <= resolution.bounds.x1);
+                    assert!(precinct.bounds.y1 <= resolution.bounds.y1);
+                    area += precinct.bounds.width() * precinct.bounds.height();
+                }
+                assert_eq!(
+                    cells.len(),
+                    usize::try_from(resolution.precinct_count).unwrap()
+                );
+                assert_eq!(area, resolution.bounds.width() * resolution.bounds.height());
+            }
+        }
+    }
+
+    #[test]
+    fn clips_global_code_blocks_to_subband_and_precinct_boundaries() {
+        let mut style = topology_style(0, &[0x33]);
+        style.code_block_width_exponent = 4;
+        style.code_block_height_exponent = 4;
+        let resolution = Part1ResolutionTopology {
+            resolution: 0,
+            bounds: Part1GridRect {
+                x0: 5,
+                y0: 3,
+                x1: 21,
+                y1: 10,
+            },
+            precinct_width_exponent: 3,
+            precinct_height_exponent: 3,
+            first_precinct_x: 0,
+            first_precinct_y: 0,
+            precinct_cols: 3,
+            precinct_rows: 2,
+            precinct_count: 6,
+        };
+        let subband_topology = Part1SubbandTopology {
+            kind: PacketSubbandKind::LowLow,
+            bounds: resolution.bounds,
+            layout_x: 0,
+            layout_y: 0,
+            precinct_width_exponent: 3,
+            precinct_height_exponent: 3,
+        };
         let mut subbands = Vec::new();
         push_default_precinct_subband(
             &mut subbands,
             0,
-            0,
-            PacketSubbandKind::LowLow,
-            0,
-            0,
-            128,
-            1,
-            64,
-            64,
+            resolution,
+            subband_topology,
+            style,
             8,
-            None,
-            Some(0x17),
-        )
-        .unwrap();
-        assert_eq!(subbands[0].precinct_cols, 1);
-        assert_eq!(subbands[0].precinct_rows, 1);
-        assert_eq!(subbands[0].code_block_rows, 1);
-
-        push_default_precinct_subband(
-            &mut subbands,
-            1,
-            1,
-            PacketSubbandKind::HighLow,
-            1,
-            0,
-            0,
-            1,
-            64,
-            64,
-            8,
-            None,
             None,
         )
         .unwrap();
-        assert_eq!(subbands.len(), 1);
+        let subband = &subbands[0];
+        assert_eq!(
+            (subband.code_block_width, subband.code_block_height),
+            (8, 8)
+        );
+        assert_eq!((subband.code_block_cols, subband.code_block_rows), (3, 2));
+        assert_eq!(
+            (
+                subband.code_block_sample_x(0).unwrap(),
+                subband.code_block_sample_width(0).unwrap()
+            ),
+            (0, 3)
+        );
+        assert_eq!(
+            (
+                subband.code_block_sample_x(1).unwrap(),
+                subband.code_block_sample_width(1).unwrap()
+            ),
+            (3, 8)
+        );
+        assert_eq!(
+            (
+                subband.code_block_sample_x(2).unwrap(),
+                subband.code_block_sample_width(2).unwrap()
+            ),
+            (11, 5)
+        );
+        assert_eq!(
+            (
+                subband.code_block_sample_y(0).unwrap(),
+                subband.code_block_sample_height(0).unwrap()
+            ),
+            (0, 5)
+        );
+        assert_eq!(
+            (
+                subband.code_block_sample_y(1).unwrap(),
+                subband.code_block_sample_height(1).unwrap()
+            ),
+            (5, 2)
+        );
+        assert_eq!(subband.precincts[0].code_block_cols, 1);
+        assert_eq!(subband.precincts[5].code_block_cols, 1);
+    }
 
+    #[test]
+    fn rejects_zero_sampling_and_bounded_state_overallocation() {
+        let invalid_sampling = topology_siz(
+            8,
+            8,
+            0,
+            0,
+            alloc::vec![ComponentParameters {
+                bits_per_sample: 8,
+                signed: false,
+                horizontal_separation: 0,
+                vertical_separation: 1,
+            }],
+        );
+        let tile = TileRect {
+            tile_index: 0,
+            tile_x: 0,
+            tile_y: 0,
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        };
+        assert!(matches!(
+            Part1PrecinctTopology::new(&invalid_sampling, tile, 0, topology_style(0, &[0x00])),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Siz),
+                ..
+            })
+        ));
+
+        let huge_resolution = Part1ResolutionTopology {
+            resolution: 0,
+            bounds: Part1GridRect {
+                x0: 0,
+                y0: 0,
+                x1: MAX_PACKET_PRECINCTS_PER_RESOLUTION + 1,
+                y1: 1,
+            },
+            precinct_width_exponent: 0,
+            precinct_height_exponent: 0,
+            first_precinct_x: 0,
+            first_precinct_y: 0,
+            precinct_cols: u32::try_from(MAX_PACKET_PRECINCTS_PER_RESOLUTION + 1).unwrap(),
+            precinct_rows: 1,
+            precinct_count: u32::try_from(MAX_PACKET_PRECINCTS_PER_RESOLUTION + 1).unwrap(),
+        };
+        let huge_subband = Part1SubbandTopology {
+            kind: PacketSubbandKind::LowLow,
+            bounds: huge_resolution.bounds,
+            layout_x: 0,
+            layout_y: 0,
+            precinct_width_exponent: 0,
+            precinct_height_exponent: 0,
+        };
         assert!(matches!(
             push_default_precinct_subband(
                 &mut Vec::new(),
                 0,
-                0,
-                PacketSubbandKind::LowLow,
-                0,
-                0,
-                128,
-                3,
-                64,
-                64,
+                huge_resolution,
+                huge_subband,
+                topology_style(0, &[0x00]),
                 8,
                 None,
-                Some(0x17),
             ),
             Err(CodestreamError::Unsupported {
                 construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_truncated_and_malformed_explicit_precinct_declarations() {
+        let truncated = [1, 0, 0, 1, 0, 2, 4, 4, 0, 1, 0x11, 0x22];
+        assert!(matches!(
+            parse_cod(&truncated, 41),
+            Err(CodestreamError::InvalidMarker {
+                offset: Some(41),
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+
+        let zero_nonlowest_exponent = [1, 0, 0, 1, 0, 2, 4, 4, 0, 1, 0x11, 0x00, 0x22];
+        assert!(matches!(
+            parse_cod(&zero_nonlowest_exponent, 43),
+            Err(CodestreamError::InvalidMarker {
+                offset: Some(43),
+                marker: Some(Marker::Cod),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_precinct_raster_overflow_before_allocating_packet_state() {
+        let siz = topology_siz(
+            70_000,
+            70_000,
+            0,
+            0,
+            alloc::vec![ComponentParameters {
+                bits_per_sample: 8,
+                signed: false,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+            }],
+        );
+        let tile = tile_rects_for_siz(&siz).unwrap()[0];
+        assert!(matches!(
+            Part1PrecinctTopology::new(&siz, tile, 0, topology_style(0, &[0x00])),
+            Err(CodestreamError::SizeOverflow)
+        ));
+    }
+
+    #[test]
+    fn rejects_distinct_absolute_precinct_positions_before_spatial_packet_headers() {
+        let samples = (0..256 * 192)
+            .map(|sample| u8::try_from((sample * 29 + 7) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let mut codestream =
+            encode_grayscale_u8_one_decomp_cprl_precinct_test_fixture(GrayscaleU8Encode {
+                width: 256,
+                height: 192,
+                samples: &samples,
+                stride_bytes: 256,
+            })
+            .unwrap();
+        shift_fixture_origin_x(&mut codestream, 2);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream[cod + lcod] = 0x77;
+
+        let parsed = parse(&codestream).unwrap();
+        let style = parsed.effective_coding_style(0).unwrap();
+        assert_eq!(style.progression_order, ProgressionOrder::Cprl);
+        assert_eq!(&style.precinct_exponents[..2], &[0x77, 0x77]);
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let topology = Part1PrecinctTopology::new(&parsed.siz, tile, 0, style).unwrap();
+        assert!(topology.has_zero_origin_synthesis_phase());
+        assert!(topology.resolutions.iter().any(|resolution| {
+            resolution.first_precinct_x != 0 || resolution.precinct_count > 1
+        }));
+        assert!(
+            !topologies_have_supported_spatial_precinct_order(
+                &parsed.siz,
+                tile,
+                &[style],
+                style.progression_order,
+            )
+            .unwrap()
+        );
+
+        let tile_part = &parsed.tiles[0];
+        let payload = tile_payload(&codestream, tile_part).unwrap();
+        assert!(matches!(
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+        assert!(matches!(
+            validate_supported_native_component_multitile_profile(&parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_singleton_precincts_at_distinct_absolute_spatial_positions() {
+        let samples = [3_u8, 17, 41, 89];
+        let mut codestream = encode_grayscale_u8_one_decomp(GrayscaleU8Encode {
+            width: 2,
+            height: 2,
+            samples: &samples,
+            stride_bytes: 2,
+        })
+        .unwrap();
+        shift_fixture_origin_x(&mut codestream, 4);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream[cod + 2..cod + 4]
+            .copy_from_slice(&u16::try_from(lcod + 2).unwrap().to_be_bytes());
+        codestream[cod + 4] |= 0x01;
+        codestream[cod + 5] = 4;
+        codestream.splice(cod + 2 + lcod..cod + 2 + lcod, [0x11, 0x13]);
+
+        let parsed = parse(&codestream).unwrap();
+        let style = parsed.effective_coding_style(0).unwrap();
+        assert_eq!(style.progression_order, ProgressionOrder::Cprl);
+        assert_eq!(&style.precinct_exponents[..2], &[0x11, 0x13]);
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let topology = Part1PrecinctTopology::new(&parsed.siz, tile, 0, style).unwrap();
+        assert_eq!(topology.tile_component.x0, 4);
+        assert_eq!(topology.tile_component.x1, 6);
+        assert!(topology.has_zero_origin_synthesis_phase());
+        let low = topology
+            .reference_precinct_lattice(&parsed.siz, style, 0)
+            .unwrap();
+        let full = topology
+            .reference_precinct_lattice(&parsed.siz, style, 1)
+            .unwrap();
+        assert_eq!((low.count, low.first_x), (1, 4));
+        assert_eq!((full.count, full.first_x), (1, 0));
+        assert!(
+            !topologies_have_supported_spatial_precinct_order(
+                &parsed.siz,
+                tile,
+                &[style],
+                style.progression_order,
+            )
+            .unwrap()
+        );
+
+        let tile_part = &parsed.tiles[0];
+        let payload = tile_payload(&codestream, tile_part).unwrap();
+        assert!(matches!(
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_nonzero_inverse_synthesis_phase_after_structural_parse() {
+        let samples = (0..16 * 12)
+            .map(|sample| u8::try_from((sample * 13 + 3) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let mut codestream = encode_grayscale_u8_one_decomp(GrayscaleU8Encode {
+            width: 16,
+            height: 12,
+            samples: &samples,
+            stride_bytes: 16,
+        })
+        .unwrap();
+        shift_fixture_origin_x(&mut codestream, 1);
+
+        let parsed = parse(&codestream).unwrap();
+        let style = parsed.effective_coding_style(0).unwrap();
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let topology = Part1PrecinctTopology::new(&parsed.siz, tile, 0, style).unwrap();
+        assert!(!topology.has_zero_origin_synthesis_phase());
+        assert!(matches!(
+            decode_baseline_owned_components(&codestream),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Siz),
+                construct: UnsupportedConstruct::Transform,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_nonzero_synthesis_phase_in_specialised_multitile_dwt2_decode() {
+        let samples = (0..16 * 16)
+            .map(|sample| u8::try_from((sample * 31 + 5) % 256).unwrap())
+            .collect::<Vec<_>>();
+        let mut codestream = encode_grayscale_u8_two_decomp_multitile(
+            GrayscaleU8Encode {
+                width: 16,
+                height: 16,
+                samples: &samples,
+                stride_bytes: 16,
+            },
+            TileSize {
+                width: 8,
+                height: 8,
+            },
+        )
+        .unwrap();
+        shift_fixture_origin_x(&mut codestream, 1);
+
+        let parsed = parse(&codestream).unwrap();
+        let style =
+            validate_supported_native_grayscale_u8_two_decomp_multitile_profile(&parsed).unwrap();
+        let first_tile = tile_rects(&parsed).unwrap()[0];
+        let topology = Part1PrecinctTopology::new(&parsed.siz, first_tile, 0, style).unwrap();
+        assert!(!topology.has_zero_origin_synthesis_phase());
+        assert!(matches!(
+            decode_native_grayscale_u8_two_decomp_multitile(&codestream, &parsed),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Siz),
+                construct: UnsupportedConstruct::Transform,
                 ..
             })
         ));
@@ -28361,6 +29079,468 @@ mod heterogeneous_packet_order_tests {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part1GridRect {
+    x0: u64,
+    y0: u64,
+    x1: u64,
+    y1: u64,
+}
+
+impl Part1GridRect {
+    fn width(self) -> u64 {
+        self.x1 - self.x0
+    }
+
+    fn height(self) -> u64 {
+        self.y1 - self.y0
+    }
+
+    fn is_empty(self) -> bool {
+        self.x0 >= self.x1 || self.y0 >= self.y1
+    }
+
+    fn intersection(self, other: Self) -> Self {
+        Self {
+            x0: self.x0.max(other.x0),
+            y0: self.y0.max(other.y0),
+            x1: self.x1.min(other.x1),
+            y1: self.y1.min(other.y1),
+        }
+    }
+}
+
+/// Codestream-private Part 1 packet geometry for one tile-component.
+///
+/// Coordinates remain absolute until the final coefficient-plane mapping.
+/// This preserves the global `(0, 0)` precinct and code-block partition
+/// anchors for non-zero image, tile, component, and resolution origins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Part1PrecinctTopology {
+    component_index: u16,
+    tile_component: Part1GridRect,
+    resolutions: Vec<Part1ResolutionTopology>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part1ResolutionTopology {
+    resolution: u8,
+    bounds: Part1GridRect,
+    precinct_width_exponent: u8,
+    precinct_height_exponent: u8,
+    first_precinct_x: u64,
+    first_precinct_y: u64,
+    precinct_cols: u32,
+    precinct_rows: u32,
+    precinct_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part1Precinct {
+    raster_index: u32,
+    grid_x: u64,
+    grid_y: u64,
+    cell: Part1GridRect,
+    bounds: Part1GridRect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part1SubbandTopology {
+    kind: PacketSubbandKind,
+    bounds: Part1GridRect,
+    layout_x: u32,
+    layout_y: u32,
+    precinct_width_exponent: u8,
+    precinct_height_exponent: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part1CodeBlockRange {
+    first_x: u64,
+    first_y: u64,
+    end_x: u64,
+    end_y: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part1ReferencePrecinctLattice {
+    first_x: u64,
+    first_y: u64,
+    step_x: u64,
+    step_y: u64,
+    cols: u32,
+    rows: u32,
+    count: u32,
+}
+
+impl Part1PrecinctTopology {
+    fn new(
+        siz: &SizMarker,
+        tile: TileRect,
+        component_index: u16,
+        coding_style: CodingStyleMarker,
+    ) -> Result<Self> {
+        let component = siz
+            .components
+            .get(usize::from(component_index))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let separation_x = u64::from(component.horizontal_separation);
+        let separation_y = u64::from(component.vertical_separation);
+        if separation_x == 0 || separation_y == 0 {
+            return Err(invalid(
+                None,
+                Some(Marker::Siz),
+                "SIZ component separations must be non-zero",
+            ));
+        }
+
+        let reference_x0 = u64::from(siz.image_origin_x)
+            .checked_add(u64::from(tile.x))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let reference_y0 = u64::from(siz.image_origin_y)
+            .checked_add(u64::from(tile.y))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let reference_x1 = reference_x0
+            .checked_add(u64::from(tile.width))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let reference_y1 = reference_y0
+            .checked_add(u64::from(tile.height))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let tile_component = Part1GridRect {
+            x0: ceil_div_u64(reference_x0, separation_x)?,
+            y0: ceil_div_u64(reference_y0, separation_y)?,
+            x1: ceil_div_u64(reference_x1, separation_x)?,
+            y1: ceil_div_u64(reference_y1, separation_y)?,
+        };
+
+        let resolution_count = usize::from(coding_style.decomposition_levels)
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let mut resolutions = Vec::new();
+        resolutions
+            .try_reserve_exact(resolution_count)
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        for resolution in 0..=coding_style.decomposition_levels {
+            let reduction = coding_style.decomposition_levels - resolution;
+            let scale = checked_pow2_u64(reduction)?;
+            let bounds = Part1GridRect {
+                x0: ceil_div_u64(tile_component.x0, scale)?,
+                y0: ceil_div_u64(tile_component.y0, scale)?,
+                x1: ceil_div_u64(tile_component.x1, scale)?,
+                y1: ceil_div_u64(tile_component.y1, scale)?,
+            };
+            let packed = if coding_style.precincts_declared {
+                coding_style.precinct_exponents[usize::from(resolution)]
+            } else {
+                0xff
+            };
+            let precinct_width_exponent = packed & 0x0f;
+            let precinct_height_exponent = packed >> 4;
+            let precinct_width = checked_pow2_u64(precinct_width_exponent)?;
+            let precinct_height = checked_pow2_u64(precinct_height_exponent)?;
+            let (first_precinct_x, first_precinct_y, precinct_cols, precinct_rows) =
+                if bounds.is_empty() {
+                    (0, 0, 0, 0)
+                } else {
+                    let first_x = bounds.x0 / precinct_width;
+                    let first_y = bounds.y0 / precinct_height;
+                    let end_x = ceil_div_u64(bounds.x1, precinct_width)?;
+                    let end_y = ceil_div_u64(bounds.y1, precinct_height)?;
+                    (
+                        first_x,
+                        first_y,
+                        u32::try_from(
+                            end_x
+                                .checked_sub(first_x)
+                                .ok_or(CodestreamError::SizeOverflow)?,
+                        )
+                        .map_err(|_| CodestreamError::SizeOverflow)?,
+                        u32::try_from(
+                            end_y
+                                .checked_sub(first_y)
+                                .ok_or(CodestreamError::SizeOverflow)?,
+                        )
+                        .map_err(|_| CodestreamError::SizeOverflow)?,
+                    )
+                };
+            let precinct_count_u64 = u64::from(precinct_cols)
+                .checked_mul(u64::from(precinct_rows))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let precinct_count =
+                u32::try_from(precinct_count_u64).map_err(|_| CodestreamError::SizeOverflow)?;
+            resolutions.push(Part1ResolutionTopology {
+                resolution,
+                bounds,
+                precinct_width_exponent,
+                precinct_height_exponent,
+                first_precinct_x,
+                first_precinct_y,
+                precinct_cols,
+                precinct_rows,
+                precinct_count,
+            });
+        }
+        Ok(Self {
+            component_index,
+            tile_component,
+            resolutions,
+        })
+    }
+
+    fn resolution(&self, resolution: u8) -> Result<&Part1ResolutionTopology> {
+        self.resolutions
+            .get(usize::from(resolution))
+            .ok_or(CodestreamError::SizeOverflow)
+    }
+
+    fn subbands(&self, resolution: u8) -> Result<Vec<Part1SubbandTopology>> {
+        let current = *self.resolution(resolution)?;
+        if resolution == 0 {
+            return Ok(if current.bounds.is_empty() {
+                Vec::new()
+            } else {
+                alloc::vec![Part1SubbandTopology {
+                    kind: PacketSubbandKind::LowLow,
+                    bounds: current.bounds,
+                    layout_x: 0,
+                    layout_y: 0,
+                    precinct_width_exponent: current.precinct_width_exponent,
+                    precinct_height_exponent: current.precinct_height_exponent,
+                }]
+            });
+        }
+
+        let previous = *self.resolution(resolution - 1)?;
+        let high = Part1GridRect {
+            x0: current.bounds.x0 / 2,
+            y0: current.bounds.y0 / 2,
+            x1: current.bounds.x1 / 2,
+            y1: current.bounds.y1 / 2,
+        };
+        let high_x_low_y = Part1GridRect {
+            x0: high.x0,
+            y0: previous.bounds.y0,
+            x1: high.x1,
+            y1: previous.bounds.y1,
+        };
+        let low_x_high_y = Part1GridRect {
+            x0: previous.bounds.x0,
+            y0: high.y0,
+            x1: previous.bounds.x1,
+            y1: high.y1,
+        };
+        let high_x_high_y = high;
+        let precinct_width_exponent =
+            current
+                .precinct_width_exponent
+                .checked_sub(1)
+                .ok_or_else(|| {
+                    invalid(
+                        None,
+                        Some(Marker::Cod),
+                        "decomposed precinct width exponent must be positive",
+                    )
+                })?;
+        let precinct_height_exponent =
+            current
+                .precinct_height_exponent
+                .checked_sub(1)
+                .ok_or_else(|| {
+                    invalid(
+                        None,
+                        Some(Marker::Cod),
+                        "decomposed precinct height exponent must be positive",
+                    )
+                })?;
+        let low_width =
+            u32::try_from(previous.bounds.width()).map_err(|_| CodestreamError::SizeOverflow)?;
+        let low_height =
+            u32::try_from(previous.bounds.height()).map_err(|_| CodestreamError::SizeOverflow)?;
+        let mut subbands = Vec::new();
+        for (kind, bounds, layout_x, layout_y) in [
+            (PacketSubbandKind::HighLow, high_x_low_y, low_width, 0),
+            (PacketSubbandKind::LowHigh, low_x_high_y, 0, low_height),
+            (
+                PacketSubbandKind::HighHigh,
+                high_x_high_y,
+                low_width,
+                low_height,
+            ),
+        ] {
+            if !bounds.is_empty() {
+                subbands.push(Part1SubbandTopology {
+                    kind,
+                    bounds,
+                    layout_x,
+                    layout_y,
+                    precinct_width_exponent,
+                    precinct_height_exponent,
+                });
+            }
+        }
+        Ok(subbands)
+    }
+
+    fn reference_precinct_lattice(
+        &self,
+        siz: &SizMarker,
+        coding_style: CodingStyleMarker,
+        resolution: u8,
+    ) -> Result<Part1ReferencePrecinctLattice> {
+        let component = siz
+            .components
+            .get(usize::from(self.component_index))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let topology = *self.resolution(resolution)?;
+        let reduction = coding_style
+            .decomposition_levels
+            .checked_sub(resolution)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let resolution_scale = checked_pow2_u64(reduction)?;
+        let step_x = checked_pow2_u64(topology.precinct_width_exponent)?
+            .checked_mul(resolution_scale)
+            .and_then(|step| step.checked_mul(u64::from(component.horizontal_separation)))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let step_y = checked_pow2_u64(topology.precinct_height_exponent)?
+            .checked_mul(resolution_scale)
+            .and_then(|step| step.checked_mul(u64::from(component.vertical_separation)))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        Ok(Part1ReferencePrecinctLattice {
+            first_x: topology
+                .first_precinct_x
+                .checked_mul(step_x)
+                .ok_or(CodestreamError::SizeOverflow)?,
+            first_y: topology
+                .first_precinct_y
+                .checked_mul(step_y)
+                .ok_or(CodestreamError::SizeOverflow)?,
+            step_x,
+            step_y,
+            cols: topology.precinct_cols,
+            rows: topology.precinct_rows,
+            count: topology.precinct_count,
+        })
+    }
+
+    fn has_zero_origin_synthesis_phase(&self) -> bool {
+        self.resolutions.iter().skip(1).all(|resolution| {
+            resolution.bounds.x0.is_multiple_of(2) && resolution.bounds.y0.is_multiple_of(2)
+        })
+    }
+}
+
+impl Part1ResolutionTopology {
+    fn precinct(self, raster_index: u32) -> Result<Part1Precinct> {
+        if raster_index >= self.precinct_count || self.precinct_cols == 0 {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let local_x = u64::from(raster_index % self.precinct_cols);
+        let local_y = u64::from(raster_index / self.precinct_cols);
+        let grid_x = self
+            .first_precinct_x
+            .checked_add(local_x)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let grid_y = self
+            .first_precinct_y
+            .checked_add(local_y)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let width = checked_pow2_u64(self.precinct_width_exponent)?;
+        let height = checked_pow2_u64(self.precinct_height_exponent)?;
+        let x0 = grid_x
+            .checked_mul(width)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let y0 = grid_y
+            .checked_mul(height)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let cell = Part1GridRect {
+            x0,
+            y0,
+            x1: x0.checked_add(width).ok_or(CodestreamError::SizeOverflow)?,
+            y1: y0
+                .checked_add(height)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        };
+        Ok(Part1Precinct {
+            raster_index,
+            grid_x,
+            grid_y,
+            cell,
+            bounds: cell.intersection(self.bounds),
+        })
+    }
+}
+
+impl Part1SubbandTopology {
+    fn precinct_bounds(self, precinct: Part1Precinct, resolution: u8) -> Part1GridRect {
+        let projected = if resolution == 0 {
+            precinct.cell
+        } else {
+            let low_x = matches!(self.kind, PacketSubbandKind::LowHigh);
+            let low_y = matches!(self.kind, PacketSubbandKind::HighLow);
+            Part1GridRect {
+                x0: if low_x {
+                    precinct.cell.x0.div_ceil(2)
+                } else {
+                    precinct.cell.x0 / 2
+                },
+                y0: if low_y {
+                    precinct.cell.y0.div_ceil(2)
+                } else {
+                    precinct.cell.y0 / 2
+                },
+                x1: if low_x {
+                    precinct.cell.x1.div_ceil(2)
+                } else {
+                    precinct.cell.x1 / 2
+                },
+                y1: if low_y {
+                    precinct.cell.y1.div_ceil(2)
+                } else {
+                    precinct.cell.y1 / 2
+                },
+            }
+        };
+        projected.intersection(self.bounds)
+    }
+
+    fn code_block_dimensions(self, coding_style: CodingStyleMarker) -> Result<(u64, u64)> {
+        Ok((
+            checked_pow2_u64(
+                coding_style
+                    .code_block_width_exponent
+                    .min(self.precinct_width_exponent),
+            )?,
+            checked_pow2_u64(
+                coding_style
+                    .code_block_height_exponent
+                    .min(self.precinct_height_exponent),
+            )?,
+        ))
+    }
+
+    fn code_block_range(
+        self,
+        bounds: Part1GridRect,
+        width: u64,
+        height: u64,
+    ) -> Result<Part1CodeBlockRange> {
+        if bounds.is_empty() {
+            return Ok(Part1CodeBlockRange {
+                first_x: 0,
+                first_y: 0,
+                end_x: 0,
+                end_y: 0,
+            });
+        }
+        Ok(Part1CodeBlockRange {
+            first_x: bounds.x0 / width,
+            first_y: bounds.y0 / height,
+            end_x: ceil_div_u64(bounds.x1, width)?,
+            end_y: ceil_div_u64(bounds.y1, height)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DefaultPrecinctComponentState {
     component_index: u16,
@@ -28378,10 +29558,14 @@ struct DefaultPrecinctSubband {
     height: u32,
     code_block_width: u32,
     code_block_height: u32,
+    first_code_block_grid_x: u64,
+    first_code_block_grid_y: u64,
+    grid_x0: u64,
+    grid_y0: u64,
     code_block_cols: u16,
     code_block_rows: u16,
-    precinct_cols: u16,
-    precinct_rows: u16,
+    precinct_cols: u32,
+    precinct_rows: u32,
     available_bitplanes: u8,
     irreversible_quantization_step: Option<transform::IrreversibleQuantizationStep>,
     precincts: Vec<DefaultPrecinctSubbandState>,
@@ -28397,14 +29581,19 @@ struct DefaultPrecinctSubbandState {
     first_code_block_y: u16,
     code_block_cols: u16,
     code_block_rows: u16,
-    inclusion: TagTree,
-    missing_bitplanes: TagTree,
+    inclusion: Option<TagTree>,
+    missing_bitplanes: Option<TagTree>,
 }
 
 impl DefaultPrecinctSubband {
     fn precinct_index(&self, precinct: u32) -> Result<usize> {
-        let precinct_count = usize::from(self.precinct_cols)
-            .checked_mul(usize::from(self.precinct_rows))
+        let precinct_count = usize::try_from(self.precinct_cols)
+            .ok()
+            .and_then(|cols| {
+                usize::try_from(self.precinct_rows)
+                    .ok()
+                    .and_then(|rows| cols.checked_mul(rows))
+            })
             .ok_or(CodestreamError::SizeOverflow)?;
         let index = usize::try_from(precinct).map_err(|_| CodestreamError::SizeOverflow)?;
         if index >= precinct_count || index >= self.precincts.len() {
@@ -28424,27 +29613,83 @@ impl DefaultPrecinctSubband {
     }
 
     fn code_block_sample_width(&self, x: u16) -> Result<u16> {
-        let start = u32::from(x)
-            .checked_mul(self.code_block_width)
+        let global_x = self
+            .first_code_block_grid_x
+            .checked_add(u64::from(x))
             .ok_or(CodestreamError::SizeOverflow)?;
-        let remaining = self
-            .width
-            .checked_sub(start)
+        let cell_start = global_x
+            .checked_mul(u64::from(self.code_block_width))
             .ok_or(CodestreamError::SizeOverflow)?;
-        u16::try_from(remaining.min(self.code_block_width))
-            .map_err(|_| CodestreamError::SizeOverflow)
+        let start = cell_start.max(self.grid_x0);
+        let cell_end = cell_start
+            .checked_add(u64::from(self.code_block_width))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let subband_end = self
+            .grid_x0
+            .checked_add(u64::from(self.width))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let end = cell_end.min(subband_end);
+        u16::try_from(
+            end.checked_sub(start)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .map_err(|_| CodestreamError::SizeOverflow)
+    }
+
+    fn code_block_sample_x(&self, x: u16) -> Result<u32> {
+        let global_x = self
+            .first_code_block_grid_x
+            .checked_add(u64::from(x))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let cell_start = global_x
+            .checked_mul(u64::from(self.code_block_width))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        self.x
+            .checked_add(
+                u32::try_from(cell_start.max(self.grid_x0) - self.grid_x0)
+                    .map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)
+    }
+
+    fn code_block_sample_y(&self, y: u16) -> Result<u32> {
+        let global_y = self
+            .first_code_block_grid_y
+            .checked_add(u64::from(y))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let cell_start = global_y
+            .checked_mul(u64::from(self.code_block_height))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        self.y
+            .checked_add(
+                u32::try_from(cell_start.max(self.grid_y0) - self.grid_y0)
+                    .map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)
     }
 
     fn code_block_sample_height(&self, y: u16) -> Result<u16> {
-        let start = u32::from(y)
-            .checked_mul(self.code_block_height)
+        let global_y = self
+            .first_code_block_grid_y
+            .checked_add(u64::from(y))
             .ok_or(CodestreamError::SizeOverflow)?;
-        let remaining = self
-            .height
-            .checked_sub(start)
+        let cell_start = global_y
+            .checked_mul(u64::from(self.code_block_height))
             .ok_or(CodestreamError::SizeOverflow)?;
-        u16::try_from(remaining.min(self.code_block_height))
-            .map_err(|_| CodestreamError::SizeOverflow)
+        let start = cell_start.max(self.grid_y0);
+        let cell_end = cell_start
+            .checked_add(u64::from(self.code_block_height))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let subband_end = self
+            .grid_y0
+            .checked_add(u64::from(self.height))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let end = cell_end.min(subband_end);
+        u16::try_from(
+            end.checked_sub(start)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .map_err(|_| CodestreamError::SizeOverflow)
     }
 }
 
@@ -29363,14 +30608,11 @@ mod qcc_marker_tests {
 }
 
 fn default_precinct_subbands(
-    component_width: u32,
-    component_height: u32,
+    topology: &Part1PrecinctTopology,
     coding_style: CodingStyleMarker,
     quantization: &ComponentQuantization,
     maxshift: Option<u8>,
 ) -> Result<Vec<DefaultPrecinctSubband>> {
-    let code_block_width = checked_pow2_u32(coding_style.code_block_width_exponent)?;
-    let code_block_height = checked_pow2_u32(coding_style.code_block_height_exponent)?;
     let expected = 1usize
         .checked_add(
             usize::from(coding_style.decomposition_levels)
@@ -29382,100 +30624,43 @@ fn default_precinct_subbands(
         return Err(CodestreamError::SizeOverflow);
     }
 
-    let mut subbands = Vec::with_capacity(expected);
-    let mut exponent_index = 0usize;
-    let (ll_width, ll_height) = resolution_dimensions(
-        component_width,
-        component_height,
-        coding_style.decomposition_levels,
-        0,
-    )?;
-    push_default_precinct_subband(
-        &mut subbands,
-        0,
-        0,
-        PacketSubbandKind::LowLow,
-        0,
-        0,
-        ll_width,
-        ll_height,
-        code_block_width,
-        code_block_height,
-        bounded_maxshift_available_bitplanes(
-            quantization.available_bitplanes(exponent_index, coding_style.entropy_coder)?,
-            maxshift,
-        )?,
-        quantization.irreversible_step(exponent_index),
-        coding_style
-            .precincts_declared
-            .then_some(coding_style.precinct_exponents[0]),
-    )?;
-    exponent_index += 1;
-
-    for resolution in 1..=coding_style.decomposition_levels {
-        let (current_width, current_height) = resolution_dimensions(
-            component_width,
-            component_height,
-            coding_style.decomposition_levels,
-            resolution,
-        )?;
-        let (previous_width, previous_height) = resolution_dimensions(
-            component_width,
-            component_height,
-            coding_style.decomposition_levels,
-            resolution - 1,
-        )?;
-        let high_width = current_width
-            .checked_sub(previous_width)
-            .ok_or(CodestreamError::SizeOverflow)?;
-        let high_height = current_height
-            .checked_sub(previous_height)
-            .ok_or(CodestreamError::SizeOverflow)?;
-        let entries = [
-            (
-                PacketSubbandKind::HighLow,
-                previous_width,
-                0,
-                high_width,
-                previous_height,
-            ),
-            (
-                PacketSubbandKind::LowHigh,
-                0,
-                previous_height,
-                previous_width,
-                high_height,
-            ),
-            (
-                PacketSubbandKind::HighHigh,
-                previous_width,
-                previous_height,
-                high_width,
-                high_height,
-            ),
-        ];
-        for (kind, x, y, width, height) in entries {
+    let mut subbands = Vec::new();
+    subbands
+        .try_reserve_exact(expected)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    for resolution in 0..=coding_style.decomposition_levels {
+        let resolution_topology = topology.resolution(resolution)?;
+        for subband_topology in topology.subbands(resolution)? {
+            let kind_offset = match subband_topology.kind {
+                PacketSubbandKind::LowLow => 0,
+                PacketSubbandKind::HighLow => 0,
+                PacketSubbandKind::LowHigh => 1,
+                PacketSubbandKind::HighHigh => 2,
+            };
+            let exponent_index = if resolution == 0 {
+                0
+            } else {
+                1usize
+                    .checked_add(
+                        usize::from(resolution - 1)
+                            .checked_mul(3)
+                            .ok_or(CodestreamError::SizeOverflow)?,
+                    )
+                    .and_then(|index| index.checked_add(kind_offset))
+                    .ok_or(CodestreamError::SizeOverflow)?
+            };
             push_default_precinct_subband(
                 &mut subbands,
                 u8::try_from(exponent_index).map_err(|_| CodestreamError::SizeOverflow)?,
-                resolution,
-                kind,
-                x,
-                y,
-                width,
-                height,
-                code_block_width,
-                code_block_height,
+                *resolution_topology,
+                subband_topology,
+                coding_style,
                 bounded_maxshift_available_bitplanes(
                     quantization.available_bitplanes(exponent_index, coding_style.entropy_coder)?,
                     maxshift,
                 )?,
                 quantization.irreversible_step(exponent_index),
-                coding_style
-                    .precincts_declared
-                    .then_some(coding_style.precinct_exponents[usize::from(resolution)]),
             )?;
-            exponent_index += 1;
         }
     }
     Ok(subbands)
@@ -29500,123 +30685,144 @@ fn bounded_maxshift_available_bitplanes(base: u8, shift: Option<u8>) -> Result<u
 fn push_default_precinct_subband(
     subbands: &mut Vec<DefaultPrecinctSubband>,
     index: u8,
-    resolution: u8,
-    kind: PacketSubbandKind,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-    code_block_width: u32,
-    code_block_height: u32,
+    resolution: Part1ResolutionTopology,
+    subband: Part1SubbandTopology,
+    coding_style: CodingStyleMarker,
     available_bitplanes: u8,
     irreversible_quantization_step: Option<transform::IrreversibleQuantizationStep>,
-    precinct_exponents: Option<u8>,
 ) -> Result<()> {
-    if width == 0 || height == 0 {
-        return Ok(());
-    }
-    let code_block_cols = u16::try_from(ceil_div(width, code_block_width)?)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    let code_block_rows = u16::try_from(ceil_div(height, code_block_height)?)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    let code_blocks = usize::from(code_block_cols)
-        .checked_mul(usize::from(code_block_rows))
+    let width = u32::try_from(subband.bounds.width()).map_err(|_| CodestreamError::SizeOverflow)?;
+    let height =
+        u32::try_from(subband.bounds.height()).map_err(|_| CodestreamError::SizeOverflow)?;
+    let (code_block_width_u64, code_block_height_u64) =
+        subband.code_block_dimensions(coding_style)?;
+    let code_block_width =
+        u32::try_from(code_block_width_u64).map_err(|_| CodestreamError::SizeOverflow)?;
+    let code_block_height =
+        u32::try_from(code_block_height_u64).map_err(|_| CodestreamError::SizeOverflow)?;
+    let all_code_blocks =
+        subband.code_block_range(subband.bounds, code_block_width_u64, code_block_height_u64)?;
+    let code_block_cols_u64 = all_code_blocks
+        .end_x
+        .checked_sub(all_code_blocks.first_x)
         .ok_or(CodestreamError::SizeOverflow)?;
-    let (precinct_width, precinct_height) = match precinct_exponents {
-        Some(packed) => {
-            let (width_exponent, height_exponent) =
-                precinct_subband_exponents(resolution, packed).ok_or_else(|| {
-                    unsupported(
-                        None,
-                        Some(Marker::Cod),
-                        UnsupportedConstruct::PacketDecode,
-                        "decomposed explicit precinct dimensions require positive resolution exponents",
-                    )
-                })?;
-            (
-                checked_pow2_u32(width_exponent)?,
-                checked_pow2_u32(height_exponent)?,
-            )
-        }
-        None => (width.max(1), height.max(1)),
-    };
-    if precinct_exponents.is_some()
-        && ((precinct_width < code_block_width && width > precinct_width)
-            || (precinct_height < code_block_height && height > precinct_height))
+    let code_block_rows_u64 = all_code_blocks
+        .end_y
+        .checked_sub(all_code_blocks.first_y)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let code_blocks_u64 = code_block_cols_u64
+        .checked_mul(code_block_rows_u64)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if code_blocks_u64 > MAX_PACKET_CODE_BLOCKS_PER_SUBBAND
+        || code_block_cols_u64 > u64::from(u16::MAX)
+        || code_block_rows_u64 > u64::from(u16::MAX)
     {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::PacketDecode,
-            "explicit precinct partitions must not split an admitted code-block dimension",
+            "packet code-block count exceeds the bounded parser state",
         ));
     }
-    let precinct_cols = u16::try_from(ceil_div(width, precinct_width)?)
+    let code_block_cols =
+        u16::try_from(code_block_cols_u64).map_err(|_| CodestreamError::SizeOverflow)?;
+    let code_block_rows =
+        u16::try_from(code_block_rows_u64).map_err(|_| CodestreamError::SizeOverflow)?;
+    if u64::from(resolution.precinct_count) > MAX_PACKET_PRECINCTS_PER_RESOLUTION {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "precinct count exceeds the bounded packet parser state",
+        ));
+    }
+    let code_blocks =
+        usize::try_from(code_blocks_u64).map_err(|_| CodestreamError::SizeOverflow)?;
+    let precinct_count =
+        usize::try_from(resolution.precinct_count).map_err(|_| CodestreamError::SizeOverflow)?;
+    let mut precincts = Vec::new();
+    precincts
+        .try_reserve_exact(precinct_count)
         .map_err(|_| CodestreamError::SizeOverflow)?;
-    let precinct_rows = u16::try_from(ceil_div(height, precinct_height)?)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    let mut precincts = Vec::with_capacity(
-        usize::from(precinct_cols)
-            .checked_mul(usize::from(precinct_rows))
-            .ok_or(CodestreamError::SizeOverflow)?,
-    );
-    for precinct_y in 0..precinct_rows {
-        for precinct_x in 0..precinct_cols {
-            let sample_x0 = u32::from(precinct_x)
-                .checked_mul(precinct_width)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            let sample_y0 = u32::from(precinct_y)
-                .checked_mul(precinct_height)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            let sample_x1 = sample_x0
-                .checked_add(precinct_width)
-                .ok_or(CodestreamError::SizeOverflow)?
-                .min(width);
-            let sample_y1 = sample_y0
-                .checked_add(precinct_height)
-                .ok_or(CodestreamError::SizeOverflow)?
-                .min(height);
-            let first_code_block_x = u16::try_from(sample_x0 / code_block_width)
-                .map_err(|_| CodestreamError::SizeOverflow)?;
-            let first_code_block_y = u16::try_from(sample_y0 / code_block_height)
-                .map_err(|_| CodestreamError::SizeOverflow)?;
-            let end_code_block_x = u16::try_from(ceil_div(sample_x1, code_block_width)?)
-                .map_err(|_| CodestreamError::SizeOverflow)?;
-            let end_code_block_y = u16::try_from(ceil_div(sample_y1, code_block_height)?)
-                .map_err(|_| CodestreamError::SizeOverflow)?;
-            let precinct_code_block_cols = end_code_block_x
-                .checked_sub(first_code_block_x)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            let precinct_code_block_rows = end_code_block_y
-                .checked_sub(first_code_block_y)
-                .ok_or(CodestreamError::SizeOverflow)?;
-            precincts.push(DefaultPrecinctSubbandState {
-                first_code_block_x,
-                first_code_block_y,
-                code_block_cols: precinct_code_block_cols,
-                code_block_rows: precinct_code_block_rows,
-                inclusion: TagTree::new(precinct_code_block_cols, precinct_code_block_rows)?,
-                missing_bitplanes: TagTree::new(
-                    precinct_code_block_cols,
-                    precinct_code_block_rows,
-                )?,
-            });
-        }
+    for precinct_index in 0..resolution.precinct_count {
+        let precinct = resolution.precinct(precinct_index)?;
+        let precinct_bounds = subband.precinct_bounds(precinct, resolution.resolution);
+        let range = subband.code_block_range(
+            precinct_bounds,
+            code_block_width_u64,
+            code_block_height_u64,
+        )?;
+        let (
+            first_code_block_x,
+            first_code_block_y,
+            precinct_code_block_cols,
+            precinct_code_block_rows,
+        ) = if precinct_bounds.is_empty() {
+            (0, 0, 0, 0)
+        } else {
+            (
+                u16::try_from(
+                    range
+                        .first_x
+                        .checked_sub(all_code_blocks.first_x)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )
+                .map_err(|_| CodestreamError::SizeOverflow)?,
+                u16::try_from(
+                    range
+                        .first_y
+                        .checked_sub(all_code_blocks.first_y)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )
+                .map_err(|_| CodestreamError::SizeOverflow)?,
+                u16::try_from(
+                    range
+                        .end_x
+                        .checked_sub(range.first_x)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )
+                .map_err(|_| CodestreamError::SizeOverflow)?,
+                u16::try_from(
+                    range
+                        .end_y
+                        .checked_sub(range.first_y)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )
+                .map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+        };
+        let has_code_blocks = precinct_code_block_cols != 0 && precinct_code_block_rows != 0;
+        precincts.push(DefaultPrecinctSubbandState {
+            first_code_block_x,
+            first_code_block_y,
+            code_block_cols: precinct_code_block_cols,
+            code_block_rows: precinct_code_block_rows,
+            inclusion: has_code_blocks
+                .then(|| TagTree::new(precinct_code_block_cols, precinct_code_block_rows))
+                .transpose()?,
+            missing_bitplanes: has_code_blocks
+                .then(|| TagTree::new(precinct_code_block_cols, precinct_code_block_rows))
+                .transpose()?,
+        });
     }
     subbands.push(DefaultPrecinctSubband {
         index,
-        resolution,
-        kind,
-        x,
-        y,
+        resolution: resolution.resolution,
+        kind: subband.kind,
+        x: subband.layout_x,
+        y: subband.layout_y,
         width,
         height,
         code_block_width,
         code_block_height,
+        first_code_block_grid_x: all_code_blocks.first_x,
+        first_code_block_grid_y: all_code_blocks.first_y,
+        grid_x0: subband.bounds.x0,
+        grid_y0: subband.bounds.y0,
         code_block_cols,
         code_block_rows,
-        precinct_cols,
-        precinct_rows,
+        precinct_cols: resolution.precinct_cols,
+        precinct_rows: resolution.precinct_rows,
         available_bitplanes,
         irreversible_quantization_step,
         precincts,
@@ -40885,6 +42091,19 @@ fn ceil_div(numerator: u32, denominator: u32) -> Result<u32> {
         return Err(CodestreamError::SizeOverflow);
     }
     Ok(numerator.div_ceil(denominator))
+}
+
+fn ceil_div_u64(numerator: u64, denominator: u64) -> Result<u64> {
+    if denominator == 0 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    Ok(numerator.div_ceil(denominator))
+}
+
+fn checked_pow2_u64(exponent: u8) -> Result<u64> {
+    1_u64
+        .checked_shl(u32::from(exponent))
+        .ok_or(CodestreamError::SizeOverflow)
 }
 
 fn invalid(
