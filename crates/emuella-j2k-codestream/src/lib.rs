@@ -27078,9 +27078,16 @@ fn parse_default_precinct_packets_from_source(
             }
             let unrequested_component = selected_components
                 .is_some_and(|selected| !selected.contains(&packet_cursor.component));
-            if let Some(declared_packet_len) = declared_packet_len {
+            let declared_packet_end = if let Some(declared_packet_len) = declared_packet_len {
+                let end = packet_start
+                    .checked_add(declared_packet_len)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                payload.require_range(packet_start, declared_packet_len)?;
                 payload.set_read_window(packet_start, declared_packet_len);
-            }
+                Some(end)
+            } else {
+                None
+            };
             if lengths_fully_cover_packets
                 && packet_header_source.kind() == PacketHeaderSourceKind::Inline
                 && unrequested_component
@@ -27111,6 +27118,7 @@ fn parse_default_precinct_packets_from_source(
                 body_offset,
                 packet_style.sop_markers,
                 expected_sop_sequence,
+                declared_packet_end,
             )?;
             expected_sop_sequence = next_sop_sequence(expected_sop_sequence);
             if packet_header_source.kind() == PacketHeaderSourceKind::Inline {
@@ -27575,7 +27583,12 @@ fn consume_packet_sop(
     offset: usize,
     sop_allowed: bool,
     expected_sequence: u16,
+    declared_packet_end: Option<usize>,
 ) -> Result<usize> {
+    let prefix_end = offset.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+    if declared_packet_end.is_some_and(|end| prefix_end > end) {
+        return Ok(offset);
+    }
     let marker = packet_source_u16(payload, offset);
     if marker != Some(Marker::Sop.code()) {
         return Ok(offset);
@@ -27585,6 +27598,14 @@ fn consume_packet_sop(
             None,
             Some(Marker::Sop),
             "SOP marker is present without COD permission",
+        ));
+    }
+    let next = offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)?;
+    if declared_packet_end.is_some_and(|end| next > end) {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "SOP marker segment crosses the declared packet boundary",
         ));
     }
     payload.require_range(offset, 6)?;
@@ -27608,8 +27629,10 @@ fn consume_packet_sop(
             "SOP packet sequence disagrees with packet progression",
         ));
     }
-    let next = offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)?;
-    if packet_source_u16(payload, next) == Some(Marker::Sop.code()) {
+    let duplicate_prefix_end = next.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+    if declared_packet_end.is_none_or(|end| duplicate_prefix_end <= end)
+        && packet_source_u16(payload, next) == Some(Marker::Sop.code())
+    {
         return Err(invalid(
             None,
             Some(Marker::Sop),
@@ -27836,6 +27859,77 @@ mod packed_packet_header_tests {
         codestream
     }
 
+    fn adjacent_sop_packed_fixture(
+        kind: PacketHeaderSourceKind,
+        first_packet_has_sop: bool,
+    ) -> Vec<u8> {
+        let mut codestream = zero_body_packed_fixture(kind);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] |= 0x02;
+        codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+
+        match kind {
+            PacketHeaderSourceKind::Ppm => {
+                let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+                let lppm = read_u16(&codestream, ppm + 2).unwrap();
+                let nppm = read_u32(&codestream, ppm + 5).unwrap();
+                codestream.splice(
+                    ppm + 2 + usize::from(lppm)..ppm + 2 + usize::from(lppm),
+                    [0],
+                );
+                codestream[ppm + 2..ppm + 4].copy_from_slice(&(lppm + 1).to_be_bytes());
+                codestream[ppm + 5..ppm + 9].copy_from_slice(&(nppm + 1).to_be_bytes());
+            }
+            PacketHeaderSourceKind::Ppt => {
+                let ppt = find_marker(&codestream, 0, Marker::Ppt).unwrap();
+                let lppt = read_u16(&codestream, ppt + 2).unwrap();
+                codestream.splice(
+                    ppt + 2 + usize::from(lppt)..ppt + 2 + usize::from(lppt),
+                    [0],
+                );
+                codestream[ppt + 2..ppt + 4].copy_from_slice(&(lppt + 1).to_be_bytes());
+                let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10].copy_from_slice(&(psot + 1).to_be_bytes());
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+
+        let mut body = Vec::new();
+        let mut lengths = Vec::new();
+        if first_packet_has_sop {
+            body.extend_from_slice(&[0xff, 0x91, 0, 4, 0, 0]);
+            lengths.push(6);
+        } else {
+            lengths.push(0);
+        }
+        body.extend_from_slice(&[0xff, 0x91, 0, 4, 0, 1]);
+        lengths.push(6);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        codestream.splice(sod + 2..sod + 2, body.iter().copied());
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(body.len()).unwrap()).to_be_bytes());
+
+        match kind {
+            PacketHeaderSourceKind::Ppm => with_plm_collections(codestream, &[lengths]),
+            PacketHeaderSourceKind::Ppt => {
+                let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+                let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+                let mut data = vec![0];
+                data.extend(lengths.iter().map(|length| u8::try_from(*length).unwrap()));
+                let plt = marker_segment(Marker::Plt, &data);
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10]
+                    .copy_from_slice(&(psot + u32::try_from(plt.len()).unwrap()).to_be_bytes());
+                codestream.splice(sod..sod, plt);
+                codestream
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+    }
+
     fn ppm_zero_body_in_final_empty_part(with_plm: bool) -> Vec<u8> {
         let mut codestream =
             with_empty_first_tile_part(zero_body_packed_fixture(PacketHeaderSourceKind::Ppm));
@@ -27936,6 +28030,20 @@ mod packed_packet_header_tests {
         assert_zero_body_slice_and_positioned(&ppm_zero_body_in_final_empty_part(false));
         assert_zero_body_slice_and_positioned(&ppt_plt_zero_body_in_final_empty_part(false));
         assert!(contributions_result(&ppt_zero_body_with_ambiguous_later_empty_part()).is_err());
+    }
+
+    #[test]
+    fn zero_length_packet_does_not_consume_the_next_packed_packet_sop() {
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            assert_zero_body_slice_and_positioned(&adjacent_sop_packed_fixture(kind, false));
+        }
+    }
+
+    #[test]
+    fn sop_only_packet_does_not_probe_the_next_packed_packet_sop_as_a_duplicate() {
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            assert_zero_body_slice_and_positioned(&adjacent_sop_packed_fixture(kind, true));
+        }
     }
 
     fn contributions(codestream: &[u8]) -> Vec<(usize, u16, u8, Vec<u8>)> {
@@ -29261,15 +29369,18 @@ mod inline_packet_marker_tests {
     #[test]
     fn permits_omitted_sop_and_validates_sequence_progression_and_wrap() {
         let no_marker = source(&[0x80]);
-        assert_eq!(consume_packet_sop(&no_marker, 0, true, 7).unwrap(), 0);
+        assert_eq!(consume_packet_sop(&no_marker, 0, true, 7, None).unwrap(), 0);
 
         let sequence_one = source(&[0xff, 0x91, 0, 4, 0, 1]);
-        assert_eq!(consume_packet_sop(&sequence_one, 0, true, 1).unwrap(), 6);
+        assert_eq!(
+            consume_packet_sop(&sequence_one, 0, true, 1, None).unwrap(),
+            6
+        );
         assert_eq!(next_sop_sequence(u16::MAX), 0);
         let wrapped = source(&[0xff, 0x91, 0, 4, 0, 0]);
-        assert_eq!(consume_packet_sop(&wrapped, 0, true, 0).unwrap(), 6);
+        assert_eq!(consume_packet_sop(&wrapped, 0, true, 0, None).unwrap(), 6);
         assert!(matches!(
-            consume_packet_sop(&sequence_one, 0, true, 2),
+            consume_packet_sop(&sequence_one, 0, true, 2, None),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
                 ..
@@ -29281,7 +29392,7 @@ mod inline_packet_marker_tests {
     fn rejects_malformed_or_unsignalled_sop() {
         let unsignalled = source(&[0xff, 0x91, 0, 4, 0, 0]);
         assert!(matches!(
-            consume_packet_sop(&unsignalled, 0, false, 0),
+            consume_packet_sop(&unsignalled, 0, false, 0, None),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
                 ..
@@ -29289,7 +29400,7 @@ mod inline_packet_marker_tests {
         ));
         let wrong_length = source(&[0xff, 0x91, 0, 3, 0, 0]);
         assert!(matches!(
-            consume_packet_sop(&wrong_length, 0, true, 0),
+            consume_packet_sop(&wrong_length, 0, true, 0, None),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
                 ..
@@ -29297,7 +29408,7 @@ mod inline_packet_marker_tests {
         ));
         let truncated = source(&[0xff, 0x91, 0, 4, 0]);
         assert!(matches!(
-            consume_packet_sop(&truncated, 0, true, 0),
+            consume_packet_sop(&truncated, 0, true, 0, None),
             Err(CodestreamError::TruncatedInput { .. })
         ));
     }
@@ -29326,6 +29437,14 @@ mod inline_packet_marker_tests {
             consume_packet_eph(&truncated, 0, true),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+        let crosses_declared_end = source(&[0xff, 0x91, 0, 4, 0, 0]);
+        assert!(matches!(
+            consume_packet_sop(&crosses_declared_end, 0, true, 0, Some(4)),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
                 ..
             })
         ));
