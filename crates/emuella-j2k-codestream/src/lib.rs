@@ -493,6 +493,30 @@ struct ProgressionChangeRecord {
     progression_order: ProgressionOrder,
 }
 
+/// One effective packet-progression volume for a coded tile.
+///
+/// POC layer bounds always begin at zero in the marker syntax. The scheduler
+/// derives the effective lower layer independently for every
+/// component-resolution-precinct identity from its exact-once ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgressionVolume {
+    resolution_start: u8,
+    component_start: u16,
+    layer_end: u16,
+    resolution_end: u8,
+    component_end: u16,
+    progression_order: ProgressionOrder,
+    declared_tile_part: usize,
+    marker_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScheduledPacket {
+    key: PacketKey,
+    declared_tile_part: usize,
+    marker_offset: Option<usize>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EffectiveProgressionChanges<'a> {
@@ -26035,15 +26059,6 @@ fn parse_default_precinct_packets_from_source(
         tile_rect,
         &component_styles,
     )?;
-    let progression_order = if matches!(
-        packet_profile,
-        ComponentPacketProfile::Profile0P007 | ComponentPacketProfile::Profile0P013
-    ) {
-        coding_style.progression_order
-    } else {
-        parse_bounded_main_header_poc(input, codestream)?
-            .map_or(coding_style.progression_order, |poc| poc.progression_order)
-    };
     let bounded_heterogeneous_single_precincts = matches!(
         packet_profile,
         ComponentPacketProfile::Profile0P005
@@ -26087,19 +26102,6 @@ fn parse_default_precinct_packets_from_source(
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    if !topologies_have_supported_spatial_precinct_order(
-        &codestream.siz,
-        tile_rect,
-        &component_styles,
-        progression_order,
-    )? {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::PacketDecode,
-            "bounded packet parsing cannot assign raster precinct indices across distinct absolute spatial positions",
-        ));
-    }
     let precinct_counts_by_component = component_topologies
         .iter()
         .map(|topology| {
@@ -26188,6 +26190,20 @@ fn parse_default_precinct_packets_from_source(
             "the qualified Profile-0 P0.13 path requires exactly 514 packets in its two progression volumes",
         ));
     }
+    let max_resolution_end = component_styles
+        .iter()
+        .map(|style| style.decomposition_levels)
+        .max()
+        .ok_or(CodestreamError::SizeOverflow)?
+        .checked_add(1)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let progression_volumes = effective_progression_volumes(
+        input,
+        codestream,
+        tile_rect.tile_index,
+        coding_style.layers,
+        max_resolution_end,
+    )?;
 
     let plt_packet_lengths = tile_packet_lengths_from_plt(input, codestream, tile_rect.tile_index)?;
     let subband_counts = component_styles
@@ -26282,14 +26298,25 @@ fn parse_default_precinct_packets_from_source(
         }
         expected_offset == payload.len()
     });
-    visit_profile_component_precinct_packet_keys(
+    let scheduled_packet_count = visit_progression_volumes(
+        &codestream.siz,
         tile_rect.tile_index,
-        progression_order,
+        (
+            u64::from(codestream.siz.image_origin_x)
+                .checked_add(u64::from(tile_rect.x))
+                .ok_or(CodestreamError::SizeOverflow)?,
+            u64::from(codestream.siz.image_origin_y)
+                .checked_add(u64::from(tile_rect.y))
+                .ok_or(CodestreamError::SizeOverflow)?,
+        ),
         coding_style.layers,
-        &precinct_counts_by_component,
-        packet_profile,
-        |packet_cursor| {
+        &component_styles,
+        &component_topologies,
+        &progression_volumes,
+        |scheduled| {
+            let packet_cursor = scheduled.key;
             let packet_start = packet_offset;
+            validate_scheduled_packet_start(payload, scheduled, packet_start)?;
             let declared_packet_len = plt_packet_lengths.as_ref().and_then(|plt| {
                 (plt.logical_offsets.get(plt_packet_cursor) == Some(&packet_start))
                     .then(|| plt.lengths[plt_packet_cursor])
@@ -26622,17 +26649,14 @@ fn parse_default_precinct_packets_from_source(
                     "parsed packet crosses a PLT-declared tile-part packet boundary",
                 ));
             }
-            validate_p0_10_packet_tile_part_boundary(
-                payload,
-                packet_profile,
-                packet_start,
-                header_end,
-                segment_offset,
-            )?;
+            validate_packet_tile_part_boundary(payload, packet_start, header_end, segment_offset)?;
             packet_offset = segment_offset;
             Ok(())
         },
     )?;
+    if scheduled_packet_count != expected_packet_count {
+        return Err(CodestreamError::SizeOverflow);
+    }
 
     if let Some(plt) = &plt_packet_lengths
         && plt_packet_cursor != plt.lengths.len()
@@ -26666,30 +26690,39 @@ fn parse_default_precinct_packets_from_source(
     })
 }
 
-fn validate_p0_10_packet_tile_part_boundary(
+fn validate_packet_tile_part_boundary(
     payload: &dyn PacketByteSource,
-    packet_profile: ComponentPacketProfile,
     packet_start: usize,
     header_end: usize,
     packet_end: usize,
 ) -> Result<()> {
-    if packet_profile != ComponentPacketProfile::Profile0P010 {
-        return Ok(());
-    }
     let Some(boundary) = payload.internal_span_boundary_in(packet_start, packet_end) else {
         return Ok(());
     };
     let detail = if boundary < header_end {
-        "the qualified Profile-0 P0.10 path requires tile-part boundaries between packets, not inside packet headers"
+        "tile-part boundaries must occur between packets, not inside packet headers"
     } else {
-        "the qualified Profile-0 P0.10 path requires tile-part boundaries between packets, not inside packet bodies"
+        "tile-part boundaries must occur between packets, not inside packet bodies"
     };
-    Err(unsupported(
-        None,
-        Some(Marker::Sot),
-        UnsupportedConstruct::PacketDecode,
-        detail,
-    ))
+    Err(invalid(None, Some(Marker::Sot), detail))
+}
+
+fn validate_scheduled_packet_start(
+    payload: &dyn PacketByteSource,
+    scheduled: ScheduledPacket,
+    packet_start: usize,
+) -> Result<()> {
+    let packet_tile_part = payload
+        .packet_tile_part_at(packet_start)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if packet_tile_part < scheduled.declared_tile_part {
+        return Err(invalid(
+            scheduled.marker_offset,
+            Some(Marker::Poc),
+            "packet progression volume is used before its POC declaration is available",
+        ));
+    }
+    Ok(())
 }
 
 /// Consume an optional inline SOP marker at one structurally known packet
@@ -27438,7 +27471,7 @@ mod inline_packet_marker_tests {
     }
 
     #[test]
-    fn rejects_distinct_absolute_precinct_positions_before_spatial_packet_headers() {
+    fn schedules_distinct_absolute_precinct_positions_before_rejecting_unqualified_payload() {
         let samples = (0..256 * 192)
             .map(|sample| u8::try_from((sample * 29 + 7) % 256).unwrap())
             .collect::<Vec<_>>();
@@ -27477,14 +27510,7 @@ mod inline_packet_marker_tests {
 
         let tile_part = &parsed.tiles[0];
         let payload = tile_payload(&codestream, tile_part).unwrap();
-        assert!(matches!(
-            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Cod),
-                construct: UnsupportedConstruct::PacketDecode,
-                ..
-            })
-        ));
+        assert!(parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload).is_err());
         assert!(matches!(
             validate_supported_native_component_multitile_profile(&parsed),
             Err(CodestreamError::Unsupported {
@@ -27496,7 +27522,7 @@ mod inline_packet_marker_tests {
     }
 
     #[test]
-    fn rejects_singleton_precincts_at_distinct_absolute_spatial_positions() {
+    fn schedules_singleton_precincts_at_distinct_absolute_spatial_positions() {
         let samples = [3_u8, 17, 41, 89];
         let mut codestream = encode_grayscale_u8_one_decomp(GrayscaleU8Encode {
             width: 2,
@@ -27543,14 +27569,12 @@ mod inline_packet_marker_tests {
 
         let tile_part = &parsed.tiles[0];
         let payload = tile_payload(&codestream, tile_part).unwrap();
-        assert!(matches!(
-            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Cod),
-                construct: UnsupportedConstruct::PacketDecode,
-                ..
-            })
-        ));
+        assert!(
+            !parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(validate_supported_native_component_multitile_profile(&parsed).is_err());
     }
 
     #[test]
@@ -28246,6 +28270,463 @@ fn push_default_precinct_contribution(
     Ok(())
 }
 
+#[derive(Debug)]
+struct PacketIdentityLedger {
+    layers: u16,
+    resolution_offsets: Vec<Vec<usize>>,
+    precinct_counts: Vec<Vec<u32>>,
+    seen: Vec<bool>,
+    seen_count: usize,
+}
+
+impl PacketIdentityLedger {
+    fn new(layers: u16, topologies: &[Part1PrecinctTopology]) -> Result<Self> {
+        if layers == 0 || topologies.is_empty() {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let mut resolution_offsets = Vec::new();
+        resolution_offsets
+            .try_reserve_exact(topologies.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        let mut precinct_counts = Vec::new();
+        precinct_counts
+            .try_reserve_exact(topologies.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        let mut packet_count = 0_usize;
+        for topology in topologies {
+            let mut offsets = Vec::new();
+            let mut counts = Vec::new();
+            offsets
+                .try_reserve_exact(topology.resolutions.len())
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            counts
+                .try_reserve_exact(topology.resolutions.len())
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            for resolution in &topology.resolutions {
+                offsets.push(packet_count);
+                counts.push(resolution.precinct_count);
+                packet_count = packet_count
+                    .checked_add(
+                        usize::try_from(resolution.precinct_count)
+                            .map_err(|_| CodestreamError::SizeOverflow)?
+                            .checked_mul(usize::from(layers))
+                            .ok_or(CodestreamError::SizeOverflow)?,
+                    )
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                if packet_count > MAX_PACKETS_PER_TILE {
+                    return Err(unsupported(
+                        None,
+                        Some(Marker::Cod),
+                        UnsupportedConstruct::PacketDecode,
+                        "packet identity ledger exceeds the bounded tile packet count",
+                    ));
+                }
+            }
+            resolution_offsets.push(offsets);
+            precinct_counts.push(counts);
+        }
+        let mut seen = Vec::new();
+        seen.try_reserve_exact(packet_count)
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        seen.resize(packet_count, false);
+        Ok(Self {
+            layers,
+            resolution_offsets,
+            precinct_counts,
+            seen,
+            seen_count: 0,
+        })
+    }
+
+    fn packet_index(&self, packet: PacketKey) -> Result<usize> {
+        if packet.layer >= self.layers {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let precinct_count = *self
+            .precinct_counts
+            .get(usize::from(packet.component))
+            .and_then(|counts| counts.get(usize::from(packet.resolution)))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        if packet.precinct >= precinct_count {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let base = *self
+            .resolution_offsets
+            .get(usize::from(packet.component))
+            .and_then(|offsets| offsets.get(usize::from(packet.resolution)))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        base.checked_add(
+            usize::try_from(packet.precinct)
+                .map_err(|_| CodestreamError::SizeOverflow)?
+                .checked_mul(usize::from(self.layers))
+                .and_then(|offset| offset.checked_add(usize::from(packet.layer)))
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .filter(|index| *index < self.seen.len())
+        .ok_or(CodestreamError::SizeOverflow)
+    }
+
+    fn mark_if_new(&mut self, packet: PacketKey) -> Result<bool> {
+        let index = self.packet_index(packet)?;
+        let visited = self
+            .seen
+            .get_mut(index)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        if *visited {
+            return Ok(false);
+        }
+        *visited = true;
+        self.seen_count = self
+            .seen_count
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        Ok(true)
+    }
+
+    fn is_complete(&self) -> bool {
+        self.seen_count == self.seen.len()
+    }
+
+    fn expected_packet_count(&self) -> usize {
+        self.seen.len()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpatialPrecinct {
+    x: u64,
+    y: u64,
+    component: u16,
+    resolution: u8,
+    precinct: u32,
+}
+
+fn effective_progression_volumes(
+    input: &[u8],
+    codestream: &Codestream,
+    tile: u16,
+    layers: u16,
+    max_resolution_end: u8,
+) -> Result<Vec<ProgressionVolume>> {
+    let state = resolve_effective_header_state(
+        input,
+        &codestream.siz,
+        codestream.kind,
+        &codestream.markers,
+    )?;
+    let mut tile_parts = state
+        .tile_parts
+        .iter()
+        .copied()
+        .filter(|part| part.tile_index == tile)
+        .collect::<Vec<_>>();
+    tile_parts.sort_by_key(|part| part.tile_part_index);
+    let last_part = tile_parts.last().copied().ok_or_else(|| {
+        invalid(
+            None,
+            Some(Marker::Sot),
+            "packet scheduling requires at least one effective tile part",
+        )
+    })?;
+    let component_end = codestream.siz.component_count();
+    let mut volumes = Vec::new();
+    let mut push_record =
+        |record: ProgressionChangeRecord, marker_offset: usize, declared_tile_part: usize| {
+            volumes.push(ProgressionVolume {
+                resolution_start: record.resolution_start,
+                component_start: record.component_start,
+                layer_end: record.layer_end,
+                resolution_end: record.resolution_end,
+                component_end: record.component_end,
+                progression_order: record.progression_order,
+                declared_tile_part,
+                marker_offset: Some(marker_offset),
+            });
+        };
+    match state.progression_changes(last_part) {
+        EffectiveProgressionChanges::Cod => volumes.push(ProgressionVolume {
+            resolution_start: 0,
+            component_start: 0,
+            layer_end: layers,
+            resolution_end: max_resolution_end,
+            component_end,
+            progression_order: state.coding_style(tile, 0).progression_order,
+            declared_tile_part: 0,
+            marker_offset: None,
+        }),
+        EffectiveProgressionChanges::Main(segment) => {
+            for record in &segment.records {
+                push_record(*record, segment.marker_offset, 0);
+            }
+        }
+        EffectiveProgressionChanges::Tile(segments) => {
+            for (segment_index, segment) in segments.iter().enumerate() {
+                let declared_tile_part = tile_parts
+                    .iter()
+                    .position(|part| part.available_tile_poc_segments > segment_index)
+                    .ok_or_else(|| {
+                        invalid(
+                            Some(segment.marker_offset),
+                            Some(Marker::Poc),
+                            "tile POC volume is not available from any retained tile part",
+                        )
+                    })?;
+                for record in &segment.records {
+                    push_record(*record, segment.marker_offset, declared_tile_part);
+                }
+            }
+        }
+    }
+    if volumes.is_empty() {
+        return Err(invalid(
+            None,
+            Some(Marker::Poc),
+            "packet progression contains no effective volumes",
+        ));
+    }
+    Ok(volumes)
+}
+
+fn progression_spatial_precincts(
+    siz: &SizMarker,
+    tile_reference_origin: (u64, u64),
+    component_styles: &[CodingStyleMarker],
+    topologies: &[Part1PrecinctTopology],
+    component_start: u16,
+    component_end: u16,
+    resolution_start: u8,
+    resolution_end: u8,
+) -> Result<Vec<SpatialPrecinct>> {
+    let mut positions = Vec::new();
+    for component in component_start..component_end {
+        let topology = topologies
+            .get(usize::from(component))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let style = *component_styles
+            .get(usize::from(component))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let actual_resolution_end = resolution_end.min(
+            style
+                .decomposition_levels
+                .checked_add(1)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        );
+        for resolution in resolution_start..actual_resolution_end {
+            let lattice = topology.reference_precinct_lattice(siz, style, resolution)?;
+            positions
+                .try_reserve(
+                    usize::try_from(lattice.count).map_err(|_| CodestreamError::SizeOverflow)?,
+                )
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            for row in 0..lattice.rows {
+                for col in 0..lattice.cols {
+                    positions.push(SpatialPrecinct {
+                        x: lattice
+                            .first_x
+                            .checked_add(
+                                u64::from(col)
+                                    .checked_mul(lattice.step_x)
+                                    .ok_or(CodestreamError::SizeOverflow)?,
+                            )
+                            .ok_or(CodestreamError::SizeOverflow)?
+                            .max(tile_reference_origin.0),
+                        y: lattice
+                            .first_y
+                            .checked_add(
+                                u64::from(row)
+                                    .checked_mul(lattice.step_y)
+                                    .ok_or(CodestreamError::SizeOverflow)?,
+                            )
+                            .ok_or(CodestreamError::SizeOverflow)?
+                            .max(tile_reference_origin.1),
+                        component,
+                        resolution,
+                        precinct: row
+                            .checked_mul(lattice.cols)
+                            .and_then(|value| value.checked_add(col))
+                            .ok_or(CodestreamError::SizeOverflow)?,
+                    });
+                }
+            }
+        }
+    }
+    Ok(positions)
+}
+
+fn visit_progression_volumes(
+    siz: &SizMarker,
+    tile: u16,
+    tile_reference_origin: (u64, u64),
+    layers: u16,
+    component_styles: &[CodingStyleMarker],
+    topologies: &[Part1PrecinctTopology],
+    volumes: &[ProgressionVolume],
+    mut visitor: impl FnMut(ScheduledPacket) -> Result<()>,
+) -> Result<usize> {
+    if component_styles.len() != topologies.len()
+        || component_styles.len() != usize::from(siz.component_count())
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let mut ledger = PacketIdentityLedger::new(layers, topologies)?;
+    for volume in volumes {
+        let component_start = volume.component_start.min(siz.component_count());
+        let component_end = volume.component_end.min(siz.component_count());
+        let layer_end = volume.layer_end.min(layers);
+        if component_start >= component_end
+            || volume.resolution_start >= volume.resolution_end
+            || layer_end == 0
+        {
+            return Err(invalid(
+                volume.marker_offset,
+                Some(Marker::Poc),
+                "progression volume has no packets after intersecting the tile domains",
+            ));
+        }
+        let mut emitted = 0_usize;
+        let mut emit = |layer: u16, resolution: u8, component: u16, precinct: u32| {
+            let packet = PacketKey {
+                tile,
+                layer,
+                resolution,
+                component,
+                precinct,
+            };
+            if ledger.mark_if_new(packet)? {
+                emitted = emitted
+                    .checked_add(1)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                visitor(ScheduledPacket {
+                    key: packet,
+                    declared_tile_part: volume.declared_tile_part,
+                    marker_offset: volume.marker_offset,
+                })?;
+            }
+            Ok::<(), CodestreamError>(())
+        };
+        match volume.progression_order {
+            ProgressionOrder::Lrcp => {
+                for layer in 0..layer_end {
+                    for resolution in volume.resolution_start..volume.resolution_end {
+                        for component in component_start..component_end {
+                            let Some(topology) = topologies.get(usize::from(component)) else {
+                                return Err(CodestreamError::SizeOverflow);
+                            };
+                            let Some(resolution_topology) =
+                                topology.resolutions.get(usize::from(resolution))
+                            else {
+                                continue;
+                            };
+                            for precinct in 0..resolution_topology.precinct_count {
+                                emit(layer, resolution, component, precinct)?;
+                            }
+                        }
+                    }
+                }
+            }
+            ProgressionOrder::Rlcp => {
+                for resolution in volume.resolution_start..volume.resolution_end {
+                    for layer in 0..layer_end {
+                        for component in component_start..component_end {
+                            let Some(topology) = topologies.get(usize::from(component)) else {
+                                return Err(CodestreamError::SizeOverflow);
+                            };
+                            let Some(resolution_topology) =
+                                topology.resolutions.get(usize::from(resolution))
+                            else {
+                                continue;
+                            };
+                            for precinct in 0..resolution_topology.precinct_count {
+                                emit(layer, resolution, component, precinct)?;
+                            }
+                        }
+                    }
+                }
+            }
+            ProgressionOrder::Rpcl | ProgressionOrder::Pcrl | ProgressionOrder::Cprl => {
+                if matches!(
+                    volume.progression_order,
+                    ProgressionOrder::Rpcl | ProgressionOrder::Pcrl
+                ) && siz.components[usize::from(component_start)..usize::from(component_end)]
+                    .iter()
+                    .any(|component| {
+                        !component.horizontal_separation.is_power_of_two()
+                            || !component.vertical_separation.is_power_of_two()
+                    })
+                {
+                    return Err(invalid(
+                        volume.marker_offset,
+                        Some(Marker::Poc),
+                        "spatial progression requires power-of-two component separations",
+                    ));
+                }
+                let mut positions = progression_spatial_precincts(
+                    siz,
+                    tile_reference_origin,
+                    component_styles,
+                    topologies,
+                    component_start,
+                    component_end,
+                    volume.resolution_start,
+                    volume.resolution_end,
+                )?;
+                match volume.progression_order {
+                    ProgressionOrder::Rpcl => positions.sort_by_key(|position| {
+                        (
+                            position.resolution,
+                            position.y,
+                            position.x,
+                            position.component,
+                        )
+                    }),
+                    ProgressionOrder::Pcrl => positions.sort_by_key(|position| {
+                        (
+                            position.y,
+                            position.x,
+                            position.component,
+                            position.resolution,
+                        )
+                    }),
+                    ProgressionOrder::Cprl => positions.sort_by_key(|position| {
+                        (
+                            position.component,
+                            position.y,
+                            position.x,
+                            position.resolution,
+                        )
+                    }),
+                    ProgressionOrder::Lrcp | ProgressionOrder::Rlcp => unreachable!(),
+                }
+                for position in positions {
+                    for layer in 0..layer_end {
+                        emit(
+                            layer,
+                            position.resolution,
+                            position.component,
+                            position.precinct,
+                        )?;
+                    }
+                }
+            }
+        }
+        if emitted == 0 {
+            return Err(invalid(
+                volume.marker_offset,
+                Some(Marker::Poc),
+                "progression volume duplicates packets already scheduled or has an empty actual domain",
+            ));
+        }
+    }
+    if !ledger.is_complete() {
+        return Err(invalid(
+            volumes.last().and_then(|volume| volume.marker_offset),
+            Some(Marker::Poc),
+            "progression volumes do not cover every packet in the coded tile exactly once",
+        ));
+    }
+    Ok(ledger.expected_packet_count())
+}
+
 #[cfg(test)]
 fn visit_default_precinct_packet_keys(
     tile: u16,
@@ -28272,6 +28753,7 @@ fn visit_default_precinct_packet_keys(
     )
 }
 
+#[cfg(test)]
 fn visit_component_precinct_packet_keys(
     tile: u16,
     progression_order: ProgressionOrder,
@@ -28396,98 +28878,6 @@ fn visit_component_precinct_packet_keys(
         }
     }
     Ok(())
-}
-
-fn visit_profile_component_precinct_packet_keys(
-    tile: u16,
-    progression_order: ProgressionOrder,
-    layers: u16,
-    precinct_counts_by_component: &[Vec<u32>],
-    packet_profile: ComponentPacketProfile,
-    mut visitor: impl FnMut(PacketKey) -> Result<()>,
-) -> Result<()> {
-    if packet_profile == ComponentPacketProfile::Profile0P013 {
-        if tile != 0
-            || layers != 1
-            || progression_order != ProgressionOrder::Rlcp
-            || precinct_counts_by_component.len() != 257
-            || precinct_counts_by_component
-                .iter()
-                .any(|counts| counts.as_slice() != [1, 1])
-        {
-            return Err(unsupported(
-                None,
-                Some(Marker::Poc),
-                UnsupportedConstruct::PacketDecode,
-                "the qualified Profile-0 P0.13 packet schedule requires tile zero, 257 components, one layer and one precinct in each of two resolutions",
-            ));
-        }
-        for resolution in 0..2_u8 {
-            for component in 0..128_u16 {
-                visitor(PacketKey {
-                    tile,
-                    layer: 0,
-                    resolution,
-                    component,
-                    precinct: 0,
-                })?;
-            }
-        }
-        for component in 128..257_u16 {
-            for resolution in 0..2_u8 {
-                visitor(PacketKey {
-                    tile,
-                    layer: 0,
-                    resolution,
-                    component,
-                    precinct: 0,
-                })?;
-            }
-        }
-        return Ok(());
-    }
-    if packet_profile != ComponentPacketProfile::Profile0P007 {
-        return visit_component_precinct_packet_keys(
-            tile,
-            progression_order,
-            layers,
-            precinct_counts_by_component,
-            visitor,
-        );
-    }
-    if tile != 0
-        || layers != 8
-        || precinct_counts_by_component.len() != 3
-        || precinct_counts_by_component
-            .iter()
-            .any(|counts| counts.as_slice() != [1, 1, 1, 1])
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Poc),
-            UnsupportedConstruct::PacketDecode,
-            "the qualified Profile-0 P0.07 packet schedule requires tile zero, three components, eight layers and one precinct in each of four resolutions",
-        ));
-    }
-
-    let mut visit_volume = |resolution_start: u8, resolution_end: u8| -> Result<()> {
-        for layer in 0..layers {
-            for resolution in resolution_start..resolution_end {
-                for component in 0..3_u16 {
-                    visitor(PacketKey {
-                        tile,
-                        layer,
-                        resolution,
-                        component,
-                        precinct: 0,
-                    })?;
-                }
-            }
-        }
-        Ok(())
-    };
-    visit_volume(0, 3)?;
-    visit_volume(3, 4)
 }
 
 #[cfg(test)]
@@ -28627,89 +29017,6 @@ mod heterogeneous_packet_order_tests {
     }
 
     #[test]
-    fn visits_the_exact_p0_07_two_volume_lrcp_shape_without_duplicates() {
-        let counts = vec![vec![1; 4]; 3];
-        let mut packets = Vec::new();
-        visit_profile_component_precinct_packet_keys(
-            0,
-            ProgressionOrder::Rlcp,
-            8,
-            &counts,
-            ComponentPacketProfile::Profile0P007,
-            |packet| {
-                packets.push(packet);
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(packets.len(), 96);
-        assert_eq!(
-            packets
-                .iter()
-                .take(72)
-                .filter(|packet| packet.resolution < 3)
-                .count(),
-            72
-        );
-        assert!(packets.iter().skip(72).all(|packet| packet.resolution == 3));
-        assert_eq!(
-            packets[71],
-            PacketKey {
-                tile: 0,
-                layer: 7,
-                resolution: 2,
-                component: 2,
-                precinct: 0,
-            }
-        );
-        assert_eq!(
-            packets[72],
-            PacketKey {
-                tile: 0,
-                layer: 0,
-                resolution: 3,
-                component: 0,
-                precinct: 0,
-            }
-        );
-        let unique = packets
-            .iter()
-            .map(|packet| {
-                (
-                    packet.layer,
-                    packet.resolution,
-                    packet.component,
-                    packet.precinct,
-                )
-            })
-            .collect::<alloc::collections::BTreeSet<_>>();
-        assert_eq!(unique.len(), packets.len());
-    }
-
-    #[test]
-    fn rejects_any_wider_p0_07_packet_shape() {
-        for (tile, layers, counts) in [
-            (1, 8, vec![vec![1; 4]; 3]),
-            (0, 7, vec![vec![1; 4]; 3]),
-            (0, 8, vec![vec![1; 5]; 3]),
-            (0, 8, vec![vec![1; 4]; 2]),
-        ] {
-            assert!(
-                visit_profile_component_precinct_packet_keys(
-                    tile,
-                    ProgressionOrder::Rlcp,
-                    layers,
-                    &counts,
-                    ComponentPacketProfile::Profile0P007,
-                    |_| Ok(()),
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
     fn rejects_reserved_scod_bits_and_trailing_p0_07_cod_data() {
         let exact = [0x06, 0x01, 0x00, 0x08, 0x00, 0x03, 0x04, 0x04, 0x00, 0x01];
         assert!(p0_07_main_cod_payload_matches(&exact));
@@ -28727,17 +29034,10 @@ mod heterogeneous_packet_order_tests {
     fn visits_the_exact_720_packet_p0_08_cprl_shape() {
         let counts = vec![vec![1; 7], vec![1; 8], vec![1; 9]];
         let mut packets = Vec::new();
-        visit_profile_component_precinct_packet_keys(
-            0,
-            ProgressionOrder::Cprl,
-            30,
-            &counts,
-            ComponentPacketProfile::Profile0P008,
-            |packet| {
-                packets.push(packet);
-                Ok(())
-            },
-        )
+        visit_component_precinct_packet_keys(0, ProgressionOrder::Cprl, 30, &counts, |packet| {
+            packets.push(packet);
+            Ok(())
+        })
         .unwrap();
 
         assert_eq!(packets.len(), 720);
@@ -28831,17 +29131,10 @@ mod heterogeneous_packet_order_tests {
     fn visits_the_exact_24_packet_per_tile_p0_10_lrcp_shape() {
         let counts = vec![vec![1; 4]; 3];
         let mut packets = Vec::new();
-        visit_profile_component_precinct_packet_keys(
-            0,
-            ProgressionOrder::Lrcp,
-            2,
-            &counts,
-            ComponentPacketProfile::Profile0P010,
-            |packet| {
-                packets.push(packet);
-                Ok(())
-            },
-        )
+        visit_component_precinct_packet_keys(0, ProgressionOrder::Lrcp, 2, &counts, |packet| {
+            packets.push(packet);
+            Ok(())
+        })
         .unwrap();
 
         assert_eq!(packets.len(), 24);
@@ -28885,40 +29178,6 @@ mod heterogeneous_packet_order_tests {
             ),
             (1, 3, 2),
         );
-    }
-
-    #[test]
-    fn visits_the_exact_514_packet_p0_13_two_volume_shape() {
-        let counts = vec![vec![1, 1]; 257];
-        let mut packets = Vec::new();
-        visit_profile_component_precinct_packet_keys(
-            0,
-            ProgressionOrder::Rlcp,
-            1,
-            &counts,
-            ComponentPacketProfile::Profile0P013,
-            |packet| {
-                packets.push(packet);
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(packets.len(), 514);
-        for (index, resolution, component) in [
-            (0, 0, 0),
-            (127, 0, 127),
-            (128, 1, 0),
-            (255, 1, 127),
-            (256, 0, 128),
-            (257, 1, 128),
-            (513, 1, 256),
-        ] {
-            assert_eq!(
-                (packets[index].resolution, packets[index].component),
-                (resolution, component),
-            );
-        }
     }
 
     #[test]
@@ -28996,14 +29255,8 @@ mod heterogeneous_packet_order_tests {
         let payload = p0_10_test_payload(&bytes, &[3, 3, 7]);
 
         for (packet_start, header_end, packet_end) in [(0, 2, 3), (3, 5, 7), (7, 8, 12)] {
-            validate_p0_10_packet_tile_part_boundary(
-                &payload,
-                ComponentPacketProfile::Profile0P010,
-                packet_start,
-                header_end,
-                packet_end,
-            )
-            .unwrap();
+            validate_packet_tile_part_boundary(&payload, packet_start, header_end, packet_end)
+                .unwrap();
         }
     }
 
@@ -29012,16 +29265,7 @@ mod heterogeneous_packet_order_tests {
         let bytes = [0_u8; 3];
         let payload = p0_10_test_payload(&bytes, &[1]);
 
-        assert!(
-            validate_p0_10_packet_tile_part_boundary(
-                &payload,
-                ComponentPacketProfile::Profile0P010,
-                0,
-                2,
-                3,
-            )
-            .is_err()
-        );
+        assert!(validate_packet_tile_part_boundary(&payload, 0, 2, 3).is_err());
     }
 
     #[test]
@@ -29029,16 +29273,7 @@ mod heterogeneous_packet_order_tests {
         let bytes = [0_u8; 3];
         let payload = p0_10_test_payload(&bytes, &[2]);
 
-        assert!(
-            validate_p0_10_packet_tile_part_boundary(
-                &payload,
-                ComponentPacketProfile::Profile0P010,
-                0,
-                1,
-                3,
-            )
-            .is_err()
-        );
+        assert!(validate_packet_tile_part_boundary(&payload, 0, 1, 3).is_err());
     }
 
     #[test]
@@ -29426,6 +29661,669 @@ impl Part1PrecinctTopology {
         self.resolutions.iter().skip(1).all(|resolution| {
             resolution.bounds.x0.is_multiple_of(2) && resolution.bounds.y0.is_multiple_of(2)
         })
+    }
+}
+
+#[cfg(test)]
+mod progression_volume_scheduler_tests {
+    use super::*;
+
+    fn style(order: ProgressionOrder, layers: u16, decompositions: u8) -> CodingStyleMarker {
+        let mut precinct_exponents = [0_u8; 33];
+        precinct_exponents[..=usize::from(decompositions)].fill(0x11);
+        CodingStyleMarker {
+            entropy_coder: EntropyCoder::ClassicTier1,
+            sop_markers: false,
+            eph_markers: false,
+            progression_order: order,
+            layers,
+            multiple_component_transform: false,
+            decomposition_levels: decompositions,
+            code_block_width_exponent: 2,
+            code_block_height_exponent: 2,
+            code_block_style: 0,
+            transform: WaveletTransform::Reversible53,
+            precincts_declared: true,
+            precinct_width_exponent: Some(1),
+            precinct_height_exponent: Some(1),
+            precinct_exponents,
+        }
+    }
+
+    fn unequal_sampling_fixture(
+        order: ProgressionOrder,
+        layers: u16,
+    ) -> (
+        SizMarker,
+        Vec<CodingStyleMarker>,
+        Vec<Part1PrecinctTopology>,
+    ) {
+        let siz = SizMarker {
+            capabilities: 0,
+            reference_grid_width: 8,
+            reference_grid_height: 4,
+            image_origin_x: 0,
+            image_origin_y: 0,
+            tile_width: 8,
+            tile_height: 4,
+            tile_origin_x: 0,
+            tile_origin_y: 0,
+            components: alloc::vec![
+                ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                },
+                ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 2,
+                    vertical_separation: 1,
+                },
+            ],
+        };
+        let tile = TileRect {
+            tile_index: 0,
+            tile_x: 0,
+            tile_y: 0,
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 4,
+        };
+        let styles = alloc::vec![style(order, layers, 0); 2];
+        let topologies = styles
+            .iter()
+            .enumerate()
+            .map(|(component, style)| {
+                Part1PrecinctTopology::new(&siz, tile, component as u16, *style).unwrap()
+            })
+            .collect();
+        (siz, styles, topologies)
+    }
+
+    fn full_volume(order: ProgressionOrder, layers: u16) -> ProgressionVolume {
+        ProgressionVolume {
+            resolution_start: 0,
+            component_start: 0,
+            layer_end: layers,
+            resolution_end: 1,
+            component_end: 2,
+            progression_order: order,
+            declared_tile_part: 0,
+            marker_offset: Some(17),
+        }
+    }
+
+    fn unit_packet_fixture(
+        component_count: usize,
+        layers: u16,
+        decompositions: u8,
+        order: ProgressionOrder,
+    ) -> (
+        SizMarker,
+        Vec<CodingStyleMarker>,
+        Vec<Part1PrecinctTopology>,
+    ) {
+        let siz = SizMarker {
+            capabilities: 0,
+            reference_grid_width: 1,
+            reference_grid_height: 1,
+            image_origin_x: 0,
+            image_origin_y: 0,
+            tile_width: 1,
+            tile_height: 1,
+            tile_origin_x: 0,
+            tile_origin_y: 0,
+            components: alloc::vec![
+                ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                };
+                component_count
+            ],
+        };
+        let tile = TileRect {
+            tile_index: 0,
+            tile_x: 0,
+            tile_y: 0,
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        let styles = alloc::vec![style(order, layers, decompositions); component_count];
+        let topologies = styles
+            .iter()
+            .enumerate()
+            .map(|(component, style)| {
+                Part1PrecinctTopology::new(&siz, tile, component as u16, *style).unwrap()
+            })
+            .collect();
+        (siz, styles, topologies)
+    }
+
+    fn scheduled_keys(order: ProgressionOrder) -> Vec<PacketKey> {
+        let (siz, styles, topologies) = unequal_sampling_fixture(order, 2);
+        let mut packets = Vec::new();
+        let count = visit_progression_volumes(
+            &siz,
+            0,
+            (0, 0),
+            2,
+            &styles,
+            &topologies,
+            &[full_volume(order, 2)],
+            |packet| {
+                packets.push(packet.key);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 24);
+        assert_eq!(packets.len(), 24);
+        assert_eq!(
+            packets
+                .iter()
+                .copied()
+                .collect::<alloc::collections::BTreeSet<_>>()
+                .len(),
+            24
+        );
+        packets
+    }
+
+    #[test]
+    fn enumerates_all_five_orders_over_unequal_component_sampling() {
+        let lrcp = scheduled_keys(ProgressionOrder::Lrcp);
+        let rlcp = scheduled_keys(ProgressionOrder::Rlcp);
+        let rpcl = scheduled_keys(ProgressionOrder::Rpcl);
+        let pcrl = scheduled_keys(ProgressionOrder::Pcrl);
+        let cprl = scheduled_keys(ProgressionOrder::Cprl);
+
+        assert_eq!(lrcp, rlcp);
+        assert_eq!(rpcl, pcrl);
+        assert_eq!((lrcp[0].layer, lrcp[12].layer), (0, 1));
+        assert_eq!(
+            (rpcl[0].component, rpcl[0].layer, rpcl[2].component),
+            (0, 0, 1)
+        );
+        assert_eq!(
+            (
+                rpcl[6].component,
+                rpcl[6].precinct,
+                rpcl[8].component,
+                rpcl[8].precinct,
+            ),
+            (0, 2, 1, 1)
+        );
+        assert_eq!(
+            (cprl[0].component, cprl[15].component, cprl[16].component),
+            (0, 0, 1)
+        );
+        for packets in [&lrcp, &rlcp, &rpcl, &pcrl, &cprl] {
+            assert_eq!(
+                packets
+                    .iter()
+                    .copied()
+                    .collect::<alloc::collections::BTreeSet<_>>(),
+                lrcp.iter().copied().collect()
+            );
+        }
+    }
+
+    #[test]
+    fn derives_next_layers_across_two_different_ordered_volumes() {
+        let (siz, styles, topologies) = unequal_sampling_fixture(ProgressionOrder::Lrcp, 2);
+        let volumes = [
+            ProgressionVolume {
+                component_end: 1,
+                layer_end: 1,
+                progression_order: ProgressionOrder::Lrcp,
+                declared_tile_part: 0,
+                ..full_volume(ProgressionOrder::Lrcp, 2)
+            },
+            ProgressionVolume {
+                progression_order: ProgressionOrder::Cprl,
+                declared_tile_part: 2,
+                marker_offset: Some(29),
+                ..full_volume(ProgressionOrder::Cprl, 2)
+            },
+        ];
+        let mut scheduled = Vec::new();
+        visit_progression_volumes(
+            &siz,
+            0,
+            (0, 0),
+            2,
+            &styles,
+            &topologies,
+            &volumes,
+            |packet| {
+                scheduled.push(packet);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(scheduled.len(), 24);
+        assert!(scheduled[..8].iter().all(|packet| {
+            packet.key.component == 0 && packet.key.layer == 0 && packet.declared_tile_part == 0
+        }));
+        assert!(
+            scheduled[8..]
+                .iter()
+                .all(|packet| { packet.key.component == 1 || packet.key.layer == 1 })
+        );
+        assert!(
+            scheduled[8..]
+                .iter()
+                .all(|packet| packet.declared_tile_part == 2)
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_gap_invalid_spatial_and_excess_ledger_shapes() {
+        let (siz, styles, topologies) = unequal_sampling_fixture(ProgressionOrder::Lrcp, 2);
+        let exact = full_volume(ProgressionOrder::Lrcp, 2);
+        assert!(
+            visit_progression_volumes(
+                &siz,
+                0,
+                (0, 0),
+                2,
+                &styles,
+                &topologies,
+                &[exact, exact],
+                |_| Ok(())
+            )
+            .is_err()
+        );
+        assert!(
+            visit_progression_volumes(
+                &siz,
+                0,
+                (0, 0),
+                2,
+                &styles,
+                &topologies,
+                &[ProgressionVolume {
+                    component_end: 1,
+                    ..exact
+                }],
+                |_| Ok(())
+            )
+            .is_err()
+        );
+
+        let mut invalid_sampling = siz.clone();
+        invalid_sampling.components[1].horizontal_separation = 3;
+        assert!(
+            visit_progression_volumes(
+                &invalid_sampling,
+                0,
+                (0, 0),
+                2,
+                &styles,
+                &topologies,
+                &[full_volume(ProgressionOrder::Rpcl, 2)],
+                |_| Ok(())
+            )
+            .is_err()
+        );
+
+        let excessive = Part1PrecinctTopology {
+            component_index: 0,
+            tile_component: Part1GridRect {
+                x0: 0,
+                y0: 0,
+                x1: 1,
+                y1: 1,
+            },
+            resolutions: alloc::vec![Part1ResolutionTopology {
+                resolution: 0,
+                bounds: Part1GridRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 1,
+                    y1: 1,
+                },
+                precinct_width_exponent: 0,
+                precinct_height_exponent: 0,
+                first_precinct_x: 0,
+                first_precinct_y: 0,
+                precinct_cols: 1,
+                precinct_rows: (MAX_PACKETS_PER_TILE as u32 / 2) + 1,
+                precinct_count: (MAX_PACKETS_PER_TILE as u32 / 2) + 1,
+            }],
+        };
+        let single_component_siz = SizMarker {
+            components: alloc::vec![siz.components[0]],
+            ..siz
+        };
+        assert!(PacketIdentityLedger::new(2, &[excessive]).is_err());
+        assert_eq!(single_component_siz.component_count(), 1);
+    }
+
+    #[test]
+    fn broad_volume_ends_intersect_actual_resolution_and_component_domains() {
+        let (siz, styles, topologies) = unequal_sampling_fixture(ProgressionOrder::Rlcp, 2);
+        let mut packets = Vec::new();
+        visit_progression_volumes(
+            &siz,
+            0,
+            (0, 0),
+            2,
+            &styles,
+            &topologies,
+            &[ProgressionVolume {
+                resolution_end: 33,
+                component_end: 256,
+                layer_end: u16::MAX,
+                ..full_volume(ProgressionOrder::Rlcp, 2)
+            }],
+            |packet| {
+                packets.push(packet.key);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(packets.len(), 24);
+    }
+
+    #[test]
+    fn generic_volumes_match_the_p0_07_and_p0_13_locked_schedules() {
+        let (siz, styles, topologies) = unit_packet_fixture(3, 8, 3, ProgressionOrder::Rlcp);
+        let p0_07 = [
+            ProgressionVolume {
+                resolution_start: 0,
+                component_start: 0,
+                layer_end: 8,
+                resolution_end: 3,
+                component_end: 3,
+                progression_order: ProgressionOrder::Lrcp,
+                declared_tile_part: 0,
+                marker_offset: Some(7),
+            },
+            ProgressionVolume {
+                resolution_start: 3,
+                resolution_end: 4,
+                declared_tile_part: 1,
+                marker_offset: Some(19),
+                ..ProgressionVolume {
+                    resolution_start: 0,
+                    component_start: 0,
+                    layer_end: 8,
+                    resolution_end: 3,
+                    component_end: 3,
+                    progression_order: ProgressionOrder::Lrcp,
+                    declared_tile_part: 0,
+                    marker_offset: Some(7),
+                }
+            },
+        ];
+        let mut packets = Vec::new();
+        visit_progression_volumes(&siz, 0, (0, 0), 8, &styles, &topologies, &p0_07, |packet| {
+            packets.push(packet);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(packets.len(), 96);
+        assert_eq!(
+            packets[71].key,
+            PacketKey {
+                tile: 0,
+                layer: 7,
+                resolution: 2,
+                component: 2,
+                precinct: 0,
+            }
+        );
+        assert_eq!(
+            (packets[72].key.resolution, packets[72].declared_tile_part),
+            (3, 1)
+        );
+
+        let (siz, styles, topologies) = unit_packet_fixture(257, 1, 1, ProgressionOrder::Rlcp);
+        let p0_13 = [
+            ProgressionVolume {
+                resolution_start: 0,
+                component_start: 0,
+                layer_end: 1,
+                resolution_end: 2,
+                component_end: 128,
+                progression_order: ProgressionOrder::Rlcp,
+                declared_tile_part: 0,
+                marker_offset: Some(31),
+            },
+            ProgressionVolume {
+                component_start: 128,
+                component_end: 257,
+                progression_order: ProgressionOrder::Cprl,
+                ..ProgressionVolume {
+                    resolution_start: 0,
+                    component_start: 0,
+                    layer_end: 1,
+                    resolution_end: 2,
+                    component_end: 128,
+                    progression_order: ProgressionOrder::Rlcp,
+                    declared_tile_part: 0,
+                    marker_offset: Some(31),
+                }
+            },
+        ];
+        let mut packets = Vec::new();
+        visit_progression_volumes(&siz, 0, (0, 0), 1, &styles, &topologies, &p0_13, |packet| {
+            packets.push(packet.key);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(packets.len(), 514);
+        for (index, resolution, component) in [
+            (0, 0, 0),
+            (127, 0, 127),
+            (128, 1, 0),
+            (255, 1, 127),
+            (256, 0, 128),
+            (257, 1, 128),
+            (513, 1, 256),
+        ] {
+            assert_eq!(
+                (packets[index].resolution, packets[index].component),
+                (resolution, component)
+            );
+        }
+    }
+
+    #[test]
+    fn tile_part_availability_accepts_empty_parts_and_rejects_early_use() {
+        let bytes = [0_u8; 4];
+        let payload = TilePartPayload {
+            spans: alloc::vec![
+                TilePayloadSpan {
+                    logical_offset: 0,
+                    bytes: &bytes[..2],
+                },
+                TilePayloadSpan {
+                    logical_offset: 2,
+                    bytes: &bytes[2..2],
+                },
+                TilePayloadSpan {
+                    logical_offset: 2,
+                    bytes: &bytes[2..],
+                },
+            ],
+            len: bytes.len(),
+        };
+        let later = ScheduledPacket {
+            key: PacketKey::default(),
+            declared_tile_part: 2,
+            marker_offset: Some(41),
+        };
+        assert!(validate_scheduled_packet_start(&payload, later, 0).is_err());
+        validate_scheduled_packet_start(&payload, later, 2).unwrap();
+        validate_packet_tile_part_boundary(&payload, 0, 1, 2).unwrap();
+        validate_packet_tile_part_boundary(&payload, 2, 3, 4).unwrap();
+    }
+
+    #[test]
+    fn cprl_uses_absolute_positions_across_resolution_lattices() {
+        let siz = SizMarker {
+            capabilities: 0,
+            reference_grid_width: 6,
+            reference_grid_height: 2,
+            image_origin_x: 4,
+            image_origin_y: 0,
+            tile_width: 2,
+            tile_height: 2,
+            tile_origin_x: 4,
+            tile_origin_y: 0,
+            components: alloc::vec![ComponentParameters {
+                bits_per_sample: 8,
+                signed: false,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+            }],
+        };
+        let tile = TileRect {
+            tile_index: 0,
+            tile_x: 0,
+            tile_y: 0,
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        let mut component_style = style(ProgressionOrder::Cprl, 1, 1);
+        component_style.precinct_exponents[..2].copy_from_slice(&[0x11, 0x13]);
+        let topology = Part1PrecinctTopology::new(&siz, tile, 0, component_style).unwrap();
+        let low = topology
+            .reference_precinct_lattice(&siz, component_style, 0)
+            .unwrap();
+        let full = topology
+            .reference_precinct_lattice(&siz, component_style, 1)
+            .unwrap();
+        assert_eq!((low.first_x, full.first_x), (4, 0));
+        let volume = ProgressionVolume {
+            resolution_start: 0,
+            component_start: 0,
+            layer_end: 1,
+            resolution_end: 2,
+            component_end: 1,
+            progression_order: ProgressionOrder::Cprl,
+            declared_tile_part: 0,
+            marker_offset: None,
+        };
+        let mut packets = Vec::new();
+        visit_progression_volumes(
+            &siz,
+            0,
+            (4, 0),
+            1,
+            &[component_style],
+            &[topology],
+            &[volume],
+            |packet| {
+                packets.push(packet.key);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            packets
+                .iter()
+                .map(|packet| packet.resolution)
+                .collect::<Vec<_>>(),
+            alloc::vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn small_domain_property_matrix_is_an_exact_packet_permutation() {
+        for order in [
+            ProgressionOrder::Lrcp,
+            ProgressionOrder::Rlcp,
+            ProgressionOrder::Rpcl,
+            ProgressionOrder::Pcrl,
+            ProgressionOrder::Cprl,
+        ] {
+            for (width, height, separation) in [(1, 1, 1), (3, 5, 1), (7, 4, 2)] {
+                let siz = SizMarker {
+                    capabilities: 0,
+                    reference_grid_width: width,
+                    reference_grid_height: height,
+                    image_origin_x: 0,
+                    image_origin_y: 0,
+                    tile_width: width,
+                    tile_height: height,
+                    tile_origin_x: 0,
+                    tile_origin_y: 0,
+                    components: alloc::vec![
+                        ComponentParameters {
+                            bits_per_sample: 8,
+                            signed: false,
+                            horizontal_separation: 1,
+                            vertical_separation: 1,
+                        },
+                        ComponentParameters {
+                            bits_per_sample: 8,
+                            signed: false,
+                            horizontal_separation: separation,
+                            vertical_separation: 1,
+                        },
+                    ],
+                };
+                let tile = TileRect {
+                    tile_index: 0,
+                    tile_x: 0,
+                    tile_y: 0,
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                };
+                let styles = alloc::vec![style(order, 3, 0); 2];
+                let topologies = styles
+                    .iter()
+                    .enumerate()
+                    .map(|(component, style)| {
+                        Part1PrecinctTopology::new(&siz, tile, component as u16, *style).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let expected = topologies
+                    .iter()
+                    .flat_map(|topology| &topology.resolutions)
+                    .map(|resolution| resolution.precinct_count as usize)
+                    .sum::<usize>()
+                    * 3;
+                let mut packets = Vec::new();
+                let count = visit_progression_volumes(
+                    &siz,
+                    0,
+                    (0, 0),
+                    3,
+                    &styles,
+                    &topologies,
+                    &[full_volume(order, 3)],
+                    |packet| {
+                        packets.push(packet.key);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert_eq!(count, expected);
+                assert_eq!(packets.len(), expected);
+                assert_eq!(
+                    packets
+                        .iter()
+                        .collect::<alloc::collections::BTreeSet<_>>()
+                        .len(),
+                    expected
+                );
+            }
+        }
     }
 }
 
@@ -30980,6 +31878,14 @@ trait PacketByteSource {
 
     fn internal_span_boundary_in(&self, _start: usize, _end: usize) -> Option<usize> {
         None
+    }
+
+    /// Tile-part ordinal containing a packet that begins at `offset`.
+    ///
+    /// Repeated logical offsets select the last empty span, so an empty tile
+    /// part before a packet neither consumes nor conceals that packet.
+    fn packet_tile_part_at(&self, offset: usize) -> Option<usize> {
+        (offset <= self.len()).then_some(0)
     }
 
     fn require_range(&self, offset: usize, len: usize) -> Result<()> {
@@ -37065,6 +37971,16 @@ impl PacketByteSource for TilePartPayload<'_> {
             .map(|span| span.logical_offset)
             .find(|boundary| start < *boundary && *boundary < end)
     }
+
+    fn packet_tile_part_at(&self, offset: usize) -> Option<usize> {
+        (offset < self.len)
+            .then(|| {
+                self.spans
+                    .partition_point(|span| span.logical_offset <= offset)
+                    .checked_sub(1)
+            })
+            .flatten()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37591,6 +38507,32 @@ impl PacketByteSource for PreparedTilePayload<'_> {
             Self::Source(payload) => payload.append_source_range(offset, len, output),
         }
     }
+
+    fn internal_span_boundary_in(&self, start: usize, end: usize) -> Option<usize> {
+        match self {
+            Self::Slice(payload) => payload.internal_span_boundary_in(start, end),
+            Self::Source(payload) => payload
+                .spans
+                .iter()
+                .skip(1)
+                .map(|span| span.logical_offset)
+                .find(|boundary| start < *boundary && *boundary < end),
+        }
+    }
+
+    fn packet_tile_part_at(&self, offset: usize) -> Option<usize> {
+        match self {
+            Self::Slice(payload) => payload.packet_tile_part_at(offset),
+            Self::Source(payload) => (offset < payload.len)
+                .then(|| {
+                    payload
+                        .spans
+                        .partition_point(|span| span.logical_offset <= offset)
+                        .checked_sub(1)
+                })
+                .flatten(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -37674,6 +38616,26 @@ impl PacketByteSource for BufferedSourcePacketPayload<'_> {
     fn set_read_window(&self, offset: usize, len: usize) {
         self.read_window_end
             .set(offset.checked_add(len).unwrap_or(self.payload.len));
+    }
+
+    fn internal_span_boundary_in(&self, start: usize, end: usize) -> Option<usize> {
+        self.payload
+            .spans
+            .iter()
+            .skip(1)
+            .map(|span| span.logical_offset)
+            .find(|boundary| start < *boundary && *boundary < end)
+    }
+
+    fn packet_tile_part_at(&self, offset: usize) -> Option<usize> {
+        (offset < self.payload.len)
+            .then(|| {
+                self.payload
+                    .spans
+                    .partition_point(|span| span.logical_offset <= offset)
+                    .checked_sub(1)
+            })
+            .flatten()
     }
 }
 
@@ -41594,6 +42556,11 @@ mod effective_header_state_tests {
                 if segments.len() == 2
                     && segments[1].records[0].progression_order == ProgressionOrder::Rpcl
         ));
+        let parsed = parse(&codestream).unwrap();
+        let volumes = effective_progression_volumes(&codestream, &parsed, 0, layers, 1).unwrap();
+        assert_eq!(volumes.len(), 2);
+        assert_eq!(volumes[0].declared_tile_part, 0);
+        assert_eq!(volumes[1].declared_tile_part, 1);
     }
 
     #[test]
