@@ -62,6 +62,7 @@ const MAX_NATIVE_PART1_TOTAL_DECODE_SAMPLES: u64 = 256 * 1024 * 1024;
 const MAX_PACKET_PRECINCTS_PER_RESOLUTION: u64 = 1_048_576;
 const MAX_PACKET_CODE_BLOCKS_PER_SUBBAND: u64 = 1_048_576;
 const MAX_PACKETS_PER_TILE: usize = 4_194_304;
+const MAX_PACKET_ORGANISATION_MARKER_BYTES: usize = 256 * 1024 * 1024;
 
 /// Raw codestream family identified by marker-level classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7253,13 +7254,23 @@ pub struct CodestreamBoundary {
 
 /// Parse marker-level codestream metadata from a byte slice.
 pub fn parse(input: &[u8]) -> Result<Codestream> {
-    parse_with_selected_region(input, None).map(|(codestream, _)| codestream)
+    let (codestream, work) = parse_with_selected_region(input, None)?;
+    validate_packet_organisation_markers(input, &codestream, &work.tile_part_order)?;
+    Ok(codestream)
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TilePartParseWork {
     tile_parts_skipped_via_tlm: u64,
     tile_part_bytes_skipped_via_tlm: u64,
+    tile_part_order: Vec<TilePartOrderEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TilePartOrderEntry {
+    tile_index: u16,
+    tile_part_index: u8,
+    payload_len: Option<usize>,
 }
 
 struct SourceHeaderScan {
@@ -7452,6 +7463,7 @@ fn scan_part1_source_headers(
             .get(usize::from(tile.tile_index))
             .copied()
             .unwrap_or(false);
+        let retained_payload_len;
         if selected {
             let (selected_tile, span) = scan_selected_source_tile_part_header(
                 source,
@@ -7460,9 +7472,11 @@ fn scan_part1_source_headers(
                 &mut marker_bytes,
                 &mut markers,
             )?;
+            retained_payload_len = Some(span.len);
             selected_tile_states.push(selected_tile);
             payload_spans.entry(tile.tile_index).or_default().push(span);
         } else {
+            retained_payload_len = None;
             let unread = u64::from(psot).saturating_sub(sot_bytes.len() as u64);
             source.record_bytes_not_read(unread, 0);
             if declared.is_some() {
@@ -7483,6 +7497,11 @@ fn scan_part1_source_headers(
                 selected_tile_states.push(metadata_only);
             }
         }
+        work.tile_part_order.push(TilePartOrderEntry {
+            tile_index: tile.tile_index,
+            tile_part_index: tile.tile_part_index,
+            payload_len: retained_payload_len,
+        });
         next_source_offset = next_source_offset
             .checked_add(u64::from(psot))
             .ok_or(CodestreamError::SizeOverflow)?;
@@ -7800,6 +7819,14 @@ fn parse_with_selected_region(
     };
     if !selected_via_tlm {
         validate_indexed_tile_part_sequence(&siz, &tiles)?;
+        parse_work.tile_part_order = tiles
+            .iter()
+            .map(|tile| TilePartOrderEntry {
+                tile_index: tile.tile_index,
+                tile_part_index: tile.tile_part_index,
+                payload_len: tile.payload_len,
+            })
+            .collect();
     }
     let main_header_end = markers
         .iter()
@@ -7969,8 +7996,18 @@ fn parse_selected_tile_parts_from_tlm(
             }
             tile.payload_offset = Some(payload_offset);
             tile.payload_len = Some(tile_part_end - payload_offset);
+            work.tile_part_order.push(TilePartOrderEntry {
+                tile_index: tile.tile_index,
+                tile_part_index: tile.tile_part_index,
+                payload_len: tile.payload_len,
+            });
             tiles.push(tile);
         } else {
+            work.tile_part_order.push(TilePartOrderEntry {
+                tile_index: tile.tile_index,
+                tile_part_index: tile.tile_part_index,
+                payload_len: None,
+            });
             work.tile_parts_skipped_via_tlm = work.tile_parts_skipped_via_tlm.saturating_add(1);
             work.tile_part_bytes_skipped_via_tlm = work
                 .tile_part_bytes_skipped_via_tlm
@@ -20310,6 +20347,7 @@ where
             request.max_layers,
             max_resolution,
             &component_indices,
+            &parse_work.tile_part_order,
         )?;
         timings.packets_parsed = timings
             .packets_parsed
@@ -24671,6 +24709,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         Some(max_resolution),
         Some(component_indices),
         packet_profile,
+        None,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -24770,6 +24809,7 @@ fn decode_multitile_tile_component_planes_selected(
         Some(max_resolution),
         Some(component_indices),
         packet_profile,
+        None,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -25832,6 +25872,7 @@ pub fn parse_default_precinct_lrcp_packets(
         None,
         None,
         ComponentPacketProfile::Default,
+        None,
     )
     .map(|parsed| parsed.contributions)
 }
@@ -25844,18 +25885,531 @@ struct ParsedPacketContributions {
     packet_bytes_skipped_via_plt: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PltPacketLengths {
-    lengths: Vec<usize>,
-    logical_offsets: Vec<usize>,
-    marker_offsets: Vec<usize>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketHeaderSourceKind {
+    Inline,
+    Ppm,
+    Ppt,
 }
 
-fn tile_packet_lengths_from_plt(
+/// Checked packet-header storage independent of the tile-part packet bodies.
+///
+/// ISO/IEC 15444-1:2024, Annex A, A.7.4–A.8.2, PDF pages 59–61, and
+/// Annex B, B.10.8–B.11, PDF pages 93–96, define the three exclusive header
+/// locations and source-aware SOP/EPH boundaries. The reviewed retrieval
+/// revision is `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackedPacketHeaderSource {
+    kind: PacketHeaderSourceKind,
+    bytes: Vec<u8>,
+    /// Logical ends of marker-segment fragments. Part 1 requires every PPM or
+    /// PPT marker segment to end at a packet-header boundary.
+    segment_ends: Vec<usize>,
+    /// PPM Nppm collection ends for the selected tile, one per tile-part.
+    tile_part_ends: Vec<usize>,
+    /// Ends of PPT byte ranges paired with the selected tile-part ordinal at
+    /// which each range becomes available.
+    availability_ends: Vec<(usize, usize)>,
+}
+
+impl PackedPacketHeaderSource {
+    fn available_tile_part_at(&self, offset: usize) -> Option<usize> {
+        self.availability_ends
+            .iter()
+            .find_map(|(end, tile_part)| (offset < *end).then_some(*tile_part))
+    }
+}
+
+impl PacketByteSource for PackedPacketHeaderSource {
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn byte(&self, offset: usize) -> Option<u8> {
+        self.bytes.get(offset).copied()
+    }
+
+    fn contiguous_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
+        offset
+            .checked_add(len)
+            .and_then(|end| self.bytes.get(offset..end))
+    }
+
+    fn append_range(&self, offset: usize, len: usize, output: &mut Vec<u8>) -> Result<()> {
+        output.extend_from_slice(checked_slice(&self.bytes, offset, len)?);
+        Ok(())
+    }
+
+    fn internal_span_boundary_in(&self, start: usize, end: usize) -> Option<usize> {
+        self.segment_ends
+            .iter()
+            .copied()
+            .find(|boundary| start < *boundary && *boundary < end)
+    }
+
+    fn packet_tile_part_at(&self, offset: usize) -> Option<usize> {
+        match self.kind {
+            PacketHeaderSourceKind::Ppm if offset < self.bytes.len() => {
+                Some(self.tile_part_ends.partition_point(|end| *end <= offset))
+            }
+            _ => (offset <= self.bytes.len()).then_some(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PacketHeaderSource {
+    Inline,
+    Packed(PackedPacketHeaderSource),
+}
+
+impl PacketHeaderSource {
+    fn kind(&self) -> PacketHeaderSourceKind {
+        match self {
+            Self::Inline => PacketHeaderSourceKind::Inline,
+            Self::Packed(source) => source.kind,
+        }
+    }
+}
+
+fn append_bounded_marker_bytes(output: &mut Vec<u8>, bytes: &[u8], marker: Marker) -> Result<()> {
+    let new_len = checked_packet_organisation_len(output.len(), bytes.len(), marker)?;
+    output
+        .try_reserve_exact(new_len - output.len())
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    output.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn checked_packet_organisation_len(
+    current: usize,
+    additional: usize,
+    marker: Marker,
+) -> Result<usize> {
+    let new_len = current
+        .checked_add(additional)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if new_len > MAX_PACKET_ORGANISATION_MARKER_BYTES {
+        return Err(unsupported(
+            None,
+            Some(marker),
+            UnsupportedConstruct::MarkerSegment,
+            "packet-organisation marker data exceed the bounded parser allocation",
+        ));
+    }
+    Ok(new_len)
+}
+
+fn indexed_marker_fragments<'a>(
+    input: &'a [u8],
+    segments: &[&MarkerSegment],
+    marker: Marker,
+) -> Result<Vec<&'a [u8]>> {
+    let mut fragments = Vec::with_capacity(segments.len());
+    for (expected_index, segment) in segments.iter().enumerate() {
+        let data = checked_slice(input, segment.data_offset, segment.data_len)?;
+        if data.is_empty() {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(marker),
+                "indexed marker payload must contain its segment index",
+            ));
+        }
+        if expected_index > usize::from(u8::MAX) || usize::from(data[0]) != expected_index {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(marker),
+                "marker indexes must start at zero and increase consecutively within their header scope",
+            ));
+        }
+        fragments.push(&data[1..]);
+    }
+    Ok(fragments)
+}
+
+fn tile_part_header_marker_ranges(markers: &[MarkerSegment]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut index = 0_usize;
+    while index < markers.len() {
+        if markers[index].marker != Marker::Sot {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let end = markers[start + 1..]
+            .iter()
+            .position(|segment| matches!(segment.marker, Marker::Sod | Marker::Sot | Marker::Eoc))
+            .map_or(markers.len(), |relative| start + 1 + relative);
+        ranges.push((start, end));
+        index = end.saturating_add(usize::from(
+            end < markers.len() && markers[end].marker == Marker::Sod,
+        ));
+    }
+    ranges
+}
+
+fn packed_packet_header_source(
     input: &[u8],
     codestream: &Codestream,
     tile_index: u16,
-) -> Result<Option<PltPacketLengths>> {
+    tile_part_order: &[TilePartOrderEntry],
+) -> Result<PacketHeaderSource> {
+    let first_sot = codestream
+        .markers
+        .iter()
+        .position(|segment| segment.marker == Marker::Sot)
+        .unwrap_or(codestream.markers.len());
+    let main = &codestream.markers[..first_sot];
+    if let Some(segment) = main.iter().find(|segment| segment.marker == Marker::Ppt) {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Ppt),
+            "PPT is confined to tile-part headers",
+        ));
+    }
+    let ppm_segments = main
+        .iter()
+        .filter(|segment| segment.marker == Marker::Ppm)
+        .collect::<Vec<_>>();
+    let ranges = tile_part_header_marker_ranges(&codestream.markers);
+    if let Some(segment) = ranges.iter().find_map(|(start, end)| {
+        codestream.markers[*start + 1..*end]
+            .iter()
+            .find(|segment| segment.marker == Marker::Ppm)
+    }) {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Ppm),
+            "PPM is confined to the main header",
+        ));
+    }
+    let first_ppt = ranges.iter().find_map(|(start, end)| {
+        codestream.markers[*start + 1..*end]
+            .iter()
+            .find(|segment| segment.marker == Marker::Ppt)
+    });
+    if !ppm_segments.is_empty()
+        && let Some(segment) = first_ppt
+    {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Ppt),
+            "PPM and PPT packet-header sources are mutually exclusive",
+        ));
+    }
+
+    if !ppm_segments.is_empty() {
+        let fragments = indexed_marker_fragments(input, &ppm_segments, Marker::Ppm)?;
+        let mut packed = Vec::new();
+        let mut raw_segment_ends = Vec::with_capacity(fragments.len());
+        for (index, fragment) in fragments.into_iter().enumerate() {
+            if fragment.len() < 4 {
+                return Err(invalid(
+                    ppm_segments.get(index).map(|segment| segment.offset),
+                    Some(Marker::Ppm),
+                    "PPM marker payload is shorter than its Nppm field",
+                ));
+            }
+            append_bounded_marker_bytes(&mut packed, fragment, Marker::Ppm)?;
+            raw_segment_ends.push(packed.len());
+        }
+        let mut output = Vec::new();
+        let mut segment_ends = Vec::new();
+        let mut tile_part_ends = Vec::new();
+        let mut cursor = 0_usize;
+        let mut segment_cursor = 0_usize;
+        for tile_part in tile_part_order {
+            require(&packed, cursor, 4).map_err(|_| {
+                invalid(
+                    ppm_segments.first().map(|segment| segment.offset),
+                    Some(Marker::Ppm),
+                    "PPM series is truncated before a tile-part header length",
+                )
+            })?;
+            let header_len = usize::try_from(read_u32(&packed, cursor)?)
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            cursor = cursor.checked_add(4).ok_or(CodestreamError::SizeOverflow)?;
+            let headers = checked_slice(&packed, cursor, header_len).map_err(|_| {
+                invalid(
+                    ppm_segments.first().map(|segment| segment.offset),
+                    Some(Marker::Ppm),
+                    "PPM tile-part packet-header bytes are truncated",
+                )
+            })?;
+            let selected = tile_part.tile_index == tile_index;
+            if selected {
+                append_bounded_marker_bytes(&mut output, headers, Marker::Ppm)?;
+                tile_part_ends.push(output.len());
+            }
+            let end = cursor
+                .checked_add(header_len)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            while raw_segment_ends
+                .get(segment_cursor)
+                .is_some_and(|boundary| *boundary <= end)
+            {
+                let boundary = raw_segment_ends[segment_cursor];
+                if boundary <= cursor {
+                    return Err(invalid(
+                        Some(ppm_segments[segment_cursor].offset),
+                        Some(Marker::Ppm),
+                        "PPM marker segment ends inside an Nppm field",
+                    ));
+                }
+                if selected {
+                    segment_ends.push(
+                        output
+                            .len()
+                            .checked_sub(end - boundary)
+                            .ok_or(CodestreamError::SizeOverflow)?,
+                    );
+                }
+                segment_cursor += 1;
+            }
+            cursor = end;
+        }
+        if cursor != packed.len() || segment_cursor != raw_segment_ends.len() {
+            return Err(invalid(
+                ppm_segments.first().map(|segment| segment.offset),
+                Some(Marker::Ppm),
+                "PPM series does not contain exactly one header collection per tile-part",
+            ));
+        }
+        return Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
+            kind: PacketHeaderSourceKind::Ppm,
+            bytes: output,
+            segment_ends,
+            tile_part_ends,
+            availability_ends: Vec::new(),
+        }));
+    }
+
+    let tile_has_ppt = ranges.iter().any(|(start, end)| {
+        parse_sot(
+            checked_slice(
+                input,
+                codestream.markers[*start].data_offset,
+                codestream.markers[*start].data_len,
+            )
+            .unwrap_or(&[]),
+            codestream.markers[*start].offset,
+        )
+        .is_ok_and(|tile| {
+            tile.tile_index == tile_index
+                && codestream.markers[*start + 1..*end]
+                    .iter()
+                    .any(|segment| segment.marker == Marker::Ppt)
+        })
+    });
+    if !tile_has_ppt {
+        return Ok(PacketHeaderSource::Inline);
+    }
+
+    let mut output = Vec::new();
+    let mut segment_ends = Vec::new();
+    let mut availability_ends = Vec::new();
+    for (start, end) in ranges {
+        let sot = &codestream.markers[start];
+        let tile = parse_sot(
+            checked_slice(input, sot.data_offset, sot.data_len)?,
+            sot.offset,
+        )?;
+        let ppt_segments = codestream.markers[start + 1..end]
+            .iter()
+            .filter(|segment| segment.marker == Marker::Ppt)
+            .collect::<Vec<_>>();
+        if tile.tile_index != tile_index {
+            continue;
+        }
+        let tile_part_ordinal = tile_part_order
+            .iter()
+            .filter(|entry| entry.tile_index == tile_index)
+            .position(|entry| entry.tile_part_index == tile.tile_part_index)
+            .ok_or_else(|| {
+                invalid(
+                    Some(sot.offset),
+                    Some(Marker::Sot),
+                    "retained tile-part header is absent from physical codestream order",
+                )
+            })?;
+        for (index, fragment) in indexed_marker_fragments(input, &ppt_segments, Marker::Ppt)?
+            .into_iter()
+            .enumerate()
+        {
+            if fragment.is_empty() {
+                return Err(invalid(
+                    ppt_segments.get(index).map(|segment| segment.offset),
+                    Some(Marker::Ppt),
+                    "PPT marker payload must contain packet-header bytes after Zppt",
+                ));
+            }
+            append_bounded_marker_bytes(&mut output, fragment, Marker::Ppt)?;
+            segment_ends.push(output.len());
+            availability_ends.push((output.len(), tile_part_ordinal));
+        }
+    }
+    Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
+        kind: PacketHeaderSourceKind::Ppt,
+        bytes: output,
+        segment_ends,
+        tile_part_ends: Vec::new(),
+        availability_ends,
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PacketLengths {
+    lengths: Vec<usize>,
+    logical_offsets: Vec<usize>,
+    marker_offsets: Vec<usize>,
+    markers: Vec<Marker>,
+    tile_parts: Vec<usize>,
+}
+
+/// Decode the common Iplm/Iplt base-128 representation.
+///
+/// Scope and reconciliation stay with the PLM/PLT callers: PLM groups lengths
+/// by codestream tile-part order, while each PLT series belongs to one
+/// tile-part header. Packed-header selection determines whether these lengths
+/// include header bytes. ISO/IEC 15444-1:2024, A.7.2–A.7.3 and Tables
+/// A.35–A.37, PDF pages 57–59, retrieval revision
+/// `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+fn decode_packet_lengths(bytes: &[u8], marker: Marker, marker_offset: usize) -> Result<Vec<usize>> {
+    let mut lengths = Vec::new();
+    let mut packet_len = 0_usize;
+    let mut continued = false;
+    for encoded in bytes {
+        packet_len = packet_len
+            .checked_mul(128)
+            .and_then(|value| value.checked_add(usize::from(encoded & 0x7f)))
+            .ok_or_else(|| {
+                invalid(
+                    Some(marker_offset),
+                    Some(marker),
+                    "packet length exceeds the addressable byte range",
+                )
+            })?;
+        continued = encoded & 0x80 != 0;
+        if !continued {
+            lengths.push(packet_len);
+            packet_len = 0;
+        }
+    }
+    if continued {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(marker),
+            "marker segment ends inside a variable-length packet length",
+        ));
+    }
+    Ok(lengths)
+}
+
+fn packet_lengths_from_plm(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_part_order: &[TilePartOrderEntry],
+) -> Result<Option<Vec<(Vec<usize>, usize)>>> {
+    let first_sot = codestream
+        .markers
+        .iter()
+        .position(|segment| segment.marker == Marker::Sot)
+        .unwrap_or(codestream.markers.len());
+    let segments = codestream.markers[..first_sot]
+        .iter()
+        .filter(|segment| segment.marker == Marker::Plm)
+        .collect::<Vec<_>>();
+    let Some(first_offset) = segments.first().map(|segment| segment.offset) else {
+        return Ok(None);
+    };
+    let fragments = indexed_marker_fragments(input, &segments, Marker::Plm)?;
+    let mut packed = Vec::new();
+    let mut fragment_ends = Vec::with_capacity(fragments.len());
+    for fragment in fragments {
+        if fragment.is_empty() {
+            return Err(invalid(
+                Some(first_offset),
+                Some(Marker::Plm),
+                "PLM marker payload must contain length information after Zplm",
+            ));
+        }
+        append_bounded_marker_bytes(&mut packed, fragment, Marker::Plm)?;
+        fragment_ends.push(packed.len());
+    }
+    let mut completed_length_ends = Vec::new();
+    let mut entries = Vec::with_capacity(tile_part_order.len());
+    let mut cursor = 0_usize;
+    for tile_part in tile_part_order {
+        let encoded_len = usize::from(*packed.get(cursor).ok_or_else(|| {
+            invalid(
+                Some(first_offset),
+                Some(Marker::Plm),
+                "PLM series is truncated before Nplm",
+            )
+        })?);
+        cursor = cursor.checked_add(1).ok_or(CodestreamError::SizeOverflow)?;
+        let encoded = checked_slice(&packed, cursor, encoded_len).map_err(|_| {
+            invalid(
+                Some(first_offset),
+                Some(Marker::Plm),
+                "PLM Iplm bytes are truncated",
+            )
+        })?;
+        let mut local = cursor;
+        for byte in encoded {
+            local = local.checked_add(1).ok_or(CodestreamError::SizeOverflow)?;
+            if byte & 0x80 == 0 {
+                completed_length_ends.push(local);
+            }
+        }
+        let lengths = decode_packet_lengths(encoded, Marker::Plm, first_offset)?;
+        if let Some(payload_len) = tile_part.payload_len {
+            let declared_payload_len = lengths.iter().try_fold(0_usize, |total, length| {
+                total
+                    .checked_add(*length)
+                    .ok_or(CodestreamError::SizeOverflow)
+            })?;
+            if declared_payload_len != payload_len {
+                return Err(invalid(
+                    Some(first_offset),
+                    Some(Marker::Plm),
+                    "PLM packet lengths do not span the corresponding tile-part payload",
+                ));
+            }
+        }
+        entries.push((lengths, first_offset));
+        cursor = cursor
+            .checked_add(encoded_len)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    if cursor != packed.len() {
+        return Err(invalid(
+            Some(first_offset),
+            Some(Marker::Plm),
+            "PLM series does not contain exactly one length collection per tile-part",
+        ));
+    }
+    if let Some(boundary) = fragment_ends
+        .iter()
+        .find(|boundary| !completed_length_ends.contains(boundary))
+    {
+        let segment_index = fragment_ends.partition_point(|end| end < boundary);
+        return Err(invalid(
+            segments.get(segment_index).map(|segment| segment.offset),
+            Some(Marker::Plm),
+            "PLM marker segment does not end with a completed packet length",
+        ));
+    }
+    Ok(Some(entries))
+}
+
+fn tile_packet_lengths(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_index: u16,
+    tile_part_order: &[TilePartOrderEntry],
+) -> Result<Option<PacketLengths>> {
+    let plm = packet_lengths_from_plm(input, codestream, tile_part_order)?;
     let mut tile_parts = codestream
         .tiles
         .iter()
@@ -25866,20 +26420,75 @@ fn tile_packet_lengths_from_plt(
     let mut all_lengths = Vec::new();
     let mut logical_offsets = Vec::new();
     let mut marker_offsets = Vec::new();
+    let mut markers = Vec::new();
+    let mut packet_tile_parts = Vec::new();
     let mut logical_tile_offset = 0_usize;
-    for tile_part in &tile_parts {
-        let Some((mut lengths, marker_offset)) =
-            tile_part_packet_lengths_from_plt(input, codestream, tile_part)?
-        else {
+    let mut saw_length_declaration = false;
+    for tile_part in tile_parts {
+        let matching_order = tile_part_order
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.tile_index == tile_part.tile_index
+                    && entry.tile_part_index == tile_part.tile_part_index
+            })
+            .collect::<Vec<_>>();
+        let [(codestream_index, order_entry)] = matching_order.as_slice() else {
+            return Err(invalid(
+                None,
+                Some(Marker::Sot),
+                "retained tile-part ordinal disagrees with physical codestream order",
+            ));
+        };
+        let tile_part_ordinal = tile_part_order[..=*codestream_index]
+            .iter()
+            .filter(|entry| entry.tile_index == tile_index)
+            .count()
+            .checked_sub(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let payload_len = tile_part.payload_len.ok_or(CodestreamError::SizeOverflow)?;
+        if order_entry
+            .payload_len
+            .is_some_and(|physical| physical != payload_len)
+        {
+            return Err(invalid(
+                None,
+                Some(Marker::Sot),
+                "retained tile-part payload span disagrees with physical codestream order",
+            ));
+        }
+        let plt = tile_part_packet_lengths_from_plt(input, codestream, tile_part)?;
+        let plm_entry = plm
+            .as_ref()
+            .and_then(|entries| entries.get(*codestream_index))
+            .cloned();
+        if let (Some((plm_lengths, plm_offset)), Some((plt_lengths, _))) = (&plm_entry, &plt)
+            && plm_lengths != plt_lengths
+        {
+            return Err(invalid(
+                Some(*plm_offset),
+                Some(Marker::Plm),
+                "PLM and PLT disagree for the same tile-part",
+            ));
+        }
+        let length_marker = if plt.is_some() {
+            Marker::Plt
+        } else {
+            Marker::Plm
+        };
+        let Some((mut lengths, marker_offset)) = plt.or(plm_entry) else {
             logical_tile_offset = logical_tile_offset
-                .checked_add(tile_part.payload_len.ok_or(CodestreamError::SizeOverflow)?)
+                .checked_add(payload_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
             continue;
         };
+        saw_length_declaration = true;
         let mut packet_offset = logical_tile_offset;
         for packet_len in &lengths {
             logical_offsets.push(packet_offset);
             marker_offsets.push(marker_offset);
+            markers.push(length_marker);
+            packet_tile_parts.push(tile_part_ordinal);
             packet_offset = packet_offset
                 .checked_add(*packet_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
@@ -25888,14 +26497,95 @@ fn tile_packet_lengths_from_plt(
         all_lengths.append(&mut lengths);
     }
 
-    if all_lengths.is_empty() {
+    if !saw_length_declaration {
         return Ok(None);
     }
-    Ok(Some(PltPacketLengths {
+    Ok(Some(PacketLengths {
         lengths: all_lengths,
         logical_offsets,
         marker_offsets,
+        markers,
+        tile_parts: packet_tile_parts,
     }))
+}
+
+fn validate_packet_organisation_markers(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_part_order: &[TilePartOrderEntry],
+) -> Result<()> {
+    let first_sot = codestream
+        .markers
+        .iter()
+        .position(|segment| segment.marker == Marker::Sot)
+        .unwrap_or(codestream.markers.len());
+    if let Some(segment) = codestream.markers[..first_sot]
+        .iter()
+        .find(|segment| segment.marker == Marker::Plt)
+    {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Plt),
+            "PLT is confined to tile-part headers",
+        ));
+    }
+    if let Some(segment) = codestream.markers[first_sot..]
+        .iter()
+        .find(|segment| segment.marker == Marker::Plm)
+    {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Plm),
+            "PLM is confined to the main header",
+        ));
+    }
+    let _plm = packet_lengths_from_plm(input, codestream, tile_part_order)?;
+    let ranges = tile_part_header_marker_ranges(&codestream.markers);
+    for (start, end) in &ranges {
+        let header = &codestream.markers[*start + 1..*end];
+        let plt = header
+            .iter()
+            .filter(|segment| segment.marker == Marker::Plt)
+            .collect::<Vec<_>>();
+        for (segment, fragment) in
+            plt.iter()
+                .zip(indexed_marker_fragments(input, &plt, Marker::Plt)?)
+        {
+            if fragment.is_empty() {
+                return Err(invalid(
+                    Some(segment.offset),
+                    Some(Marker::Plt),
+                    "PLT marker payload must contain packet-length bytes after Zplt",
+                ));
+            }
+            let _lengths = decode_packet_lengths(fragment, Marker::Plt, segment.offset)?;
+        }
+
+        let ppt = header
+            .iter()
+            .filter(|segment| segment.marker == Marker::Ppt)
+            .collect::<Vec<_>>();
+        for (segment, fragment) in
+            ppt.iter()
+                .zip(indexed_marker_fragments(input, &ppt, Marker::Ppt)?)
+        {
+            if fragment.is_empty() {
+                return Err(invalid(
+                    Some(segment.offset),
+                    Some(Marker::Ppt),
+                    "PPT marker payload must contain packet-header bytes after Zppt",
+                ));
+            }
+        }
+    }
+    if let Some(tile) = codestream.tiles.first() {
+        // One construction validates the entire main-header PPM series and
+        // global PPM/PPT exclusivity. PPT series were checked once per header
+        // above, avoiding quadratic work across large tile grids.
+        let _headers =
+            packed_packet_header_source(input, codestream, tile.tile_index, tile_part_order)?;
+    }
+    Ok(())
 }
 
 fn tile_part_packet_lengths_from_plt(
@@ -25958,6 +26648,13 @@ fn tile_part_packet_lengths_from_plt(
                 "PLT marker payload must contain Zplt",
             ));
         }
+        if data.len() == 1 {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Plt),
+                "PLT marker payload must contain packet-length bytes after Zplt",
+            ));
+        }
         if expected_index > usize::from(u8::MAX) || usize::from(data[0]) != expected_index {
             return Err(invalid(
                 Some(segment.offset),
@@ -25966,39 +26663,11 @@ fn tile_part_packet_lengths_from_plt(
             ));
         }
 
-        let mut packet_len = 0_usize;
-        let mut continued = false;
-        for encoded in &data[1..] {
-            packet_len = packet_len
-                .checked_mul(128)
-                .and_then(|value| value.checked_add(usize::from(encoded & 0x7f)))
-                .ok_or_else(|| {
-                    invalid(
-                        Some(segment.offset),
-                        Some(Marker::Plt),
-                        "PLT packet length exceeds the addressable byte range",
-                    )
-                })?;
-            continued = encoded & 0x80 != 0;
-            if !continued {
-                if packet_len == 0 {
-                    return Err(invalid(
-                        Some(segment.offset),
-                        Some(Marker::Plt),
-                        "PLT packet lengths must be non-zero",
-                    ));
-                }
-                lengths.push(packet_len);
-                packet_len = 0;
-            }
-        }
-        if continued {
-            return Err(invalid(
-                Some(segment.offset),
-                Some(Marker::Plt),
-                "PLT marker ends inside a variable-length packet length",
-            ));
-        }
+        lengths.extend(decode_packet_lengths(
+            &data[1..],
+            Marker::Plt,
+            segment.offset,
+        )?);
     }
 
     let declared_payload_len = lengths.iter().try_fold(0_usize, |total, length| {
@@ -26025,6 +26694,7 @@ fn parse_default_precinct_packets_from_source(
     max_resolution: Option<u8>,
     selected_components: Option<&[u16]>,
     packet_profile: ComponentPacketProfile,
+    physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
     let component_count = usize::from(codestream.siz.component_count());
     let component_styles = if matches!(
@@ -26205,7 +26875,33 @@ fn parse_default_precinct_packets_from_source(
         max_resolution_end,
     )?;
 
-    let plt_packet_lengths = tile_packet_lengths_from_plt(input, codestream, tile_rect.tile_index)?;
+    let retained_tile_part_order;
+    let tile_part_order = match physical_tile_part_order {
+        Some(order) => order,
+        None => {
+            retained_tile_part_order = codestream
+                .tiles
+                .iter()
+                .map(|tile| TilePartOrderEntry {
+                    tile_index: tile.tile_index,
+                    tile_part_index: tile.tile_part_index,
+                    payload_len: tile.payload_len,
+                })
+                .collect::<Vec<_>>();
+            &retained_tile_part_order
+        }
+    };
+    let packet_header_source =
+        packed_packet_header_source(input, codestream, tile_rect.tile_index, tile_part_order)?;
+    let packed_headers = match &packet_header_source {
+        PacketHeaderSource::Inline => None,
+        PacketHeaderSource::Packed(source) => Some(source),
+    };
+    let header_payload: &dyn PacketByteSource = packed_headers
+        .map(|source| source as &dyn PacketByteSource)
+        .unwrap_or(payload);
+    let packet_lengths =
+        tile_packet_lengths(input, codestream, tile_rect.tile_index, tile_part_order)?;
     let subband_counts = component_styles
         .iter()
         .map(|style| {
@@ -26260,7 +26956,8 @@ fn parse_default_precinct_packets_from_source(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut packet_offset = 0usize;
+    let mut body_offset = 0usize;
+    let mut header_offset = 0usize;
     let mut contributions = Vec::new();
     let mut contribution_indices = BTreeMap::new();
     let mut excluded_body_bytes = 0_u64;
@@ -26268,7 +26965,7 @@ fn parse_default_precinct_packets_from_source(
     let mut expected_sop_sequence = 0_u16;
     let mut packets_skipped_via_plt = 0_u64;
     let mut packet_bytes_skipped_via_plt = 0_u64;
-    let mut plt_packet_cursor = 0_usize;
+    let mut packet_length_cursor = 0_usize;
     let aggregate_quality_layers = coding_style.layers > 1;
     let retained_layers = max_layers
         .unwrap_or(coding_style.layers)
@@ -26280,14 +26977,14 @@ fn parse_default_precinct_packets_from_source(
             "maximum quality layers must retain at least one layer",
         ));
     }
-    let plt_fully_covers_packets = plt_packet_lengths.as_ref().is_some_and(|plt| {
-        if plt.lengths.len() != expected_packet_count
-            || plt.logical_offsets.len() != expected_packet_count
+    let lengths_fully_cover_packets = packet_lengths.as_ref().is_some_and(|lengths| {
+        if lengths.lengths.len() != expected_packet_count
+            || lengths.logical_offsets.len() != expected_packet_count
         {
             return false;
         }
         let mut expected_offset = 0_usize;
-        for (offset, length) in plt.logical_offsets.iter().zip(&plt.lengths) {
+        for (offset, length) in lengths.logical_offsets.iter().zip(&lengths.lengths) {
             if *offset != expected_offset {
                 return false;
             }
@@ -26315,30 +27012,84 @@ fn parse_default_precinct_packets_from_source(
         &progression_volumes,
         |scheduled| {
             let packet_cursor = scheduled.key;
-            let packet_start = packet_offset;
-            validate_scheduled_packet_start(payload, scheduled, packet_start)?;
-            let declared_packet_len = plt_packet_lengths.as_ref().and_then(|plt| {
-                (plt.logical_offsets.get(plt_packet_cursor) == Some(&packet_start))
-                    .then(|| plt.lengths[plt_packet_cursor])
+            let packet_start = body_offset;
+            let declared_packet_len = packet_lengths.as_ref().and_then(|lengths| {
+                (lengths.logical_offsets.get(packet_length_cursor) == Some(&packet_start))
+                    .then(|| lengths.lengths[packet_length_cursor])
             });
-            if let Some(plt) = &plt_packet_lengths
-                && plt
+            let declared_tile_part = declared_packet_len.and_then(|_| {
+                packet_lengths
+                    .as_ref()
+                    .and_then(|lengths| lengths.tile_parts.get(packet_length_cursor).copied())
+            });
+            let physical_tile_part = payload.packet_tile_part_at(packet_start);
+            let packed_scope_tile_part = match packed_headers {
+                Some(packed) if packed.kind == PacketHeaderSourceKind::Ppm => {
+                    header_payload.packet_tile_part_at(header_offset)
+                }
+                Some(packed) if packed.kind == PacketHeaderSourceKind::Ppt => packed
+                    .available_tile_part_at(header_offset)
+                    .filter(|available| {
+                        tile_part_order
+                            .iter()
+                            .filter(|entry| entry.tile_index == tile_rect.tile_index)
+                            .count()
+                            .checked_sub(1)
+                            == Some(*available)
+                    }),
+                _ => None,
+            };
+            let packet_tile_part = if declared_packet_len == Some(0) {
+                declared_tile_part.ok_or(CodestreamError::SizeOverflow)?
+            } else if declared_packet_len.is_none() && packed_scope_tile_part.is_some() {
+                // An active Nppm collection is exact. A PPT declaration in
+                // the final tile-part is also exact because no later packet
+                // body scope exists. Either can disambiguate a header-only
+                // packet at a shared empty-span offset; any subsequently
+                // parsed non-empty body is checked against the physical span.
+                packed_scope_tile_part.ok_or(CodestreamError::SizeOverflow)?
+            } else {
+                physical_tile_part.ok_or(CodestreamError::SizeOverflow)?
+            };
+            if declared_packet_len.is_some_and(|length| length != 0)
+                && declared_tile_part.is_some_and(|declared| declared != packet_tile_part)
+            {
+                let lengths = packet_lengths
+                    .as_ref()
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                return Err(invalid(
+                    lengths.marker_offsets.get(packet_length_cursor).copied(),
+                    lengths.markers.get(packet_length_cursor).copied(),
+                    "packet-length marker tile-part ordinal disagrees with the physical packet body",
+                ));
+            }
+            validate_scheduled_packet_start(scheduled, packet_tile_part)?;
+            if let Some(lengths) = &packet_lengths
+                && lengths
                     .logical_offsets
-                    .get(plt_packet_cursor)
+                    .get(packet_length_cursor)
                     .is_some_and(|declared_offset| *declared_offset < packet_start)
             {
                 return Err(invalid(
-                    Some(plt.marker_offsets[plt_packet_cursor]),
-                    Some(Marker::Plt),
-                    "PLT packet offset disagrees with the parsed packet progression",
+                    Some(lengths.marker_offsets[packet_length_cursor]),
+                    Some(lengths.markers[packet_length_cursor]),
+                    "packet-length marker offset disagrees with the parsed packet progression",
                 ));
             }
             let unrequested_component = selected_components
                 .is_some_and(|selected| !selected.contains(&packet_cursor.component));
-            if let Some(declared_packet_len) = declared_packet_len {
+            let declared_packet_end = if let Some(declared_packet_len) = declared_packet_len {
+                let end = packet_start
+                    .checked_add(declared_packet_len)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                payload.require_range(packet_start, declared_packet_len)?;
                 payload.set_read_window(packet_start, declared_packet_len);
-            }
-            if plt_fully_covers_packets
+                Some(end)
+            } else {
+                None
+            };
+            if lengths_fully_cover_packets
+                && packet_header_source.kind() == PacketHeaderSourceKind::Inline
                 && unrequested_component
                 && !coding_style.sop_markers
                 && !coding_style.eph_markers
@@ -26346,10 +27097,11 @@ fn parse_default_precinct_packets_from_source(
                 let declared_packet_len =
                     declared_packet_len.ok_or(CodestreamError::SizeOverflow)?;
                 payload.require_range(packet_start, declared_packet_len)?;
-                packet_offset = packet_start
+                body_offset = packet_start
                     .checked_add(declared_packet_len)
                     .ok_or(CodestreamError::SizeOverflow)?;
-                plt_packet_cursor = plt_packet_cursor
+                header_offset = body_offset;
+                packet_length_cursor = packet_length_cursor
                     .checked_add(1)
                     .ok_or(CodestreamError::SizeOverflow)?;
                 packets_skipped_via_plt = packets_skipped_via_plt.saturating_add(1);
@@ -26361,17 +27113,43 @@ fn parse_default_precinct_packets_from_source(
             let packet_style = *component_styles
                 .get(usize::from(packet_cursor.component))
                 .ok_or(CodestreamError::SizeOverflow)?;
-            packet_offset = consume_inline_sop(
+            body_offset = consume_packet_sop(
                 payload,
-                packet_offset,
+                body_offset,
                 packet_style.sop_markers,
                 expected_sop_sequence,
+                declared_packet_end,
             )?;
             expected_sop_sequence = next_sop_sequence(expected_sop_sequence);
+            if packet_header_source.kind() == PacketHeaderSourceKind::Inline {
+                header_offset = body_offset;
+            }
             let component_state = component_states
                 .get_mut(usize::from(packet_cursor.component))
                 .ok_or(CodestreamError::SizeOverflow)?;
-            let mut reader = PacketBitReader::at(payload, packet_offset)?;
+            let packet_header_start = header_offset;
+            if packet_header_source.kind() == PacketHeaderSourceKind::Ppm
+                && header_payload.packet_tile_part_at(packet_header_start) != Some(packet_tile_part)
+            {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Ppm),
+                    "PPM Nppm collections disagree with packet-body tile-part boundaries",
+                ));
+            }
+            if let Some(packed) = packed_headers
+                && packed.kind == PacketHeaderSourceKind::Ppt
+                && packed
+                    .available_tile_part_at(packet_header_start)
+                    .is_some_and(|available| available > packet_tile_part)
+            {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Ppt),
+                    "PPT packet-header bytes are consumed before their tile-part header is available",
+                ));
+            }
+            let mut reader = PacketBitReader::at(header_payload, packet_header_start)?;
             let packet_present = reader.read_bits_with_stuffing(1)? == 1;
             let mut packet_contributions = Vec::new();
             if packet_present {
@@ -26585,11 +27363,31 @@ fn parse_default_precinct_packets_from_source(
 
             reader.align();
             let header_len = reader.byte_pos();
-            let header_end = packet_offset
+            let header_end = packet_header_start
                 .checked_add(header_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
+            header_offset =
+                consume_packet_eph(header_payload, header_end, packet_style.eph_markers)?;
+            if header_payload
+                .internal_span_boundary_in(packet_header_start, header_offset)
+                .is_some()
+            {
+                return Err(invalid(
+                    None,
+                    Some(match packet_header_source.kind() {
+                        PacketHeaderSourceKind::Ppm => Marker::Ppm,
+                        PacketHeaderSourceKind::Ppt => Marker::Ppt,
+                        PacketHeaderSourceKind::Inline => Marker::Sot,
+                    }),
+                    "packet-header source segment ends inside a packet header",
+                ));
+            }
             let mut segment_offset =
-                consume_inline_eph(payload, header_end, packet_style.eph_markers)?;
+                if packet_header_source.kind() == PacketHeaderSourceKind::Inline {
+                    header_offset
+                } else {
+                    body_offset
+                };
             for pending in packet_contributions {
                 payload.require_range(segment_offset, pending.codeword_len)?;
                 let codeword_len = pending.codeword_len;
@@ -26617,40 +27415,74 @@ fn parse_default_precinct_packets_from_source(
                     .checked_add(codeword_len)
                     .ok_or(CodestreamError::SizeOverflow)?;
             }
+            let parsed_packet_len = segment_offset
+                .checked_sub(packet_start)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if parsed_packet_len != 0
+                && physical_tile_part.is_some_and(|physical| physical != packet_tile_part)
+            {
+                return Err(invalid(
+                    None,
+                    Some(match packet_header_source.kind() {
+                        PacketHeaderSourceKind::Inline => Marker::Sod,
+                        PacketHeaderSourceKind::Ppm => Marker::Ppm,
+                        PacketHeaderSourceKind::Ppt => Marker::Ppt,
+                    }),
+                    "non-empty packet body disagrees with its resolved tile-part scope",
+                ));
+            }
             if let Some(declared_packet_len) = declared_packet_len {
-                let parsed_packet_len = segment_offset
-                    .checked_sub(packet_start)
-                    .ok_or(CodestreamError::SizeOverflow)?;
                 if parsed_packet_len != declared_packet_len {
+                    let lengths = packet_lengths
+                        .as_ref()
+                        .ok_or(CodestreamError::SizeOverflow)?;
                     return Err(invalid(
                         Some(
-                            plt_packet_lengths
-                                .as_ref()
-                                .and_then(|plt| plt.marker_offsets.get(plt_packet_cursor))
+                            lengths
+                                .marker_offsets
+                                .get(packet_length_cursor)
                                 .copied()
                                 .ok_or(CodestreamError::SizeOverflow)?,
                         ),
-                        Some(Marker::Plt),
-                        "PLT packet length disagrees with the parsed packet boundary",
+                        Some(
+                            lengths
+                                .markers
+                                .get(packet_length_cursor)
+                                .copied()
+                                .ok_or(CodestreamError::SizeOverflow)?,
+                        ),
+                        "packet-length marker disagrees with the parsed packet boundary",
                     ));
                 }
-                plt_packet_cursor = plt_packet_cursor
+                packet_length_cursor = packet_length_cursor
                     .checked_add(1)
                     .ok_or(CodestreamError::SizeOverflow)?;
-            } else if let Some(plt) = &plt_packet_lengths
-                && plt
+            } else if let Some(lengths) = &packet_lengths
+                && lengths
                     .logical_offsets
-                    .get(plt_packet_cursor)
+                    .get(packet_length_cursor)
                     .is_some_and(|declared_offset| *declared_offset < segment_offset)
             {
                 return Err(invalid(
-                    Some(plt.marker_offsets[plt_packet_cursor]),
-                    Some(Marker::Plt),
-                    "parsed packet crosses a PLT-declared tile-part packet boundary",
+                    Some(lengths.marker_offsets[packet_length_cursor]),
+                    Some(lengths.markers[packet_length_cursor]),
+                    "parsed packet crosses a declared packet boundary",
                 ));
             }
-            validate_packet_tile_part_boundary(payload, packet_start, header_end, segment_offset)?;
-            packet_offset = segment_offset;
+            validate_packet_tile_part_boundary(
+                payload,
+                packet_start,
+                if packet_header_source.kind() == PacketHeaderSourceKind::Inline {
+                    header_offset
+                } else {
+                    body_offset
+                },
+                segment_offset,
+            )?;
+            body_offset = segment_offset;
+            if packet_header_source.kind() == PacketHeaderSourceKind::Inline {
+                header_offset = body_offset;
+            }
             Ok(())
         },
     )?;
@@ -26658,26 +27490,44 @@ fn parse_default_precinct_packets_from_source(
         return Err(CodestreamError::SizeOverflow);
     }
 
-    if let Some(plt) = &plt_packet_lengths
-        && plt_packet_cursor != plt.lengths.len()
+    if let Some(lengths) = &packet_lengths
+        && packet_length_cursor != lengths.lengths.len()
     {
         return Err(invalid(
             Some(
-                plt.marker_offsets
-                    .get(plt_packet_cursor)
+                lengths
+                    .marker_offsets
+                    .get(packet_length_cursor)
                     .copied()
                     .ok_or(CodestreamError::SizeOverflow)?,
             ),
-            Some(Marker::Plt),
-            "PLT contains a packet boundary outside the parsed packet progression",
+            Some(
+                lengths
+                    .markers
+                    .get(packet_length_cursor)
+                    .copied()
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            ),
+            "packet-length marker contains a boundary outside the parsed packet progression",
         ));
     }
 
-    if packet_offset != payload.len() {
+    if body_offset != payload.len() {
         return Err(invalid(
             None,
             Some(Marker::Sod),
             "default-precinct LRCP packets did not consume the tile-part payload",
+        ));
+    }
+    if header_offset != header_payload.len() {
+        return Err(invalid(
+            None,
+            Some(match packet_header_source.kind() {
+                PacketHeaderSourceKind::Inline => Marker::Sod,
+                PacketHeaderSourceKind::Ppm => Marker::Ppm,
+                PacketHeaderSourceKind::Ppt => Marker::Ppt,
+            }),
+            "packet progression did not consume the complete packet-header source",
         ));
     }
 
@@ -26708,13 +27558,9 @@ fn validate_packet_tile_part_boundary(
 }
 
 fn validate_scheduled_packet_start(
-    payload: &dyn PacketByteSource,
     scheduled: ScheduledPacket,
-    packet_start: usize,
+    packet_tile_part: usize,
 ) -> Result<()> {
-    let packet_tile_part = payload
-        .packet_tile_part_at(packet_start)
-        .ok_or(CodestreamError::SizeOverflow)?;
     if packet_tile_part < scheduled.declared_tile_part {
         return Err(invalid(
             scheduled.marker_offset,
@@ -26725,19 +27571,24 @@ fn validate_scheduled_packet_start(
     Ok(())
 }
 
-/// Consume an optional inline SOP marker at one structurally known packet
+/// Consume an optional SOP marker at one structurally known packet-body
 /// boundary.
 ///
 /// ISO/IEC 15444-1:2024, A.6.1 and A.8.1, PDF pages 47 and 60–61, permits SOP
 /// per packet when COD signals it. `Nsop` still counts every packet in the
 /// coded tile, including packets without the marker. The reviewed retrieval
 /// revision is `34e5d1639b9f121807e620c001893ca9d2c8f977`.
-fn consume_inline_sop(
+fn consume_packet_sop(
     payload: &dyn PacketByteSource,
     offset: usize,
     sop_allowed: bool,
     expected_sequence: u16,
+    declared_packet_end: Option<usize>,
 ) -> Result<usize> {
+    let prefix_end = offset.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+    if declared_packet_end.is_some_and(|end| prefix_end > end) {
+        return Ok(offset);
+    }
     let marker = packet_source_u16(payload, offset);
     if marker != Some(Marker::Sop.code()) {
         return Ok(offset);
@@ -26747,6 +27598,14 @@ fn consume_inline_sop(
             None,
             Some(Marker::Sop),
             "SOP marker is present without COD permission",
+        ));
+    }
+    let next = offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)?;
+    if declared_packet_end.is_some_and(|end| next > end) {
+        return Err(invalid(
+            None,
+            Some(Marker::Sop),
+            "SOP marker segment crosses the declared packet boundary",
         ));
     }
     payload.require_range(offset, 6)?;
@@ -26770,8 +27629,10 @@ fn consume_inline_sop(
             "SOP packet sequence disagrees with packet progression",
         ));
     }
-    let next = offset.checked_add(6).ok_or(CodestreamError::SizeOverflow)?;
-    if packet_source_u16(payload, next) == Some(Marker::Sop.code()) {
+    let duplicate_prefix_end = next.checked_add(2).ok_or(CodestreamError::SizeOverflow)?;
+    if declared_packet_end.is_none_or(|end| duplicate_prefix_end <= end)
+        && packet_source_u16(payload, next) == Some(Marker::Sop.code())
+    {
         return Err(invalid(
             None,
             Some(Marker::Sop),
@@ -26781,13 +27642,14 @@ fn consume_inline_sop(
     Ok(next)
 }
 
-/// Consume the inline EPH marker that COD requires immediately after one
-/// packet header.
+/// Consume the EPH marker that COD requires immediately after one packet
+/// header, from the active inline or packed header source.
 ///
 /// ISO/IEC 15444-1:2024, A.6.1, A.8.2 and B.10.8, PDF pages 47, 61 and
-/// 93–95, requires EPH exactly at this boundary when signalled. Packed packet
-/// headers use a different placement model and remain outside this path.
-fn consume_inline_eph(
+/// 93–95, requires EPH exactly at this boundary when signalled. The caller
+/// selects the packet-header byte source, so a packed EPH can never be
+/// mistaken for bytes in the tile-part packet body.
+fn consume_packet_eph(
     payload: &dyn PacketByteSource,
     offset: usize,
     eph_required: bool,
@@ -26829,6 +27691,792 @@ fn packet_source_u16(payload: &dyn PacketByteSource, offset: usize) -> Option<u1
 
 fn next_sop_sequence(sequence: u16) -> u16 {
     sequence.wrapping_add(1)
+}
+
+#[cfg(test)]
+mod packed_packet_header_tests {
+    use super::*;
+
+    fn marker_segment(marker: Marker, data: &[u8]) -> Vec<u8> {
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(
+            &u16::try_from(data.len() + 2)
+                .expect("test marker length")
+                .to_be_bytes(),
+        );
+        segment.extend_from_slice(data);
+        segment
+    }
+
+    fn fixture() -> Vec<u8> {
+        let samples = (0..16)
+            .map(|sample| u8::try_from((sample * 29 + 7) % 256).unwrap())
+            .collect::<Vec<_>>();
+        encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap()
+    }
+
+    fn encode_test_packet_length(mut value: usize) -> Vec<u8> {
+        if value == 0 {
+            return vec![0];
+        }
+        let mut digits = Vec::new();
+        while value != 0 {
+            digits.push(u8::try_from(value & 0x7f).unwrap());
+            value >>= 7;
+        }
+        digits.reverse();
+        let last = digits.len() - 1;
+        for digit in &mut digits[..last] {
+            *digit |= 0x80;
+        }
+        digits
+    }
+
+    fn with_plm_collections(mut codestream: Vec<u8>, collections: &[Vec<usize>]) -> Vec<u8> {
+        let mut data = vec![0];
+        for collection in collections {
+            let encoded = collection
+                .iter()
+                .flat_map(|length| encode_test_packet_length(*length))
+                .collect::<Vec<_>>();
+            data.push(u8::try_from(encoded.len()).unwrap());
+            data.extend_from_slice(&encoded);
+        }
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream.splice(sot..sot, marker_segment(Marker::Plm, &data));
+        codestream
+    }
+
+    fn with_empty_first_tile_part(mut codestream: Vec<u8>) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream[sot + 10] = 1;
+        codestream[sot + 11] = 2;
+        let mut empty_tile_part = Marker::Sot.code().to_be_bytes().to_vec();
+        empty_tile_part.extend_from_slice(&10_u16.to_be_bytes());
+        empty_tile_part.extend_from_slice(&0_u16.to_be_bytes());
+        empty_tile_part.extend_from_slice(&14_u32.to_be_bytes());
+        empty_tile_part.push(0);
+        empty_tile_part.push(2);
+        empty_tile_part.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        codestream.splice(sot..sot, empty_tile_part);
+        codestream
+    }
+
+    fn packed_fixture(kind: PacketHeaderSourceKind, sop: bool, eph: bool) -> Vec<u8> {
+        let mut codestream = fixture();
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] = (u8::from(sop) << 1) | (u8::from(eph) << 2);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let payload_offset = sod + 2;
+        let eoc = find_marker(&codestream, payload_offset, Marker::Eoc).unwrap();
+        let packet = parse_no_decomp_lrcp_packet(&codestream[payload_offset..eoc]).unwrap();
+        let mut headers = codestream[payload_offset..payload_offset + packet.header_len].to_vec();
+        if eph {
+            headers.extend_from_slice(&Marker::Eph.code().to_be_bytes());
+        }
+        let mut bodies = Vec::new();
+        if sop {
+            bodies.extend_from_slice(&Marker::Sop.code().to_be_bytes());
+            bodies.extend_from_slice(&4_u16.to_be_bytes());
+            bodies.extend_from_slice(&0_u16.to_be_bytes());
+        }
+        bodies.extend_from_slice(&codestream[payload_offset + packet.header_len..eoc]);
+        codestream.splice(payload_offset..eoc, bodies.iter().copied());
+
+        let packed_segment = match kind {
+            PacketHeaderSourceKind::Ppm => {
+                let mut data = vec![0];
+                data.extend_from_slice(&u32::try_from(headers.len()).unwrap().to_be_bytes());
+                data.extend_from_slice(&headers);
+                marker_segment(Marker::Ppm, &data)
+            }
+            PacketHeaderSourceKind::Ppt => {
+                let mut data = vec![0];
+                data.extend_from_slice(&headers);
+                marker_segment(Marker::Ppt, &data)
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        };
+        let new_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, new_sot + 6).unwrap();
+        let body_delta =
+            i64::try_from(bodies.len()).unwrap() - i64::try_from(eoc - payload_offset).unwrap();
+        let tile_header_delta = if kind == PacketHeaderSourceKind::Ppt {
+            i64::try_from(packed_segment.len()).unwrap()
+        } else {
+            0
+        };
+        let new_psot = u32::try_from(i64::from(psot) + body_delta + tile_header_delta).unwrap();
+        codestream[new_sot + 6..new_sot + 10].copy_from_slice(&new_psot.to_be_bytes());
+        let insertion = if kind == PacketHeaderSourceKind::Ppm {
+            new_sot
+        } else {
+            find_marker(&codestream, new_sot, Marker::Sod).unwrap()
+        };
+        codestream.splice(insertion..insertion, packed_segment);
+        codestream
+    }
+
+    fn zero_body_packed_fixture(kind: PacketHeaderSourceKind) -> Vec<u8> {
+        let mut codestream = packed_fixture(kind, false, false);
+        match kind {
+            PacketHeaderSourceKind::Ppm => {
+                let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+                let old_len = usize::from(read_u16(&codestream, ppm + 2).unwrap());
+                let header_start = ppm + 9;
+                let header_end = ppm + 2 + old_len;
+                let removed = header_end - header_start;
+                codestream.splice(header_start..header_end, [0]);
+                codestream[ppm + 5..ppm + 9].copy_from_slice(&1_u32.to_be_bytes());
+                codestream[ppm + 2..ppm + 4]
+                    .copy_from_slice(&u16::try_from(old_len - removed + 1).unwrap().to_be_bytes());
+            }
+            PacketHeaderSourceKind::Ppt => {
+                let ppt = find_marker(&codestream, 0, Marker::Ppt).unwrap();
+                let old_len = usize::from(read_u16(&codestream, ppt + 2).unwrap());
+                let header_start = ppt + 5;
+                let header_end = ppt + 2 + old_len;
+                let removed = header_end - header_start;
+                codestream.splice(header_start..header_end, [0]);
+                codestream[ppt + 2..ppt + 4]
+                    .copy_from_slice(&u16::try_from(old_len - removed + 1).unwrap().to_be_bytes());
+                let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10]
+                    .copy_from_slice(&(psot - u32::try_from(removed - 1).unwrap()).to_be_bytes());
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        let body_len = eoc - (sod + 2);
+        codestream.drain(sod + 2..eoc);
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot - u32::try_from(body_len).unwrap()).to_be_bytes());
+        codestream
+    }
+
+    fn adjacent_sop_packed_fixture(
+        kind: PacketHeaderSourceKind,
+        first_packet_has_sop: bool,
+    ) -> Vec<u8> {
+        let mut codestream = zero_body_packed_fixture(kind);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] |= 0x02;
+        codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+
+        match kind {
+            PacketHeaderSourceKind::Ppm => {
+                let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+                let lppm = read_u16(&codestream, ppm + 2).unwrap();
+                let nppm = read_u32(&codestream, ppm + 5).unwrap();
+                codestream.splice(
+                    ppm + 2 + usize::from(lppm)..ppm + 2 + usize::from(lppm),
+                    [0],
+                );
+                codestream[ppm + 2..ppm + 4].copy_from_slice(&(lppm + 1).to_be_bytes());
+                codestream[ppm + 5..ppm + 9].copy_from_slice(&(nppm + 1).to_be_bytes());
+            }
+            PacketHeaderSourceKind::Ppt => {
+                let ppt = find_marker(&codestream, 0, Marker::Ppt).unwrap();
+                let lppt = read_u16(&codestream, ppt + 2).unwrap();
+                codestream.splice(
+                    ppt + 2 + usize::from(lppt)..ppt + 2 + usize::from(lppt),
+                    [0],
+                );
+                codestream[ppt + 2..ppt + 4].copy_from_slice(&(lppt + 1).to_be_bytes());
+                let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10].copy_from_slice(&(psot + 1).to_be_bytes());
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+
+        let mut body = Vec::new();
+        let mut lengths = Vec::new();
+        if first_packet_has_sop {
+            body.extend_from_slice(&[0xff, 0x91, 0, 4, 0, 0]);
+            lengths.push(6);
+        } else {
+            lengths.push(0);
+        }
+        body.extend_from_slice(&[0xff, 0x91, 0, 4, 0, 1]);
+        lengths.push(6);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        codestream.splice(sod + 2..sod + 2, body.iter().copied());
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(body.len()).unwrap()).to_be_bytes());
+
+        match kind {
+            PacketHeaderSourceKind::Ppm => with_plm_collections(codestream, &[lengths]),
+            PacketHeaderSourceKind::Ppt => {
+                let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+                let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+                let mut data = vec![0];
+                data.extend(lengths.iter().map(|length| u8::try_from(*length).unwrap()));
+                let plt = marker_segment(Marker::Plt, &data);
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10]
+                    .copy_from_slice(&(psot + u32::try_from(plt.len()).unwrap()).to_be_bytes());
+                codestream.splice(sod..sod, plt);
+                codestream
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+    }
+
+    fn ppm_zero_body_in_final_empty_part(with_plm: bool) -> Vec<u8> {
+        let mut codestream =
+            with_empty_first_tile_part(zero_body_packed_fixture(PacketHeaderSourceKind::Ppm));
+        let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+        let lppm = read_u16(&codestream, ppm + 2).unwrap();
+        codestream.splice(ppm + 5..ppm + 5, 0_u32.to_be_bytes());
+        codestream[ppm + 2..ppm + 4].copy_from_slice(&(lppm + 4).to_be_bytes());
+        if with_plm {
+            codestream = with_plm_collections(codestream, &[Vec::new(), vec![0]]);
+        }
+        codestream
+    }
+
+    fn ppt_plt_zero_body_in_final_empty_part(with_plt: bool) -> Vec<u8> {
+        let mut codestream =
+            with_empty_first_tile_part(zero_body_packed_fixture(PacketHeaderSourceKind::Ppt));
+        if with_plt {
+            let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+            let second_sot =
+                first_sot + usize::try_from(read_u32(&codestream, first_sot + 6).unwrap()).unwrap();
+            let sod = find_marker(&codestream, second_sot, Marker::Sod).unwrap();
+            let plt = marker_segment(Marker::Plt, &[0, 0]);
+            let psot = read_u32(&codestream, second_sot + 6).unwrap();
+            codestream[second_sot + 6..second_sot + 10]
+                .copy_from_slice(&(psot + u32::try_from(plt.len()).unwrap()).to_be_bytes());
+            codestream.splice(sod..sod, plt);
+        }
+        codestream
+    }
+
+    fn ppt_zero_body_with_ambiguous_later_empty_part() -> Vec<u8> {
+        let mut codestream = zero_body_packed_fixture(PacketHeaderSourceKind::Ppt);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream[sot + 11] = 2;
+        let mut empty = Marker::Sot.code().to_be_bytes().to_vec();
+        empty.extend_from_slice(&10_u16.to_be_bytes());
+        empty.extend_from_slice(&0_u16.to_be_bytes());
+        empty.extend_from_slice(&14_u32.to_be_bytes());
+        empty.push(1);
+        empty.push(2);
+        empty.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
+        codestream.splice(eoc..eoc, empty);
+        codestream
+    }
+
+    fn assert_zero_body_slice_and_positioned(codestream: &[u8]) {
+        assert!(contributions_result(codestream).unwrap().is_empty());
+        let source = source::SliceSource::new(codestream);
+        let request = TileRegionRequest {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let mut scan = scan_part1_source_headers(&source, request).unwrap();
+        let tile = tile_rects_for_siz(&scan.codestream.siz).unwrap()[0];
+        let mut spans = scan.payload_spans.remove(&tile.tile_index).unwrap();
+        let mut logical_offset = 0_usize;
+        for span in &mut spans {
+            span.logical_offset = logical_offset;
+            logical_offset = logical_offset.checked_add(span.len).unwrap();
+        }
+        let source_payload = SourceTilePartPayload {
+            source: &source,
+            spans,
+            len: logical_offset,
+        };
+        let buffered = BufferedSourcePacketPayload::new(&source_payload);
+        let parsed = parse_default_precinct_packets_from_source(
+            &scan.marker_bytes,
+            &scan.codestream,
+            tile,
+            &buffered,
+            None,
+            None,
+            None,
+            ComponentPacketProfile::Default,
+            Some(&scan.work.tile_part_order),
+        )
+        .unwrap();
+        assert!(parsed.contributions.is_empty());
+        assert!(buffered.take_error().is_none());
+    }
+
+    #[test]
+    fn ppm_plm_zero_body_uses_declared_final_empty_tile_part_for_slice_and_source() {
+        assert_zero_body_slice_and_positioned(&ppm_zero_body_in_final_empty_part(true));
+    }
+
+    #[test]
+    fn ppt_plt_zero_body_uses_declared_final_empty_tile_part_for_slice_and_source() {
+        assert_zero_body_slice_and_positioned(&ppt_plt_zero_body_in_final_empty_part(true));
+    }
+
+    #[test]
+    fn zero_body_without_lengths_requires_an_exact_packed_header_scope() {
+        assert_zero_body_slice_and_positioned(&ppm_zero_body_in_final_empty_part(false));
+        assert_zero_body_slice_and_positioned(&ppt_plt_zero_body_in_final_empty_part(false));
+        assert!(contributions_result(&ppt_zero_body_with_ambiguous_later_empty_part()).is_err());
+    }
+
+    #[test]
+    fn zero_length_packet_does_not_consume_the_next_packed_packet_sop() {
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            assert_zero_body_slice_and_positioned(&adjacent_sop_packed_fixture(kind, false));
+        }
+    }
+
+    #[test]
+    fn sop_only_packet_does_not_probe_the_next_packed_packet_sop_as_a_duplicate() {
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            assert_zero_body_slice_and_positioned(&adjacent_sop_packed_fixture(kind, true));
+        }
+    }
+
+    fn contributions(codestream: &[u8]) -> Vec<(usize, u16, u8, Vec<u8>)> {
+        let parsed = parse(codestream).unwrap();
+        let tile = tile_rects_for_siz(&parsed.siz).unwrap()[0];
+        let payload = tile_payload_spans_for_rect(codestream, &parsed, tile).unwrap();
+        let contributions = parse_default_precinct_packets_from_source(
+            codestream,
+            &parsed,
+            tile,
+            &payload,
+            None,
+            None,
+            None,
+            ComponentPacketProfile::Default,
+            None,
+        )
+        .unwrap()
+        .contributions;
+        contributions
+            .into_iter()
+            .map(|contribution| {
+                let mut bytes = Vec::new();
+                payload
+                    .append_range(
+                        contribution.payload_offset,
+                        contribution.codeword_len,
+                        &mut bytes,
+                    )
+                    .unwrap();
+                (
+                    contribution.codeword_len,
+                    contribution.coding_passes,
+                    contribution.missing_most_significant_bitplanes,
+                    bytes,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inline_ppm_and_ppt_sources_parse_equivalent_packet_contributions() {
+        let inline = fixture();
+        let expected = contributions(&inline);
+        assert_eq!(
+            contributions(&packed_fixture(PacketHeaderSourceKind::Ppm, false, false)),
+            expected
+        );
+        assert_eq!(
+            contributions(&packed_fixture(PacketHeaderSourceKind::Ppt, false, false)),
+            expected
+        );
+    }
+
+    fn ppm_with_empty_first_tile_part(misassign_header: bool) -> Vec<u8> {
+        let mut codestream = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let ppm = find_marker(&codestream, 0, Marker::Ppm).unwrap();
+        let lppm = read_u16(&codestream, ppm + 2).unwrap();
+        let first_collection = ppm + 5;
+        let nppm = usize::try_from(read_u32(&codestream, first_collection).unwrap()).unwrap();
+        let existing = codestream[first_collection..first_collection + 4 + nppm].to_vec();
+        let collections = if misassign_header {
+            let mut collections = existing;
+            collections.extend_from_slice(&0_u32.to_be_bytes());
+            collections
+        } else {
+            let mut collections = 0_u32.to_be_bytes().to_vec();
+            collections.extend_from_slice(&existing);
+            collections
+        };
+        codestream.splice(first_collection..first_collection + 4 + nppm, collections);
+        codestream[ppm + 2..ppm + 4].copy_from_slice(&(lppm + 4).to_be_bytes());
+
+        let sot = find_marker(&codestream, ppm, Marker::Sot).unwrap();
+        codestream[sot + 10] = 1;
+        codestream[sot + 11] = 2;
+        let mut empty_tile_part = Marker::Sot.code().to_be_bytes().to_vec();
+        empty_tile_part.extend_from_slice(&10_u16.to_be_bytes());
+        empty_tile_part.extend_from_slice(&0_u16.to_be_bytes());
+        empty_tile_part.extend_from_slice(&14_u32.to_be_bytes());
+        empty_tile_part.push(0);
+        empty_tile_part.push(2);
+        empty_tile_part.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        codestream.splice(sot..sot, empty_tile_part);
+        codestream
+    }
+
+    #[test]
+    fn ppm_collections_follow_tile_part_scope_including_empty_parts() {
+        let expected = contributions(&fixture());
+        assert_eq!(
+            contributions(&ppm_with_empty_first_tile_part(false)),
+            expected
+        );
+        let misassigned = ppm_with_empty_first_tile_part(true);
+        assert!(matches!(
+            parse(&misassigned),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Ppm),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn plm_only_collections_match_physical_tile_part_payloads() {
+        let base = fixture();
+        let sot = find_marker(&base, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&base, sot, Marker::Sod).unwrap();
+        let payload_len =
+            usize::try_from(read_u32(&base, sot + 6).unwrap()).unwrap() - (sod + 2 - sot);
+
+        parse(&with_plm_collections(base.clone(), &[vec![payload_len]])).unwrap();
+        for mismatched in [payload_len - 1, payload_len + 1] {
+            assert!(matches!(
+                parse(&with_plm_collections(base.clone(), &[vec![mismatched]])),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Plm),
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            parse(&with_plm_collections(base.clone(), &[Vec::new()])),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plm),
+                ..
+            })
+        ));
+
+        let two_parts = with_empty_first_tile_part(base);
+        parse(&with_plm_collections(
+            two_parts.clone(),
+            &[Vec::new(), vec![payload_len]],
+        ))
+        .unwrap();
+        assert!(matches!(
+            parse(&with_plm_collections(
+                two_parts,
+                &[vec![payload_len], Vec::new()],
+            )),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plm),
+                ..
+            })
+        ));
+    }
+
+    fn ppt_with_empty_other_tile_part(ppt_is_earlier: bool) -> Vec<u8> {
+        let mut codestream = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let ppt = find_marker(&codestream, sot, Marker::Ppt).unwrap();
+        let ppt_end = ppt + 2 + usize::from(read_u16(&codestream, ppt + 2).unwrap());
+        let ppt_segment = codestream[ppt..ppt_end].to_vec();
+        codestream.drain(ppt..ppt_end);
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot - u32::try_from(ppt_segment.len()).unwrap()).to_be_bytes());
+        codestream[sot + 11] = 2;
+
+        let empty_index = if ppt_is_earlier { 0 } else { 1 };
+        let mut empty = Marker::Sot.code().to_be_bytes().to_vec();
+        empty.extend_from_slice(&10_u16.to_be_bytes());
+        empty.extend_from_slice(&0_u16.to_be_bytes());
+        empty.extend_from_slice(&u32::try_from(14 + ppt_segment.len()).unwrap().to_be_bytes());
+        empty.push(empty_index);
+        empty.push(2);
+        empty.extend_from_slice(&ppt_segment);
+        empty.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+
+        if ppt_is_earlier {
+            codestream[sot + 10] = 1;
+            codestream.splice(sot..sot, empty);
+        } else {
+            codestream[sot + 10] = 0;
+            let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
+            codestream.splice(eoc..eoc, empty);
+        }
+        codestream
+    }
+
+    #[test]
+    fn ppt_headers_obey_tile_part_availability_including_empty_parts() {
+        assert!(
+            !contributions(&packed_fixture(PacketHeaderSourceKind::Ppt, false, false,)).is_empty()
+        );
+        assert!(!contributions(&ppt_with_empty_other_tile_part(true)).is_empty());
+        assert!(matches!(
+            contributions_result(&ppt_with_empty_other_tile_part(false)),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Ppt),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn positioned_tlm_plm_regional_preparation_maps_global_order_to_selected_payload() {
+        let mut codestream = fixture();
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 6..siz + 10].copy_from_slice(&8_u32.to_be_bytes());
+        let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let eoc = find_marker(&codestream, first_sot, Marker::Eoc).unwrap();
+        let mut second_tile_part = codestream[first_sot..eoc].to_vec();
+        second_tile_part[4..6].copy_from_slice(&1_u16.to_be_bytes());
+        codestream.splice(eoc..eoc, second_tile_part);
+
+        let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, first_sot + 6).unwrap();
+        let sod = find_marker(&codestream, first_sot, Marker::Sod).unwrap();
+        let payload_len = usize::try_from(psot).unwrap() - (sod + 2 - first_sot);
+        let mut tlm_data = vec![0, 0x10];
+        for tile_index in [0_u8, 1] {
+            tlm_data.push(tile_index);
+            tlm_data.extend_from_slice(&u16::try_from(psot).unwrap().to_be_bytes());
+        }
+        let tlm = marker_segment(Marker::Tlm, &tlm_data);
+        let mut plm_data = vec![0];
+        for _ in 0..2 {
+            let encoded = encode_test_packet_length(payload_len);
+            plm_data.push(u8::try_from(encoded.len()).unwrap());
+            plm_data.extend_from_slice(&encoded);
+        }
+        let plm = marker_segment(Marker::Plm, &plm_data);
+        codestream.splice(first_sot..first_sot, tlm.into_iter().chain(plm));
+
+        let source = source::SliceSource::new(&codestream);
+        let prepared = prepare_part1_component_decode_from_source(
+            &source,
+            Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: TileRegionRequest {
+                    x: 4,
+                    y: 0,
+                    width: 4,
+                    height: 4,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(prepared.output_dimensions(), (4, 4));
+        assert_eq!(prepared.preparation_timings().tile_parts_skipped_via_tlm, 1);
+    }
+
+    #[test]
+    fn packed_headers_keep_sop_in_the_body_and_eph_with_the_header() {
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            assert!(!contributions(&packed_fixture(kind, true, true)).is_empty());
+        }
+
+        let mut wrong_eph = packed_fixture(PacketHeaderSourceKind::Ppt, false, true);
+        let ppt = find_marker(&wrong_eph, 0, Marker::Ppt).unwrap();
+        let lppt = usize::from(read_u16(&wrong_eph, ppt + 2).unwrap());
+        let eph = ppt + 2 + lppt - 2;
+        wrong_eph.drain(eph..eph + 2);
+        let sot = find_marker(&wrong_eph, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&wrong_eph, sot, Marker::Sod).unwrap();
+        wrong_eph.splice(sod + 2..sod + 2, Marker::Eph.code().to_be_bytes());
+        assert!(contributions_result(&wrong_eph).is_err());
+    }
+
+    fn contributions_result(codestream: &[u8]) -> Result<Vec<PacketCodeBlockContribution>> {
+        let parsed = parse(codestream)?;
+        let tile = tile_rects_for_siz(&parsed.siz)?[0];
+        let payload = tile_payload_spans_for_rect(codestream, &parsed, tile)?;
+        parse_default_precinct_packets_from_source(
+            codestream,
+            &parsed,
+            tile,
+            &payload,
+            None,
+            None,
+            None,
+            ComponentPacketProfile::Default,
+            None,
+        )
+        .map(|parsed| parsed.contributions)
+    }
+
+    #[test]
+    fn rejects_mixed_duplicate_out_of_order_and_truncated_packed_sources() {
+        let mut mixed = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let sot = find_marker(&mixed, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&mixed, sot, Marker::Sod).unwrap();
+        let ppt = marker_segment(Marker::Ppt, &[0, 0]);
+        let psot = read_u32(&mixed, sot + 6).unwrap();
+        mixed[sot + 6..sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(ppt.len()).unwrap()).to_be_bytes());
+        mixed.splice(sod..sod, ppt);
+        assert!(matches!(
+            parse(&mixed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Ppt),
+                ..
+            })
+        ));
+
+        let mut out_of_order = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let ppt = find_marker(&out_of_order, 0, Marker::Ppt).unwrap();
+        out_of_order[ppt + 4] = 1;
+        assert!(parse(&out_of_order).is_err());
+
+        let mut truncated = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let ppm = find_marker(&truncated, 0, Marker::Ppm).unwrap();
+        truncated[ppm + 5..ppm + 9].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(parse(&truncated).is_err());
+
+        let mut inline_and_ppt = fixture();
+        let sot = find_marker(&inline_and_ppt, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&inline_and_ppt, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&inline_and_ppt, sod + 2, Marker::Eoc).unwrap();
+        let packet = parse_no_decomp_lrcp_packet(&inline_and_ppt[sod + 2..eoc]).unwrap();
+        let mut data = vec![0];
+        data.extend_from_slice(&inline_and_ppt[sod + 2..sod + 2 + packet.header_len]);
+        let ppt = marker_segment(Marker::Ppt, &data);
+        let psot = read_u32(&inline_and_ppt, sot + 6).unwrap();
+        inline_and_ppt[sot + 6..sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(ppt.len()).unwrap()).to_be_bytes());
+        inline_and_ppt.splice(sod..sod, ppt);
+        parse(&inline_and_ppt).unwrap();
+        assert!(contributions_result(&inline_and_ppt).is_err());
+    }
+
+    #[test]
+    fn shared_plm_plt_lengths_reconcile_and_reject_mismatch_and_overflow() {
+        let base = fixture();
+        let sot = find_marker(&base, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&base, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&base, sod + 2, Marker::Eoc).unwrap();
+        let packet_len = u8::try_from(eoc - (sod + 2)).unwrap();
+        let plm = marker_segment(Marker::Plm, &[0, 1, packet_len]);
+        let plt = marker_segment(Marker::Plt, &[0, packet_len]);
+        let mut matching = base.clone();
+        matching.splice(sot..sot, plm.clone());
+        let shifted_sot = find_marker(&matching, 0, Marker::Sot).unwrap();
+        let shifted_sod = find_marker(&matching, shifted_sot, Marker::Sod).unwrap();
+        let psot = read_u32(&matching, shifted_sot + 6).unwrap();
+        matching[shifted_sot + 6..shifted_sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(plt.len()).unwrap()).to_be_bytes());
+        matching.splice(shifted_sod..shifted_sod, plt);
+        contributions_result(&matching).unwrap();
+
+        let mut mismatch = matching.clone();
+        let plm_offset = find_marker(&mismatch, 0, Marker::Plm).unwrap();
+        mismatch[plm_offset + 6] = packet_len - 1;
+        assert!(matches!(
+            parse(&mismatch),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Plm),
+                ..
+            })
+        ));
+
+        assert!(decode_packet_lengths(&[0xff; 64], Marker::Plm, 0).is_err());
+        assert_eq!(
+            decode_packet_lengths(&[0], Marker::Plt, 0).unwrap(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn packet_length_small_domain_round_trips_and_allocation_math_is_checked() {
+        fn encode(mut value: usize) -> Vec<u8> {
+            if value == 0 {
+                return vec![0];
+            }
+            let mut digits = Vec::new();
+            while value != 0 {
+                digits.push(u8::try_from(value & 0x7f).unwrap());
+                value >>= 7;
+            }
+            digits.reverse();
+            let last = digits.len() - 1;
+            for digit in &mut digits[..last] {
+                *digit |= 0x80;
+            }
+            digits
+        }
+
+        for value in [0, 1, 2, 126, 127, 128, 129, 16_383, 16_384, usize::MAX] {
+            assert_eq!(
+                decode_packet_lengths(&encode(value), Marker::Plm, 0).unwrap(),
+                vec![value]
+            );
+        }
+        assert!(checked_packet_organisation_len(usize::MAX, 1, Marker::Ppm).is_err());
+        assert!(
+            checked_packet_organisation_len(MAX_PACKET_ORGANISATION_MARKER_BYTES, 1, Marker::Ppt,)
+                .is_err()
+        );
+
+        let ppm = PackedPacketHeaderSource {
+            kind: PacketHeaderSourceKind::Ppm,
+            bytes: vec![1, 2, 3, 4],
+            segment_ends: vec![2, 4],
+            tile_part_ends: vec![0, 2, 4],
+            availability_ends: Vec::new(),
+        };
+        assert_eq!(
+            (0..4)
+                .map(|offset| ppm.packet_tile_part_at(offset).unwrap())
+                .collect::<Vec<_>>(),
+            vec![1, 1, 2, 2]
+        );
+    }
+
+    #[test]
+    fn indexed_fragments_concatenate_in_scope_and_reject_duplicate_indexes() {
+        let input = [0_u8, 11, 1, 22];
+        let first = MarkerSegment {
+            marker: Marker::Ppt,
+            offset: 10,
+            data_offset: 0,
+            data_len: 2,
+        };
+        let second = MarkerSegment {
+            marker: Marker::Ppt,
+            offset: 20,
+            data_offset: 2,
+            data_len: 2,
+        };
+        assert_eq!(
+            indexed_marker_fragments(&input, &[&first, &second], Marker::Ppt).unwrap(),
+            vec![&[11][..], &[22][..]]
+        );
+        let duplicate_input = [0_u8, 11, 0, 22];
+        assert!(
+            indexed_marker_fragments(&duplicate_input, &[&first, &second], Marker::Ppt).is_err()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -27721,15 +29369,18 @@ mod inline_packet_marker_tests {
     #[test]
     fn permits_omitted_sop_and_validates_sequence_progression_and_wrap() {
         let no_marker = source(&[0x80]);
-        assert_eq!(consume_inline_sop(&no_marker, 0, true, 7).unwrap(), 0);
+        assert_eq!(consume_packet_sop(&no_marker, 0, true, 7, None).unwrap(), 0);
 
         let sequence_one = source(&[0xff, 0x91, 0, 4, 0, 1]);
-        assert_eq!(consume_inline_sop(&sequence_one, 0, true, 1).unwrap(), 6);
+        assert_eq!(
+            consume_packet_sop(&sequence_one, 0, true, 1, None).unwrap(),
+            6
+        );
         assert_eq!(next_sop_sequence(u16::MAX), 0);
         let wrapped = source(&[0xff, 0x91, 0, 4, 0, 0]);
-        assert_eq!(consume_inline_sop(&wrapped, 0, true, 0).unwrap(), 6);
+        assert_eq!(consume_packet_sop(&wrapped, 0, true, 0, None).unwrap(), 6);
         assert!(matches!(
-            consume_inline_sop(&sequence_one, 0, true, 2),
+            consume_packet_sop(&sequence_one, 0, true, 2, None),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
                 ..
@@ -27741,7 +29392,7 @@ mod inline_packet_marker_tests {
     fn rejects_malformed_or_unsignalled_sop() {
         let unsignalled = source(&[0xff, 0x91, 0, 4, 0, 0]);
         assert!(matches!(
-            consume_inline_sop(&unsignalled, 0, false, 0),
+            consume_packet_sop(&unsignalled, 0, false, 0, None),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
                 ..
@@ -27749,7 +29400,7 @@ mod inline_packet_marker_tests {
         ));
         let wrong_length = source(&[0xff, 0x91, 0, 3, 0, 0]);
         assert!(matches!(
-            consume_inline_sop(&wrong_length, 0, true, 0),
+            consume_packet_sop(&wrong_length, 0, true, 0, None),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Sop),
                 ..
@@ -27757,7 +29408,7 @@ mod inline_packet_marker_tests {
         ));
         let truncated = source(&[0xff, 0x91, 0, 4, 0]);
         assert!(matches!(
-            consume_inline_sop(&truncated, 0, true, 0),
+            consume_packet_sop(&truncated, 0, true, 0, None),
             Err(CodestreamError::TruncatedInput { .. })
         ));
     }
@@ -27765,9 +29416,9 @@ mod inline_packet_marker_tests {
     #[test]
     fn requires_or_rejects_eph_according_to_cod() {
         let eph = source(&[0xff, 0x92]);
-        assert_eq!(consume_inline_eph(&eph, 0, true).unwrap(), 2);
+        assert_eq!(consume_packet_eph(&eph, 0, true).unwrap(), 2);
         assert!(matches!(
-            consume_inline_eph(&eph, 0, false),
+            consume_packet_eph(&eph, 0, false),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Eph),
                 ..
@@ -27775,7 +29426,7 @@ mod inline_packet_marker_tests {
         ));
         let missing = source(&[0x7f, 0x00]);
         assert!(matches!(
-            consume_inline_eph(&missing, 0, true),
+            consume_packet_eph(&missing, 0, true),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Eph),
                 ..
@@ -27783,9 +29434,17 @@ mod inline_packet_marker_tests {
         ));
         let truncated = source(&[0xff]);
         assert!(matches!(
-            consume_inline_eph(&truncated, 0, true),
+            consume_packet_eph(&truncated, 0, true),
             Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Eph),
+                ..
+            })
+        ));
+        let crosses_declared_end = source(&[0xff, 0x91, 0, 4, 0, 0]);
+        assert!(matches!(
+            consume_packet_sop(&crosses_declared_end, 0, true, 0, Some(4)),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Sop),
                 ..
             })
         ));
@@ -30162,8 +31821,8 @@ mod progression_volume_scheduler_tests {
             declared_tile_part: 2,
             marker_offset: Some(41),
         };
-        assert!(validate_scheduled_packet_start(&payload, later, 0).is_err());
-        validate_scheduled_packet_start(&payload, later, 2).unwrap();
+        assert!(validate_scheduled_packet_start(later, 0).is_err());
+        validate_scheduled_packet_start(later, 2).unwrap();
         validate_packet_tile_part_boundary(&payload, 0, 1, 2).unwrap();
         validate_packet_tile_part_boundary(&payload, 2, 3, 4).unwrap();
     }
@@ -38647,6 +40306,7 @@ fn parse_prepared_payload_packets(
     max_layers: Option<u16>,
     max_resolution: u8,
     component_indices: &[u16],
+    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<ParsedPacketContributions> {
     match payload {
         PreparedTilePayload::Slice(_) => parse_default_precinct_packets_from_source(
@@ -38658,6 +40318,7 @@ fn parse_prepared_payload_packets(
             Some(max_resolution),
             Some(component_indices),
             ComponentPacketProfile::Default,
+            Some(tile_part_order),
         ),
         PreparedTilePayload::Source(source_payload) => {
             let buffered = BufferedSourcePacketPayload::new(source_payload);
@@ -38670,6 +40331,7 @@ fn parse_prepared_payload_packets(
                 Some(max_resolution),
                 Some(component_indices),
                 ComponentPacketProfile::Default,
+                Some(tile_part_order),
             );
             if let Some(error) = buffered.take_error() {
                 Err(source_error_in_phase(error, "packet-header preparation"))
