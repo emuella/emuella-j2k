@@ -737,7 +737,10 @@ pub struct DecodeOptions {
     pub mode: DecodeMode,
     pub requested_components: ComponentSelection,
     /// Maximum number of leading quality layers to reconstruct. `None`
-    /// reconstructs every layer in the admitted profile.
+    /// reconstructs every layer. Existing admitted one-layer profiles clamp
+    /// any positive limit to their complete output. Genuine truncation is
+    /// currently bounded to the raw, full-image, planar, single-component
+    /// two-layer LRCP profile, where values at or above two clamp to complete.
     pub max_quality_layers: Option<u16>,
     pub target_layout: ComponentLayout,
 }
@@ -773,12 +776,75 @@ fn validate_max_quality_layers(mode: DecodeMode, max_layers: Option<u16>) -> Res
 fn validate_max_quality_layer_profile(
     input: &[u8],
     metadata: &Metadata,
-    max_layers: Option<u16>,
+    options: &DecodeOptions,
 ) -> Result<()> {
-    if max_layers.is_some() && primary_part1_codestream_bytes(input, metadata)?.is_none() {
-        return Err(unsupported(
+    if options.max_quality_layers.is_none() {
+        return Ok(());
+    }
+    let codestream_bytes = primary_part1_codestream_bytes(input, metadata)?.ok_or_else(|| {
+        unsupported(
             UnsupportedFeature::PartialDecodeMode,
             "maximum quality-layer selection is currently available only for Part 1 J2K and JP2 component decode",
+        )
+    })?;
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if parsed
+        .uniform_effective_coding_style()
+        .is_some_and(|style| style.layers == 1)
+    {
+        return Ok(());
+    }
+    if metadata.format != InputFormat::J2kCodestream
+        || options.target_layout != ComponentLayout::Planar
+        || !(matches!(&options.requested_components, ComponentSelection::All)
+            || matches!(&options.requested_components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16]))
+        || !codestream::is_supported_part1_native_quality_layer_component_profile(&parsed)
+    {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "maximum quality-layer selection requires the bounded raw single-component two-layer LRCP profile with full planar output",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_partial_quality_layer_profile(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<()> {
+    if options.max_quality_layers.is_none() {
+        return Ok(());
+    }
+    if options.max_quality_layers == Some(0) {
+        return Err(J2kError::InvalidParameter {
+            parameter: "max_quality_layers",
+            message: "maximum quality layers must be at least one",
+        });
+    }
+    let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
+        return Ok(());
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if parsed
+        .uniform_effective_coding_style()
+        .is_some_and(|style| style.layers == 1)
+    {
+        return Ok(());
+    }
+    let exact_component = matches!(&options.components, ComponentSelection::All)
+        || matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16]);
+    if metadata.format != InputFormat::J2kCodestream
+        || options.region.is_some()
+        || options.tile.is_some()
+        || options.resolution != ResolutionLevel::Full
+        || options.target_layout != ComponentLayout::Planar
+        || !exact_component
+        || !codestream::is_supported_part1_native_quality_layer_component_profile(&parsed)
+    {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "maximum quality-layer selection requires the bounded raw single-component two-layer LRCP profile with full planar output",
         ));
     }
     Ok(())
@@ -913,7 +979,11 @@ pub struct PartialDecodeOptions {
     pub tile: Option<TileSelection>,
     pub resolution: ResolutionLevel,
     pub components: ComponentSelection,
-    /// Maximum number of leading quality layers to reconstruct.
+    /// Maximum number of leading quality layers to reconstruct. Existing
+    /// admitted one-layer profiles preserve their positive-limit behaviour.
+    /// Genuine truncation is currently bounded to the raw, full-image, planar,
+    /// single-component two-layer LRCP profile; spatial selection and
+    /// resolution reduction remain outside that two-layer profile.
     pub max_quality_layers: Option<u16>,
     pub target_layout: ComponentLayout,
 }
@@ -1104,7 +1174,7 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
 
     let metadata = inspect(input, &InspectOptions::default())?;
-    validate_max_quality_layer_profile(input, &metadata, options.max_quality_layers)?;
+    validate_max_quality_layer_profile(input, &metadata, options)?;
     requested_component_indices(&metadata, &options.requested_components)?;
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
@@ -1159,7 +1229,7 @@ pub fn decode_htj2k_with_workspace(
 
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
-    validate_max_quality_layer_profile(input, &metadata, options.max_quality_layers)?;
+    validate_max_quality_layer_profile(input, &metadata, options)?;
     reject_unsupported_rendered_projection(&metadata, options)?;
     decode_algorithmic_htj2k_with_workspace(input, &metadata, options, workspace)
 }
@@ -1192,7 +1262,7 @@ pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
 
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
-    validate_max_quality_layer_profile(input, &metadata, options.max_quality_layers)?;
+    validate_max_quality_layer_profile(input, &metadata, options)?;
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
@@ -1221,7 +1291,7 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
 
     let metadata = inspect(input, &InspectOptions::default())?;
-    validate_max_quality_layer_profile(input, &metadata, options.max_quality_layers)?;
+    validate_max_quality_layer_profile(input, &metadata, options)?;
     requested_component_indices(&metadata, &options.requested_components)?;
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
@@ -2228,6 +2298,7 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    validate_partial_quality_layer_profile(input, &metadata, options)?;
     if let Some(image) =
         decode_owned_part1_p0_08_heterogeneous_reversible(input, &metadata, options)?
     {
@@ -3259,6 +3330,7 @@ pub fn prepare_part1_decode<'a>(
         ));
     }
     let metadata = inspect(input, &InspectOptions::default())?;
+    validate_partial_quality_layer_profile(input, &metadata, options)?;
     let codestream_bytes = primary_part1_codestream_bytes(input, &metadata)?.ok_or_else(|| {
         unsupported(
             UnsupportedFeature::PartialDecodeMode,
@@ -3370,6 +3442,28 @@ pub fn prepare_part1_decode_from_source<'a>(
 ) -> Result<PreparedPart1Decode<'a>> {
     let codestream = codestream::prepare_part1_component_decode_from_source(source, request)
         .map_err(map_codestream_error)?;
+    if request.max_layers.is_some() && codestream.codestream_declared_quality_layers() != Some(1) {
+        let (image_width, image_height) = codestream.codestream_image_dimensions();
+        if request.max_layers == Some(0) {
+            return Err(J2kError::InvalidParameter {
+                parameter: "max_quality_layers",
+                message: "maximum quality layers must be at least one",
+            });
+        }
+        if !codestream.codestream_supports_native_quality_layers()
+            || request.component_indices != [0]
+            || request.region.x != 0
+            || request.region.y != 0
+            || request.region.width != image_width
+            || request.region.height != image_height
+            || request.discard_levels != 0
+        {
+            return Err(unsupported(
+                UnsupportedFeature::PartialDecodeMode,
+                "source-backed quality-layer selection requires the bounded full-image single-component two-layer LRCP profile",
+            ));
+        }
+    }
     if codestream.codestream_has_subsampled_components() {
         if request.discard_levels > 2 {
             return Err(unsupported(
@@ -5854,6 +5948,7 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
     }
 
     let metadata = inspect(input, &InspectOptions::default())?;
+    validate_partial_quality_layer_profile(input, &metadata, options)?;
     if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, &metadata)? {
         let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
         if is_native_multitile_partial_profile(&metadata, codestream_bytes, &parsed) {
@@ -6899,6 +6994,63 @@ mod effective_coding_style_tests {
         (fixture, samples)
     }
 
+    fn native_quality_layer_fixture() -> (codestream::NativeQualityLayerTestFixture, Vec<u8>) {
+        let width = 32_u32;
+        let height = 32_u32;
+        let samples = (0..width * height)
+            .map(|index| {
+                let x = index % width;
+                let y = index / width;
+                ((x * 29 + y * 47 + x * y * 7 + (x ^ y) * 11) & 0xff) as u8
+            })
+            .collect::<Vec<_>>();
+        let fixture = codestream::encode_grayscale_u8_two_decomp_quality_layer_test_fixture(
+            codestream::GrayscaleU8Encode {
+                width,
+                height,
+                samples: &samples,
+                stride_bytes: width as usize,
+            },
+        )
+        .unwrap();
+        (fixture, samples)
+    }
+
+    fn component_decode_options(max_quality_layers: Option<u16>) -> DecodeOptions {
+        DecodeOptions {
+            mode: DecodeMode::Components,
+            requested_components: ComponentSelection::All,
+            max_quality_layers,
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        }
+    }
+
+    fn wrap_grayscale_jp2(codestream: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let info = ImageInfo::new(
+            width,
+            height,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut output = Vec::new();
+        write_jp2_encode_output(
+            &info,
+            codestream,
+            &EncodeOptions {
+                format: OutputFormat::Jp2,
+                decomposition_levels: 2,
+                ..EncodeOptions::default()
+            },
+            &mut output,
+        )
+        .unwrap();
+        output
+    }
+
     fn jp2_wrapped_native_multitile_fixture(codestream: &[u8]) -> Vec<u8> {
         let info = ImageInfo::new(
             131,
@@ -6967,7 +7119,8 @@ mod effective_coding_style_tests {
                 &mut target,
                 &mut Part1DecodeWorkspace::new(),
                 codestream::PreparedPart1ExecutionOptions {
-                    instrumentation: codestream::DecodeInstrumentation::WorkCounters,
+                    instrumentation: codestream::DecodeInstrumentation::DetailedProfile,
+                    collect_tier1_work_counters: true,
                     parallelism: codestream::DecodeExecutionParallelism::Serial,
                     synthesis_crossover_route: route,
                     ..codestream::PreparedPart1ExecutionOptions::default()
@@ -6976,6 +7129,450 @@ mod effective_coding_style_tests {
             .unwrap()
         };
         (samples, timings)
+    }
+
+    #[test]
+    fn genuine_quality_layers_are_exact_across_owned_caller_info_and_prepared_routes() {
+        let (fixture, samples) = native_quality_layer_fixture();
+        let full_options = component_decode_options(None);
+        let limited_options = component_decode_options(Some(1));
+        let oracle = decode(&fixture.one_layer_oracle, &full_options).unwrap();
+        let full = decode(&fixture.two_layer_codestream, &full_options).unwrap();
+        let limited = decode(&fixture.two_layer_codestream, &limited_options).unwrap();
+        assert_eq!(planar_bytes(&limited), planar_bytes(&oracle));
+        assert_ne!(planar_bytes(&limited), planar_bytes(&full));
+        assert_eq!(planar_bytes(&full)[0], samples);
+        for limit in [Some(2), Some(9)] {
+            assert_eq!(
+                decode(
+                    &fixture.two_layer_codestream,
+                    &component_decode_options(limit)
+                )
+                .unwrap(),
+                full
+            );
+        }
+        assert_eq!(
+            decode_shape(&fixture.two_layer_codestream, &limited_options).unwrap(),
+            decode_shape(&fixture.two_layer_codestream, &full_options).unwrap()
+        );
+
+        let mut caller = vec![0xa5; samples.len()];
+        let info = limited.info.clone();
+        {
+            let plane = PlaneMut::new(&mut caller, 32, 32, 32, SampleFormat::U8).unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            decode_into(&fixture.two_layer_codestream, &mut target, &limited_options).unwrap();
+        }
+        assert_eq!(caller, planar_bytes(&oracle)[0]);
+
+        let limited_partial = PartialDecodeOptions {
+            max_quality_layers: Some(1),
+            ..PartialDecodeOptions::default()
+        };
+        let full_partial = PartialDecodeOptions::default();
+        let partial = decode_partial(&fixture.two_layer_codestream, &limited_partial).unwrap();
+        assert_eq!(planar_bytes(&partial), planar_bytes(&oracle));
+        assert_eq!(
+            decode_partial_info(&fixture.two_layer_codestream, &limited_partial).unwrap(),
+            limited.info
+        );
+        assert_eq!(
+            decode_partial_component_info(&fixture.two_layer_codestream, &limited_partial).unwrap(),
+            limited.component_info
+        );
+        for limit in [Some(2), Some(9)] {
+            let clamped = PartialDecodeOptions {
+                max_quality_layers: limit,
+                ..PartialDecodeOptions::default()
+            };
+            assert_eq!(
+                decode_partial(&fixture.two_layer_codestream, &clamped).unwrap(),
+                full
+            );
+            let prepared = prepare_part1_decode(&fixture.two_layer_codestream, &clamped).unwrap();
+            assert_eq!(execute_prepared_u8(&prepared, None).0, samples);
+            let source = codestream::source::SliceSource::new(&fixture.two_layer_codestream);
+            let source_prepared = prepare_part1_decode_from_source(
+                &source,
+                codestream::Part1ComponentDecodeRequest {
+                    component_indices: &[0],
+                    region: codestream::TileRegionRequest {
+                        x: 0,
+                        y: 0,
+                        width: 32,
+                        height: 32,
+                    },
+                    discard_levels: 0,
+                    max_layers: limit,
+                },
+            )
+            .unwrap();
+            assert_eq!(execute_prepared_u8(&source_prepared, None).0, samples);
+        }
+
+        let limited_prepared =
+            prepare_part1_decode(&fixture.two_layer_codestream, &limited_partial).unwrap();
+        let full_prepared =
+            prepare_part1_decode(&fixture.two_layer_codestream, &full_partial).unwrap();
+        let (limited_prepared_samples, limited_work) = execute_prepared_u8(&limited_prepared, None);
+        let (full_prepared_samples, full_work) = execute_prepared_u8(&full_prepared, None);
+        assert_eq!(limited_prepared_samples, planar_bytes(&oracle)[0]);
+        assert_eq!(full_prepared_samples, samples);
+        assert_eq!(
+            limited_prepared.preparation_timings().packet_headers_parsed,
+            full_prepared.preparation_timings().packet_headers_parsed
+        );
+        assert_eq!(
+            limited_prepared.preparation_timings().packet_headers_parsed,
+            6
+        );
+        assert!(
+            limited_prepared
+                .preparation_timings()
+                .packet_body_bytes_skipped
+                > 0
+        );
+        assert!(limited_work.tier1_codeword_bytes < full_work.tier1_codeword_bytes);
+        let tier1_positions = |work: &codestream::DecodeStageTimings| {
+            work.tier1_work_counters
+                .cleanup_positions_visited
+                .saturating_add(work.tier1_work_counters.significance_positions_visited)
+                .saturating_add(work.tier1_work_counters.magnitude_positions_visited)
+        };
+        assert!(tier1_positions(&limited_work) < tier1_positions(&full_work));
+
+        let limited_source = codestream::source::InstrumentedSource::new(
+            codestream::source::SliceSource::new(&fixture.two_layer_codestream),
+        );
+        let limited_source_prepared = prepare_part1_decode_from_source(
+            &limited_source,
+            codestream::Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: codestream::TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 32,
+                    height: 32,
+                },
+                discard_levels: 0,
+                max_layers: Some(1),
+            },
+        )
+        .unwrap();
+        let (source_samples, source_work) = execute_prepared_u8(&limited_source_prepared, None);
+        assert_eq!(source_samples, planar_bytes(&oracle)[0]);
+        assert_eq!(
+            source_work.tier1_codeword_bytes,
+            limited_work.tier1_codeword_bytes
+        );
+        let skipped_second_layer_bytes = fixture
+            .second_layer_body_ranges
+            .iter()
+            .map(|range| u64::try_from(range.len()).unwrap())
+            .sum::<u64>();
+        assert!(limited_source.metrics().packet_body_bytes_not_read >= skipped_second_layer_bytes);
+
+        let full_source = codestream::source::InstrumentedSource::new(
+            codestream::source::SliceSource::new(&fixture.two_layer_codestream),
+        );
+        let full_source_prepared = prepare_part1_decode_from_source(
+            &full_source,
+            codestream::Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: codestream::TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 32,
+                    height: 32,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(execute_prepared_u8(&full_source_prepared, None).0, samples);
+        assert!(
+            limited_source.metrics().source_bytes_returned
+                < full_source.metrics().source_bytes_returned
+        );
+    }
+
+    #[test]
+    fn quality_layer_corruption_and_exclusions_fail_closed() {
+        let (fixture, _) = native_quality_layer_fixture();
+        let limited = component_decode_options(Some(1));
+        let full = component_decode_options(None);
+        let oracle = decode(&fixture.one_layer_oracle, &full).unwrap();
+
+        let mut ignored_second_layer_corruption = None;
+        'second: for range in &fixture.second_layer_body_ranges {
+            for offset in range.start..range.end.saturating_sub(1) {
+                let mut candidate = fixture.two_layer_codestream.clone();
+                candidate[offset] = 0xff;
+                candidate[offset + 1] = 0x90;
+                if decode(&candidate, &full).is_err()
+                    && decode(&candidate, &limited).is_ok_and(|image| image == oracle)
+                {
+                    ignored_second_layer_corruption = Some(candidate);
+                    break 'second;
+                }
+            }
+        }
+        assert!(ignored_second_layer_corruption.is_some());
+
+        let mut malformed_second_layer_header = false;
+        'header: for offset in &fixture.second_layer_header_offsets {
+            for mask in [0x80, 0x40, 0x20, 0x10, 0xff] {
+                let mut candidate = fixture.two_layer_codestream.clone();
+                candidate[*offset] ^= mask;
+                if decode(&candidate, &limited).is_err() {
+                    malformed_second_layer_header = true;
+                    break 'header;
+                }
+            }
+        }
+        assert!(malformed_second_layer_header);
+
+        let mut failing_first_layer = None;
+        'first: for range in &fixture.first_layer_body_ranges {
+            for offset in range.start..range.end.saturating_sub(1) {
+                let mut candidate = fixture.two_layer_codestream.clone();
+                candidate[offset] = 0xff;
+                candidate[offset + 1] = 0x90;
+                if decode(&candidate, &limited).is_err() {
+                    failing_first_layer = Some(candidate);
+                    break 'first;
+                }
+            }
+        }
+        let failing_first_layer = failing_first_layer.expect("first-layer entropy corruption");
+        let mut caller = vec![0xa5; 32 * 32];
+        let info = oracle.info.clone();
+        {
+            let plane = PlaneMut::new(&mut caller, 32, 32, 32, SampleFormat::U8).unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_into(&failing_first_layer, &mut target, &limited).is_err());
+        }
+        assert!(caller.iter().all(|sample| *sample == 0xa5));
+
+        let assert_rejected_across_routes = |candidate: &[u8], width: u32, height: u32| {
+            let partial = PartialDecodeOptions {
+                max_quality_layers: Some(1),
+                ..PartialDecodeOptions::default()
+            };
+            assert!(decode(candidate, &limited).is_err());
+            assert!(decode_shape(candidate, &limited).is_err());
+            assert!(decode_partial(candidate, &partial).is_err());
+            assert!(decode_partial_info(candidate, &partial).is_err());
+            assert!(decode_partial_component_info(candidate, &partial).is_err());
+            assert!(prepare_part1_decode(candidate, &partial).is_err());
+            assert!(
+                prepare_part1_decode_from_source(
+                    &codestream::source::SliceSource::new(candidate),
+                    codestream::Part1ComponentDecodeRequest {
+                        component_indices: &[0],
+                        region: codestream::TileRegionRequest {
+                            x: 0,
+                            y: 0,
+                            width,
+                            height,
+                        },
+                        discard_levels: 0,
+                        max_layers: Some(1),
+                    },
+                )
+                .is_err()
+            );
+        };
+        let zero = component_decode_options(Some(0));
+        assert!(decode(&fixture.two_layer_codestream, &zero).is_err());
+        assert!(decode_shape(&fixture.two_layer_codestream, &zero).is_err());
+        let zero_partial = PartialDecodeOptions {
+            max_quality_layers: Some(0),
+            ..PartialDecodeOptions::default()
+        };
+        assert!(decode_partial(&fixture.two_layer_codestream, &zero_partial).is_err());
+        assert!(decode_partial_info(&fixture.two_layer_codestream, &zero_partial).is_err());
+        assert!(
+            decode_partial_component_info(&fixture.two_layer_codestream, &zero_partial).is_err()
+        );
+        assert!(prepare_part1_decode(&fixture.two_layer_codestream, &zero_partial).is_err());
+        assert!(
+            prepare_part1_decode_from_source(
+                &codestream::source::SliceSource::new(&fixture.two_layer_codestream),
+                codestream::Part1ComponentDecodeRequest {
+                    component_indices: &[0],
+                    region: codestream::TileRegionRequest {
+                        x: 0,
+                        y: 0,
+                        width: 32,
+                        height: 32,
+                    },
+                    discard_levels: 0,
+                    max_layers: Some(0),
+                },
+            )
+            .is_err()
+        );
+        let container = wrap_grayscale_jp2(&fixture.two_layer_codestream, 32, 32);
+        assert_rejected_across_routes(&container, 32, 32);
+
+        let partial_exclusions = [
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 16,
+                    height: 32,
+                }),
+                max_quality_layers: Some(1),
+                ..PartialDecodeOptions::default()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                max_quality_layers: Some(1),
+                ..PartialDecodeOptions::default()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 0 },
+                max_quality_layers: Some(1),
+                ..PartialDecodeOptions::default()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                max_quality_layers: Some(1),
+                ..PartialDecodeOptions::default()
+            },
+        ];
+        assert!(partial_exclusions.iter().all(|options| {
+            decode_partial(&fixture.two_layer_codestream, options).is_err()
+                && decode_partial_info(&fixture.two_layer_codestream, options).is_err()
+                && prepare_part1_decode(&fixture.two_layer_codestream, options).is_err()
+        }));
+
+        let marker = |bytes: &[u8], marker| marker_offset(bytes, marker, 0);
+        let mut structural = Vec::new();
+        let mut changed = fixture.two_layer_codestream.clone();
+        let siz = marker(&changed, codestream::Marker::Siz);
+        changed[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let siz = marker(&changed, codestream::Marker::Siz);
+        changed[siz + 40] |= 0x80;
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let siz = marker(&changed, codestream::Marker::Siz);
+        changed[siz + 40] = 8;
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let siz = marker(&changed, codestream::Marker::Siz);
+        changed[siz + 41] = 2;
+        structural.push(changed);
+        for (offset, value) in [
+            (4, 2),
+            (4, 4),
+            (5, 1),
+            (8, 1),
+            (9, 1),
+            (10, 3),
+            (11, 3),
+            (12, 1),
+            (13, 0),
+        ] {
+            let mut changed = fixture.two_layer_codestream.clone();
+            let cod = marker(&changed, codestream::Marker::Cod);
+            changed[cod + offset] = value;
+            structural.push(changed);
+        }
+        let mut changed = fixture.two_layer_codestream.clone();
+        let cod = marker(&changed, codestream::Marker::Cod);
+        let cod_len = u16::from_be_bytes(changed[cod + 2..cod + 4].try_into().unwrap());
+        changed[cod + 4] |= 1;
+        changed[cod + 2..cod + 4].copy_from_slice(&(cod_len + 3).to_be_bytes());
+        changed.splice(
+            cod + 2 + usize::from(cod_len)..cod + 2 + usize::from(cod_len),
+            [0x44; 3],
+        );
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let cod = marker(&changed, codestream::Marker::Cod);
+        changed[cod + 7] = 3;
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let sot = marker(&changed, codestream::Marker::Sot);
+        changed.splice(sot..sot, [0xff, 0x53, 0, 9, 0, 0, 2, 4, 4, 0, 1]);
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let qcd = marker(&changed, codestream::Marker::Qcd);
+        let qcd_len = usize::from(u16::from_be_bytes(
+            changed[qcd + 2..qcd + 4].try_into().unwrap(),
+        ));
+        let mut qcc = vec![0xff, 0x5d];
+        qcc.extend_from_slice(&u16::try_from(qcd_len + 1).unwrap().to_be_bytes());
+        qcc.push(0);
+        qcc.extend_from_slice(&changed[qcd + 4..qcd + 2 + qcd_len]);
+        let sot = marker(&changed, codestream::Marker::Sot);
+        changed.splice(sot..sot, qcc);
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let sot = marker(&changed, codestream::Marker::Sot);
+        changed.splice(sot..sot, [0xff, 0x50, 0, 6, 0, 0, 0, 0]);
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let sot = marker(&changed, codestream::Marker::Sot);
+        changed.splice(sot..sot, [0xff, 0x64, 0, 3, 0]);
+        structural.push(changed);
+        let mut changed = fixture.two_layer_codestream.clone();
+        let sot = marker(&changed, codestream::Marker::Sot);
+        changed[sot + 11] = 0;
+        structural.push(changed);
+        for candidate in &structural {
+            assert_rejected_across_routes(candidate, 32, 32);
+        }
+
+        let rgb = vec![91_u8; 16 * 16 * 3];
+        let multiple_components = codestream::encode_rgb_u8_two_decomp(codestream::RgbU8Encode {
+            width: 16,
+            height: 16,
+            samples: &rgb,
+            stride_bytes: 16 * 3,
+        })
+        .unwrap();
+        let declare_two_layers = |mut candidate: Vec<u8>| {
+            let cod = marker(&candidate, codestream::Marker::Cod);
+            candidate[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+            candidate
+        };
+        assert_rejected_across_routes(&declare_two_layers(multiple_components), 16, 16);
+        let ht = codestream::encode_htj2k_rgb_u8_no_decomp(codestream::RgbU8Encode {
+            width: 16,
+            height: 16,
+            samples: &rgb,
+            stride_bytes: 16 * 3,
+        })
+        .unwrap();
+        assert_rejected_across_routes(&declare_two_layers(ht), 16, 16);
+
+        let (multitile, _) = native_multitile_fixture();
+        assert_rejected_across_routes(&declare_two_layers(multitile), 131, 99);
+        let rendered = DecodeOptions {
+            mode: DecodeMode::Rendered,
+            max_quality_layers: Some(1),
+            ..DecodeOptions::default()
+        };
+        assert!(decode(&fixture.two_layer_codestream, &rendered).is_err());
     }
 
     #[test]

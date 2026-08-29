@@ -434,6 +434,49 @@ follows Annex B. The canonical transcription consulted was retrieval revision
 `1a7a03799078b476bf38e91786b979059b4c533d`). Tests use only the
 project-authored multi-tile encoder fixture.
 
+### Native quality-layer truncation
+
+The public component APIs admit leading-quality-layer selection for one narrow
+raw Part 1 profile: an origin-aligned single tile with one unsigned 8-bit,
+unit-sampled grayscale component, reversible 5/3 coding with exactly two
+decompositions, default precinct and code-block style, LRCP progression,
+exactly two declared layers and one complete tile part. Output is the complete
+image in one planar component. `None`, `Some(2)` and limits above two produce
+the complete decode; `Some(1)` reconstructs only the first contribution and
+`Some(0)` is invalid.
+
+This two-layer gate is additive to the existing one-layer component profiles.
+Their previously admitted spatial, reduced, subsampled, caller-owned and
+positioned-source routes continue to treat every positive layer limit as the
+complete one-layer output.
+
+The feature-gated project-authored fixture retains the production Tier-1
+coding-pass boundaries. It places a non-empty stable pass prefix in layer one
+and the remaining passes in layer two, while carrying inclusion, missing-MSB
+tag-tree and Lblock state through genuine layer-major packet headers. A
+separate one-layer codestream is written from exactly the prefix pass set and
+serves as an independently parsed pixel oracle. Tests require the limited
+two-layer decode to equal that oracle exactly and to differ deliberately from
+the complete two-layer image.
+
+Prepared slice and positioned-source tests visit the same packet-header count
+for limited and complete requests, while proving non-zero excluded layer-two
+body bytes and lower retained Tier-1 byte and coefficient-position work for
+the limited request. Positioned-source accounting also proves that excluded
+body bytes are not physically read. Malformed later packet headers still fail
+closed because every header is parsed; corrupt later bodies may be skipped,
+whereas selected-body corruption is rejected before a directly staged public
+caller buffer is published. Prepared execution retains its documented
+non-transactional boundary after entropy work begins.
+
+Regions, tile selection, every reduction form, non-zero origins, multiple,
+subsampled, signed or higher-precision components, MCT, irreversible 9/7,
+HT block coding, containers, non-LRCP progression, coding or quantisation
+overrides, explicit precincts, inline markers, extra mechanisms and fragmented
+tile parts remain excluded from this profile. These exclusions are exercised
+through owned, information, retained-plan and positioned-source admission
+routes without widening the separate multi-tile spatial predicate.
+
 ## Inline packet markers
 
 The native subsampled and unit-sampled component paths consume inline SOP and

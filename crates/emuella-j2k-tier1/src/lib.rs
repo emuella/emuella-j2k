@@ -322,6 +322,20 @@ pub struct CodeBlockEncode {
     pub byte_len: usize,
 }
 
+/// A stable byte-prefix boundary after an actual coding pass.
+///
+/// This is fixture-only encoder evidence. `stable_byte_len` counts bytes that
+/// have already left the MQ coder's carry-sensitive pending state, so later
+/// passes cannot rewrite the reported prefix.
+#[cfg(feature = "test-fixtures")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodeBlockPassBoundary {
+    /// Number of leading coding passes represented at this boundary.
+    pub coding_passes: u16,
+    /// Stable leading bytes available at this boundary.
+    pub stable_byte_len: usize,
+}
+
 /// Summary returned after a code-block decode attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodeBlockDecode {
@@ -1588,6 +1602,154 @@ pub fn encode_baseline_code_block_with_strided_scratch(
     }
 
     encode_prepared_baseline_code_block(&mut ctx, max_magnitude, spec, output, None)
+}
+
+/// Encode a strided fixture block and retain stable coding-pass boundaries.
+///
+/// Production encoders deliberately use the ordinary entry point. This typed
+/// fixture hook observes the real MQ stream without inserting terminations or
+/// inventing byte offsets.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub fn encode_baseline_code_block_with_strided_scratch_and_pass_boundaries(
+    coefficients: &[i32],
+    row_stride: usize,
+    spec: CodeBlockEncodeSpec,
+    output: &mut Vec<u8>,
+    pass_boundaries: &mut Vec<CodeBlockPassBoundary>,
+    scratch: &mut CodeBlockEncodeScratch,
+) -> Result<CodeBlockEncode> {
+    pass_boundaries.clear();
+    spec.validate()?;
+
+    let width = usize::from(spec.dimensions.width());
+    let height = usize::from(spec.dimensions.height());
+    if row_stride < width {
+        return Err(Tier1Error::CoefficientBufferTooSmall {
+            required: width,
+            actual: row_stride,
+        });
+    }
+    let required_len = (height - 1)
+        .checked_mul(row_stride)
+        .and_then(|offset| offset.checked_add(width))
+        .ok_or(Tier1Error::MalformedBitstream {
+            reason: "code-block coefficient view size overflows usize",
+        })?;
+    if coefficients.len() < required_len {
+        return Err(Tier1Error::CoefficientBufferTooSmall {
+            required: required_len,
+            actual: coefficients.len(),
+        });
+    }
+
+    let (mut ctx, max_magnitude) =
+        scratch.prepare_strided_with_max(width, height, spec.subband, coefficients, row_stride);
+    if max_magnitude == 0 {
+        return Ok(CodeBlockEncode {
+            pass_count: 0,
+            included: false,
+            missing_bitplanes: spec.available_bitplanes,
+            byte_len: 0,
+        });
+    }
+
+    encode_prepared_baseline_code_block_with_pass_boundaries(
+        &mut ctx,
+        max_magnitude,
+        spec,
+        output,
+        pass_boundaries,
+    )
+}
+
+#[cfg(feature = "test-fixtures")]
+fn encode_prepared_baseline_code_block_with_pass_boundaries(
+    ctx: &mut BitPlaneEncodeContext<'_>,
+    max_magnitude: u32,
+    spec: CodeBlockEncodeSpec,
+    output: &mut Vec<u8>,
+    pass_boundaries: &mut Vec<CodeBlockPassBoundary>,
+) -> Result<CodeBlockEncode> {
+    let significant_bitplanes = u8::try_from(32 - max_magnitude.leading_zeros()).map_err(|_| {
+        Tier1Error::MalformedBitstream {
+            reason: "coefficient magnitude bit-plane count does not fit u8",
+        }
+    })?;
+    if significant_bitplanes > spec.available_bitplanes {
+        return Err(Tier1Error::MalformedBitstream {
+            reason: "coefficient magnitude exceeds available bit-planes",
+        });
+    }
+    let missing_bitplanes = spec.available_bitplanes - significant_bitplanes;
+    let pass_count = 1 + 3 * u16::from(significant_bitplanes - 1);
+    let style = CodeBlockStyle::from_bits(spec.code_block_style);
+    let start_len = output.len();
+    let byte_len = {
+        let mut encoder = ArithmeticEncoder::new(output);
+        encode_coding_passes_with_boundaries(
+            ctx,
+            &mut encoder,
+            style,
+            significant_bitplanes,
+            pass_count,
+            pass_boundaries,
+        )?;
+        encoder.len() - start_len
+    };
+    Ok(CodeBlockEncode {
+        pass_count,
+        included: true,
+        missing_bitplanes,
+        byte_len,
+    })
+}
+
+#[cfg(feature = "test-fixtures")]
+fn encode_coding_passes_with_boundaries(
+    ctx: &mut BitPlaneEncodeContext<'_>,
+    encoder: &mut ArithmeticEncoder<'_>,
+    style: CodeBlockStyle,
+    coded_bitplanes: u8,
+    pass_count: u16,
+    pass_boundaries: &mut Vec<CodeBlockPassBoundary>,
+) -> Result<()> {
+    if style.bits() != 0 {
+        return Err(Tier1Error::UnsupportedCodingStyle {
+            style: style.bits(),
+            unsupported_bits: style.bits(),
+        });
+    }
+    for coding_pass in 0..pass_count {
+        let current_bitplane = coding_pass.div_ceil(3);
+        ctx.current_bit_position = coded_bitplanes
+            .checked_sub(1)
+            .and_then(|value| value.checked_sub(current_bitplane as u8))
+            .ok_or(Tier1Error::MalformedBitstream {
+                reason: "coding pass exceeds available bit-planes",
+            })?;
+        match coding_pass_for_index(coding_pass) {
+            CodingPass::Cleanup => {
+                cleanup_pass_encode::<false>(ctx, encoder)?;
+                ctx.reset_for_next_bitplane();
+            }
+            CodingPass::SignificancePropagation => {
+                significance_propagation_pass_encode::<false>(ctx, encoder);
+            }
+            CodingPass::MagnitudeRefinement => {
+                magnitude_refinement_pass_encode::<false>(ctx, encoder);
+            }
+        }
+        pass_boundaries.push(CodeBlockPassBoundary {
+            coding_passes: coding_pass + 1,
+            stable_byte_len: encoder.current_segment_len(),
+        });
+    }
+    encoder.finish();
+    if let Some(final_boundary) = pass_boundaries.last_mut() {
+        final_boundary.stable_byte_len = encoder.current_segment_len();
+    }
+    Ok(())
 }
 
 fn encode_prepared_baseline_code_block(

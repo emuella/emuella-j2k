@@ -4998,6 +4998,19 @@ pub struct NativeMultitileTestGeometry {
     pub tile_height: u32,
 }
 
+/// Project-authored two-layer fixture and its independently parseable
+/// first-layer oracle.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeQualityLayerTestFixture {
+    pub two_layer_codestream: Vec<u8>,
+    pub one_layer_oracle: Vec<u8>,
+    pub first_layer_body_ranges: Vec<core::ops::Range<usize>>,
+    pub second_layer_body_ranges: Vec<core::ops::Range<usize>>,
+    pub second_layer_header_offsets: Vec<usize>,
+}
+
 /// Borrowed interleaved RGB sample plane accepted by the native RGB Part 1
 /// encode slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6262,6 +6275,7 @@ fn decode_tier1_code_block_fast(
     coefficients: &mut [i32],
     scratch: &mut tier1::CodeBlockDecodeScratch,
 ) -> tier1::Result<tier1::CodeBlockDecodeOutcome> {
+    validate_default_mq_segment_stuffing(segment, decode_spec.style)?;
     let uses_segment_boundaries = decode_spec.style.bits()
         & (tier1::CodeBlockStyle::SELECTIVE_ARITHMETIC_BYPASS
             | tier1::CodeBlockStyle::TERMINATE_EACH_PASS)
@@ -6293,6 +6307,7 @@ fn decode_tier1_code_block_with_optional_profile(
     scratch: &mut tier1::CodeBlockDecodeScratch,
     timings: &mut Option<&mut DecodeStageTimings>,
 ) -> tier1::Result<tier1::CodeBlockDecodeOutcome> {
+    validate_default_mq_segment_stuffing(segment, decode_spec.style)?;
     let uses_segment_boundaries = decode_spec.style.bits()
         & (tier1::CodeBlockStyle::SELECTIVE_ARITHMETIC_BYPASS
             | tier1::CodeBlockStyle::TERMINATE_EACH_PASS)
@@ -6355,6 +6370,22 @@ fn decode_tier1_code_block_with_optional_profile(
     }?;
     stage_timings.add_tier1_code_block_timings(&code_block_timings);
     tier1::checked_decode_outcome(decoded, coding_segments, decode_spec)
+}
+
+fn validate_default_mq_segment_stuffing(
+    segment: &[u8],
+    style: tier1::CodeBlockStyle,
+) -> tier1::Result<()> {
+    if style.bits() == 0
+        && segment
+            .windows(2)
+            .any(|pair| pair[0] == 0xff && pair[1] > 0x8f)
+    {
+        return Err(tier1::Tier1Error::MalformedBitstream {
+            reason: "marker prefix found inside MQ-coded code-block segment",
+        });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "std")]
@@ -6798,6 +6829,30 @@ impl PreparedPart1ComponentDecode<'_> {
                 coding_style.transform == WaveletTransform::Reversible53
                     && coding_style.decomposition_levels >= discard_levels
             },
+        )
+    }
+
+    /// Whether the complete codestream has the exact bounded quality-layer
+    /// structure admitted by the facade.
+    #[doc(hidden)]
+    pub fn codestream_supports_native_quality_layers(&self) -> bool {
+        is_supported_part1_native_quality_layer_component_profile(&self.codestream)
+    }
+
+    /// Declared quality-layer count when one effective coding style exists.
+    #[doc(hidden)]
+    pub fn codestream_declared_quality_layers(&self) -> Option<u16> {
+        self.codestream
+            .uniform_effective_coding_style()
+            .map(|style| style.layers)
+    }
+
+    /// Full image dimensions retained from SIZ.
+    #[doc(hidden)]
+    pub fn codestream_image_dimensions(&self) -> (u32, u32) {
+        (
+            self.codestream.image_width(),
+            self.codestream.image_height(),
         )
     }
 
@@ -9314,6 +9369,7 @@ fn encode_htj2k_grayscale_u8_decomp_test_fixture(
         decomposition_levels,
         &qcd_exponents,
         true,
+        1,
     )?;
     write_tile_part(&mut codestream, 0, &packet, true)?;
     Ok(codestream)
@@ -9517,6 +9573,193 @@ pub fn encode_grayscale_u8_two_decomp_multitile_test_fixture(
         false,
         "native grayscale u8 multi-tile DWT2 test fixture",
     )
+}
+
+/// Encode a genuine two-layer LRCP fixture and a one-layer oracle from the
+/// exact same leading Tier-1 pass set.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_grayscale_u8_two_decomp_quality_layer_test_fixture(
+    input: GrayscaleU8Encode<'_>,
+) -> Result<NativeQualityLayerTestFixture> {
+    validate_grayscale_u8_encode(input)?;
+    if input.width < 16 || input.height < 16 || input.width > 64 || input.height > 64 {
+        return Err(invalid(
+            None,
+            Some(Marker::Siz),
+            "quality-layer test fixture requires dimensions from 16 through 64 samples",
+        ));
+    }
+
+    let mut coefficients = level_shift_grayscale_plane(input)?;
+    forward_reversible_5_3_levels(
+        input.width,
+        input.height,
+        &mut coefficients,
+        2,
+        "quality-layer test fixture forward transform failed",
+    )?;
+    let specs = decomp_subband_specs(input.width, input.height, 2)?;
+    let qcd_exponents = specs
+        .iter()
+        .map(|spec| {
+            subband_available_bitplanes(
+                input.width,
+                &coefficients,
+                spec.x,
+                spec.y,
+                spec.width,
+                spec.height,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut segments = Vec::new();
+    let mut splits = Vec::with_capacity(specs.len());
+    let mut subbands = Vec::with_capacity(specs.len());
+    let mut scratch = tier1::CodeBlockEncodeScratch::new();
+    for (spec, available_bitplanes) in specs.iter().zip(&qcd_exponents) {
+        let (subband, subband_splits) = encode_quality_layer_decomp_subband(
+            input.width,
+            &coefficients,
+            *spec,
+            *available_bitplanes,
+            &mut segments,
+            &mut scratch,
+        )?;
+        subbands.push(subband);
+        splits.push(subband_splits);
+    }
+
+    let two_layer_packet = write_quality_layer_packets(&subbands, &splits, &segments, 2)?;
+    let oracle_packet = write_quality_layer_packets(&subbands, &splits, &segments, 1)?;
+
+    let mut two_layer_codestream = Vec::new();
+    write_native_main_header(
+        &mut two_layer_codestream,
+        input.width,
+        input.height,
+        input.width,
+        input.height,
+        8,
+        1,
+        false,
+        2,
+        &qcd_exponents,
+        false,
+        2,
+    )?;
+    let two_layer_payload_offset = two_layer_codestream
+        .len()
+        .checked_add(14)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    write_tile_part(&mut two_layer_codestream, 0, &two_layer_packet.bytes, true)?;
+
+    let mut one_layer_oracle = Vec::new();
+    write_native_main_header(
+        &mut one_layer_oracle,
+        input.width,
+        input.height,
+        input.width,
+        input.height,
+        8,
+        1,
+        false,
+        2,
+        &qcd_exponents,
+        false,
+        1,
+    )?;
+    write_tile_part(&mut one_layer_oracle, 0, &oracle_packet.bytes, true)?;
+
+    let absolute_ranges = |ranges: Vec<core::ops::Range<usize>>| {
+        ranges
+            .into_iter()
+            .map(|range| {
+                let start = two_layer_payload_offset
+                    .checked_add(range.start)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                let end = two_layer_payload_offset
+                    .checked_add(range.end)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                Ok(start..end)
+            })
+            .collect::<Result<Vec<_>>>()
+    };
+    let first_layer_body_ranges = absolute_ranges(two_layer_packet.first_layer_body_ranges)?;
+    let second_layer_body_ranges = absolute_ranges(two_layer_packet.second_layer_body_ranges)?;
+    let second_layer_header_offsets = two_layer_packet
+        .second_layer_header_offsets
+        .into_iter()
+        .map(|offset| {
+            two_layer_payload_offset
+                .checked_add(offset)
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if first_layer_body_ranges.is_empty() || second_layer_body_ranges.is_empty() {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    Ok(NativeQualityLayerTestFixture {
+        two_layer_codestream,
+        one_layer_oracle,
+        first_layer_body_ranges,
+        second_layer_body_ranges,
+        second_layer_header_offsets,
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn genuine_quality_layer_fixture_matches_its_independent_oracle() {
+    let width = 32;
+    let height = 32;
+    let samples = (0..width * height)
+        .map(|index| {
+            let x = index % width;
+            let y = index / width;
+            ((x * 29 + y * 47 + x * y * 7 + (x ^ y) * 11) & 0xff) as u8
+        })
+        .collect::<Vec<_>>();
+    let fixture = encode_grayscale_u8_two_decomp_quality_layer_test_fixture(GrayscaleU8Encode {
+        width,
+        height,
+        samples: &samples,
+        stride_bytes: width as usize,
+    })
+    .unwrap();
+    let parsed = parse(&fixture.two_layer_codestream).unwrap();
+    assert_eq!(parsed.coding_style.unwrap().layers, 2);
+    assert_eq!(parsed.tiles.len(), 1);
+    assert!(
+        is_supported_part1_native_quality_layer_component_profile(&parsed),
+        "markers={:?}, style={:?}, siz={:?}, tiles={:?}",
+        parsed
+            .markers
+            .iter()
+            .map(|segment| segment.marker)
+            .collect::<Vec<_>>(),
+        parsed.coding_style,
+        parsed.siz,
+        parsed.tiles
+    );
+    let oracle = decode_baseline_owned_components(&fixture.one_layer_oracle).unwrap();
+    let limited = decode_baseline_owned_components_selected_with_max_layers(
+        &fixture.two_layer_codestream,
+        &[0],
+        Some(1),
+    )
+    .unwrap();
+    let full = decode_baseline_owned_components(&fixture.two_layer_codestream).unwrap();
+    assert_eq!(limited.components, oracle.components);
+    assert_ne!(limited.components, full.components);
+    assert_eq!(full.components[0].samples, samples);
+    assert!(
+        fixture
+            .second_layer_body_ranges
+            .iter()
+            .all(|range| range.start < range.end)
+    );
 }
 
 /// Encode an unsigned 16-bit RGB Part 1 codestream using the narrow
@@ -11834,6 +12077,194 @@ fn encode_decomp_subband(
     })
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QualityLayerBlockSplit {
+    first_coding_passes: u16,
+    first_byte_len: usize,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn encode_quality_layer_decomp_subband(
+    image_width: u32,
+    plane: &[i32],
+    spec: DecompSubbandSpec,
+    available_bitplanes: u8,
+    segments: &mut Vec<u8>,
+    tier1_encode_scratch: &mut tier1::CodeBlockEncodeScratch,
+) -> Result<(NativeDecompSubband, Vec<QualityLayerBlockSplit>)> {
+    let grid_x1 = spec
+        .grid_x0
+        .checked_add(u64::from(spec.width))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let grid_y1 = spec
+        .grid_y0
+        .checked_add(u64::from(spec.height))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let first_code_block_x = spec.grid_x0 / 64;
+    let first_code_block_y = spec.grid_y0 / 64;
+    let code_block_cols = u16::try_from(
+        ceil_div_u64(grid_x1, 64)?
+            .checked_sub(first_code_block_x)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )
+    .map_err(|_| CodestreamError::SizeOverflow)?;
+    let code_block_rows = u16::try_from(
+        ceil_div_u64(grid_y1, 64)?
+            .checked_sub(first_code_block_y)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )
+    .map_err(|_| CodestreamError::SizeOverflow)?;
+    let block_count = usize::from(code_block_cols)
+        .checked_mul(usize::from(code_block_rows))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut code_blocks = Vec::with_capacity(block_count);
+    let mut splits = Vec::with_capacity(block_count);
+    let image_width_usize =
+        usize::try_from(image_width).map_err(|_| CodestreamError::SizeOverflow)?;
+    let subband_x = usize::try_from(spec.x).map_err(|_| CodestreamError::SizeOverflow)?;
+    let subband_y = usize::try_from(spec.y).map_err(|_| CodestreamError::SizeOverflow)?;
+
+    for block_y in 0..code_block_rows {
+        for block_x in 0..code_block_cols {
+            let code_block_x0 = first_code_block_x
+                .checked_add(u64::from(block_x))
+                .and_then(|value| value.checked_mul(64))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let code_block_y0 = first_code_block_y
+                .checked_add(u64::from(block_y))
+                .and_then(|value| value.checked_mul(64))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let clipped_x0 = code_block_x0.max(spec.grid_x0);
+            let clipped_y0 = code_block_y0.max(spec.grid_y0);
+            let clipped_x1 = code_block_x0
+                .checked_add(64)
+                .ok_or(CodestreamError::SizeOverflow)?
+                .min(grid_x1);
+            let clipped_y1 = code_block_y0
+                .checked_add(64)
+                .ok_or(CodestreamError::SizeOverflow)?
+                .min(grid_y1);
+            let width = u16::try_from(
+                clipped_x1
+                    .checked_sub(clipped_x0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            let height = u16::try_from(
+                clipped_y1
+                    .checked_sub(clipped_y0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            let dimensions =
+                tier1::CodeBlockDimensions::new(width, height).map_err(map_tier1_error)?;
+            let local_x0 = usize::try_from(
+                clipped_x0
+                    .checked_sub(spec.grid_x0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            let local_y0 = usize::try_from(
+                clipped_y0
+                    .checked_sub(spec.grid_y0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            let source_x = subband_x
+                .checked_add(local_x0)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let source_y = subband_y
+                .checked_add(local_y0)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let source_offset = source_y
+                .checked_mul(image_width_usize)
+                .and_then(|offset| offset.checked_add(source_x))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let source = plane
+                .get(source_offset..)
+                .ok_or(CodestreamError::SizeOverflow)?;
+
+            let segment_offset = segments.len();
+            let mut pass_boundaries = Vec::new();
+            let encoded =
+                tier1::encode_baseline_code_block_with_strided_scratch_and_pass_boundaries(
+                    source,
+                    image_width_usize,
+                    tier1::CodeBlockEncodeSpec {
+                        dimensions,
+                        subband: spec.kind.tier1_subband(),
+                        available_bitplanes,
+                        code_block_style: 0,
+                    },
+                    segments,
+                    &mut pass_boundaries,
+                    tier1_encode_scratch,
+                )
+                .map_err(map_tier1_error)?;
+            if !encoded.included {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Sod),
+                    "quality-layer fixture requires a non-zero contribution in every code-block",
+                ));
+            }
+            let desired_passes = encoded.pass_count.div_ceil(2);
+            let boundary = pass_boundaries
+                .iter()
+                .filter(|boundary| {
+                    boundary.coding_passes < encoded.pass_count
+                        && boundary.stable_byte_len > 0
+                        && boundary.stable_byte_len < encoded.byte_len
+                })
+                .min_by_key(|boundary| boundary.coding_passes.abs_diff(desired_passes))
+                .copied()
+                .ok_or_else(|| {
+                    invalid(
+                        None,
+                        Some(Marker::Sod),
+                        "quality-layer fixture could not expose a stable non-empty Tier-1 pass prefix",
+                    )
+                })?;
+            code_blocks.push(EncodedCodeBlock {
+                x: block_x,
+                y: block_y,
+                width,
+                height,
+                included: true,
+                missing_bitplanes: encoded
+                    .missing_bitplanes
+                    .checked_add(1)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                coding_passes: encoded.pass_count,
+                segment_offset,
+                segment_len: encoded.byte_len,
+            });
+            splits.push(QualityLayerBlockSplit {
+                first_coding_passes: boundary.coding_passes,
+                first_byte_len: boundary.stable_byte_len,
+            });
+        }
+    }
+
+    Ok((
+        NativeDecompSubband {
+            index: spec.index,
+            resolution: spec.resolution,
+            kind: spec.kind,
+            x: spec.x,
+            y: spec.y,
+            width: spec.width,
+            height: spec.height,
+            code_block_cols,
+            code_block_rows,
+            available_bitplanes,
+            code_blocks,
+        },
+        splits,
+    ))
+}
+
 #[cfg(test)]
 fn encode_ht_decomp_subband_test_fixture(
     image_width: u32,
@@ -12933,6 +13364,7 @@ fn write_native_part1_main_header(
         decomposition_levels,
         qcd_exponents,
         false,
+        1,
     )
 }
 
@@ -12955,6 +13387,7 @@ fn write_native_part1_main_header_with_siz(
         decomposition_levels,
         qcd_exponents,
         false,
+        1,
     )
 }
 
@@ -12978,6 +13411,7 @@ fn write_native_ht_main_header(
         0,
         &[bits_per_sample],
         true,
+        1,
     )
 }
 
@@ -12994,6 +13428,7 @@ fn write_native_main_header(
     decomposition_levels: u8,
     qcd_exponents: &[u8],
     ht_block_coding: bool,
+    layers: u16,
 ) -> Result<()> {
     let siz = SizMarker {
         capabilities: if ht_block_coding { 0x4000 } else { 0 },
@@ -13023,6 +13458,7 @@ fn write_native_main_header(
         decomposition_levels,
         qcd_exponents,
         ht_block_coding,
+        layers,
     )
 }
 
@@ -13036,6 +13472,7 @@ fn write_native_main_header_with_siz(
     decomposition_levels: u8,
     qcd_exponents: &[u8],
     ht_block_coding: bool,
+    layers: u16,
 ) -> Result<()> {
     let expected_subbands = 1usize
         .checked_add(
@@ -13094,7 +13531,10 @@ fn write_native_main_header_with_siz(
     output.extend_from_slice(&[0xff, 0x52]);
     output.extend_from_slice(&12_u16.to_be_bytes());
     output.extend_from_slice(&[0, 0]);
-    output.extend_from_slice(&1_u16.to_be_bytes());
+    if layers == 0 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    output.extend_from_slice(&layers.to_be_bytes());
     output.extend_from_slice(&[
         u8::from(multiple_component_transform),
         decomposition_levels,
@@ -13312,6 +13752,227 @@ fn write_native_decomp_packets(
         }
     }
     Ok(())
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+struct QualityLayerHeaderState {
+    inclusion: EncTagTree,
+    missing: EncTagTree,
+    l_block: Vec<u8>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl QualityLayerHeaderState {
+    fn new(subband: &NativeDecompSubband) -> Result<Self> {
+        Ok(Self {
+            inclusion: EncTagTree::new(
+                subband.code_block_cols,
+                subband.code_block_rows,
+                subband
+                    .code_blocks
+                    .iter()
+                    .map(|block| if block.included { 0 } else { 2 }),
+            )?,
+            missing: EncTagTree::new(
+                subband.code_block_cols,
+                subband.code_block_rows,
+                subband
+                    .code_blocks
+                    .iter()
+                    .map(|block| u32::from(block.missing_bitplanes)),
+            )?,
+            l_block: alloc::vec![3; subband.code_blocks.len()],
+        })
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+struct QualityLayerPacketBytes {
+    bytes: Vec<u8>,
+    first_layer_body_ranges: Vec<core::ops::Range<usize>>,
+    second_layer_body_ranges: Vec<core::ops::Range<usize>>,
+    second_layer_header_offsets: Vec<usize>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn write_quality_layer_packets(
+    subbands: &[NativeDecompSubband],
+    splits: &[Vec<QualityLayerBlockSplit>],
+    segments: &[u8],
+    layers: u16,
+) -> Result<QualityLayerPacketBytes> {
+    if !matches!(layers, 1 | 2) || subbands.len() != splits.len() {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let mut states = subbands
+        .iter()
+        .map(QualityLayerHeaderState::new)
+        .collect::<Result<Vec<_>>>()?;
+    let mut output = QualityLayerPacketBytes {
+        bytes: Vec::new(),
+        first_layer_body_ranges: Vec::new(),
+        second_layer_body_ranges: Vec::new(),
+        second_layer_header_offsets: Vec::new(),
+    };
+
+    for layer in 0..layers {
+        for resolution in 0..=2 {
+            let packet_header_offset = output.bytes.len();
+            if layer == 1 {
+                output
+                    .second_layer_header_offsets
+                    .push(packet_header_offset);
+            }
+            let mut writer = PacketBitWriter::new();
+            let packet_present =
+                subbands
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, subband)| subband.resolution == resolution)
+                    .any(|(subband_index, subband)| {
+                        subband.code_blocks.iter().zip(&splits[subband_index]).any(
+                            |(block, split)| {
+                                block.included
+                                    && if layer == 0 {
+                                        split.first_byte_len > 0
+                                    } else {
+                                        split.first_byte_len < block.segment_len
+                                    }
+                            },
+                        )
+                    });
+            writer.write_bit(u32::from(packet_present))?;
+            if packet_present {
+                for (subband_index, subband) in subbands
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, subband)| subband.resolution == resolution)
+                {
+                    let state = states
+                        .get_mut(subband_index)
+                        .ok_or(CodestreamError::SizeOverflow)?;
+                    for (block_index, (block, split)) in subband
+                        .code_blocks
+                        .iter()
+                        .zip(&splits[subband_index])
+                        .enumerate()
+                    {
+                        if layer == 0 {
+                            state.inclusion.encode(&mut writer, block.x, block.y, 1)?;
+                            if !block.included {
+                                continue;
+                            }
+                            state
+                                .missing
+                                .encode(&mut writer, block.x, block.y, u32::MAX)?;
+                            write_quality_layer_block_length(
+                                &mut writer,
+                                split.first_coding_passes,
+                                split.first_byte_len,
+                                state
+                                    .l_block
+                                    .get_mut(block_index)
+                                    .ok_or(CodestreamError::SizeOverflow)?,
+                            )?;
+                        } else {
+                            let remaining_passes = block
+                                .coding_passes
+                                .checked_sub(split.first_coding_passes)
+                                .ok_or(CodestreamError::SizeOverflow)?;
+                            let remaining_len = block
+                                .segment_len
+                                .checked_sub(split.first_byte_len)
+                                .ok_or(CodestreamError::SizeOverflow)?;
+                            let contributes = remaining_passes != 0 && remaining_len != 0;
+                            writer.write_bit(u32::from(contributes))?;
+                            if contributes {
+                                write_quality_layer_block_length(
+                                    &mut writer,
+                                    remaining_passes,
+                                    remaining_len,
+                                    state
+                                        .l_block
+                                        .get_mut(block_index)
+                                        .ok_or(CodestreamError::SizeOverflow)?,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+            writer.align();
+            output.bytes.extend_from_slice(writer.bytes());
+            for (subband_index, subband) in subbands
+                .iter()
+                .enumerate()
+                .filter(|(_, subband)| subband.resolution == resolution)
+            {
+                for (block, split) in subband.code_blocks.iter().zip(&splits[subband_index]) {
+                    if !block.included {
+                        continue;
+                    }
+                    let (relative_offset, len) = if layer == 0 {
+                        (0, split.first_byte_len)
+                    } else {
+                        (
+                            split.first_byte_len,
+                            block
+                                .segment_len
+                                .checked_sub(split.first_byte_len)
+                                .ok_or(CodestreamError::SizeOverflow)?,
+                        )
+                    };
+                    if len == 0 {
+                        continue;
+                    }
+                    let segment_offset = block
+                        .segment_offset
+                        .checked_add(relative_offset)
+                        .ok_or(CodestreamError::SizeOverflow)?;
+                    let body = checked_slice(segments, segment_offset, len)?;
+                    let start = output.bytes.len();
+                    output.bytes.extend_from_slice(body);
+                    let range = start..output.bytes.len();
+                    if layer == 0 {
+                        output.first_layer_body_ranges.push(range);
+                    } else {
+                        output.second_layer_body_ranges.push(range);
+                    }
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn write_quality_layer_block_length(
+    writer: &mut PacketBitWriter,
+    coding_passes: u16,
+    byte_len: usize,
+    l_block: &mut u8,
+) -> Result<()> {
+    if coding_passes == 0 || byte_len == 0 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    write_coding_pass_count(writer, coding_passes)?;
+    let pass_bits = u8::try_from(u32::from(coding_passes).ilog2())
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    while u128::try_from(byte_len).map_err(|_| CodestreamError::SizeOverflow)?
+        >= (1_u128 << u32::from(*l_block + pass_bits))
+    {
+        writer.write_bit(1)?;
+        *l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    writer.write_bit(0)?;
+    writer.write_bits(
+        u32::try_from(byte_len).map_err(|_| CodestreamError::SizeOverflow)?,
+        l_block
+            .checked_add(pass_bits)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )
 }
 
 fn write_component_packet_header(
@@ -15005,6 +15666,66 @@ pub fn is_supported_u8_two_decomposition_encode_compatible_profile(
         "grayscale/RGB",
     )
     .is_none()
+}
+
+/// True only for the bounded raw two-layer component profile.
+///
+/// This does not widen the ordinary multi-tile or encode-compatible
+/// predicates. Packet headers remain fully parsed later so malformed excluded
+/// layer declarations still fail closed.
+pub fn is_supported_part1_native_quality_layer_component_profile(codestream: &Codestream) -> bool {
+    if decomposition_encode_compatible_unsupported_construct(
+        codestream,
+        2,
+        8,
+        Some(1),
+        Some(false),
+        "quality-layer grayscale",
+    )
+    .is_some()
+    {
+        return false;
+    }
+    let Some(style) = codestream.uniform_effective_coding_style() else {
+        return false;
+    };
+    let exact_markers = codestream.markers.iter().map(|segment| segment.marker).eq([
+        Marker::Siz,
+        Marker::Cod,
+        Marker::Qcd,
+        Marker::Sot,
+        Marker::Sod,
+        Marker::Eoc,
+    ]);
+    exact_markers
+        && codestream.siz.image_origin_x == 0
+        && codestream.siz.image_origin_y == 0
+        && codestream.siz.tile_origin_x == 0
+        && codestream.siz.tile_origin_y == 0
+        && codestream.siz.tile_width == codestream.siz.reference_grid_width
+        && codestream.siz.tile_height == codestream.siz.reference_grid_height
+        && style.entropy_coder == EntropyCoder::ClassicTier1
+        && style.progression_order == ProgressionOrder::Lrcp
+        && style.layers == 2
+        && !style.multiple_component_transform
+        && style.decomposition_levels == 2
+        && style.code_block_width_exponent == 6
+        && style.code_block_height_exponent == 6
+        && style.code_block_style == 0
+        && style.transform == WaveletTransform::Reversible53
+        && !style.sop_markers
+        && !style.eph_markers
+        && !style.precincts_declared
+        && matches!(
+            codestream.tiles.as_slice(),
+            [tile]
+                if tile.tile_index == 0
+                    && tile.tile_part_index == 0
+                    && tile.tile_part_count == Some(1)
+                    && tile.tile_part_length.is_some()
+                    && tile.payload_offset.is_some()
+                    && tile.payload_len.is_some()
+        )
 }
 
 /// True when a raw Part 1 codestream is inside the bounded reduced-resolution
@@ -21813,7 +22534,13 @@ pub fn prepare_part1_component_decode_from_source<'a>(
             }))
         },
     )?;
-    source.record_bytes_not_read(0, prepared.preparation_timings.packet_bytes_skipped_via_plt);
+    source.record_bytes_not_read(
+        0,
+        prepared
+            .preparation_timings
+            .packet_bytes_skipped_via_plt
+            .saturating_add(prepared.preparation_timings.packet_body_bytes_skipped),
+    );
     #[cfg(feature = "std")]
     {
         prepared.preparation_timings.marker_parse_ns = marker_parse_ns;
@@ -30430,7 +31157,7 @@ mod packed_packet_header_tests {
             spans,
             len: logical_offset,
         };
-        let buffered = BufferedSourcePacketPayload::new(&source_payload);
+        let buffered = BufferedSourcePacketPayload::new(&source_payload, false);
         let parsed = parse_default_precinct_packets_from_source(
             &scan.marker_bytes,
             &scan.codestream,
@@ -30558,7 +31285,7 @@ mod packed_packet_header_tests {
             spans,
             len: logical_offset,
         };
-        let buffered = BufferedSourcePacketPayload::new(&source_payload);
+        let buffered = BufferedSourcePacketPayload::new(&source_payload, false);
         let parsed = parse_default_precinct_packets_from_source(
             &scan.marker_bytes,
             &scan.codestream,
@@ -43847,15 +44574,17 @@ struct BufferedSourcePacketPayload<'a> {
     window: core::cell::RefCell<SourcePacketWindow>,
     last_error: core::cell::RefCell<Option<source::SourceError>>,
     read_window_end: core::cell::Cell<usize>,
+    exact_packet_header_reads: bool,
 }
 
 impl<'a> BufferedSourcePacketPayload<'a> {
-    fn new(payload: &'a SourceTilePartPayload<'a>) -> Self {
+    fn new(payload: &'a SourceTilePartPayload<'a>, exact_packet_header_reads: bool) -> Self {
         Self {
             payload,
             window: core::cell::RefCell::new(SourcePacketWindow::default()),
             last_error: core::cell::RefCell::new(None),
             read_window_end: core::cell::Cell::new(payload.len),
+            exact_packet_header_reads,
         }
     }
 
@@ -43884,9 +44613,13 @@ impl PacketByteSource for BufferedSourcePacketPayload<'_> {
             .spans
             .get(self.payload.span_index_at(offset)?)?;
         let local = offset.checked_sub(span.logical_offset)?;
-        let read_len = (64 * 1024)
-            .min(span.len.checked_sub(local)?)
-            .min(self.read_window_end.get().checked_sub(offset)?);
+        let read_len = (if self.exact_packet_header_reads {
+            1
+        } else {
+            64 * 1024
+        })
+        .min(span.len.checked_sub(local)?)
+        .min(self.read_window_end.get().checked_sub(offset)?);
         if read_len == 0 {
             return None;
         }
@@ -43963,7 +44696,12 @@ fn parse_prepared_payload_packets(
             Some(tile_part_order),
         ),
         PreparedTilePayload::Source(source_payload) => {
-            let buffered = BufferedSourcePacketPayload::new(source_payload);
+            let retained_layers = max_layers.map_or(u16::MAX, |layers| layers);
+            let exact_packet_header_reads = codestream
+                .uniform_effective_coding_style()
+                .is_some_and(|style| retained_layers < style.layers);
+            let buffered =
+                BufferedSourcePacketPayload::new(source_payload, exact_packet_header_reads);
             let result = parse_default_precinct_packets_from_source(
                 marker_input,
                 codestream,
