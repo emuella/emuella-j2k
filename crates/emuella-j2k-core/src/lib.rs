@@ -6873,6 +6873,32 @@ mod effective_coding_style_tests {
         (fixture, samples)
     }
 
+    fn native_origin_multitile_fixture() -> (Vec<u8>, Vec<u8>) {
+        let width = 131_u32;
+        let height = 99_u32;
+        let samples = (0..width * height)
+            .map(|sample| u8::try_from((sample * 43 + sample / width * 23 + 17) % 251).unwrap())
+            .collect::<Vec<_>>();
+        let fixture = codestream::encode_grayscale_u8_two_decomp_multitile_test_fixture(
+            codestream::GrayscaleU8Encode {
+                width,
+                height,
+                samples: &samples,
+                stride_bytes: usize::try_from(width).unwrap(),
+            },
+            codestream::NativeMultitileTestGeometry {
+                image_origin_x: 8,
+                image_origin_y: 12,
+                tile_origin_x: 4,
+                tile_origin_y: 4,
+                tile_width: 64,
+                tile_height: 48,
+            },
+        )
+        .unwrap();
+        (fixture, samples)
+    }
+
     fn jp2_wrapped_native_multitile_fixture(codestream: &[u8]) -> Vec<u8> {
         let info = ImageInfo::new(
             131,
@@ -7195,6 +7221,284 @@ mod effective_coding_style_tests {
     }
 
     #[test]
+    fn phase_aligned_native_origins_are_exact_across_partial_routes() {
+        let (fixture, samples) = native_origin_multitile_fixture();
+        let parsed = codestream::parse(&fixture).unwrap();
+        assert_eq!(
+            (
+                parsed.siz.reference_grid_width,
+                parsed.siz.reference_grid_height,
+                parsed.siz.image_origin_x,
+                parsed.siz.image_origin_y,
+                parsed.siz.tile_origin_x,
+                parsed.siz.tile_origin_y,
+                parsed.siz.tile_width,
+                parsed.siz.tile_height,
+            ),
+            (139, 111, 8, 12, 4, 4, 64, 48)
+        );
+        assert!(codestream::is_supported_part1_native_multitile_partial_profile(&fixture, &parsed));
+
+        let partial_full = decode_partial(&fixture, &PartialDecodeOptions::default()).unwrap();
+        assert_eq!(
+            (partial_full.info.width, partial_full.info.height),
+            (131, 99)
+        );
+        assert_eq!(planar_bytes(&partial_full)[0], samples);
+
+        let full = decode(
+            &fixture,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((full.info.width, full.info.height), (131, 99));
+        assert_eq!(planar_bytes(&full)[0], samples);
+        assert_eq!(
+            (
+                full.component_info[0].x_origin,
+                full.component_info[0].y_origin,
+                full.component_info[0].width,
+                full.component_info[0].height,
+            ),
+            (8, 12, 131, 99)
+        );
+
+        for region in [
+            Region {
+                x: 8,
+                y: 9,
+                width: 20,
+                height: 17,
+            },
+            Region {
+                x: 54,
+                y: 8,
+                width: 12,
+                height: 21,
+            },
+            Region {
+                x: 7,
+                y: 35,
+                width: 23,
+                height: 11,
+            },
+            Region {
+                x: 50,
+                y: 32,
+                width: 30,
+                height: 25,
+            },
+        ] {
+            let options = PartialDecodeOptions {
+                region: Some(region),
+                ..PartialDecodeOptions::default()
+            };
+            let decoded = decode_partial(&fixture, &options).unwrap();
+            assert_eq!(planar_bytes(&decoded)[0], crop_u8(&samples, 131, region));
+            let descriptor = decode_partial_component_info(&fixture, &options).unwrap()[0].clone();
+            assert_eq!(
+                (
+                    descriptor.x_origin,
+                    descriptor.y_origin,
+                    descriptor.width,
+                    descriptor.height,
+                ),
+                (8 + region.x, 12 + region.y, region.width, region.height)
+            );
+        }
+
+        for (tile, region) in [
+            (
+                TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                },
+                Region {
+                    x: 0,
+                    y: 0,
+                    width: 60,
+                    height: 40,
+                },
+            ),
+            (
+                TileSelection {
+                    tile_x: 2,
+                    tile_y: 0,
+                },
+                Region {
+                    x: 124,
+                    y: 0,
+                    width: 7,
+                    height: 40,
+                },
+            ),
+            (
+                TileSelection {
+                    tile_x: 0,
+                    tile_y: 2,
+                },
+                Region {
+                    x: 0,
+                    y: 88,
+                    width: 60,
+                    height: 11,
+                },
+            ),
+            (
+                TileSelection {
+                    tile_x: 2,
+                    tile_y: 2,
+                },
+                Region {
+                    x: 124,
+                    y: 88,
+                    width: 7,
+                    height: 11,
+                },
+            ),
+        ] {
+            let options = PartialDecodeOptions {
+                tile: Some(tile),
+                ..PartialDecodeOptions::default()
+            };
+            let decoded = decode_partial(&fixture, &options).unwrap();
+            assert_eq!(planar_bytes(&decoded)[0], crop_u8(&samples, 131, region));
+            assert_eq!(
+                plan_partial_decode_work(&fixture, &options)
+                    .unwrap()
+                    .selected_tiles
+                    .len(),
+                1
+            );
+        }
+
+        let crossing = Region {
+            x: 50,
+            y: 32,
+            width: 30,
+            height: 25,
+        };
+        let options = PartialDecodeOptions {
+            region: Some(crossing),
+            ..PartialDecodeOptions::default()
+        };
+        assert_eq!(
+            decode_partial_info(&fixture, &options).unwrap().width,
+            crossing.width
+        );
+        let plan = plan_partial_decode_work(&fixture, &options).unwrap();
+        assert_eq!(plan.selected_tiles.len(), 4);
+        assert_eq!(
+            (
+                plan.selected_resolution.width,
+                plan.selected_resolution.height
+            ),
+            (crossing.width, crossing.height)
+        );
+        assert!(!plan.full_image_full_resolution_fallback);
+        let prepared = prepare_part1_decode(&fixture, &options).unwrap();
+        assert_eq!(prepared.codestream.selected_tile_count(), 4);
+        assert_eq!(
+            (
+                prepared.component_info()[0].x_origin,
+                prepared.component_info()[0].y_origin,
+            ),
+            (58, 44)
+        );
+        let (prepared_samples, work) = execute_prepared_u8(&prepared, None);
+        let expected = crop_u8(&samples, 131, crossing);
+        assert_eq!(prepared_samples, expected);
+        assert!(work.executed_code_blocks > 0);
+        assert!(work.windowed_synthesis_component_tiles > 0);
+
+        let stride = usize::try_from(crossing.width + 9).unwrap();
+        let mut padded = vec![0x6d; stride * usize::try_from(crossing.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut padded,
+                crossing.width,
+                crossing.height,
+                stride,
+                SampleFormat::U8,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let info = decode_partial_info(&fixture, &options).unwrap();
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            decode_partial_into(&fixture, &mut target, &options).unwrap();
+        }
+        for (actual, expected) in padded
+            .chunks_exact(stride)
+            .zip(expected.chunks_exact(usize::try_from(crossing.width).unwrap()))
+        {
+            assert_eq!(&actual[..expected.len()], expected);
+            assert!(
+                actual[expected.len()..]
+                    .iter()
+                    .all(|sample| *sample == 0x6d)
+            );
+        }
+
+        let source = codestream::source::SliceSource::new(&fixture);
+        let source_prepared = prepare_part1_decode_from_source(
+            &source,
+            codestream::Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: codestream::TileRegionRequest {
+                    x: crossing.x,
+                    y: crossing.y,
+                    width: crossing.width,
+                    height: crossing.height,
+                },
+                discard_levels: 0,
+                max_layers: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(source_prepared.codestream.selected_tile_count(), 4);
+        assert_eq!(
+            (
+                source_prepared.component_info()[0].x_origin,
+                source_prepared.component_info()[0].y_origin,
+            ),
+            (58, 44)
+        );
+        assert_eq!(execute_prepared_u8(&source_prepared, None).0, expected);
+
+        let clipped_tile_options = PartialDecodeOptions {
+            tile: Some(TileSelection {
+                tile_x: 2,
+                tile_y: 2,
+            }),
+            ..PartialDecodeOptions::default()
+        };
+        let clipped_tile_prepared = prepare_part1_decode(&fixture, &clipped_tile_options).unwrap();
+        let (clipped_tile_samples, clipped_tile_work) =
+            execute_prepared_u8(&clipped_tile_prepared, None);
+        assert_eq!(
+            clipped_tile_samples,
+            crop_u8(
+                &samples,
+                131,
+                Region {
+                    x: 124,
+                    y: 88,
+                    width: 7,
+                    height: 11,
+                }
+            )
+        );
+        assert!(clipped_tile_work.full_synthesis_component_tiles > 0);
+        assert_eq!(clipped_tile_work.windowed_synthesis_component_tiles, 0);
+    }
+
+    #[test]
     fn native_multitile_partial_partition_stitches_to_one_call() {
         let (fixture, samples) = native_multitile_fixture();
         let whole = Region {
@@ -7228,6 +7532,70 @@ mod effective_coding_style_tests {
                 y: 48,
                 width: 16,
                 height: 15,
+            },
+        ] {
+            let decoded = decode_partial(
+                &fixture,
+                &PartialDecodeOptions {
+                    region: Some(part),
+                    ..PartialDecodeOptions::default()
+                },
+            )
+            .unwrap();
+            let local_x = usize::try_from(part.x - whole.x).unwrap();
+            let local_y = usize::try_from(part.y - whole.y).unwrap();
+            let width = usize::try_from(part.width).unwrap();
+            for (row, source) in planar_bytes(&decoded)[0].chunks_exact(width).enumerate() {
+                let start = (local_y + row) * usize::try_from(whole.width).unwrap() + local_x;
+                stitched[start..start + width].copy_from_slice(source);
+            }
+        }
+        assert_eq!(stitched, crop_u8(&samples, 131, whole));
+        let one_call = decode_partial(
+            &fixture,
+            &PartialDecodeOptions {
+                region: Some(whole),
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(stitched, planar_bytes(&one_call)[0]);
+    }
+
+    #[test]
+    fn phase_aligned_native_origin_partition_stitches_to_one_call() {
+        let (fixture, samples) = native_origin_multitile_fixture();
+        let whole = Region {
+            x: 50,
+            y: 32,
+            width: 30,
+            height: 25,
+        };
+        let mut stitched = vec![0_u8; usize::try_from(whole.width * whole.height).unwrap()];
+        for part in [
+            Region {
+                x: 50,
+                y: 32,
+                width: 10,
+                height: 8,
+            },
+            Region {
+                x: 60,
+                y: 32,
+                width: 20,
+                height: 8,
+            },
+            Region {
+                x: 50,
+                y: 40,
+                width: 10,
+                height: 17,
+            },
+            Region {
+                x: 60,
+                y: 40,
+                width: 20,
+                height: 17,
             },
         ] {
             let decoded = decode_partial(
@@ -7329,6 +7697,201 @@ mod effective_coding_style_tests {
         assert!(prepare_part1_decode(input, options).is_err());
         assert!(plan_partial_decode_work(input, options).is_err());
         assert_partial_rejected_without_mutation(input, options, target_info);
+    }
+
+    fn assert_native_origin_source_rejected(input: &[u8], region: Region) {
+        let source = codestream::source::SliceSource::new(input);
+        assert!(
+            prepare_part1_decode_from_source(
+                &source,
+                codestream::Part1ComponentDecodeRequest {
+                    component_indices: &[0],
+                    region: codestream::TileRegionRequest {
+                        x: region.x,
+                        y: region.y,
+                        width: region.width,
+                        height: region.height,
+                    },
+                    discard_levels: 0,
+                    max_layers: Some(1),
+                },
+            )
+            .is_err()
+        );
+    }
+
+    fn set_siz_u32(input: &mut [u8], field_offset: usize, value: u32) {
+        let siz = marker_offset(input, codestream::Marker::Siz, 0);
+        input[siz + field_offset..siz + field_offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    #[test]
+    fn native_origin_partial_rejects_unaligned_geometry_and_prior_exclusions_across_routes() {
+        let (fixture, _) = native_origin_multitile_fixture();
+        let region = Region {
+            x: 50,
+            y: 32,
+            width: 30,
+            height: 25,
+        };
+        let options = PartialDecodeOptions {
+            region: Some(region),
+            ..PartialDecodeOptions::default()
+        };
+        let target_info = decode_partial_info(&fixture, &options).unwrap();
+
+        let mut candidates = Vec::new();
+        for (field, end_field, origin, end) in [
+            (14, 6, 9, 140),
+            (14, 6, 10, 141),
+            (18, 10, 13, 112),
+            (18, 10, 14, 113),
+        ] {
+            let mut candidate = fixture.clone();
+            set_siz_u32(&mut candidate, field, origin);
+            set_siz_u32(&mut candidate, end_field, end);
+            candidates.push(candidate);
+        }
+        for (field, origin) in [(30, 5), (30, 6), (34, 5), (34, 6)] {
+            let mut candidate = fixture.clone();
+            set_siz_u32(&mut candidate, field, origin);
+            candidates.push(candidate);
+        }
+        for (field, extent) in [(22, 62), (26, 46)] {
+            let mut candidate = fixture.clone();
+            set_siz_u32(&mut candidate, field, extent);
+            candidates.push(candidate);
+        }
+        for (field, origin) in [(30, 12), (34, 16)] {
+            let mut candidate = fixture.clone();
+            set_siz_u32(&mut candidate, field, origin);
+            candidates.push(candidate);
+        }
+
+        let siz = marker_offset(&fixture, codestream::Marker::Siz, 0);
+        let cod = marker_offset(&fixture, codestream::Marker::Cod, 0);
+        let mut signed = fixture.clone();
+        signed[siz + 40] |= 0x80;
+        candidates.push(signed);
+        let mut subsampled = fixture.clone();
+        subsampled[siz + 41] = 2;
+        candidates.push(subsampled);
+        let mut irreversible = fixture.clone();
+        irreversible[cod + 13] = 0;
+        candidates.push(irreversible);
+        let mut two_layers = fixture.clone();
+        two_layers[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+        candidates.push(two_layers);
+        candidates.push(insert_before_first_sot(
+            fixture.clone(),
+            &[0xff, 0x60, 0, 3, 0],
+        ));
+        candidates.push(insert_before_first_sot(
+            fixture.clone(),
+            &[0xff, 0x64, 0, 2],
+        ));
+        let mut bytes_after_eoc = fixture.clone();
+        bytes_after_eoc.extend_from_slice(&[0, 1]);
+        candidates.push(bytes_after_eoc);
+
+        for candidate in candidates {
+            if let Ok(parsed) = codestream::parse(&candidate) {
+                assert!(
+                    !codestream::is_supported_part1_native_multitile_partial_profile(
+                        &candidate, &parsed,
+                    )
+                );
+            }
+            assert_native_partial_rejected_across_routes(&candidate, &options, &target_info);
+            assert_native_origin_source_rejected(&candidate, region);
+        }
+
+        let jp2 = jp2_wrapped_native_multitile_fixture(&fixture);
+        assert_native_partial_rejected_across_routes(&jp2, &options, &target_info);
+        assert_native_origin_source_rejected(&jp2, region);
+        for excluded in [
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(2),
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![1]),
+                ..options.clone()
+            },
+        ] {
+            assert_partial_rejected_without_mutation(&fixture, &excluded, &target_info);
+        }
+    }
+
+    #[test]
+    fn native_origin_partial_selected_corruption_is_atomic_and_unselected_is_ignored() {
+        let (fixture, _) = native_origin_multitile_fixture();
+        let tile_options = PartialDecodeOptions {
+            tile: Some(TileSelection {
+                tile_x: 2,
+                tile_y: 2,
+            }),
+            ..PartialDecodeOptions::default()
+        };
+        let target_info = decode_partial_info(&fixture, &tile_options).unwrap();
+
+        let mut bad_psot = fixture.clone();
+        let selected_sot = marker_offset(&bad_psot, codestream::Marker::Sot, 8);
+        bad_psot[selected_sot + 6..selected_sot + 10].copy_from_slice(&13_u32.to_be_bytes());
+        assert_partial_rejected_without_mutation(&bad_psot, &tile_options, &target_info);
+
+        let mut bad_selected_packet = fixture.clone();
+        let selected_payload = codestream::parse(&bad_selected_packet)
+            .unwrap()
+            .tiles
+            .iter()
+            .find(|tile| tile.tile_index == 8)
+            .and_then(|tile| tile.payload_offset)
+            .unwrap();
+        bad_selected_packet[selected_payload] = 0xff;
+        assert_partial_rejected_without_mutation(&bad_selected_packet, &tile_options, &target_info);
+
+        let expected = decode_partial(&fixture, &tile_options).unwrap();
+        let mut bad_unselected_packet = fixture.clone();
+        let unselected_payload = codestream::parse(&bad_unselected_packet)
+            .unwrap()
+            .tiles
+            .iter()
+            .find(|tile| tile.tile_index == 0)
+            .and_then(|tile| tile.payload_offset)
+            .unwrap();
+        bad_unselected_packet[unselected_payload] = 0xff;
+        assert_eq!(
+            decode_partial(&bad_unselected_packet, &tile_options).unwrap(),
+            expected
+        );
+
+        let selected_region = codestream::TileRegionRequest {
+            x: 124,
+            y: 88,
+            width: 7,
+            height: 11,
+        };
+        let source = codestream::source::SliceSource::new(&bad_unselected_packet);
+        let source_prepared = prepare_part1_decode_from_source(
+            &source,
+            codestream::Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: selected_region,
+                discard_levels: 0,
+                max_layers: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(source_prepared.codestream.selected_tile_count(), 1);
+        assert_eq!(
+            execute_prepared_u8(&source_prepared, None).0,
+            planar_bytes(&expected)[0]
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ std = [
   "emuella-j2k-tier1/std",
   "emuella-j2k-transform/std",
 ]
+test-fixtures = []
 
 [dependencies]
 emuella-j2k-accel.workspace = true

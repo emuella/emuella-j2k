@@ -28,6 +28,7 @@ emuella-j2k-codestream.workspace = true
 emuella-j2k-container.workspace = true
 
 [dev-dependencies]
+emuella-j2k-codestream = { workspace = true, features = ["test-fixtures"] }
 sha2 = "0.10.9"
 
 [lints]
