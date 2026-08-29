@@ -1564,11 +1564,11 @@ fn reject_unsupported_part1_rendered_sampling(
     }
     if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? {
         let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-        // Establish the full-resolution default-canvas geometry at
-        // the rendered boundary. Pixel projection remains deliberately held.
-        let _canvas_plan = parsed
-            .rendered_canvas_plan()
-            .map_err(map_codestream_error)?;
+        if metadata.format == InputFormat::Jp2 {
+            // Select JP2 default-image geometry only at this container
+            // presentation boundary. Pixel projection remains held.
+            let _default_image_geometry = jp2_default_image_geometry(&parsed)?;
+        }
         if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {
             return Err(unsupported(
                 UnsupportedFeature::ComponentLayout,
@@ -1577,6 +1577,19 @@ fn reject_unsupported_part1_rendered_sampling(
         }
     }
     Ok(())
+}
+
+fn jp2_default_image_geometry(
+    codestream: &codestream::Codestream,
+) -> Result<codestream::geometry::CommonGridPlan> {
+    codestream::geometry::CommonGridPlan::new(
+        codestream
+            .siz
+            .image_reference_rect()
+            .map_err(map_codestream_error)?,
+        &codestream.siz.components,
+    )
+    .map_err(map_codestream_error)
 }
 
 fn validate_native_best_effort_decode_request(metadata: &Metadata) -> Result<()> {
@@ -7056,6 +7069,31 @@ mod effective_coding_style_tests {
         output
     }
 
+    fn wrap_rgb_jp2(codestream: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let info = ImageInfo::new(
+            width,
+            height,
+            3,
+            SampleFormat::U8,
+            ColorModel::Rgb,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut output = Vec::new();
+        write_jp2_encode_output(
+            &info,
+            codestream,
+            &EncodeOptions {
+                format: OutputFormat::Jp2,
+                decomposition_levels: 0,
+                ..EncodeOptions::default()
+            },
+            &mut output,
+        )
+        .unwrap();
+        output
+    }
+
     fn jp2_wrapped_native_multitile_fixture(codestream: &[u8]) -> Vec<u8> {
         let info = ImageInfo::new(
             131,
@@ -8798,7 +8836,7 @@ mod effective_coding_style_tests {
     }
 
     #[test]
-    fn rendered_canvas_planning_preserves_native_output_and_rejects_projection_atomically() {
+    fn jp2_default_image_planning_preserves_native_output_and_rejects_projection_atomically() {
         let (fixture, expected) = subsampled_fixture(9, 5);
         let native = decode_partial(&fixture, &PartialDecodeOptions::default()).unwrap();
         assert_eq!(planar_bytes(&native), expected.as_slice());
@@ -8806,6 +8844,32 @@ mod effective_coding_style_tests {
         let rendered = DecodeOptions::default();
         assert!(matches!(
             decode(&fixture, &rendered),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ComponentLayout,
+                ..
+            })
+        ));
+
+        let jp2 = wrap_rgb_jp2(&fixture, 9, 5);
+        let metadata = inspect(&jp2, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jp2);
+        let codestream_bytes = primary_part1_codestream_bytes(&jp2, &metadata)
+            .unwrap()
+            .unwrap();
+        let parsed = codestream::parse(codestream_bytes).unwrap();
+        let selected = jp2_default_image_geometry(&parsed).unwrap();
+        assert_eq!(selected.spacing(), 1);
+        assert_eq!(
+            (
+                selected.bounds().x0(),
+                selected.bounds().y0(),
+                selected.width(),
+                selected.height(),
+            ),
+            (0, 0, 9, 5)
+        );
+        assert!(matches!(
+            decode(&jp2, &rendered),
             Err(J2kError::Unsupported {
                 feature: UnsupportedFeature::ComponentLayout,
                 ..
@@ -8832,7 +8896,7 @@ mod effective_coding_style_tests {
                 planes: &mut planes,
             };
             assert!(matches!(
-                decode_into(&fixture, &mut target, &rendered),
+                decode_into(&jp2, &mut target, &rendered),
                 Err(J2kError::Unsupported {
                     feature: UnsupportedFeature::ComponentLayout,
                     ..
@@ -8840,6 +8904,57 @@ mod effective_coding_style_tests {
             ));
         }
         assert!(buffers.iter().flatten().all(|sample| *sample == 0x6d));
+    }
+
+    #[test]
+    fn raw_part1_does_not_select_jp2_default_image_geometry_or_change_error_precedence() {
+        let sample = [0x2a];
+        let mut fixture = codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
+            1,
+            1,
+            &[codestream::SubsampledU8TestComponent {
+                horizontal_separation: 2,
+                vertical_separation: 2,
+                samples: &sample,
+            }],
+        )
+        .unwrap();
+        let siz = marker_offset(&fixture, codestream::Marker::Siz, 0);
+        fixture[siz + 6..siz + 10].copy_from_slice(&2_u32.to_be_bytes());
+        fixture[siz + 10..siz + 14].copy_from_slice(&2_u32.to_be_bytes());
+        fixture[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
+        fixture[siz + 18..siz + 22].copy_from_slice(&1_u32.to_be_bytes());
+        fixture[siz + 22..siz + 26].copy_from_slice(&2_u32.to_be_bytes());
+        fixture[siz + 26..siz + 30].copy_from_slice(&2_u32.to_be_bytes());
+
+        let parsed = codestream::parse(&fixture).unwrap();
+        assert!(
+            codestream::geometry::CommonGridPlan::new(
+                parsed.siz.image_reference_rect().unwrap(),
+                &parsed.siz.components,
+            )
+            .is_err()
+        );
+        let raw_error = decode(&fixture, &DecodeOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                raw_error,
+                J2kError::Unsupported {
+                    feature: UnsupportedFeature::ComponentLayout,
+                    ref detail,
+                } if detail == "native subsampled component decode currently requires zero image and tile origins"
+            ),
+            "{raw_error:?}"
+        );
+
+        let jp2 = wrap_grayscale_jp2(&fixture, 1, 1);
+        assert!(matches!(
+            decode(&jp2, &DecodeOptions::default()),
+            Err(J2kError::InvalidInput {
+                offset: None,
+                message,
+            }) if message == "codestream size overflowed parser limits"
+        ));
     }
 
     #[test]
