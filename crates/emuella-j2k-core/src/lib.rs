@@ -144,6 +144,54 @@ mod jp2_header_validation_tests {
         output
     }
 
+    fn planar_bytes(image: &Image) -> &[Vec<u8>] {
+        let ImageData::Planes(planes) = &image.data else {
+            panic!("expected planar image data");
+        };
+        planes
+    }
+
+    fn sycc_codestream(width: u32, height: u32, luma: &[u8], cb: &[u8], cr: &[u8]) -> Vec<u8> {
+        codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
+            width,
+            height,
+            &[
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: luma,
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: cb,
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: cr,
+                },
+            ],
+        )
+        .unwrap()
+    }
+
+    fn wrap_sycc_jp2(codestream: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let mut jp2 = wrap_jp2(codestream, width, height, 3, 7, None);
+        set_first_colour(&mut jp2, 1, Some(18));
+        jp2
+    }
+
+    fn insert_crg(codestream: &mut Vec<u8>, values: [u16; 6]) {
+        let sot = marker_offset(codestream, codestream::Marker::Sot.code().to_be_bytes());
+        let mut segment = codestream::Marker::Crg.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&14_u16.to_be_bytes());
+        for value in values {
+            segment.extend_from_slice(&value.to_be_bytes());
+        }
+        codestream.splice(sot..sot, segment);
+    }
+
     fn unsupported_presentation_inputs(raw: &[u8], components: u16) -> Vec<Vec<u8>> {
         let mut inputs = Vec::new();
         for box_type in [
@@ -719,6 +767,202 @@ mod jp2_header_validation_tests {
                 "direct JP2 colour metadata must not change native partial component decode"
             );
         }
+    }
+
+    #[test]
+    fn bounded_sycc_projection_is_exact_for_ramps_edges_conversion_and_clipping() {
+        assert_eq!(
+            [-1.0, -0.5, -0.49, 0.0, 0.49, 0.5, 1.5, 254.49, 254.5, 300.0,].map(round_and_clip_u8),
+            [0, 0, 0, 0, 0, 1, 2, 254, 255, 255]
+        );
+        let luma = vec![
+            0, 32, 64, 96, 128, 160, 192, 224, 255, 1, 127, 200, 250, 80, 40,
+        ];
+        let decoded = codestream::DecodedImage {
+            width: 5,
+            height: 3,
+            bits_per_sample: 8,
+            signed: false,
+            components: [
+                luma,
+                vec![128, 0, 255, 64, 192, 128],
+                vec![128, 255, 0, 192, 64, 128],
+            ]
+            .into_iter()
+            .map(|samples| codestream::DecodedComponent { samples })
+            .collect(),
+        };
+        let rendered = render_bounded_sycc_420(decoded).unwrap();
+        assert_eq!((rendered.width, rendered.height), (5, 3));
+        assert_eq!(
+            rendered
+                .components
+                .iter()
+                .map(|component| component.samples.as_slice())
+                .collect::<Vec<_>>(),
+            vec![
+                &[
+                    0, 32, 242, 255, 0, 160, 192, 255, 255, 0, 217, 255, 160, 0, 40
+                ][..],
+                &[
+                    0, 32, 17, 49, 176, 160, 192, 177, 208, 49, 103, 176, 255, 104, 40
+                ][..],
+                &[0, 32, 0, 0, 255, 160, 192, 0, 28, 226, 14, 87, 255, 193, 40][..],
+            ]
+        );
+    }
+
+    #[test]
+    fn bounded_sycc_jp2_preserves_native_planes_and_renders_all_full_decode_routes() {
+        let luma = [
+            0, 32, 64, 96, 128, 160, 192, 224, 255, 1, 127, 200, 250, 80, 40,
+        ];
+        let cb = [128, 0, 255, 64, 192, 128];
+        let cr = [128, 255, 0, 192, 64, 128];
+        let raw = sycc_codestream(5, 3, &luma, &cb, &cr);
+        let jp2 = wrap_sycc_jp2(&raw, 5, 3);
+        assert_eq!(
+            inspect(&jp2, &InspectOptions::default()).unwrap().support,
+            SupportStatus::Supported
+        );
+
+        let native_options = DecodeOptions {
+            mode: DecodeMode::Components,
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        let native = decode(&jp2, &native_options).unwrap();
+        assert_eq!(
+            planar_bytes(&native),
+            &[luma.as_slice(), cb.as_slice(), cr.as_slice()]
+        );
+        assert_eq!(
+            decode_partial(&jp2, &PartialDecodeOptions::default()).unwrap(),
+            native
+        );
+
+        let expected = [
+            vec![
+                0, 32, 242, 255, 0, 160, 192, 255, 255, 0, 217, 255, 160, 0, 40,
+            ],
+            vec![
+                0, 32, 17, 49, 176, 160, 192, 177, 208, 49, 103, 176, 255, 104, 40,
+            ],
+            vec![0, 32, 0, 0, 255, 160, 192, 0, 28, 226, 14, 87, 255, 193, 40],
+        ];
+        let planar_options = DecodeOptions {
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        let shape = decode_shape(&jp2, &planar_options).unwrap();
+        assert_eq!(
+            (shape.width, shape.height, shape.output_components),
+            (5, 3, 3)
+        );
+        assert_eq!(shape.sample_format, SampleFormat::U8);
+        assert_eq!(shape.color_model, ColorModel::Rgb);
+        let rendered = decode(&jp2, &planar_options).unwrap();
+        assert_eq!(rendered.info, shape.image_info().unwrap());
+        assert_eq!(planar_bytes(&rendered), expected.as_slice());
+        assert!(
+            rendered
+                .component_info
+                .iter()
+                .all(|component| component.source_component.is_none())
+        );
+        assert_eq!(
+            planar_full_into(&jp2, &rendered.info, &planar_options),
+            expected
+        );
+
+        let interleaved_options = DecodeOptions {
+            target_layout: ComponentLayout::Interleaved,
+            ..DecodeOptions::default()
+        };
+        let interleaved = decode(&jp2, &interleaved_options).unwrap();
+        let ImageData::Interleaved(samples) = interleaved.data else {
+            panic!("rendered output must be interleaved")
+        };
+        let expected_interleaved = (0..15)
+            .flat_map(|sample| expected.iter().map(move |plane| plane[sample]))
+            .collect::<Vec<_>>();
+        assert_eq!(samples, expected_interleaved);
+    }
+
+    #[test]
+    fn bounded_sycc_jp2_accepts_zero_registration_and_rejects_nearby_profiles() {
+        let luma = [128_u8; 15];
+        let cb = [128_u8; 6];
+        let cr = [128_u8; 6];
+        let raw = sycc_codestream(5, 3, &luma, &cb, &cr);
+
+        let mut zero_crg = raw.clone();
+        insert_crg(&mut zero_crg, [0; 6]);
+        let zero_crg = wrap_sycc_jp2(&zero_crg, 5, 3);
+        assert!(decode(&zero_crg, &DecodeOptions::default()).is_ok());
+
+        let mut nonzero_crg = raw.clone();
+        insert_crg(&mut nonzero_crg, [0, 0, 0, 1, 0, 0]);
+        let nonzero_crg = wrap_sycc_jp2(&nonzero_crg, 5, 3);
+
+        let wrong_sampling = codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
+            5,
+            3,
+            &[
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: &luma,
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 1,
+                    samples: &[128; 9],
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &cr,
+                },
+            ],
+        )
+        .unwrap();
+        let wrong_sampling = wrap_sycc_jp2(&wrong_sampling, 5, 3);
+
+        let mut extra_colour = wrap_sycc_jp2(&raw, 5, 3);
+        append_jp2_header_child(
+            &mut extra_colour,
+            colour_box(container::ColorSpecificationMethod::Enumerated, Some(16)),
+        );
+
+        let mut multiple_codestreams = wrap_sycc_jp2(&raw, 5, 3);
+        container::write_contiguous_codestream_box(&mut multiple_codestreams, &raw).unwrap();
+
+        let mut channel_definition = wrap_sycc_jp2(&raw, 5, 3);
+        append_jp2_header_child(
+            &mut channel_definition,
+            presentation_box(container::boxes::CHANNEL_DEFINITION, &[0, 0]),
+        );
+
+        for input in [
+            nonzero_crg,
+            wrong_sampling,
+            extra_colour,
+            multiple_codestreams,
+            channel_definition,
+        ] {
+            assert!(matches!(
+                decode(&input, &DecodeOptions::default()),
+                Err(J2kError::Unsupported { .. })
+            ));
+        }
+        assert!(matches!(
+            decode(&raw, &DecodeOptions::default()),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ComponentLayout,
+                ..
+            })
+        ));
     }
 }
 
@@ -1871,6 +2115,9 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     }
     reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
+    if let Some(image) = decode_bounded_jp2_sycc_420(input, &metadata, options)? {
+        return Ok(image);
+    }
     #[cfg(feature = "std")]
     if let Some(image) = decode_algorithmic_htj2k(input, &metadata, options)? {
         return Ok(image);
@@ -1989,6 +2236,22 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
 
+    if is_bounded_jp2_sycc_420_input(input, &metadata)? {
+        let image = metadata.image.as_ref().ok_or_else(sample_size_overflow)?;
+        return Ok(DecodeShape {
+            width: image.width,
+            height: image.height,
+            codestream_components: 3,
+            colour_channels: 3,
+            output_components: 3,
+            sample_format: SampleFormat::U8,
+            layout: options.target_layout,
+            byte_order: None,
+            color_model: ColorModel::Rgb,
+            mode: DecodeMode::Rendered,
+        });
+    }
+
     if let Some(shape) = p0_13_high_component_progression_decode_shape(input, &metadata, options)? {
         return Ok(shape);
     }
@@ -2045,6 +2308,105 @@ fn decode_owned_baseline(
         None
     };
     decoded_baseline_to_image_with_component_info(decoded, options, component_info).map(Some)
+}
+
+fn decode_bounded_jp2_sycc_420(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &DecodeOptions,
+) -> Result<Option<Image>> {
+    if options.mode != DecodeMode::Rendered || !is_bounded_jp2_sycc_420_input(input, metadata)? {
+        return Ok(None);
+    }
+    let codestream_bytes =
+        primary_part1_codestream_bytes(input, metadata)?.ok_or_else(sample_size_overflow)?;
+    let native = codestream::decode_baseline_owned_components(codestream_bytes)
+        .map_err(map_codestream_error)?;
+    let rendered = render_bounded_sycc_420(native)?;
+    decoded_baseline_to_image_with_component_info(rendered, options, None).map(Some)
+}
+
+/// Project-selected full-frame sYCC projection for the bounded direct 4:2:0
+/// JP2 profile. SIZ places chroma samples at even reference-grid coordinates;
+/// each sample is held over its following 2 × 2 output block, with the final
+/// sample extended to an odd right or bottom edge. Conversion uses binary64,
+/// rounds each sRGB channel to the nearest integer, then clips to unsigned u8.
+///
+/// ISO/IEC 15444-1:2024, Annex B, B.1–B.2 (PDF pages 79–80), Annex I,
+/// I.5.3.3 and Table I.10 (PDF pages 171–173), and J.14 (PDF page 216) define
+/// the component locations and sYCC interpretation but do not select the
+/// interpolation policy. ISO/IEC 15444-4:2024, Annex G, G.1–G.4 and Table G.1
+/// (PDF pages 47–49) supplies the full-resolution sRGB comparison boundary.
+/// The reviewed retrieval revisions were `34e5d1639b9f121807e620c001893ca9d2c8f977`
+/// and `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7` respectively.
+fn render_bounded_sycc_420(decoded: codestream::DecodedImage) -> Result<codestream::DecodedImage> {
+    if decoded.bits_per_sample != 8
+        || decoded.signed
+        || decoded.width == 0
+        || decoded.height == 0
+        || decoded.components.len() != 3
+    {
+        return Err(J2kError::InternalInvariant {
+            message: "bounded sYCC projection received incompatible native components".into(),
+        });
+    }
+    let width = usize::try_from(decoded.width).map_err(|_| sample_size_overflow())?;
+    let height = usize::try_from(decoded.height).map_err(|_| sample_size_overflow())?;
+    let chroma_width =
+        usize::try_from(decoded.width.div_ceil(2)).map_err(|_| sample_size_overflow())?;
+    let chroma_height =
+        usize::try_from(decoded.height.div_ceil(2)).map_err(|_| sample_size_overflow())?;
+    let luma_samples = width.checked_mul(height).ok_or_else(sample_size_overflow)?;
+    let chroma_samples = chroma_width
+        .checked_mul(chroma_height)
+        .ok_or_else(sample_size_overflow)?;
+    let [luma, cb, cr] = decoded.components.as_slice() else {
+        unreachable!("component count was checked")
+    };
+    if luma.samples.len() != luma_samples
+        || cb.samples.len() != chroma_samples
+        || cr.samples.len() != chroma_samples
+    {
+        return Err(J2kError::InternalInvariant {
+            message: "bounded sYCC native plane lengths disagree with SIZ geometry".into(),
+        });
+    }
+
+    let mut red = Vec::with_capacity(luma_samples);
+    let mut green = Vec::with_capacity(luma_samples);
+    let mut blue = Vec::with_capacity(luma_samples);
+    for y in 0..height {
+        for x in 0..width {
+            let luma = f64::from(luma.samples[y * width + x]);
+            let chroma_offset = (y / 2) * chroma_width + x / 2;
+            let cb = f64::from(cb.samples[chroma_offset]) - 128.0;
+            let cr = f64::from(cr.samples[chroma_offset]) - 128.0;
+            red.push(round_and_clip_u8(luma + 1.402 * cr));
+            green.push(round_and_clip_u8(luma - 0.344_13 * cb - 0.714_14 * cr));
+            blue.push(round_and_clip_u8(luma + 1.772 * cb));
+        }
+    }
+
+    Ok(codestream::DecodedImage {
+        width: decoded.width,
+        height: decoded.height,
+        bits_per_sample: 8,
+        signed: false,
+        components: [red, green, blue]
+            .into_iter()
+            .map(|samples| codestream::DecodedComponent { samples })
+            .collect(),
+    })
+}
+
+fn round_and_clip_u8(value: f64) -> u8 {
+    if value < 0.5 {
+        0
+    } else if value >= 254.5 {
+        255
+    } else {
+        (value + 0.5) as u8
+    }
 }
 
 fn is_p0_10_decode_request(options: &DecodeOptions) -> bool {
@@ -2233,7 +2595,16 @@ fn reject_unsupported_rendered_projection(
 
     if metadata.format == InputFormat::Jp2 {
         let container = container::parse(input).map_err(map_container_error)?;
-        if let Some((feature, detail)) = unsupported_jp2_presentation(&container)? {
+        let primary = container
+            .primary_codestream(input)
+            .map_err(map_container_error)?;
+        let parsed = primary
+            .map(codestream::parse)
+            .transpose()
+            .map_err(map_codestream_error)?;
+        if let Some((feature, detail)) =
+            unsupported_jp2_presentation(&container, primary.zip(parsed.as_ref()))?
+        {
             return Err(unsupported(feature, detail));
         }
     }
@@ -2260,6 +2631,9 @@ fn reject_unsupported_part1_rendered_sampling(
     if options.mode != DecodeMode::Rendered {
         return Ok(());
     }
+    if is_bounded_jp2_sycc_420_input(input, metadata)? {
+        return Ok(());
+    }
     if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? {
         let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
         if metadata.format == InputFormat::Jp2 {
@@ -2275,6 +2649,25 @@ fn reject_unsupported_part1_rendered_sampling(
         }
     }
     Ok(())
+}
+
+fn is_bounded_jp2_sycc_420_input(input: &[u8], metadata: &Metadata) -> Result<bool> {
+    if metadata.format != InputFormat::Jp2 {
+        return Ok(false);
+    }
+    let container = container::parse(input).map_err(map_container_error)?;
+    let Some(codestream_bytes) = container
+        .primary_codestream(input)
+        .map_err(map_container_error)?
+    else {
+        return Ok(false);
+    };
+    let codestream = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    Ok(is_bounded_jp2_sycc_420_profile(
+        &container,
+        codestream_bytes,
+        &codestream,
+    ))
 }
 
 fn jp2_default_image_geometry(
@@ -5836,7 +6229,10 @@ fn metadata_from_container(
     {
         validate_jp2_header_against_siz(&container, codestream)?;
     }
-    let unsupported_presentation = unsupported_jp2_presentation(&container)?;
+    let unsupported_presentation = unsupported_jp2_presentation(
+        &container,
+        primary_codestream.zip(parsed_codestream.as_ref()),
+    )?;
     let support = if !options.classify_support {
         SupportStatus::Unknown {
             detail: "support classification was not requested".into(),
@@ -5901,6 +6297,7 @@ fn metadata_from_container(
 
 fn unsupported_jp2_presentation(
     container: &container::Container,
+    primary_codestream: Option<(&[u8], &codestream::Codestream)>,
 ) -> Result<Option<(UnsupportedFeature, String)>> {
     if container.kind != container::ContainerKind::Jp2 {
         return Ok(None);
@@ -5949,9 +6346,18 @@ fn unsupported_jp2_presentation(
             (
                 container::ColorSpecificationMethod::Enumerated,
                 Some(container::EnumeratedColorSpace::SYcc),
-            ) => {
-                Some("JP2 sYCC rendered output requires a colour transform that is not implemented")
+            ) if primary_codestream.is_some_and(|(bytes, codestream)| {
+                is_bounded_jp2_sycc_420_profile(container, bytes, codestream)
+            }) =>
+            {
+                None
             }
+            (
+                container::ColorSpecificationMethod::Enumerated,
+                Some(container::EnumeratedColorSpace::SYcc),
+            ) => Some(
+                "JP2 sYCC rendered output is limited to the bounded direct unsigned 8-bit 4:2:0 profile",
+            ),
             _ => Some(
                 "JP2 ICC, vendor, reserved, and unrecognised colour metadata is not implemented for rendered output",
             ),
@@ -5961,6 +6367,109 @@ fn unsupported_jp2_presentation(
         }
     }
     Ok(None)
+}
+
+fn is_bounded_jp2_sycc_420_profile(
+    container: &container::Container,
+    codestream_bytes: &[u8],
+    codestream: &codestream::Codestream,
+) -> bool {
+    if container.kind != container::ContainerKind::Jp2
+        || container.codestreams.len() != 1
+        || container.image_header.is_none_or(|header| {
+            header.components != 3
+                || header.width == 0
+                || header.height == 0
+                || header.width != codestream.image_width()
+                || header.height != codestream.image_height()
+        })
+        || container.color_specification.is_none_or(|colour| {
+            colour.method != container::ColorSpecificationMethod::Enumerated
+                || colour.enumerated_color_space != Some(container::EnumeratedColorSpace::SYcc)
+        })
+        || container
+            .component_sample_formats()
+            .is_none_or(|components| {
+                components.len() != 3
+                    || components
+                        .iter()
+                        .any(|component| component.bits_per_sample != 8 || component.signed)
+            })
+        || codestream.siz.components.as_slice()
+            != [
+                codestream::ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                },
+                codestream::ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                },
+                codestream::ComponentParameters {
+                    bits_per_sample: 8,
+                    signed: false,
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                },
+            ]
+        || codestream
+            .uniform_effective_coding_style()
+            .is_none_or(|style| style.multiple_component_transform)
+        || !codestream::is_supported_part1_native_subsampled_component_profile(codestream)
+    {
+        return false;
+    }
+
+    let Some(header) = container
+        .boxes
+        .iter()
+        .find(|record| record.box_type == container::boxes::JP2_HEADER)
+    else {
+        return false;
+    };
+    let Some(header_end) = header.data_offset.checked_add(header.data_len) else {
+        return false;
+    };
+    let mut colour_count = 0_u8;
+    for record in container.boxes.iter().filter(|record| {
+        record.header_offset >= header.data_offset && record.header_offset < header_end
+    }) {
+        if record.box_type == container::boxes::COLOR_SPECIFICATION {
+            colour_count = colour_count.saturating_add(1);
+        }
+        if matches!(
+            record.box_type,
+            container::boxes::PALETTE
+                | container::boxes::COMPONENT_MAPPING
+                | container::boxes::CHANNEL_DEFINITION
+        ) {
+            return false;
+        }
+    }
+    if colour_count != 1 {
+        return false;
+    }
+
+    let mut registration = codestream
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == codestream::Marker::Crg);
+    let Some(segment) = registration.next() else {
+        return true;
+    };
+    if registration.next().is_some() || segment.data_len != 12 {
+        return false;
+    }
+    let Some(end) = segment.data_offset.checked_add(segment.data_len) else {
+        return false;
+    };
+    codestream_bytes
+        .get(segment.data_offset..end)
+        .is_some_and(|registration| registration.iter().all(|byte| *byte == 0))
 }
 
 fn validate_jp2_header_against_siz(

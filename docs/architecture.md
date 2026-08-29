@@ -46,11 +46,10 @@ a codestream reconstruction input and does not acquire JP2 presentation
 semantics. JPH and HTJ2K admission are unchanged.
 
 Public native component output remains unchanged. Unequal-grid rendered decode
-continues to fail closed while CRG registration, interpolation phase and
-kernel, edge extension, arithmetic precision, rounding, clipping and rendered
-sample storage remain deliberately unselected. Existing resolution reductions
-continue to describe native component reconstruction; no rendered-reduction
-interpretation is selected by common-grid or JP2 default-image planning.
+continues to fail closed except for the bounded full-frame sYCC projection
+below. Existing resolution reductions continue to describe native component
+reconstruction; no rendered-reduction interpretation is selected by
+common-grid or JP2 default-image planning.
 
 The neutral SIZ arithmetic follows the image, component, registration and
 reduced-grid navigation in ISO/IEC 15444-1:2024, Annex A, A.5.1 and A.9.1,
@@ -59,6 +58,44 @@ I.5.3.1.1. The reviewed retrieval revision was
 `34e5d1639b9f121807e620c001893ca9d2c8f977`. The description and deterministic
 tests are project-authored and do not reproduce standards prose, equations or
 tables.
+
+## Bounded full-frame sYCC projection
+
+The core admits one direct, unsigned 8-bit JP2 sYCC projection. The first
+component is Y on a 1 × 1 SIZ grid and the second and third components are Cb
+and Cr on matching 2 × 2 grids. The input must contain exactly one contiguous
+codestream and one enumerated sYCC colour specification, no multiple-component
+transform, and no palette, component mapping or channel definition. This also
+excludes alpha, ICC interpretation and additional colour specifications. The
+native codestream must satisfy the existing single-tile subsampled-component
+decoder gate, including zero image and tile origins. CRG may be absent or may
+contain exactly one all-zero registration pair for each of the three
+components. Every nearby profile remains unsupported, including signed or
+higher-precision samples, different sampling, non-zero registration, multiple
+codestreams and indirect component mappings.
+
+With zero registration, chroma sample `(x / 2, y / 2)` is selected for output
+sample `(x, y)`, using integer division. This is a nearest-neighbour,
+zero-order hold over each 2 × 2 block; the last chroma sample is extended to an
+odd right or bottom edge. The selected Y, Cb and Cr values are converted using
+binary64 arithmetic and the sYCC coefficients `1.402`, `0.34413`, `0.71414`
+and `1.772`, with a chroma centre of 128. Each result is rounded to the nearest
+integer, with halfway cases away from zero, then clipped to `[0, 255]`. Output
+is three unsigned 8-bit sRGB channels at the full SIZ image width and height,
+stored in the caller-selected planar or interleaved layout.
+
+Only ordinary full-frame rendered decode and shape discovery select this
+policy. Raw component and partial decode continue to return native component
+grids without colour conversion or resampling, and raw J2K rendered decode
+continues to fail closed. The component locations and sYCC interpretation
+follow ISO/IEC 15444-1:2024, Annex B, B.1–B.2, Annex I, I.5.3.3 and Table I.10,
+and J.14, PDF pages 79–80, 171–173 and 216. The full-resolution sRGB
+qualification boundary follows ISO/IEC 15444-4:2024, Annex G, G.1–G.4 and
+Table G.1, PDF pages 47–49. The reviewed retrieval revisions were
+`34e5d1639b9f121807e620c001893ca9d2c8f977` and
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7` respectively. The resampling
+policy and its synthetic fixtures are project-authored because Part 1 does not
+select an interpolation kernel.
 
 ## Baseline JP2 header admission
 
@@ -84,9 +121,10 @@ decode may still expose admitted raw codestream planes and applies no
 presentation transform. Component output metadata is inferred from the raw
 selection: all one- and three-component outputs are labelled grayscale and RGB
 respectively, while other counts and explicit subsets remain unknown. JP2
-colour metadata does not alter that inference. Rendered requests fail closed
-before output allocation or mutation for palette, component mapping, channel
-definition, sYCC, ICC, vendor, reserved or unrecognised colour metadata.
+colour metadata does not alter that inference. Except for the bounded sYCC
+profile above, rendered requests fail closed before output allocation or
+mutation for palette, component mapping, channel definition, sYCC, ICC,
+vendor, reserved or unrecognised colour metadata.
 Partial decode requests are native component selections; their Part 1
 full-decode compatibility fallback therefore also uses component mode.
 

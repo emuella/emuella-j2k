@@ -552,8 +552,9 @@ The same bounded path recognises and validates the optional main-header CRG
 component-pair syntax as informational metadata. ISO/IEC 15444-1:2024, Annex
 A, A.9–A.9.1 and Table A.42, PDF pages 61–62, states that CRG has no effect on
 codestream decoding. The selected raw component samples therefore remain
-unchanged; rendered registration, component placement and resampling are not
-implemented.
+unchanged. Rendered registration, component placement and resampling remain
+unsupported except for the separately bounded full-frame sYCC policy in
+[`architecture.md`](architecture.md#bounded-full-frame-sycc-projection).
 
 Synthetic POC-plus-SOP regressions cover signed coefficient realignment,
 windowed and full selected output, unaffected tiles, exact reconstruction, and

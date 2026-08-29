@@ -18424,7 +18424,9 @@ fn validate_supported_native_subsampled_component_profile(
             "native subsampled component decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false, false) {
+    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false, false)
+        && marker != Marker::Crg
+    {
         return Err(unsupported(
             None,
             Some(marker),
@@ -18432,6 +18434,7 @@ fn validate_supported_native_subsampled_component_profile(
             "marker segment is outside native subsampled component decode",
         ));
     }
+    validate_native_informational_crg_structure(codestream)?;
     if codestream.siz.components.is_empty() {
         return Err(unsupported(
             None,
@@ -18567,6 +18570,48 @@ fn validate_supported_native_subsampled_component_profile(
     }
     validate_one_tile_part_per_tile(codestream)?;
     Ok(coding_style)
+}
+
+fn validate_native_informational_crg_structure(codestream: &Codestream) -> Result<()> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .unwrap_or(usize::MAX);
+    let mut registration = codestream
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Crg);
+    let Some(segment) = registration.next() else {
+        return Ok(());
+    };
+    if registration.next().is_some() {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Crg),
+            "main header contains more than one CRG marker segment",
+        ));
+    }
+    if segment.offset >= first_tile_offset {
+        return Err(unsupported(
+            Some(segment.offset),
+            Some(Marker::Crg),
+            UnsupportedConstruct::MarkerSegment,
+            "CRG is permitted only in the main header",
+        ));
+    }
+    let expected = usize::from(codestream.siz.component_count())
+        .checked_mul(4)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if segment.data_len != expected {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Crg),
+            "CRG must contain exactly one Xcrg/Ycrg pair per SIZ component",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_supported_native_irreversible_component_selective_profile(
@@ -21778,6 +21823,9 @@ pub fn decode_baseline_owned_rendered(input: &[u8]) -> Result<DecodedImage> {
 /// component planes because that is the currently supported rendered profile.
 pub fn decode_baseline_owned_components(input: &[u8]) -> Result<DecodedImage> {
     let codestream = parse(input)?;
+    if is_supported_part1_native_subsampled_component_profile(&codestream) {
+        return decode_native_subsampled_components(input, &codestream);
+    }
     decode_supported_part1_reversible53_default_precinct(input, &codestream).or_else(|error| {
         if uniform_effective_coding_style(&codestream)
             .is_ok_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
@@ -21801,8 +21849,6 @@ pub fn decode_baseline_owned_components(input: &[u8]) -> Result<DecodedImage> {
             &codestream,
         ) {
             decode_native_rgb_u16_two_decomp_multitile(input, &codestream)
-        } else if is_supported_part1_native_subsampled_component_profile(&codestream) {
-            decode_native_subsampled_components(input, &codestream)
         } else if is_supported_native_component_multitile_profile(&codestream) {
             decode_native_component_multitile(input, &codestream)
         } else if is_supported_part1_high_bit_depth_component_profile(&codestream) {
@@ -32079,6 +32125,46 @@ mod inline_packet_marker_tests {
             .copy_from_slice(&reference_width.checked_add(origin_x).unwrap().to_be_bytes());
         codestream[siz + 14..siz + 18].copy_from_slice(&origin_x.to_be_bytes());
         codestream[siz + 30..siz + 34].copy_from_slice(&origin_x.to_be_bytes());
+    }
+
+    #[test]
+    fn full_component_decode_preserves_each_native_subsampled_grid() {
+        let luma = [
+            0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238,
+        ];
+        let cb = [3, 47, 91, 135, 179, 223];
+        let cr = [241, 199, 157, 115, 73, 31];
+        let codestream = encode_planar_u8_subsampled_no_decomp_test_fixture(
+            5,
+            3,
+            &[
+                SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: &luma,
+                },
+                SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &cb,
+                },
+                SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &cr,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(is_supported_part1_native_subsampled_component_profile(
+            &parse(&codestream).unwrap()
+        ));
+
+        let decoded = decode_baseline_owned_components(&codestream).unwrap();
+        assert_eq!((decoded.width, decoded.height), (5, 3));
+        assert_eq!(decoded.components[0].samples, luma);
+        assert_eq!(decoded.components[1].samples, cb);
+        assert_eq!(decoded.components[2].samples, cr);
     }
 
     #[test]
