@@ -20200,7 +20200,7 @@ pub fn decode_part1_p0_10_subsampled_reversible_mct_component_zero(
             &mut workspace,
             None,
             0,
-            PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P010),
+            PacketOrganisationConfig::VALIDATED_UNIFORM_SINGLE_PRECINCT_LRCP_24,
         )?;
         let tile_samples = decoded.pop().ok_or(CodestreamError::SizeOverflow)?;
         if !decoded.is_empty() {
@@ -24978,7 +24978,6 @@ fn decode_multitile_components_selected_validated(
 enum ComponentPacketProfile {
     Default,
     Profile0P007,
-    Profile0P010,
     Profile0P013,
 }
 
@@ -24997,10 +24996,17 @@ enum HeterogeneousSinglePrecinctPermission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UniformSinglePrecinctPermission {
+    None,
+    ValidatedLrcp24Packets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PacketOrganisationConfig {
     component_profile: ComponentPacketProfile,
     explicit_precinct_permission: ExplicitPrecinctPermission,
     heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission,
+    uniform_single_precinct_permission: UniformSinglePrecinctPermission,
     validator_granted_effective_maxshift: Option<BoundedTileMaxshift>,
 }
 
@@ -25013,6 +25019,7 @@ impl PacketOrganisationConfig {
         component_profile: ComponentPacketProfile::Default,
         explicit_precinct_permission: ExplicitPrecinctPermission::ValidatedProfile0P004,
         heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
+        uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
         validator_granted_effective_maxshift: None,
     };
     // The exact heterogeneous-component validator is the only production
@@ -25024,6 +25031,7 @@ impl PacketOrganisationConfig {
         explicit_precinct_permission: ExplicitPrecinctPermission::None,
         heterogeneous_single_precinct_permission:
             HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets,
+        uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
         validator_granted_effective_maxshift: None,
     };
 
@@ -25036,6 +25044,19 @@ impl PacketOrganisationConfig {
         explicit_precinct_permission: ExplicitPrecinctPermission::None,
         heterogeneous_single_precinct_permission:
             HeterogeneousSinglePrecinctPermission::ValidatedCprl720Packets,
+        uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+        validator_granted_effective_maxshift: None,
+    };
+
+    // The exact public-route validator is the only production caller that
+    // grants this capability. The shared planner independently re-resolves
+    // uniform styles and rechecks the single-precinct LRCP-24 schedule for
+    // every tile before consuming packet bytes.
+    const VALIDATED_UNIFORM_SINGLE_PRECINCT_LRCP_24: Self = Self {
+        component_profile: ComponentPacketProfile::Default,
+        explicit_precinct_permission: ExplicitPrecinctPermission::None,
+        heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
+        uniform_single_precinct_permission: UniformSinglePrecinctPermission::ValidatedLrcp24Packets,
         validator_granted_effective_maxshift: None,
     };
 
@@ -25050,6 +25071,7 @@ impl PacketOrganisationConfig {
             explicit_precinct_permission: ExplicitPrecinctPermission::None,
             heterogeneous_single_precinct_permission:
                 HeterogeneousSinglePrecinctPermission::ValidatedRpcl112Packets,
+            uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
             validator_granted_effective_maxshift: Some(effective_maxshift),
         }
     }
@@ -25059,6 +25081,7 @@ impl PacketOrganisationConfig {
             component_profile,
             explicit_precinct_permission: ExplicitPrecinctPermission::None,
             heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
+            uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
             validator_granted_effective_maxshift: None,
         }
     }
@@ -25660,6 +25683,12 @@ fn stitch_tile_sample_plane(
         usize::try_from(tile_rect.height).map_err(|_| CodestreamError::SizeOverflow)?;
     let tile_x = usize::try_from(tile_rect.x).map_err(|_| CodestreamError::SizeOverflow)?;
     let tile_y = usize::try_from(tile_rect.y).map_err(|_| CodestreamError::SizeOverflow)?;
+    let tile_end_x = tile_x
+        .checked_add(tile_width)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if tile_end_x > output_stride_samples {
+        return Err(CodestreamError::SizeOverflow);
+    }
     let tile_width_bytes = tile_width
         .checked_mul(bytes_per_sample)
         .ok_or(CodestreamError::SizeOverflow)?;
@@ -27286,6 +27315,49 @@ fn validate_heterogeneous_single_precinct_schedule(
     Ok(())
 }
 
+fn recheck_validator_granted_uniform_single_precinct_schedule(
+    permission: UniformSinglePrecinctPermission,
+    codestream: &Codestream,
+    component_styles: &[CodingStyleMarker],
+    component_topologies: &[Part1PrecinctTopology],
+    expected_packet_count: usize,
+) -> Result<()> {
+    if permission != UniformSinglePrecinctPermission::ValidatedLrcp24Packets {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "the uniform single-precinct LRCP-24 schedule requires an exact-validator grant",
+        ));
+    }
+
+    let coding_style = uniform_effective_coding_style(codestream)?;
+    let component_count = usize::from(codestream.siz.component_count());
+    let uniform_styles = component_styles.len() == component_count
+        && component_styles.iter().all(|style| *style == coding_style);
+    let single_precinct_topologies = component_topologies.len() == component_count
+        && component_topologies.iter().all(|topology| {
+            topology.resolutions.len() == usize::from(coding_style.decomposition_levels) + 1
+                && topology
+                    .resolutions
+                    .iter()
+                    .all(|resolution| resolution.precinct_count == 1)
+        });
+    if !uniform_styles
+        || !single_precinct_topologies
+        || coding_style.progression_order != ProgressionOrder::Lrcp
+        || expected_packet_count != 24
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "the validator-granted packet path requires uniform effective styles and exactly 24 single-precinct LRCP packets per tile",
+        ));
+    }
+    Ok(())
+}
+
 fn packet_precinct_grid_supported(
     codestream: &Codestream,
     tile_rect: TileRect,
@@ -27419,20 +27491,23 @@ fn parse_default_precinct_packets_from_source(
         coding_style,
         expected_packet_count,
     )?;
+    if packet_organisation.uniform_single_precinct_permission
+        != UniformSinglePrecinctPermission::None
+    {
+        recheck_validator_granted_uniform_single_precinct_schedule(
+            packet_organisation.uniform_single_precinct_permission,
+            codestream,
+            &component_styles,
+            &component_topologies,
+            expected_packet_count,
+        )?;
+    }
     if packet_profile == ComponentPacketProfile::Profile0P007 && expected_packet_count != 96 {
         return Err(unsupported(
             None,
             Some(Marker::Poc),
             UnsupportedConstruct::PacketDecode,
             "the qualified Profile-0 P0.07 path requires exactly 96 tile-zero packets",
-        ));
-    }
-    if packet_profile == ComponentPacketProfile::Profile0P010 && expected_packet_count != 24 {
-        return Err(unsupported(
-            None,
-            Some(Marker::Sot),
-            UnsupportedConstruct::PacketDecode,
-            "the qualified Profile-0 P0.10 path requires exactly 24 LRCP packets per tile",
         ));
     }
     if packet_profile == ComponentPacketProfile::Profile0P013 && expected_packet_count != 514 {
@@ -31166,7 +31241,7 @@ mod heterogeneous_packet_order_tests {
         parse(&p0_08_exact_fixture()).unwrap()
     }
 
-    fn p0_08_marker_segment(marker: Marker, data: &[u8]) -> Vec<u8> {
+    fn packet_profile_marker_segment(marker: Marker, data: &[u8]) -> Vec<u8> {
         let mut segment = marker.code().to_be_bytes().to_vec();
         segment.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
         segment.extend_from_slice(data);
@@ -31195,7 +31270,7 @@ mod heterogeneous_packet_order_tests {
         let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
         codestream.splice(
             cod..cod + 2 + lcod,
-            p0_08_marker_segment(
+            packet_profile_marker_segment(
                 Marker::Cod,
                 &[0x06, 0x04, 0x00, 0x1e, 0x00, 0x07, 0x04, 0x04, 0x00, 0x01],
             ),
@@ -31210,7 +31285,7 @@ mod heterogeneous_packet_order_tests {
                     2 => [2, 0, 8, 4, 4, 0, 1],
                     _ => unreachable!(),
                 };
-                p0_08_marker_segment(Marker::Coc, &payload)
+                packet_profile_marker_segment(Marker::Coc, &payload)
             })
             .collect::<Vec<_>>();
         codestream.splice(qcd..qcd, coc_segments);
@@ -31222,7 +31297,7 @@ mod heterogeneous_packet_order_tests {
             .collect::<Vec<_>>();
         codestream.splice(
             qcd..qcd + 2 + lqcd,
-            p0_08_marker_segment(Marker::Qcd, &qcd_payload),
+            packet_profile_marker_segment(Marker::Qcd, &qcd_payload),
         );
 
         let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
@@ -31232,9 +31307,9 @@ mod heterogeneous_packet_order_tests {
                 .chain(core::iter::once(0x80))
                 .chain((0..subband_count).map(|subband| p0_08_exponent(subband) << 3))
                 .collect::<Vec<_>>();
-            trailing_main_header.extend(p0_08_marker_segment(Marker::Qcc, &payload));
+            trailing_main_header.extend(packet_profile_marker_segment(Marker::Qcc, &payload));
         }
-        trailing_main_header.extend(p0_08_marker_segment(Marker::Com, &[0, 1]));
+        trailing_main_header.extend(packet_profile_marker_segment(Marker::Com, &[0, 1]));
         codestream.splice(sot..sot, trailing_main_header);
 
         let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
@@ -31254,6 +31329,88 @@ mod heterogeneous_packet_order_tests {
         let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
         codestream[sot + 6..sot + 10]
             .copy_from_slice(&u32::try_from(eoc - sot).unwrap().to_be_bytes());
+        codestream
+    }
+
+    fn empty_header_tile_part(
+        tile_index: u16,
+        tile_part_index: u8,
+        tile_part_count: Option<u8>,
+        packet_count: usize,
+    ) -> Vec<u8> {
+        let mut tile_part = Marker::Sot.code().to_be_bytes().to_vec();
+        tile_part.extend_from_slice(&10_u16.to_be_bytes());
+        tile_part.extend_from_slice(&tile_index.to_be_bytes());
+        tile_part.extend_from_slice(
+            &u32::try_from(14_usize.checked_add(packet_count).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        tile_part.push(tile_part_index);
+        tile_part.push(tile_part_count.unwrap_or(0));
+        tile_part.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        tile_part.resize(tile_part.len() + packet_count, 0);
+        tile_part
+    }
+
+    fn p0_10_exact_synthetic_fixture() -> Vec<u8> {
+        let planes = [vec![0_u8; 1], vec![0_u8; 1], vec![0_u8; 1]];
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut codestream = encode_planar_u8_no_decomp_test_fixture(1, 1, &views).unwrap();
+
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 4..siz + 6].copy_from_slice(&1_u16.to_be_bytes());
+        codestream[siz + 6..siz + 10].copy_from_slice(&256_u32.to_be_bytes());
+        codestream[siz + 10..siz + 14].copy_from_slice(&256_u32.to_be_bytes());
+        codestream[siz + 22..siz + 26].copy_from_slice(&128_u32.to_be_bytes());
+        codestream[siz + 26..siz + 30].copy_from_slice(&128_u32.to_be_bytes());
+        for component in 0..3 {
+            let offset = siz + 40 + component * 3;
+            codestream[offset] = 7;
+            codestream[offset + 1] = 4;
+            codestream[offset + 2] = 4;
+        }
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream.splice(
+            cod..cod + 2 + lcod,
+            packet_profile_marker_segment(
+                Marker::Cod,
+                &[0x00, 0x00, 0x00, 0x02, 0x01, 0x03, 0x04, 0x04, 0x00, 0x01],
+            ),
+        );
+
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&codestream, qcd + 2).unwrap());
+        let qcd_payload = core::iter::once(0)
+            .chain((0..10).map(|subband| p0_10_exponent(subband) << 3))
+            .collect::<Vec<_>>();
+        codestream.splice(
+            qcd..qcd + 2 + lqcd,
+            packet_profile_marker_segment(Marker::Qcd, &qcd_payload),
+        );
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
+        let parts = [
+            (0_u16, 0_u8, None, 3_usize),
+            (1, 0, None, 0),
+            (2, 0, None, 1),
+            (3, 0, None, 12),
+            (0, 1, Some(2), 21),
+            (1, 1, Some(2), 24),
+            (3, 1, Some(2), 12),
+            (2, 1, None, 2),
+            (2, 2, None, 21),
+        ];
+        let tile_parts = parts
+            .into_iter()
+            .flat_map(|(tile, part, count, packets)| {
+                empty_header_tile_part(tile, part, count, packets)
+            })
+            .collect::<Vec<_>>();
+        codestream.splice(sot..eoc, tile_parts);
         codestream
     }
 
@@ -31666,6 +31823,156 @@ mod heterogeneous_packet_order_tests {
     }
 
     #[test]
+    fn validated_uniform_single_precinct_lrcp_24_grant_is_private_and_rechecked() {
+        let input = p0_10_exact_synthetic_fixture();
+        let codestream = parse(&input).unwrap();
+        let tile = tile_rects(&codestream).unwrap()[0];
+        let granted = PacketOrganisationConfig::VALIDATED_UNIFORM_SINGLE_PRECINCT_LRCP_24;
+        let styles = packet_component_styles(&codestream, granted).unwrap();
+        let topologies = styles
+            .iter()
+            .enumerate()
+            .map(|(component, style)| {
+                Part1PrecinctTopology::new(&codestream.siz, tile, component as u16, *style).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            PacketOrganisationConfig::DEFAULT.uniform_single_precinct_permission,
+            UniformSinglePrecinctPermission::None,
+        );
+        assert!(
+            recheck_validator_granted_uniform_single_precinct_schedule(
+                PacketOrganisationConfig::DEFAULT.uniform_single_precinct_permission,
+                &codestream,
+                &styles,
+                &topologies,
+                24,
+            )
+            .is_err()
+        );
+        recheck_validator_granted_uniform_single_precinct_schedule(
+            granted.uniform_single_precinct_permission,
+            &codestream,
+            &styles,
+            &topologies,
+            24,
+        )
+        .unwrap();
+
+        for count in [0, 23, 25, MAX_PACKETS_PER_TILE.saturating_add(1)] {
+            assert!(
+                recheck_validator_granted_uniform_single_precinct_schedule(
+                    granted.uniform_single_precinct_permission,
+                    &codestream,
+                    &styles,
+                    &topologies,
+                    count,
+                )
+                .is_err()
+            );
+        }
+
+        let mut non_uniform_styles = styles.clone();
+        non_uniform_styles[1].decomposition_levels = 2;
+        assert!(
+            recheck_validator_granted_uniform_single_precinct_schedule(
+                granted.uniform_single_precinct_permission,
+                &codestream,
+                &non_uniform_styles,
+                &topologies,
+                24,
+            )
+            .is_err()
+        );
+
+        let mut multiple_precincts = topologies.clone();
+        multiple_precincts[2].resolutions[3].precinct_count = 2;
+        assert!(
+            recheck_validator_granted_uniform_single_precinct_schedule(
+                granted.uniform_single_precinct_permission,
+                &codestream,
+                &styles,
+                &multiple_precincts,
+                24,
+            )
+            .is_err()
+        );
+
+        let mut wrong_order = codestream.clone();
+        wrong_order.coding_style.as_mut().unwrap().progression_order = ProgressionOrder::Rlcp;
+        let wrong_styles = packet_component_styles(&wrong_order, granted).unwrap();
+        assert!(
+            recheck_validator_granted_uniform_single_precinct_schedule(
+                granted.uniform_single_precinct_permission,
+                &wrong_order,
+                &wrong_styles,
+                &topologies,
+                24,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn shared_planner_derives_the_exact_24_packet_lrcp_order_for_every_tile() {
+        let input = p0_10_exact_synthetic_fixture();
+        let codestream = parse(&input).unwrap();
+        let coding_style = uniform_effective_coding_style(&codestream).unwrap();
+        let styles = vec![coding_style; 3];
+
+        for tile in tile_rects(&codestream).unwrap() {
+            let topologies = styles
+                .iter()
+                .enumerate()
+                .map(|(component, style)| {
+                    Part1PrecinctTopology::new(&codestream.siz, tile, component as u16, *style)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let volumes = effective_progression_volumes(
+                &input,
+                &codestream,
+                tile.tile_index,
+                coding_style.layers,
+                coding_style.decomposition_levels + 1,
+            )
+            .unwrap();
+            let mut packets = Vec::new();
+            let count = visit_progression_volumes(
+                &codestream.siz,
+                tile.tile_index,
+                (u64::from(tile.x), u64::from(tile.y)),
+                coding_style.layers,
+                &styles,
+                &topologies,
+                &volumes,
+                |scheduled| {
+                    packets.push(scheduled.key);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+            let expected = (0_u16..2)
+                .flat_map(|layer| {
+                    (0_u8..4).flat_map(move |resolution| {
+                        (0_u16..3).map(move |component| PacketKey {
+                            tile: tile.tile_index,
+                            layer,
+                            resolution,
+                            component,
+                            precinct: 0,
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(count, 24);
+            assert_eq!(packets, expected);
+        }
+    }
+
+    #[test]
     fn p0_13_marker_payloads_require_exact_two_byte_selectors_and_fields() {
         let cod = [0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x03, 0x03, 0x10, 0x01];
         let coc = [0x00, 0x02, 0x00, 0x01, 0x04, 0x04, 0x00, 0x01];
@@ -31712,6 +32019,79 @@ mod heterogeneous_packet_order_tests {
         let mut trailing_qcd = qcd;
         trailing_qcd.push(0);
         assert!(!p0_10_qcd_payload_matches(&trailing_qcd));
+    }
+
+    #[test]
+    fn p0_10_exact_synthetic_route_decodes_interleaved_and_empty_tile_parts() {
+        let input = p0_10_exact_synthetic_fixture();
+        let codestream = parse(&input).unwrap();
+        assert!(
+            is_supported_part1_p0_10_subsampled_reversible_mct_component_profile(
+                &input,
+                &codestream,
+            )
+        );
+
+        let decoded = decode_part1_p0_10_subsampled_reversible_mct_component_zero(&input).unwrap();
+        assert_eq!((decoded.width, decoded.height), (64, 64));
+        assert_eq!((decoded.bits_per_sample, decoded.signed), (8, false));
+        assert_eq!(decoded.components.len(), 1);
+        assert_eq!(decoded.components[0].samples, vec![128; 64 * 64]);
+
+        assert!(decode_baseline_owned_components(&input).is_err());
+        assert!(decode_baseline_owned_components_selected(&input, &[0]).is_err());
+    }
+
+    #[test]
+    fn p0_10_exact_synthetic_route_rejects_declarations_and_truncation() {
+        let input = p0_10_exact_synthetic_fixture();
+        for truncated_len in [input.len() - 1, input.len() - 2] {
+            if let Ok(parsed) = parse(&input[..truncated_len]) {
+                assert!(
+                    !is_supported_part1_p0_10_subsampled_reversible_mct_component_profile(
+                        &input[..truncated_len],
+                        &parsed,
+                    )
+                );
+            }
+        }
+
+        let mut wrong_declared_length = input.clone();
+        let first_sot = find_marker(&wrong_declared_length, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&wrong_declared_length, first_sot + 6).unwrap();
+        wrong_declared_length[first_sot + 6..first_sot + 10]
+            .copy_from_slice(&(psot + 1).to_be_bytes());
+        assert!(parse(&wrong_declared_length).is_err());
+
+        let mut wrong_declared_count = input.clone();
+        let first_sot = find_marker(&wrong_declared_count, 0, Marker::Sot).unwrap();
+        wrong_declared_count[first_sot + 11] = 2;
+        let parsed = parse(&wrong_declared_count).unwrap();
+        assert!(
+            !is_supported_part1_p0_10_subsampled_reversible_mct_component_profile(
+                &wrong_declared_count,
+                &parsed,
+            )
+        );
+
+        let mut missing_packet_header = input;
+        let first_sot = find_marker(&missing_packet_header, 0, Marker::Sot).unwrap();
+        let first_sod = find_marker(&missing_packet_header, first_sot, Marker::Sod).unwrap();
+        let psot = read_u32(&missing_packet_header, first_sot + 6).unwrap();
+        missing_packet_header[first_sot + 6..first_sot + 10]
+            .copy_from_slice(&(psot - 1).to_be_bytes());
+        missing_packet_header.remove(first_sod + 2);
+        let parsed = parse(&missing_packet_header).unwrap();
+        assert!(
+            is_supported_part1_p0_10_subsampled_reversible_mct_component_profile(
+                &missing_packet_header,
+                &parsed,
+            )
+        );
+        assert!(
+            decode_part1_p0_10_subsampled_reversible_mct_component_zero(&missing_packet_header)
+                .is_err()
+        );
     }
 
     fn p0_10_test_payload<'a>(bytes: &'a [u8], boundaries: &[usize]) -> TilePartPayload<'a> {
@@ -31796,6 +32176,61 @@ mod heterogeneous_packet_order_tests {
             };
             assert_eq!(actual, expected);
         }
+
+        assert!(
+            stitch_tile_sample_plane(
+                &mut output,
+                8,
+                1,
+                TileRect {
+                    tile_index: 4,
+                    tile_x: 2,
+                    tile_y: 0,
+                    x: 8,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                &[5],
+            )
+            .is_err()
+        );
+        assert!(
+            stitch_tile_sample_plane(
+                &mut output,
+                usize::MAX,
+                2,
+                TileRect {
+                    tile_index: 0,
+                    tile_x: 0,
+                    tile_y: 0,
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                &[0, 0],
+            )
+            .is_err()
+        );
+        assert!(
+            stitch_tile_sample_plane(
+                &mut output,
+                8,
+                1,
+                TileRect {
+                    tile_index: 0,
+                    tile_x: 0,
+                    tile_y: 0,
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 4,
+                },
+                &[0; 15],
+            )
+            .is_err()
+        );
     }
 }
 
