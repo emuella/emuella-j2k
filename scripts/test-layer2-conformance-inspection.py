@@ -249,7 +249,10 @@ class CodecIdentityTests(unittest.TestCase):
                 ["git", "-C", str(checkout), "commit", "-qm", "fixture"], check=True
             )
 
-            with mock.patch.object(runner, "ROOT", checkout):
+            with (
+                mock.patch.dict(runner.os.environ, {}, clear=True),
+                mock.patch.object(runner, "ROOT", checkout),
+            ):
                 identity = runner.inspect_codec_identity(codec, False)
                 self.assertEqual(identity.sha256, digest(original))
                 self.assertIsNotNone(identity.commit)
@@ -259,6 +262,7 @@ class CodecIdentityTests(unittest.TestCase):
             outside.write_bytes(original)
             outside.chmod(0o755)
             with (
+                mock.patch.dict(runner.os.environ, {}, clear=True),
                 mock.patch.object(runner, "ROOT", checkout),
                 self.assertRaisesRegex(runner.RunnerError, "canonical executable"),
             ):
@@ -268,6 +272,7 @@ class CodecIdentityTests(unittest.TestCase):
 
             codec.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
             with (
+                mock.patch.dict(runner.os.environ, {}, clear=True),
                 mock.patch.object(runner, "ROOT", checkout),
                 self.assertRaisesRegex(runner.RunnerError, "tracked modifications"),
             ):

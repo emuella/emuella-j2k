@@ -94,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codec",
         type=Path,
-        default=ROOT / "target/debug/emuella-j2k",
+        default=common.canonical_codec_path(),
         help="emuella-j2k executable built from this checkout",
     )
     parser.add_argument(
@@ -413,7 +413,13 @@ def run_case(
             if completed.returncode < 0
             else f"exit {completed.returncode}"
         )
-        raise RunnerError(f"codec worker produced no aggregate record ({outcome})")
+        diagnostic = " ".join(completed.stderr.strip().split())
+        pack_prefix = str(pack_root) + os.sep
+        diagnostic = diagnostic.replace(pack_prefix, "")
+        detail = f": {diagnostic}" if diagnostic else ""
+        raise RunnerError(
+            f"codec worker produced no aggregate record ({outcome}){detail}"
+        )
     result = parse_worker_output(completed.stdout, case)
     if completed.returncode == 0 and result.passed:
         return result

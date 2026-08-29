@@ -29,11 +29,12 @@ rejection-diagnostic mismatches make the run fail.
 The normal invocation binds its evidence to this codec checkout. Run the
 documented `cargo build` immediately beforehand; the runner then requires a
 clean tracked checkout, reports its full `HEAD`, verifies that the executable
-is this worktree's canonical `target/debug/emuella-j2k`, and copies it to one
-private execution snapshot. Every candidate runs through that snapshot; its
-SHA-256 is reported and rechecked after inspection, alongside the canonical
-source path and checkout. This identifies the tested checkout and bytes but is
-not a cryptographic build-provenance attestation.
+is this worktree's canonical Cargo debug executable, and copies it to one
+private execution snapshot. The canonical path is `target/debug/emuella-j2k`
+unless `CARGO_TARGET_DIR` names an explicit build root. Every candidate runs
+through that snapshot; its SHA-256 is reported and rechecked after inspection,
+alongside the canonical source path and checkout. This identifies the tested
+checkout and bytes but is not a cryptographic build-provenance attestation.
 
 An arbitrary executable may be exercised explicitly with
 `--unbound-codec --codec /path/to/executable`. That mode still records the
@@ -47,6 +48,10 @@ Annex C, Annex G, or informative Annex H cohort. Successful metadata inspection
 does not mean native decoding is supported; those are distinct API outcomes.
 Ordinary `cargo test` runs only project-authored runner and parser cases and
 never invokes this live corpus journey.
+
+Run structural inspection as the independent command shown above. It proves
+only that the codec can parse and report the selected structures; it neither
+decodes nor compares pixels and is not decoded-pixel qualification evidence.
 
 Pinned qualification in CI is Layer 3. It should record the codec revision,
 catalogue revision, pack ID and version, and pack digest. Restricted packs must
@@ -70,6 +75,42 @@ classifiers, embedded reference-pixel replay, empty fixture-array placeholders,
 and compatibility APIs named after an external codec do not belong in the
 runtime crates. Corpus-specific expectations stay in `emuella-testdata` and its
 harnesses.
+
+### HTJ2K DS0 qualification
+
+The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
+and the capability claim in `testdata.lock.toml`:
+
+```sh
+cargo build -p emuella-j2k-cli
+python3 scripts/run-layer2-derived-set.py \
+  --testdata /path/to/emuella-testdata
+```
+
+The claim is Profile 0, Class 0, `M_MAGB=18`, with `HTONLY` as the only
+supported coding mode. `HTMIX` is deliberately unsupported. For every DS0 case
+in a claimed mode, the runner selects the variant with the greatest `B_MAGB`
+not exceeding `M_MAGB`; a case with no such variant is not applicable. It
+resolves the selected point to exactly one scalar or choice reference contract
+and applies the variant's final inclusive error limits. Choice alternatives
+remain alternatives and their catalogue minimum determines qualification.
+
+The ordinary invocation executes only applicable `HTONLY` cases. Every such
+case must execute within its finite worker timeout and produce an in-limit
+native `compare-pgx` result; a decode error, malformed aggregate, timeout or
+out-of-limit comparison rejects the qualification run. `--report-all` also
+lists `HTMIX` points as `not-applicable` with a deliberately-unsupported
+diagnostic, without invoking the worker for them. It does not turn unsupported
+points into passes or required failures.
+
+The runner applies the same clean catalogue, exact lock, inventory, archive,
+complete-tree, codec checkout and executable-snapshot boundaries as the
+inspection journey. Its deterministic output contains only case, coding-mode,
+input and `B_MAGB` identities, factual aggregate errors, diagnostics and final
+qualified/rejected/not-applicable counts. Inputs, PGX references and decoded
+pixels remain in the authorised store and process memory and are never printed
+or persisted. The self-contained orchestration tests create only temporary,
+project-authored fixtures and do not open the protected pack.
 
 ### Decoded-pixel canary
 
