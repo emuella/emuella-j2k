@@ -192,6 +192,32 @@ mod jp2_header_validation_tests {
         codestream.splice(sot..sot, segment);
     }
 
+    fn main_header_marker_segment(marker: codestream::Marker, data: &[u8]) -> Vec<u8> {
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(data);
+        segment
+    }
+
+    fn sycc_marker_permutation(
+        codestream: &[u8],
+        marker: codestream::Marker,
+        marker_data: &[u8],
+        unsupported_before_crg: bool,
+    ) -> Vec<u8> {
+        let mut output = codestream.to_vec();
+        let crg = main_header_marker_segment(codestream::Marker::Crg, &[0; 12]);
+        let unsupported = main_header_marker_segment(marker, marker_data);
+        let segments = if unsupported_before_crg {
+            [unsupported, crg].concat()
+        } else {
+            [crg, unsupported].concat()
+        };
+        let sot = marker_offset(&output, codestream::Marker::Sot.code().to_be_bytes());
+        output.splice(sot..sot, segments);
+        output
+    }
+
     fn unsupported_presentation_inputs(raw: &[u8], components: u16) -> Vec<Vec<u8>> {
         let mut inputs = Vec::new();
         for box_type in [
@@ -242,6 +268,48 @@ mod jp2_header_validation_tests {
         };
         decode_into(input, &mut target, options).unwrap();
         buffers
+    }
+
+    fn assert_full_component_into_rejects_atomically(
+        input: &[u8],
+        shape: &DecodeShape,
+        options: &DecodeOptions,
+    ) {
+        let info = shape.image_info().unwrap();
+        let plane_len = usize::try_from(info.width * info.height).unwrap();
+        let mut buffers = (0..info.components)
+            .map(|component| vec![0x60_u8 + u8::try_from(component).unwrap(); plane_len])
+            .collect::<Vec<_>>();
+        {
+            let mut planes = buffers
+                .iter_mut()
+                .map(|samples| {
+                    PlaneMut::new(
+                        samples,
+                        info.width,
+                        info.height,
+                        usize::try_from(info.width).unwrap(),
+                        info.sample_format,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(input, &mut target, options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+        }
+        for (component, buffer) in buffers.iter().enumerate() {
+            assert!(
+                buffer
+                    .iter()
+                    .all(|sample| *sample == 0x60 + u8::try_from(component).unwrap())
+            );
+        }
     }
 
     fn planar_partial_into(
@@ -831,15 +899,46 @@ mod jp2_header_validation_tests {
             target_layout: ComponentLayout::Planar,
             ..DecodeOptions::default()
         };
+        let raw_native_shape = decode_shape(&raw, &native_options).unwrap();
+        let jp2_native_shape = decode_shape(&jp2, &native_options).unwrap();
+        assert_eq!(raw_native_shape, jp2_native_shape);
+        assert_eq!(jp2_native_shape.mode, DecodeMode::Components);
+        assert_eq!(
+            (
+                jp2_native_shape.width,
+                jp2_native_shape.height,
+                jp2_native_shape.output_components,
+            ),
+            (5, 3, 3)
+        );
         let native = decode(&jp2, &native_options).unwrap();
+        assert_eq!(decode(&raw, &native_options).unwrap(), native);
+        assert_eq!(native.info, jp2_native_shape.image_info().unwrap());
+        assert_eq!(
+            native
+                .component_info
+                .iter()
+                .map(|component| (component.width, component.height))
+                .collect::<Vec<_>>(),
+            [(5, 3), (3, 2), (3, 2)]
+        );
         assert_eq!(
             planar_bytes(&native),
             &[luma.as_slice(), cb.as_slice(), cr.as_slice()]
         );
         assert_eq!(
+            planar_bytes(&native)
+                .iter()
+                .map(|plane| plane.len())
+                .collect::<Vec<_>>(),
+            [15, 6, 6]
+        );
+        assert_eq!(
             decode_partial(&jp2, &PartialDecodeOptions::default()).unwrap(),
             native
         );
+        assert_full_component_into_rejects_atomically(&raw, &raw_native_shape, &native_options);
+        assert_full_component_into_rejects_atomically(&jp2, &jp2_native_shape, &native_options);
 
         let expected = [
             vec![
@@ -905,6 +1004,18 @@ mod jp2_header_validation_tests {
         insert_crg(&mut nonzero_crg, [0, 0, 0, 1, 0, 0]);
         let nonzero_crg = wrap_sycc_jp2(&nonzero_crg, 5, 3);
 
+        let component_options = DecodeOptions {
+            mode: DecodeMode::Components,
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        for input in [&zero_crg, &nonzero_crg] {
+            assert_eq!(
+                planar_bytes(&decode(input, &component_options).unwrap()),
+                &[luma.as_slice(), cb.as_slice(), cr.as_slice()]
+            );
+        }
+
         let wrong_sampling = codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
             5,
             3,
@@ -954,6 +1065,37 @@ mod jp2_header_validation_tests {
             assert!(matches!(
                 decode(&input, &DecodeOptions::default()),
                 Err(J2kError::Unsupported { .. })
+            ));
+        }
+
+        for (marker, data) in [
+            (codestream::Marker::Poc, &[0, 0, 0, 1, 1, 3, 0][..]),
+            (codestream::Marker::Rgn, &[0, 0, 1][..]),
+            (codestream::Marker::Qcc, &[0, 0, 5 << 3][..]),
+            (codestream::Marker::Unknown(0xff79), &[0][..]),
+        ] {
+            let support = [false, true].map(|unsupported_before_crg| {
+                let permutation =
+                    sycc_marker_permutation(&raw, marker, data, unsupported_before_crg);
+                let permutation = wrap_sycc_jp2(&permutation, 5, 3);
+                let support = inspect(&permutation, &InspectOptions::default())
+                    .unwrap()
+                    .support;
+                assert!(matches!(support, SupportStatus::Unsupported { .. }));
+                assert!(matches!(
+                    decode(&permutation, &component_options),
+                    Err(J2kError::Unsupported { .. })
+                ));
+                assert!(matches!(
+                    decode(&permutation, &DecodeOptions::default()),
+                    Err(J2kError::Unsupported { .. })
+                ));
+                support
+            });
+            assert_eq!(support[0], support[1]);
+            assert!(matches!(
+                &support[0],
+                SupportStatus::Unsupported { detail, .. } if !detail.contains("CRG")
             ));
         }
         assert!(matches!(
@@ -2236,7 +2378,7 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
 
-    if is_bounded_jp2_sycc_420_input(input, &metadata)? {
+    if options.mode == DecodeMode::Rendered && is_bounded_jp2_sycc_420_input(input, &metadata)? {
         let image = metadata.image.as_ref().ok_or_else(sample_size_overflow)?;
         return Ok(DecodeShape {
             width: image.width,
@@ -7710,13 +7852,13 @@ fn copy_image_into_target(image: &Image, target: &mut ImageViewMut<'_>) -> Resul
                 });
             }
 
-            for (source, target) in source_planes.iter().zip(target_planes.iter_mut()) {
-                let row_bytes = checked_public_row_bytes(
-                    "target.info",
-                    image.info.width,
-                    1,
-                    public_bytes_per_sample("target.info", image.info.sample_format)?,
-                )?;
+            let row_bytes = checked_public_row_bytes(
+                "target.info",
+                image.info.width,
+                1,
+                public_bytes_per_sample("target.info", image.info.sample_format)?,
+            )?;
+            for (source, target) in source_planes.iter().zip(target_planes.iter()) {
                 if target.width != image.info.width || target.height != image.info.height {
                     return Err(J2kError::InvalidParameter {
                         parameter: "plane",
@@ -7729,6 +7871,15 @@ fn copy_image_into_target(image: &Image, target: &mut ImageViewMut<'_>) -> Resul
                         message: "target plane sample format must match decoded image sample format",
                     });
                 }
+                validate_copy_rows(
+                    source,
+                    row_bytes,
+                    target.samples.len(),
+                    target.stride_bytes,
+                    image.info.height,
+                )?;
+            }
+            for (source, target) in source_planes.iter().zip(target_planes.iter_mut()) {
                 copy_rows(
                     source,
                     row_bytes,
@@ -7937,6 +8088,25 @@ fn copy_rows(
     target_stride: usize,
     height: u32,
 ) -> Result<()> {
+    validate_copy_rows(source, row_bytes, target.len(), target_stride, height)?;
+
+    for row in 0..height as usize {
+        let source_start = row * row_bytes;
+        let target_start = row * target_stride;
+        target[target_start..target_start + row_bytes]
+            .copy_from_slice(&source[source_start..source_start + row_bytes]);
+    }
+
+    Ok(())
+}
+
+fn validate_copy_rows(
+    source: &[u8],
+    row_bytes: usize,
+    target_len: usize,
+    target_stride: usize,
+    height: u32,
+) -> Result<()> {
     if target_stride < row_bytes {
         return Err(J2kError::InvalidParameter {
             parameter: "stride_bytes",
@@ -7957,18 +8127,11 @@ fn copy_rows(
     let target_required = target_stride
         .checked_mul(height as usize)
         .ok_or_else(sample_size_overflow)?;
-    if target.len() < target_required {
+    if target_len < target_required {
         return Err(J2kError::BufferTooSmall {
             required: target_required,
-            provided: target.len(),
+            provided: target_len,
         });
-    }
-
-    for row in 0..height as usize {
-        let source_start = row * row_bytes;
-        let target_start = row * target_stride;
-        target[target_start..target_start + row_bytes]
-            .copy_from_slice(&source[source_start..source_start + row_bytes]);
     }
 
     Ok(())

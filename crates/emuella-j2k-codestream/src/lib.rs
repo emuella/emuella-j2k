@@ -14068,7 +14068,15 @@ pub fn unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedCons
         return ht_unsupported_construct(codestream);
     }
 
-    if let Some((marker, detail)) = unsupported_part1_profile_marker(codestream, false, false) {
+    let has_subsampled_components = codestream.siz.components.iter().any(|component| {
+        component.horizontal_separation != 1 || component.vertical_separation != 1
+    });
+    let unsupported_marker = if has_subsampled_components {
+        unsupported_part1_profile_marker_inner(codestream, false, false, true)
+    } else {
+        unsupported_part1_profile_marker(codestream, false, false)
+    };
+    if let Some((marker, detail)) = unsupported_marker {
         return Some((
             UnsupportedConstruct::MarkerSegment,
             detail_for_marker(marker, detail),
@@ -14228,6 +14236,20 @@ fn unsupported_part1_profile_marker(
     allow_main_header_component_extensions: bool,
     allow_bounded_tile_maxshift: bool,
 ) -> Option<(Marker, &'static str)> {
+    unsupported_part1_profile_marker_inner(
+        codestream,
+        allow_main_header_component_extensions,
+        allow_bounded_tile_maxshift,
+        false,
+    )
+}
+
+fn unsupported_part1_profile_marker_inner(
+    codestream: &Codestream,
+    allow_main_header_component_extensions: bool,
+    allow_bounded_tile_maxshift: bool,
+    allow_informational_crg: bool,
+) -> Option<(Marker, &'static str)> {
     let first_tile_offset = codestream
         .markers
         .iter()
@@ -14282,7 +14304,7 @@ fn unsupported_part1_profile_marker(
             Marker::Rgn => "RGN region-of-interest scaling is not implemented in native profile decode",
             Marker::Ppm => "PPM packed packet headers are not consumed by the profile packet walker",
             Marker::Ppt => "PPT packed packet headers are not consumed by the profile packet walker",
-            Marker::Crg if allow_bounded_tile_maxshift => return None,
+            Marker::Crg if allow_bounded_tile_maxshift || allow_informational_crg => return None,
             Marker::Crg => "CRG component registration is outside the admitted native profile",
             Marker::Sop | Marker::Eph => {
                 "SOP/EPH packet markers are not consumed by the profile packet walker"
@@ -18424,8 +18446,8 @@ fn validate_supported_native_subsampled_component_profile(
             "native subsampled component decode is limited to raw J2K Part 1 codestreams",
         ));
     }
-    if let Some((marker, _detail)) = unsupported_part1_profile_marker(codestream, false, false)
-        && marker != Marker::Crg
+    if let Some((marker, _detail)) =
+        unsupported_part1_profile_marker_inner(codestream, false, false, true)
     {
         return Err(unsupported(
             None,
@@ -32125,6 +32147,87 @@ mod inline_packet_marker_tests {
             .copy_from_slice(&reference_width.checked_add(origin_x).unwrap().to_be_bytes());
         codestream[siz + 14..siz + 18].copy_from_slice(&origin_x.to_be_bytes());
         codestream[siz + 30..siz + 34].copy_from_slice(&origin_x.to_be_bytes());
+    }
+
+    fn main_header_marker_segment(marker: Marker, data: &[u8]) -> Vec<u8> {
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(data);
+        segment
+    }
+
+    fn subsampled_marker_permutation(
+        marker: Marker,
+        marker_data: &[u8],
+        unsupported_before_crg: bool,
+    ) -> Vec<u8> {
+        let luma = [17_u8; 16];
+        let chroma = [128_u8; 4];
+        let mut codestream = encode_planar_u8_subsampled_no_decomp_test_fixture(
+            4,
+            4,
+            &[
+                SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: &luma,
+                },
+                SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &chroma,
+                },
+                SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &chroma,
+                },
+            ],
+        )
+        .unwrap();
+        let crg = main_header_marker_segment(Marker::Crg, &[0; 12]);
+        let unsupported = main_header_marker_segment(marker, marker_data);
+        let segments = if unsupported_before_crg {
+            [unsupported, crg].concat()
+        } else {
+            [crg, unsupported].concat()
+        };
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream.splice(sot..sot, segments);
+        codestream
+    }
+
+    #[test]
+    fn informational_crg_never_masks_unsupported_markers_in_either_order() {
+        for (marker, data) in [
+            (Marker::Poc, &[0, 0, 0, 1, 1, 3, 0][..]),
+            (Marker::Rgn, &[0, 0, 1][..]),
+            (Marker::Qcc, &[0, 0, 5 << 3][..]),
+            (Marker::Unknown(0xff79), &[0][..]),
+        ] {
+            let classified = [false, true].map(|unsupported_before_crg| {
+                let codestream =
+                    subsampled_marker_permutation(marker, data, unsupported_before_crg);
+                let parsed = parse(&codestream).unwrap();
+                assert!(!is_supported_part1_native_subsampled_component_profile(
+                    &parsed
+                ));
+                assert!(matches!(
+                    validate_supported_native_subsampled_component_profile(&parsed),
+                    Err(CodestreamError::Unsupported {
+                        marker: Some(rejected),
+                        ..
+                    }) if rejected == marker
+                ));
+                assert!(matches!(
+                    decode_baseline_owned_components(&codestream),
+                    Err(CodestreamError::Unsupported { .. })
+                ));
+                unsupported_construct(&parsed).unwrap()
+            });
+            assert_eq!(classified[0], classified[1]);
+            assert!(!classified[0].1.contains("CRG"));
+        }
     }
 
     #[test]
