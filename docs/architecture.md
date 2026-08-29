@@ -93,7 +93,7 @@ reviewed retrieval revision was
 `3b15e13add906b67e6528f13dc69dde999abc9c0d089afa7eccea7075806f5a1`). The
 description and synthetic fixtures are project-authored.
 
-## Bounded full-frame sYCC projection
+## Bounded full-frame and partial sYCC projection
 
 The core admits one direct, unsigned 8-bit JP2 sYCC projection. The first
 component is Y on a 1 × 1 SIZ grid and the second and third components are Cb
@@ -118,18 +118,49 @@ integer, with halfway cases away from zero, then clipped to `[0, 255]`. Output
 is three unsigned 8-bit sRGB channels at the full SIZ image width and height,
 stored in the caller-selected planar or interleaved layout.
 
-Only ordinary full-frame rendered decode and shape discovery select this
-policy. Raw component and partial decode continue to return native component
-grids without colour conversion or resampling, and raw J2K rendered decode
-continues to fail closed. The component locations and sYCC interpretation
-follow ISO/IEC 15444-1:2024, Annex B, B.1–B.2, Annex I, I.5.3.3 and Table I.10,
-and J.14, PDF pages 79–80, 171–173 and 216. The full-resolution sRGB
-qualification boundary follows ISO/IEC 15444-4:2024, Annex G, G.1–G.4 and
-Table G.1, PDF pages 47–49. The reviewed retrieval revisions were
-`34e5d1639b9f121807e620c001893ca9d2c8f977` and
-`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7` respectively. The resampling
-policy and its synthetic fixtures are project-authored because Part 1 does not
-select an interpolation kernel.
+The additive `decode_rendered_partial`, `decode_rendered_partial_info` and
+`decode_rendered_partial_into` APIs reuse `PartialDecodeOptions` without
+changing the native partial API. They admit a non-empty, full-resolution,
+image-relative rectangle wholly inside this same direct JP2 profile. The
+request must select all channels, no tile and no quality-layer limit. Partial
+decode additionally requires reversible 5/3 coding and the existing direct
+selective codestream profile; it never selects compatibility or
+full-image-decode-and-crop fallback.
+
+For a requested half-open rectangle, the selective source rectangle starts at
+the preceding even x and y coordinates and ends at the requested right and
+bottom edges. This retains the co-sited chroma needed by odd starts. The
+prepared codestream plan reconstructs only that source rectangle into owned
+native staging, then the shared projector selects chroma from the absolute
+output coordinate and crops surplus luma. Caller-owned publication occurs only
+after reconstruction and projection both succeed. Rendered descriptors have
+no source-component identity; their origin is the absolute requested x and y,
+their separation is one, and their dimensions are the requested dimensions.
+The ordinary reversible full-frame sYCC renderer uses this same checked plan
+and projector while retaining its existing acceptance of inert top-level
+metadata. The partial API applies the stricter direct-metadata boundary above.
+The existing irreversible full-frame renderer remains available, but partial
+9/7 requests fail closed.
+
+| Boundary | Supported now | Deferred |
+| --- | --- | --- |
+| Container and colour | One JP2, one Part 1 codestream, one enumerated sYCC specification, direct Y/Cb/Cr | raw rendered output, JPH/HT, indirect mapping, ICC and alpha |
+| Samples and grids | unsigned u8, Y 1×1, Cb/Cr 2×2, zero image/tile origins, absent or all-zero CRG | high-depth or direct greyscale partial, other sampling, non-zero origins or CRG |
+| Coding and selection | one tile, reversible 5/3, full resolution, all channels, no quality limit | multiple tiles, reductions, quality-layer limits and partial 9/7 |
+| Output | planar or RGB-interleaved u8, checked owned staging before caller publication | compatibility fallback and raw component presentation |
+
+Native component decode, including the existing native partial APIs, continues
+to return native component grids without colour conversion or resampling. Raw
+J2K rendered decode continues to fail closed. The project authority is
+ISO/IEC 15444-1:2024, clauses A.5.1, A.9.1, B.1–B.3, I.5.3.1.1,
+I.5.3.3 Table I.10 and J.14, reviewed at retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` in bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`. The rendered comparison authority
+is ISO/IEC 15444-4:2024, Annex G, reviewed at retrieval revision
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7` in bundle
+`7b3d8d60cd4d4f6c056cd108d928b7f99f492aa9`. This description, the
+nearest-neighbour hold policy and the synthetic fixtures are project-authored;
+no ISO expression is reproduced.
 
 ## Baseline JP2 header admission
 
