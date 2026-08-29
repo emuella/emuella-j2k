@@ -4602,9 +4602,15 @@ fn support_from_codestream(
 ) -> SupportStatus {
     #[cfg(feature = "std")]
     if codestream.kind == codestream::CodestreamKind::Htj2k
-        && bytes.is_some_and(|bytes| codestream::is_htj2k_lossless_profile(bytes, codestream))
+        && let Some(bytes) = bytes
     {
-        return SupportStatus::Supported;
+        return match codestream::htj2k_lossless_profile_unsupported_construct(bytes, codestream) {
+            None => SupportStatus::Supported,
+            Some((construct, detail)) => SupportStatus::Unsupported {
+                feature: unsupported_feature_from_construct(construct),
+                detail,
+            },
+        };
     }
 
     if codestream.kind == codestream::CodestreamKind::J2k
@@ -6171,6 +6177,141 @@ mod effective_coding_style_tests {
                 feature: UnsupportedFeature::MarkerSegment,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn inspect_reports_the_complete_htj2k_lossless_admission_diagnostic() {
+        let samples = (0..64)
+            .map(|sample| u8::try_from((sample * 19 + 5) % 251).unwrap())
+            .collect::<Vec<_>>();
+        let fixture = || {
+            codestream::encode_htj2k_grayscale_u8_no_decomp(codestream::GrayscaleU8Encode {
+                width: 8,
+                height: 8,
+                samples: &samples,
+                stride_bytes: 8,
+            })
+            .unwrap()
+        };
+        let multitile_fixture = |decomposition_levels: u8, declared_tile_parts: u8| {
+            let mut codestream = fixture();
+            if decomposition_levels != 0 {
+                let cod = codestream
+                    .windows(2)
+                    .position(|bytes| bytes == [0xff, 0x52])
+                    .unwrap();
+                codestream[cod + 9] = decomposition_levels;
+                let qcd = codestream
+                    .windows(2)
+                    .position(|bytes| bytes == [0xff, 0x5c])
+                    .unwrap();
+                let old_length = usize::from(u16::from_be_bytes(
+                    codestream[qcd + 2..qcd + 4].try_into().unwrap(),
+                ));
+                let exponent = codestream[qcd + 5];
+                let added = usize::from(decomposition_levels) * 3;
+                codestream.splice(
+                    qcd + 2 + old_length..qcd + 2 + old_length,
+                    vec![exponent; added],
+                );
+                codestream[qcd + 2..qcd + 4]
+                    .copy_from_slice(&u16::try_from(old_length + added).unwrap().to_be_bytes());
+            }
+
+            let siz = codestream
+                .windows(2)
+                .position(|bytes| bytes == [0xff, 0x51])
+                .unwrap();
+            codestream[siz + 22..siz + 26].copy_from_slice(&4_u32.to_be_bytes());
+            let sot = codestream
+                .windows(2)
+                .position(|bytes| bytes == [0xff, 0x90])
+                .unwrap();
+            codestream[sot + 11] = declared_tile_parts;
+            let tile_part_length = usize::try_from(u32::from_be_bytes(
+                codestream[sot + 6..sot + 10].try_into().unwrap(),
+            ))
+            .unwrap();
+            let tile_part_end = sot + tile_part_length;
+            let mut second_tile = codestream[sot..tile_part_end].to_vec();
+            second_tile[4..6].copy_from_slice(&1_u16.to_be_bytes());
+            second_tile[11] = declared_tile_parts;
+            codestream.splice(tile_part_end..tile_part_end, second_tile);
+            codestream
+        };
+
+        assert_eq!(
+            inspect(&fixture(), &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Supported
+        );
+
+        let mut invalid_qcd = fixture();
+        let qcd = invalid_qcd
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x5c])
+            .unwrap();
+        invalid_qcd[qcd + 4] = 0xe0;
+        invalid_qcd[qcd + 5] = 0xf8;
+        assert!(matches!(
+            inspect(&invalid_qcd, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::MarkerSegment,
+                ref detail,
+            } if detail.contains("reversible scalar QCD")
+        ));
+
+        let mut unsupported_final_set = fixture();
+        let cod = unsupported_final_set
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x52])
+            .unwrap();
+        unsupported_final_set[cod + 12] = 0;
+        assert!(matches!(
+            inspect(&unsupported_final_set, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::EntropyCoder,
+                ref detail,
+            } if detail.contains("HT final coding set")
+        ));
+
+        let multitile_decomposition = multitile_fixture(1, 1);
+        assert!(matches!(
+            inspect(&multitile_decomposition, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::WaveletTransform,
+                ref detail,
+            } if detail.contains("multi-tile HTJ2K lossless decode requires zero decomposition")
+        ));
+
+        let unspecified_tile_part_count = multitile_fixture(0, 0);
+        assert!(matches!(
+            inspect(&unspecified_tile_part_count, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::MarkerSegment,
+                ref detail,
+            } if detail.contains("exactly one tile-part for every tile")
+        ));
+
+        let retained_payload_failure = multitile_fixture(0, 1);
+        let mut parsed = codestream::parse(&retained_payload_failure).unwrap();
+        parsed.tiles[0].payload_offset = Some(usize::MAX);
+        assert!(matches!(
+            support_from_codestream(&parsed, Some(&retained_payload_failure)),
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::MarkerSegment,
+                ref detail,
+            } if detail.contains("retained payload state")
         ));
     }
 
