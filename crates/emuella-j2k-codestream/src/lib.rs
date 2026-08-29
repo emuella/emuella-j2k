@@ -6773,6 +6773,18 @@ impl PreparedPart1ComponentDecode<'_> {
         })
     }
 
+    /// Whether the complete codestream satisfies the bounded native
+    /// subsampled profile and can retain the requested resolution.
+    #[doc(hidden)]
+    pub fn codestream_supports_native_subsampled_discard(&self, discard_levels: u8) -> bool {
+        validate_supported_native_subsampled_component_profile(&self.codestream).is_ok_and(
+            |coding_style| {
+                coding_style.transform == WaveletTransform::Reversible53
+                    && coding_style.decomposition_levels >= discard_levels
+            },
+        )
+    }
+
     /// Selected source components in caller-visible output order.
     pub fn component_indices(&self) -> &[u16] {
         &self.component_indices
