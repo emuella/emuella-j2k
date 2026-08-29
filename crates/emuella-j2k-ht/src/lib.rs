@@ -61,7 +61,11 @@ pub struct HtMarkerState {
     pub has_tile_part: bool,
     pub packet_progression_supported: bool,
     pub reversible_transform: bool,
+    /// Whether COD permits SOP markers. The codestream layer remains
+    /// responsible for validating each marker at a packet boundary.
     pub sop_markers: bool,
+    /// Whether COD requires EPH markers. The codestream layer remains
+    /// responsible for validating each marker at a packet-header boundary.
     pub eph_markers: bool,
     pub precincts_declared: bool,
     pub code_block_width: Option<u16>,
@@ -121,7 +125,8 @@ pub enum HtUnsupportedReason {
     ProgressionOrder,
     /// Only reversible 5/3 is in the first candidate set.
     WaveletTransform,
-    /// SOP/EPH marker handling is not in the first candidate set.
+    /// Legacy packet-marker gate retained for stable reason-code compatibility.
+    /// Current candidates validate SOP/EPH in the codestream packet walker.
     PacketMarkers,
     /// Custom precinct partitioning is not in the first candidate set.
     Precincts,
@@ -153,7 +158,9 @@ impl HtUnsupportedReason {
             }
             Self::ProgressionOrder => "HTJ2K packet progression is outside the decode subset",
             Self::WaveletTransform => "irreversible HTJ2K decode is not implemented",
-            Self::PacketMarkers => "HTJ2K SOP/EPH marker handling is not implemented",
+            Self::PacketMarkers => {
+                "HTJ2K SOP/EPH markers require codestream packet-walker validation"
+            }
             Self::Precincts => "HTJ2K precinct partitioning is not implemented",
             Self::CodeBlockDimensions => {
                 "HTJ2K code-block dimensions must be available and fit the block-layout bound before decode support is enabled"
@@ -197,9 +204,9 @@ pub fn classify_decode_subset(state: HtMarkerState) -> HtClassification {
     if !state.reversible_transform {
         return unsupported(HtUnsupportedReason::WaveletTransform);
     }
-    if state.sop_markers || state.eph_markers {
-        return unsupported(HtUnsupportedReason::PacketMarkers);
-    }
+    // SOP and EPH are packet syntax rather than block-coder properties. The
+    // codestream layer admits them only through its strict shared inline
+    // packet walker, which checks signalling, placement and packet bounds.
     if state.precincts_declared {
         return unsupported(HtUnsupportedReason::Precincts);
     }
