@@ -42804,6 +42804,20 @@ impl Htj2kLosslessProfileDiagnostic {
     }
 }
 
+#[cfg(feature = "std")]
+fn htj2k_multilevel_quantization_override(codestream: &Codestream) -> Option<Marker> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)?
+        .offset;
+    codestream.markers.iter().find_map(|segment| {
+        (segment.marker == Marker::Qcc
+            || (segment.marker == Marker::Qcd && segment.offset > first_tile_offset))
+            .then_some(segment.marker)
+    })
+}
+
 fn classify_htj2k_lossless_profile_markers(
     codestream: &Codestream,
 ) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
@@ -42891,6 +42905,14 @@ fn classify_htj2k_lossless_profile(
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::HtBlockDecode,
             "native HTJ2K lossless decode accepts the HT code-block style without additional style flags",
+        ));
+    }
+    if coding_style.decomposition_levels >= 2
+        && htj2k_multilevel_quantization_override(codestream).is_some()
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides",
         ));
     }
 
@@ -43195,6 +43217,38 @@ mod htj2k_lossless_profile_classifier_tests {
         (codestream, samples)
     }
 
+    fn matching_qcc_segment(codestream: &[u8]) -> Vec<u8> {
+        let qcd = find_marker(codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(codestream, qcd + 2).unwrap());
+        let qcd_payload = &codestream[qcd + 4..qcd + 2 + lqcd];
+        let lqcc = u16::try_from(lqcd + 1).unwrap();
+        let mut qcc = Marker::Qcc.code().to_be_bytes().to_vec();
+        qcc.extend_from_slice(&lqcc.to_be_bytes());
+        qcc.push(0);
+        qcc.extend_from_slice(qcd_payload);
+        qcc
+    }
+
+    fn insert_main_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream.splice(sot..sot, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header_segment(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(segment.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
     #[test]
     fn admits_and_decodes_project_authored_two_and_three_level_fixtures() {
         for levels in [2, 3] {
@@ -43253,6 +43307,71 @@ mod htj2k_lossless_profile_classifier_tests {
         assert!(matches!(
             diagnostic(&malformed_packet),
             Some((UnsupportedConstruct::PacketDecode, _))
+        ));
+    }
+
+    #[test]
+    fn multilevel_profile_rejects_all_quantization_override_locations() {
+        let (fixture, _) = multilevel_fixture(3);
+        let qcd = find_marker(&fixture, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&fixture, qcd + 2).unwrap());
+        let qcd_segment = fixture[qcd..qcd + 2 + lqcd].to_vec();
+        let qcc_segment = matching_qcc_segment(&fixture);
+        let variants = [
+            (
+                insert_main_header_segment(fixture.clone(), &qcc_segment),
+                Marker::Qcc,
+            ),
+            (
+                insert_tile_header_segment(fixture.clone(), &qcd_segment),
+                Marker::Qcd,
+            ),
+            (
+                insert_tile_header_segment(fixture, &qcc_segment),
+                Marker::Qcc,
+            ),
+        ];
+
+        for (codestream, expected_marker) in variants {
+            assert_eq!(
+                diagnostic(&codestream),
+                Some((
+                    UnsupportedConstruct::MarkerSegment,
+                    "native HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides".into(),
+                ))
+            );
+            assert!(matches!(
+                decode_htj2k_lossless_owned(&codestream),
+                Err(CodestreamError::Unsupported {
+                    marker: Some(marker),
+                    construct: UnsupportedConstruct::MarkerSegment,
+                    message,
+                    ..
+                }) if marker == expected_marker
+                    && message == "benchmark-oriented HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides"
+            ));
+        }
+    }
+
+    #[test]
+    fn malformed_empty_quantization_overrides_fail_during_structural_parse() {
+        let (fixture, _) = multilevel_fixture(2);
+        let empty_main_qcc = insert_main_header_segment(fixture.clone(), &[0xff, 0x5d, 0, 2]);
+        assert!(matches!(
+            parse(&empty_main_qcc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcc),
+                ..
+            })
+        ));
+
+        let empty_tile_qcd = insert_tile_header_segment(fixture, &[0xff, 0x5c, 0, 2]);
+        assert!(matches!(
+            parse(&empty_tile_qcd),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcd),
+                ..
+            })
         ));
     }
 
@@ -43918,11 +44037,12 @@ fn byte_stuffing_profile(bytes: &[u8]) -> (usize, usize) {
 ///
 /// The accepted profile is one or more tiles, one effective precinct per
 /// component and resolution, any positive quality-layer count and COD
-/// progression order, reversible 5/3 with zero or one decomposition level,
-/// grayscale/RGB components with matching signedness and 8- to 16-bit
-/// precision for the zero- and one-level profiles. The two- and three-level
-/// profile is restricted to one unsigned 8-bit, unit-sampled component with
-/// zero origins and no MCT. All profiles use one or
+/// progression order, and reversible 5/3 with zero through three decomposition
+/// levels. The zero- and one-level profiles accept grayscale/RGB components
+/// with matching signedness and 8- to 16-bit precision. The two- and
+/// three-level profile is restricted to one unsigned 8-bit, unit-sampled
+/// component with zero origins, no MCT, and no component or tile quantisation
+/// overrides. All profiles use one or
 /// more HT sets of Cleanup plus optional SigProp/MagRef passes per included
 /// code-block. The final independently decodable set supplies the requested
 /// full-quality block. Three-component streams with three matching signed or
@@ -44016,6 +44136,16 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             Some(Marker::Cod),
             UnsupportedConstruct::HtBlockDecode,
             "benchmark-oriented HTJ2K decode accepts the HT code-block style without additional style flags",
+        ));
+    }
+    if coding_style.decomposition_levels >= 2
+        && let Some(marker) = htj2k_multilevel_quantization_override(&codestream)
+    {
+        return Err(unsupported(
+            None,
+            Some(marker),
+            UnsupportedConstruct::MarkerSegment,
+            "benchmark-oriented HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides",
         ));
     }
 
