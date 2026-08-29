@@ -14176,6 +14176,127 @@ mod reduced_irreversible_mct_component_profile_tests {
             !is_supported_part1_reduced_irreversible_mct_component_profile(&tile_cod, &parsed, 3,)
         );
     }
+
+    #[test]
+    fn validated_precinct_config_reaches_the_generic_rlcp_scheduler() {
+        let codestream = fixture();
+        let parsed = parse(&codestream).expect("project-authored P0.04 shape parses");
+        let style = parsed.coding_style.expect("COD marker is present");
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let empty_payload = ContiguousPacketSource { bytes: &[] };
+
+        assert!(matches!(
+            parse_default_precinct_packets_from_source(
+                &codestream,
+                &parsed,
+                tile,
+                &empty_payload,
+                None,
+                Some(3),
+                Some(&[0]),
+                PacketOrganisationConfig::DEFAULT,
+                None,
+            ),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_default_precinct_packets_from_source(
+                &codestream,
+                &parsed,
+                tile,
+                &empty_payload,
+                None,
+                Some(3),
+                Some(&[0]),
+                PacketOrganisationConfig::PROFILE0_P004,
+                None,
+            ),
+            Err(CodestreamError::TruncatedInput { .. })
+        ));
+
+        let mut nearby_grid = codestream.clone();
+        let cod = find_marker(&nearby_grid, 0, Marker::Cod).unwrap();
+        nearby_grid[cod + 14] = 0x66;
+        let nearby_parsed = parse(&nearby_grid).unwrap();
+        assert!(matches!(
+            parse_default_precinct_packets_from_source(
+                &nearby_grid,
+                &nearby_parsed,
+                tile,
+                &empty_payload,
+                None,
+                Some(3),
+                Some(&[0]),
+                PacketOrganisationConfig::PROFILE0_P004,
+                None,
+            ),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+
+        let styles = alloc::vec![style; usize::from(parsed.siz.component_count())];
+        let topologies = styles
+            .iter()
+            .enumerate()
+            .map(|(component, style)| {
+                Part1PrecinctTopology::new(&parsed.siz, tile, component as u16, *style).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let volumes = effective_progression_volumes(
+            &codestream,
+            &parsed,
+            tile.tile_index,
+            style.layers,
+            style.decomposition_levels + 1,
+        )
+        .unwrap();
+        let mut scheduled = Vec::new();
+        let count = visit_progression_volumes(
+            &parsed.siz,
+            tile.tile_index,
+            (u64::from(tile.x), u64::from(tile.y)),
+            style.layers,
+            &styles,
+            &topologies,
+            &volumes,
+            |packet| {
+                scheduled.push(packet.key);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(count, 600);
+        assert_eq!(scheduled.len(), 600);
+        assert_eq!(
+            scheduled[..6]
+                .iter()
+                .map(|packet| {
+                    (
+                        packet.layer,
+                        packet.resolution,
+                        packet.component,
+                        packet.precinct,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            &[
+                (0, 0, 0, 0),
+                (0, 0, 1, 0),
+                (0, 0, 2, 0),
+                (1, 0, 0, 0),
+                (1, 0, 1, 0),
+                (1, 0, 2, 0),
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -19403,7 +19524,7 @@ pub fn decode_part1_reduced_reversible_mct_components_selected(
         &mut workspace,
         None,
         discard_levels,
-        ComponentPacketProfile::Default,
+        PacketOrganisationConfig::DEFAULT,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -19459,7 +19580,7 @@ pub fn decode_part1_reduced_irreversible_mct_component_zero(
         &mut workspace,
         None,
         discard_levels,
-        ComponentPacketProfile::Profile0P004,
+        PacketOrganisationConfig::PROFILE0_P004,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -19514,7 +19635,7 @@ pub fn decode_part1_reduced_heterogeneous_irreversible_component_zero(
         &mut workspace,
         None,
         discard_levels,
-        ComponentPacketProfile::Profile0P005,
+        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P005),
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -19571,7 +19692,7 @@ pub fn decode_part1_reduced_roi_irreversible_component_zero(
         &mut workspace,
         None,
         discard_levels,
-        ComponentPacketProfile::Profile0P006,
+        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P006),
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -19621,7 +19742,7 @@ pub fn decode_part1_p0_07_progression_change_component_zero(input: &[u8]) -> Res
         &mut workspace,
         None,
         0,
-        ComponentPacketProfile::Profile0P007,
+        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P007),
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -19663,7 +19784,7 @@ pub fn decode_part1_p0_08_heterogeneous_reversible_component_zero(
         &mut workspace,
         None,
         discard_levels,
-        ComponentPacketProfile::Profile0P008,
+        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P008),
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -19743,7 +19864,7 @@ pub fn decode_part1_p0_10_subsampled_reversible_mct_component_zero(
             &mut workspace,
             None,
             0,
-            ComponentPacketProfile::Profile0P010,
+            PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P010),
         )?;
         let tile_samples = decoded.pop().ok_or(CodestreamError::SizeOverflow)?;
         if !decoded.is_empty() {
@@ -19790,7 +19911,7 @@ pub fn decode_part1_p0_13_high_component_progression_component_zero(
         &mut workspace,
         None,
         0,
-        ComponentPacketProfile::Profile0P013,
+        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P013),
     )?;
     let samples = components.pop().ok_or(CodestreamError::SizeOverflow)?;
     if !components.is_empty() || samples.len() != 1 {
@@ -19904,7 +20025,7 @@ pub fn decode_baseline_owned_component_region_selected_with_max_layers(
             &mut workspace,
             max_layers,
             0,
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
         )?;
         for (((output, tile_samples), bytes_per_sample), _) in components
             .iter_mut()
@@ -24402,7 +24523,7 @@ fn decode_multitile_components_selected_validated(
             workspace,
             max_layers,
             0,
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
         )?;
         let components = samples
             .into_iter()
@@ -24482,7 +24603,7 @@ fn decode_multitile_components_selected_validated(
             workspace,
             max_layers,
             0,
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
         )?;
         if tile_components.len() != component_indices.len() {
             return Err(CodestreamError::SizeOverflow);
@@ -24520,13 +24641,42 @@ fn decode_multitile_components_selected_validated(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComponentPacketProfile {
     Default,
-    Profile0P004,
     Profile0P005,
     Profile0P006,
     Profile0P007,
     Profile0P008,
     Profile0P010,
     Profile0P013,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExplicitPrecinctPermission {
+    None,
+    ValidatedProfile0P004,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PacketOrganisationConfig {
+    component_profile: ComponentPacketProfile,
+    explicit_precinct_permission: ExplicitPrecinctPermission,
+}
+
+impl PacketOrganisationConfig {
+    const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    // The exact public-route validator is the only production caller that
+    // grants this permission. The shared parser independently rechecks the
+    // selected grid before constructing packet topology.
+    const PROFILE0_P004: Self = Self {
+        component_profile: ComponentPacketProfile::Default,
+        explicit_precinct_permission: ExplicitPrecinctPermission::ValidatedProfile0P004,
+    };
+
+    const fn for_component_profile(component_profile: ComponentPacketProfile) -> Self {
+        Self {
+            component_profile,
+            explicit_precinct_permission: ExplicitPrecinctPermission::None,
+        }
+    }
 }
 
 fn decode_multitile_tile_component_samples_selected(
@@ -24539,7 +24689,7 @@ fn decode_multitile_tile_component_samples_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
-    packet_profile: ComponentPacketProfile,
+    packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<Vec<u8>>> {
     if coding_style.transform == WaveletTransform::Irreversible97 {
         let planes = decode_multitile_tile_irreversible_component_planes_selected(
@@ -24552,7 +24702,7 @@ fn decode_multitile_tile_component_samples_selected(
             workspace,
             max_layers,
             discard_levels,
-            packet_profile,
+            packet_organisation,
         )?;
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
@@ -24595,7 +24745,7 @@ fn decode_multitile_tile_component_samples_selected(
         workspace,
         max_layers,
         discard_levels,
-        packet_profile,
+        packet_organisation,
     )?;
     if planes.len() != component_indices.len() {
         return Err(CodestreamError::SizeOverflow);
@@ -24679,7 +24829,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
-    packet_profile: ComponentPacketProfile,
+    packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<Vec<f32>>> {
     let max_resolution = coding_style
         .decomposition_levels
@@ -24708,7 +24858,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
-        packet_profile,
+        packet_organisation,
         None,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
@@ -24743,7 +24893,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
     );
 
     let detailed_profile = timings.is_some();
-    let maxshift = match packet_profile {
+    let maxshift = match packet_organisation.component_profile {
         ComponentPacketProfile::Profile0P006 => {
             Some(parse_p0_06_effective_maxshift(input, codestream)?)
         }
@@ -24779,7 +24929,7 @@ fn decode_multitile_tile_component_planes_selected(
     workspace: &mut Part1ComponentDecodeWorkspace,
     max_layers: Option<u16>,
     discard_levels: u8,
-    packet_profile: ComponentPacketProfile,
+    packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<Vec<i32>>> {
     let max_resolution = coding_style
         .decomposition_levels
@@ -24808,7 +24958,7 @@ fn decode_multitile_tile_component_planes_selected(
         max_layers,
         Some(max_resolution),
         Some(component_indices),
-        packet_profile,
+        packet_organisation,
         None,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
@@ -24843,7 +24993,7 @@ fn decode_multitile_tile_component_planes_selected(
     );
 
     let detailed_profile = timings.is_some();
-    let maxshift = match packet_profile {
+    let maxshift = match packet_organisation.component_profile {
         ComponentPacketProfile::Profile0P013 => Some(parse_p0_13_main_maxshift(input, codestream)?),
         _ => parse_bounded_tile_maxshift(input, codestream)?,
     }
@@ -25871,7 +26021,7 @@ pub fn parse_default_precinct_lrcp_packets(
         None,
         None,
         None,
-        ComponentPacketProfile::Default,
+        PacketOrganisationConfig::DEFAULT,
         None,
     )
     .map(|parsed| parsed.contributions)
@@ -26693,9 +26843,10 @@ fn parse_default_precinct_packets_from_source(
     max_layers: Option<u16>,
     max_resolution: Option<u8>,
     selected_components: Option<&[u16]>,
-    packet_profile: ComponentPacketProfile,
+    packet_organisation: PacketOrganisationConfig,
     physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
+    let packet_profile = packet_organisation.component_profile;
     let component_count = usize::from(codestream.siz.component_count());
     let component_styles = if matches!(
         packet_profile,
@@ -26748,7 +26899,8 @@ fn parse_default_precinct_packets_from_source(
             })
         });
     let supported_precinct_grid = coding_style_has_supported_precinct_grid(coding_style, tile_rect)
-        || (packet_profile == ComponentPacketProfile::Profile0P004
+        || (packet_organisation.explicit_precinct_permission
+            == ExplicitPrecinctPermission::ValidatedProfile0P004
             && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
         || bounded_heterogeneous_single_precincts;
     if !default_precinct_layer_count_supported(coding_style.layers) || !supported_precinct_grid {
@@ -28007,7 +28159,7 @@ mod packed_packet_header_tests {
             None,
             None,
             None,
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
             Some(&scan.work.tile_part_order),
         )
         .unwrap();
@@ -28058,7 +28210,7 @@ mod packed_packet_header_tests {
             None,
             None,
             None,
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
             None,
         )
         .unwrap()
@@ -28320,7 +28472,7 @@ mod packed_packet_header_tests {
             None,
             None,
             None,
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
             None,
         )
         .map(|parsed| parsed.contributions)
@@ -40317,7 +40469,7 @@ fn parse_prepared_payload_packets(
             max_layers,
             Some(max_resolution),
             Some(component_indices),
-            ComponentPacketProfile::Default,
+            PacketOrganisationConfig::DEFAULT,
             Some(tile_part_order),
         ),
         PreparedTilePayload::Source(source_payload) => {
@@ -40330,7 +40482,7 @@ fn parse_prepared_payload_packets(
                 max_layers,
                 Some(max_resolution),
                 Some(component_indices),
-                ComponentPacketProfile::Default,
+                PacketOrganisationConfig::DEFAULT,
                 Some(tile_part_order),
             );
             if let Some(error) = buffered.take_error() {
