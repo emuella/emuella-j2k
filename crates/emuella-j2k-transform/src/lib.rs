@@ -266,7 +266,8 @@ pub struct Irreversible97Config {
 }
 
 impl Irreversible97Config {
-    /// Scratch elements required by [`inverse_irreversible_9_7`].
+    /// Scratch elements required by [`forward_irreversible_9_7`] and
+    /// [`inverse_irreversible_9_7`].
     pub const fn scratch_len(self) -> usize {
         2 * max_usize(self.width, self.height)
     }
@@ -569,6 +570,45 @@ const IRREVERSIBLE_97_DELTA: f32 = 0.443_506_87;
 const IRREVERSIBLE_97_K: f32 = 1.230_174_1;
 const IRREVERSIBLE_97_INV_K: f32 = 0.812_893_1;
 
+/// Apply an allocation-free in-place two-dimensional forward irreversible 9/7
+/// transform to level-shifted `f32` samples.
+///
+/// Coefficients are stored low-pass first along each transformed axis. Callers
+/// apply one level at a time from the full tile-component towards its lowest
+/// resolution.
+pub fn forward_irreversible_9_7(
+    plane: &mut [f32],
+    config: Irreversible97Config,
+    scratch: &mut [f32],
+) -> Result<(), TransformError> {
+    validate_irreversible_config(plane, config, scratch)?;
+    let max_axis = max_usize(config.width, config.height);
+    let (line, work) = scratch.split_at_mut(max_axis);
+
+    for x in 0..config.width {
+        copy_strided_f32_column_to_line(plane, config.stride, x, &mut line[..config.height]);
+        forward_irreversible_9_7_line(
+            &mut line[..config.height],
+            config.edges.vertical_low_samples,
+            config.edges.vertical_first,
+            &mut work[..config.height],
+        );
+        write_f32_line_to_strided_column(plane, config.stride, x, &line[..config.height]);
+    }
+
+    for y in 0..config.height {
+        let start = y * config.stride;
+        forward_irreversible_9_7_line(
+            &mut plane[start..start + config.width],
+            config.edges.horizontal_low_samples,
+            config.edges.horizontal_first,
+            &mut work[..config.width],
+        );
+    }
+
+    validate_finite_irreversible_samples(plane, config)
+}
+
 /// Apply an allocation-free in-place two-dimensional inverse irreversible 9/7
 /// transform to dequantized `f32` coefficients.
 ///
@@ -672,6 +712,35 @@ pub fn inverse_irreversible_color_transform(
     Ok(())
 }
 
+/// Apply the forward JPEG 2000 irreversible component transform in place.
+///
+/// Inputs are level-shifted `R`, `G`, and `B` planes. They are replaced by
+/// `Y`, `Cb`, and `Cr` transform-component planes.
+pub fn forward_irreversible_color_transform(
+    r_plane: &mut [f32],
+    g_plane: &mut [f32],
+    b_plane: &mut [f32],
+) -> Result<(), TransformError> {
+    if r_plane.len() != g_plane.len() || r_plane.len() != b_plane.len() {
+        return Err(TransformError::ComponentLengthMismatch);
+    }
+    for index in 0..r_plane.len() {
+        let red = r_plane[index];
+        let green = g_plane[index];
+        let blue = b_plane[index];
+        let y = 0.299 * red + 0.587 * green + 0.114 * blue;
+        let cb = -0.168_75 * red - 0.331_26 * green + 0.5 * blue;
+        let cr = 0.5 * red - 0.418_69 * green - 0.081_31 * blue;
+        if !y.is_finite() || !cb.is_finite() || !cr.is_finite() {
+            return Err(TransformError::NonFiniteSample { index });
+        }
+        r_plane[index] = y;
+        g_plane[index] = cb;
+        b_plane[index] = cr;
+    }
+    Ok(())
+}
+
 fn validate_irreversible_config(
     plane: &[f32],
     config: Irreversible97Config,
@@ -735,6 +804,42 @@ fn inverse_irreversible_9_7_line(
     }
     work[..line.len()].copy_from_slice(line);
     inverse_irreversible_9_7_line_from_read(&mut work[..line.len()], line, low_samples, first);
+}
+
+fn forward_irreversible_9_7_line(
+    line: &mut [f32],
+    low_samples: usize,
+    first: TransformBand,
+    work: &mut [f32],
+) {
+    if line.len() <= 1 {
+        return;
+    }
+    let high_samples = line.len() - low_samples;
+    for index in 0..low_samples {
+        work[index] = match first {
+            TransformBand::Low => line[2 * index],
+            TransformBand::High => line[2 * index + 1],
+        };
+    }
+    for index in 0..high_samples {
+        work[low_samples + index] = match first {
+            TransformBand::Low => line[2 * index + 1],
+            TransformBand::High => line[2 * index],
+        };
+    }
+    let (low, high) = work[..line.len()].split_at_mut(low_samples);
+    update_irreversible_high(low, high, first, IRREVERSIBLE_97_ALPHA);
+    update_irreversible_low(low, high, first, IRREVERSIBLE_97_BETA);
+    update_irreversible_high(low, high, first, IRREVERSIBLE_97_GAMMA);
+    update_irreversible_low(low, high, first, IRREVERSIBLE_97_DELTA);
+    for value in low.iter_mut() {
+        *value *= IRREVERSIBLE_97_INV_K;
+    }
+    for value in high.iter_mut() {
+        *value *= IRREVERSIBLE_97_K;
+    }
+    line.copy_from_slice(&work[..line.len()]);
 }
 
 fn inverse_irreversible_9_7_line_from_read(
@@ -1653,4 +1758,31 @@ fn floor_div2_sum_bounded(a: i32, b: i32) -> i32 {
 
 fn floor_div4_sum_plus_two_bounded(a: i32, b: i32) -> i32 {
     a.wrapping_add(b).wrapping_add(2) >> 2
+}
+
+#[cfg(test)]
+mod irreversible_encode_tests {
+    use super::*;
+
+    #[test]
+    fn forward_and_inverse_irreversible_9_7_round_trip_odd_plane() {
+        let width = 17;
+        let height = 13;
+        let mut plane = (0..width * height)
+            .map(|index| ((index * 37 + index / width * 19) % 511) as f32 - 255.0)
+            .collect::<Vec<_>>();
+        let source = plane.clone();
+        let config = Irreversible97Config {
+            width,
+            height,
+            stride: width,
+            edges: Irreversible97Edges::from_tile_origin(0, 0, width, height),
+        };
+        let mut scratch = vec![0.0; config.scratch_len()];
+        forward_irreversible_9_7(&mut plane, config, &mut scratch).unwrap();
+        inverse_irreversible_9_7(&mut plane, config, &mut scratch).unwrap();
+        for (expected, actual) in source.iter().zip(&plane) {
+            assert!((expected - actual).abs() < 0.001, "{expected} != {actual}");
+        }
+    }
 }

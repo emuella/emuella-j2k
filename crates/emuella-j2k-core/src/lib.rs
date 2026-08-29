@@ -3015,7 +3015,13 @@ pub struct TileSize {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EncodeQuality {
+    /// Reversible coding with exact native component reconstruction.
     Lossless,
+    /// Complete raw-codestream bits per reference-grid pixel.
+    ///
+    /// JP2 box overhead is excluded. The first supported lossy profile uses
+    /// one tile, LRCP, one layer, irreversible 9/7, and two decomposition
+    /// levels; unsupported or unattainable requests fail explicitly.
     TargetRate { bits_per_pixel: f32 },
 }
 
@@ -6523,6 +6529,15 @@ fn encode_part1_lossless_into(
     validate_encode_options(options)?;
     let info = image_info(image);
     validate_encode_image_info(info)?;
+    if let EncodeQuality::TargetRate { bits_per_pixel } = options.quality {
+        let budget = target_rate_codestream_byte_budget(info, bits_per_pixel)?;
+        let codestream = encode_native_target_rate(image, budget, options.decomposition_levels)?;
+        match options.format {
+            OutputFormat::J2kCodestream => output.extend_from_slice(&codestream),
+            OutputFormat::Jp2 => write_jp2_encode_output(info, &codestream, options, output)?,
+        }
+        return Ok(());
+    }
     if options.tile_size.is_some()
         && !((is_native_grayscale_u8_encode(info)
             || is_native_rgb_u8_encode(info)
@@ -6660,6 +6675,163 @@ fn is_native_rgb_u16_le_encode(info: &ImageInfo) -> bool {
     info.components == 3
         && matches!(info.color_model, ColorModel::Rgb | ColorModel::Unknown)
         && info.sample_format == SampleFormat::U16_LE
+}
+
+#[cfg(feature = "std")]
+fn target_rate_codestream_byte_budget(info: &ImageInfo, bits_per_pixel: f32) -> Result<usize> {
+    if !bits_per_pixel.is_finite() || bits_per_pixel <= 0.0 {
+        return Err(J2kError::InvalidParameter {
+            parameter: "quality.bits_per_pixel",
+            message: "target rate must be finite and greater than zero",
+        });
+    }
+    let pixels = u64::from(info.width)
+        .checked_mul(u64::from(info.height))
+        .ok_or_else(sample_size_overflow)?;
+    let complete_bits = f64::from(bits_per_pixel) * pixels as f64;
+    if !complete_bits.is_finite() || complete_bits < 8.0 || complete_bits > u64::MAX as f64 {
+        return Err(J2kError::InvalidParameter {
+            parameter: "quality.bits_per_pixel",
+            message: "target rate does not produce a representable non-zero whole-byte codestream budget",
+        });
+    }
+    usize::try_from((complete_bits.floor() as u64) / 8).map_err(|_| sample_size_overflow())
+}
+
+#[cfg(feature = "std")]
+fn encode_native_target_rate(
+    image: ImageView<'_>,
+    codestream_byte_budget: usize,
+    decomposition_levels: u8,
+) -> Result<Vec<u8>> {
+    let info = image_info(image);
+    if !matches!(
+        (info.components, info.color_model),
+        (1, ColorModel::Grayscale) | (3, ColorModel::Rgb)
+    ) {
+        return Err(unsupported(
+            UnsupportedFeature::ColorModel,
+            "target-rate encode requires an explicit grayscale or RGB colour model",
+        ));
+    }
+    let target = codestream::Part1LossyRateTarget {
+        codestream_byte_budget,
+        decomposition_levels,
+    };
+    if is_native_grayscale_u8_encode(info) {
+        let input = match image {
+            ImageView::Planar { planes, .. } => {
+                let plane = planes.first().ok_or(J2kError::InvalidParameter {
+                    parameter: "planes",
+                    message: "grayscale encode requires one input plane",
+                })?;
+                codestream::GrayscaleU8Encode {
+                    width: info.width,
+                    height: info.height,
+                    samples: plane.samples,
+                    stride_bytes: plane.stride_bytes,
+                }
+            }
+            ImageView::Interleaved {
+                samples,
+                stride_bytes,
+                ..
+            } => codestream::GrayscaleU8Encode {
+                width: info.width,
+                height: info.height,
+                samples,
+                stride_bytes,
+            },
+        };
+        return codestream::encode_grayscale_u8_target_rate(input, target)
+            .map_err(map_codestream_error);
+    }
+    if is_native_grayscale_u16_le_encode(info) {
+        let input = match image {
+            ImageView::Planar { planes, .. } => {
+                let plane = planes.first().ok_or(J2kError::InvalidParameter {
+                    parameter: "planes",
+                    message: "grayscale encode requires one input plane",
+                })?;
+                codestream::GrayscaleU16LeEncode {
+                    width: info.width,
+                    height: info.height,
+                    samples: plane.samples,
+                    stride_bytes: plane.stride_bytes,
+                }
+            }
+            ImageView::Interleaved {
+                samples,
+                stride_bytes,
+                ..
+            } => codestream::GrayscaleU16LeEncode {
+                width: info.width,
+                height: info.height,
+                samples,
+                stride_bytes,
+            },
+        };
+        return codestream::encode_grayscale_u16_le_target_rate(input, target)
+            .map_err(map_codestream_error);
+    }
+    if is_native_rgb_u8_encode(info) {
+        let owned;
+        let (samples, stride_bytes) = match image {
+            ImageView::Planar { planes, .. } => {
+                owned = interleaved_rgb_from_planes(info, planes, SampleFormat::U8)?;
+                (
+                    &owned[..],
+                    usize::try_from(info.width).map_err(|_| sample_size_overflow())? * 3,
+                )
+            }
+            ImageView::Interleaved {
+                samples,
+                stride_bytes,
+                ..
+            } => (samples, stride_bytes),
+        };
+        return codestream::encode_rgb_u8_target_rate(
+            codestream::RgbU8Encode {
+                width: info.width,
+                height: info.height,
+                samples,
+                stride_bytes,
+            },
+            target,
+        )
+        .map_err(map_codestream_error);
+    }
+    if is_native_rgb_u16_le_encode(info) {
+        let owned;
+        let (samples, stride_bytes) = match image {
+            ImageView::Planar { planes, .. } => {
+                owned = interleaved_rgb_from_planes(info, planes, SampleFormat::U16_LE)?;
+                (
+                    &owned[..],
+                    usize::try_from(info.width).map_err(|_| sample_size_overflow())? * 6,
+                )
+            }
+            ImageView::Interleaved {
+                samples,
+                stride_bytes,
+                ..
+            } => (samples, stride_bytes),
+        };
+        return codestream::encode_rgb_u16_le_target_rate(
+            codestream::RgbU16LeEncode {
+                width: info.width,
+                height: info.height,
+                samples,
+                stride_bytes,
+            },
+            target,
+        )
+        .map_err(map_codestream_error);
+    }
+    Err(unsupported(
+        UnsupportedFeature::ComponentLayout,
+        "target-rate encode supports native grayscale/RGB u8 and u16_le input",
+    ))
 }
 
 #[cfg(feature = "std")]
@@ -7465,23 +7637,41 @@ fn validate_encode_options(options: &EncodeOptions) -> Result<()> {
             "baseline encode currently emits deterministic LRCP progression only",
         ));
     }
-    if options.transform != WaveletTransform::Reversible53 {
-        return Err(unsupported(
-            UnsupportedFeature::WaveletTransform,
-            "baseline encode currently emits reversible 5/3 lossless codestreams only",
-        ));
-    }
-    if !matches!(options.quality, EncodeQuality::Lossless) {
-        return Err(unsupported(
-            UnsupportedFeature::OutputFormat,
-            "rate-targeted lossy encode requires an implemented and qualified rate-control design",
-        ));
-    }
-    if options.decomposition_levels > 2 {
-        return Err(unsupported(
-            UnsupportedFeature::WaveletTransform,
-            "baseline encode currently supports decomposition level 0 and grayscale/RGB u8 or u16_le decomposition levels 1 or 2 only",
-        ));
+    match options.quality {
+        EncodeQuality::Lossless => {
+            if options.transform != WaveletTransform::Reversible53 {
+                return Err(unsupported(
+                    UnsupportedFeature::WaveletTransform,
+                    "lossless encode requires the reversible 5/3 transform",
+                ));
+            }
+            if options.decomposition_levels > 2 {
+                return Err(unsupported(
+                    UnsupportedFeature::WaveletTransform,
+                    "lossless encode supports decomposition level 0 and grayscale/RGB u8 or u16_le decomposition levels 1 or 2 only",
+                ));
+            }
+        }
+        EncodeQuality::TargetRate { .. } => {
+            if options.transform != WaveletTransform::Irreversible97 {
+                return Err(unsupported(
+                    UnsupportedFeature::WaveletTransform,
+                    "target-rate encode requires the irreversible 9/7 transform",
+                ));
+            }
+            if options.decomposition_levels != 2 {
+                return Err(unsupported(
+                    UnsupportedFeature::WaveletTransform,
+                    "the qualified target-rate profile requires exactly two decomposition levels",
+                ));
+            }
+            if options.tile_size.is_some() {
+                return Err(unsupported(
+                    UnsupportedFeature::ComponentLayout,
+                    "target-rate encode supports one tile only",
+                ));
+            }
+        }
     }
     if options.format == OutputFormat::J2kCodestream && !options.metadata.is_empty() {
         return Err(unsupported(

@@ -5031,6 +5031,13 @@ pub struct RgbU16LeEncode<'a> {
     pub stride_bytes: usize,
 }
 
+/// Internal whole-byte limit for one irreversible Part 1 codestream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Part1LossyRateTarget {
+    pub codestream_byte_budget: usize,
+    pub decomposition_levels: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeNoDecompComponent {
     coefficients: Vec<i32>,
@@ -10210,6 +10217,98 @@ pub fn encode_rgb_u16_le_two_decomp(input: RgbU16LeEncode<'_>) -> Result<Vec<u8>
     )
 }
 
+/// Encode a bounded single-tile irreversible Part 1 grayscale codestream.
+pub fn encode_grayscale_u8_target_rate(
+    input: GrayscaleU8Encode<'_>,
+    target: Part1LossyRateTarget,
+) -> Result<Vec<u8>> {
+    validate_grayscale_u8_encode(input)?;
+    let plane = level_shift_grayscale_plane(input)?
+        .into_iter()
+        .map(|value| value as f32)
+        .collect();
+    encode_irreversible_target_rate(
+        input.width,
+        input.height,
+        8,
+        alloc::vec![plane],
+        false,
+        target,
+    )
+}
+
+/// Encode a bounded single-tile irreversible Part 1 grayscale codestream.
+pub fn encode_grayscale_u16_le_target_rate(
+    input: GrayscaleU16LeEncode<'_>,
+    target: Part1LossyRateTarget,
+) -> Result<Vec<u8>> {
+    validate_grayscale_u16_le_encode(input)?;
+    let plane = level_shift_grayscale_u16_le_plane(input)?
+        .into_iter()
+        .map(|value| value as f32)
+        .collect();
+    encode_irreversible_target_rate(
+        input.width,
+        input.height,
+        16,
+        alloc::vec![plane],
+        false,
+        target,
+    )
+}
+
+/// Encode a bounded single-tile irreversible Part 1 RGB codestream.
+pub fn encode_rgb_u8_target_rate(
+    input: RgbU8Encode<'_>,
+    target: Part1LossyRateTarget,
+) -> Result<Vec<u8>> {
+    validate_rgb_u8_encode(input)?;
+    let components = level_shift_rgb_u8_components(input)?;
+    let [mut red, mut green, mut blue] = components.map(|component| {
+        component
+            .coefficients
+            .into_iter()
+            .map(|v| v as f32)
+            .collect::<Vec<f32>>()
+    });
+    transform::forward_irreversible_color_transform(&mut red, &mut green, &mut blue)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    encode_irreversible_target_rate(
+        input.width,
+        input.height,
+        8,
+        alloc::vec![red, green, blue],
+        true,
+        target,
+    )
+}
+
+/// Encode a bounded single-tile irreversible Part 1 RGB codestream.
+pub fn encode_rgb_u16_le_target_rate(
+    input: RgbU16LeEncode<'_>,
+    target: Part1LossyRateTarget,
+) -> Result<Vec<u8>> {
+    validate_rgb_u16_le_encode(input)?;
+    let components = level_shift_rgb_u16_le_components_with_precision(input, 16)?;
+    let [mut red, mut green, mut blue] = components.map(|component| {
+        component
+            .coefficients
+            .into_iter()
+            .map(|v| v as f32)
+            .collect::<Vec<f32>>()
+    });
+    transform::forward_irreversible_color_transform(&mut red, &mut green, &mut blue)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    encode_irreversible_target_rate(
+        input.width,
+        input.height,
+        16,
+        alloc::vec![red, green, blue],
+        true,
+        target,
+    )
+}
+
 struct NativeNoDecompEncode<'a> {
     width: u32,
     height: u32,
@@ -11018,6 +11117,254 @@ fn reversible_5_3_region_config(
         edges: transform::Reversible53Edges::from_tile_origin(0, 0, width, height),
         sample_range,
     })
+}
+
+const IRREVERSIBLE_QCD_GUARD_BITS: u8 = 2;
+const IRREVERSIBLE_COARSENESS_MIN: u32 = 2 * 2048;
+const IRREVERSIBLE_COARSENESS_MAX: u32 = 30 * 2048 - 1;
+
+fn encode_irreversible_target_rate(
+    width: u32,
+    height: u32,
+    bits_per_sample: u8,
+    mut component_planes: Vec<Vec<f32>>,
+    multiple_component_transform: bool,
+    target: Part1LossyRateTarget,
+) -> Result<Vec<u8>> {
+    if target.codestream_byte_budget == 0 {
+        return Err(invalid(
+            None,
+            Some(Marker::Siz),
+            "irreversible target-rate byte budget must be greater than zero",
+        ));
+    }
+    if target.decomposition_levels != 2 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "the qualified irreversible target-rate profile requires exactly two decomposition levels",
+        ));
+    }
+    if !matches!(component_planes.len(), 1 | 3) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let sample_count = checked_component_sample_count(width, height)?;
+    if component_planes
+        .iter()
+        .any(|plane| plane.len() != sample_count)
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+
+    let stride = usize::try_from(width).map_err(|_| CodestreamError::SizeOverflow)?;
+    let mut scratch = Vec::new();
+    for plane in &mut component_planes {
+        for completed_levels in 0..target.decomposition_levels {
+            let (active_width, active_height) = if completed_levels == 0 {
+                (width, height)
+            } else {
+                resolution_dimensions(width, height, completed_levels, 0)?
+            };
+            let active_width =
+                usize::try_from(active_width).map_err(|_| CodestreamError::SizeOverflow)?;
+            let active_height =
+                usize::try_from(active_height).map_err(|_| CodestreamError::SizeOverflow)?;
+            let config = transform::Irreversible97Config {
+                width: active_width,
+                height: active_height,
+                stride,
+                edges: transform::Irreversible97Edges::from_tile_origin(
+                    0,
+                    0,
+                    active_width,
+                    active_height,
+                ),
+            };
+            scratch.resize(config.scratch_len(), 0.0);
+            transform::forward_irreversible_9_7(plane, config, &mut scratch)
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+        }
+    }
+
+    let specs = decomp_subband_specs(width, height, target.decomposition_levels)?;
+    let mut lower = IRREVERSIBLE_COARSENESS_MIN;
+    let mut upper = IRREVERSIBLE_COARSENESS_MAX;
+    let coarsest = encode_irreversible_candidate(
+        width,
+        height,
+        bits_per_sample,
+        target.decomposition_levels,
+        &component_planes,
+        multiple_component_transform,
+        &specs,
+        upper,
+    )?;
+    if coarsest.len() > target.codestream_byte_budget {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::PacketDecode,
+            "target-rate budget is smaller than the irreducible valid codestream",
+        ));
+    }
+    let mut best = coarsest;
+    while lower <= upper {
+        let midpoint = lower + (upper - lower) / 2;
+        let candidate = encode_irreversible_candidate(
+            width,
+            height,
+            bits_per_sample,
+            target.decomposition_levels,
+            &component_planes,
+            multiple_component_transform,
+            &specs,
+            midpoint,
+        )?;
+        if candidate.len() <= target.codestream_byte_budget {
+            if candidate.len() > best.len() {
+                best = candidate;
+            }
+            if midpoint == 0 {
+                break;
+            }
+            upper = midpoint - 1;
+        } else {
+            lower = midpoint + 1;
+        }
+    }
+    let allowed_undershoot = 32_usize.max(target.codestream_byte_budget.div_ceil(500));
+    if target.codestream_byte_budget - best.len() > allowed_undershoot {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::PacketDecode,
+            "target-rate budget is not attainable within the qualified non-padding tolerance",
+        ));
+    }
+    Ok(best)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_irreversible_candidate(
+    width: u32,
+    height: u32,
+    bits_per_sample: u8,
+    decomposition_levels: u8,
+    transformed_planes: &[Vec<f32>],
+    multiple_component_transform: bool,
+    specs: &[DecompSubbandSpec],
+    coarseness: u32,
+) -> Result<Vec<u8>> {
+    let octave = coarseness / 2048;
+    let mantissa = u16::try_from(coarseness % 2048).map_err(|_| CodestreamError::SizeOverflow)?;
+    let base_exponent = 31_u8
+        .checked_sub(u8::try_from(octave).map_err(|_| CodestreamError::SizeOverflow)?)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let qcd_steps = specs
+        .iter()
+        .map(|spec| {
+            let gain = match spec.kind {
+                PacketSubbandKind::LowLow => 0,
+                PacketSubbandKind::HighLow | PacketSubbandKind::LowHigh => 1,
+                PacketSubbandKind::HighHigh => 2,
+            };
+            transform::IrreversibleQuantizationStep::new(
+                base_exponent
+                    .checked_add(gain)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                mantissa,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let available_bitplanes = qcd_steps
+        .iter()
+        .map(|step| {
+            IRREVERSIBLE_QCD_GUARD_BITS
+                .checked_add(step.exponent)
+                .and_then(|value| value.checked_sub(2))
+                .ok_or(CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut quantized_planes = transformed_planes
+        .iter()
+        .map(|plane| alloc::vec![0_i32; plane.len()])
+        .collect::<Vec<_>>();
+    let stride = usize::try_from(width).map_err(|_| CodestreamError::SizeOverflow)?;
+    for (source, quantized) in transformed_planes.iter().zip(&mut quantized_planes) {
+        for (spec, step) in specs.iter().zip(&qcd_steps) {
+            let gain = match spec.kind {
+                PacketSubbandKind::LowLow => 0,
+                PacketSubbandKind::HighLow | PacketSubbandKind::LowHigh => 1,
+                PacketSubbandKind::HighHigh => 2,
+            };
+            let delta = step
+                .delta(bits_per_sample, gain)
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            for y in 0..usize::try_from(spec.height).map_err(|_| CodestreamError::SizeOverflow)? {
+                let row = usize::try_from(spec.y)
+                    .map_err(|_| CodestreamError::SizeOverflow)?
+                    .checked_add(y)
+                    .and_then(|value| value.checked_mul(stride))
+                    .and_then(|value| value.checked_add(usize::try_from(spec.x).ok()?))
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                let width =
+                    usize::try_from(spec.width).map_err(|_| CodestreamError::SizeOverflow)?;
+                for x in 0..width {
+                    let value = source[row + x];
+                    let scaled_magnitude = value.abs() / delta;
+                    if scaled_magnitude > i32::MAX as f32 {
+                        return Err(CodestreamError::SizeOverflow);
+                    }
+                    let magnitude = scaled_magnitude as i32;
+                    quantized[row + x] = if value.is_sign_negative() {
+                        -magnitude
+                    } else {
+                        magnitude
+                    };
+                }
+            }
+        }
+    }
+
+    let plane_refs = quantized_planes
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let mut segments = Vec::new();
+    let mut component_subbands = Vec::with_capacity(plane_refs.len());
+    encode_decomp_components_sequential(
+        width,
+        &plane_refs,
+        specs,
+        &available_bitplanes,
+        &mut component_subbands,
+        &mut segments,
+    )?;
+    let mut packet = Vec::with_capacity(native_decomp_packet_capacity_hint(
+        &component_subbands,
+        &segments,
+    )?);
+    write_native_decomp_packets(
+        &mut packet,
+        decomposition_levels,
+        &component_subbands,
+        &segments,
+    )?;
+    let mut codestream = Vec::new();
+    write_native_irreversible_main_header(
+        &mut codestream,
+        width,
+        height,
+        bits_per_sample,
+        u16::try_from(plane_refs.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        multiple_component_transform,
+        decomposition_levels,
+        &qcd_steps,
+    )?;
+    write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
 }
 
 fn encode_native_decomp_transformed(
@@ -13332,6 +13679,87 @@ fn fill_forward_rct_u16_le_row(
 
 fn forward_rct_luma(red: i32, green: i32, blue: i32) -> i32 {
     (red + (green << 1) + blue) >> 2
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_native_irreversible_main_header(
+    output: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    bits_per_sample: u8,
+    components: u16,
+    multiple_component_transform: bool,
+    decomposition_levels: u8,
+    qcd_steps: &[transform::IrreversibleQuantizationStep],
+) -> Result<()> {
+    let expected_subbands = 1usize
+        .checked_add(
+            usize::from(decomposition_levels)
+                .checked_mul(3)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if qcd_steps.len() != expected_subbands || components == 0 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let siz_len = 38_u16
+        .checked_add(
+            components
+                .checked_mul(3)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .ok_or(CodestreamError::SizeOverflow)?;
+    output.extend_from_slice(&[0xff, 0x4f, 0xff, 0x51]);
+    output.extend_from_slice(&siz_len.to_be_bytes());
+    output.extend_from_slice(&0_u16.to_be_bytes());
+    output.extend_from_slice(&width.to_be_bytes());
+    output.extend_from_slice(&height.to_be_bytes());
+    output.extend_from_slice(&0_u32.to_be_bytes());
+    output.extend_from_slice(&0_u32.to_be_bytes());
+    output.extend_from_slice(&width.to_be_bytes());
+    output.extend_from_slice(&height.to_be_bytes());
+    output.extend_from_slice(&0_u32.to_be_bytes());
+    output.extend_from_slice(&0_u32.to_be_bytes());
+    output.extend_from_slice(&components.to_be_bytes());
+    let sample_marker = bits_per_sample
+        .checked_sub(1)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    for _ in 0..components {
+        output.extend_from_slice(&[sample_marker, 1, 1]);
+    }
+
+    output.extend_from_slice(&[0xff, 0x52]);
+    output.extend_from_slice(&12_u16.to_be_bytes());
+    output.extend_from_slice(&[0, 0]);
+    output.extend_from_slice(&1_u16.to_be_bytes());
+    output.extend_from_slice(&[
+        u8::from(multiple_component_transform),
+        decomposition_levels,
+        4,
+        4,
+        0,
+        0,
+    ]);
+
+    output.extend_from_slice(&[0xff, 0x5c]);
+    let qcd_len = u16::try_from(
+        3usize
+            .checked_add(
+                qcd_steps
+                    .len()
+                    .checked_mul(2)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )
+    .map_err(|_| CodestreamError::SizeOverflow)?;
+    output.extend_from_slice(&qcd_len.to_be_bytes());
+    output.push((IRREVERSIBLE_QCD_GUARD_BITS << 5) | 2);
+    for step in qcd_steps {
+        let packed = (u16::from(step.exponent) << 11) | step.mantissa;
+        output.extend_from_slice(&packed.to_be_bytes());
+    }
+    Ok(())
 }
 
 fn write_native_part1_main_header(
