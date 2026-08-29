@@ -118,6 +118,26 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.RunnerError, "repeats an asset"):
             runner.load_rendered_cases(self.suite, self.inventory, self.lock)
 
+    def test_rejects_case_ids_that_are_not_report_safe_catalogue_tokens(self) -> None:
+        record = self.suite["rendered_pixel_comparison"]["cases"][0]
+        for case_id in [
+            "",
+            "Uppercase",
+            " leading",
+            "trailing ",
+            "annex-g/injected\nsummary",
+            "annex-g/control\x1b",
+            "annex-g/non-ascii-é",
+            "../escape",
+            "annex-g/../escape",
+            "/absolute",
+            "trailing/",
+        ]:
+            with self.subTest(case_id=repr(case_id)):
+                record["id"] = case_id
+                with self.assertRaisesRegex(runner.RunnerError, "report-safe catalogue ID"):
+                    runner.load_rendered_cases(self.suite, self.inventory, self.lock)
+
 
 class WorkerTests(unittest.TestCase):
     def test_accepts_only_the_deterministic_aggregate_record(self) -> None:

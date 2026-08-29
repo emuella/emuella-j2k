@@ -8,6 +8,7 @@ import dataclasses
 import importlib.util
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import sys
 from typing import Any
@@ -45,6 +46,9 @@ EXPECTED_RESULT_KEYS = {
     "passed",
 }
 MAX_COMPARISON_SAMPLES = 100_000_000
+REPORT_SAFE_CASE_ID = re.compile(
+    r"[a-z0-9](?:[a-z0-9./-]*[a-z0-9.-])?", re.ASCII
+)
 
 
 class RunnerError(Exception):
@@ -144,6 +148,16 @@ def inventory_paths(inventory: dict[str, Any]) -> set[str]:
     return paths
 
 
+def report_safe_case_id(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or REPORT_SAFE_CASE_ID.fullmatch(value) is None
+        or ".." in PurePosixPath(value).parts
+    ):
+        raise RunnerError("rendered-pixel case ID is not a report-safe catalogue ID")
+    return value
+
+
 def load_rendered_cases(
     suite: dict[str, Any], inventory: dict[str, Any], lock: common.Lock
 ) -> tuple[RenderedCase, ...]:
@@ -180,9 +194,9 @@ def load_rendered_cases(
     for record in records:
         if not isinstance(record, dict) or set(record) != CASE_KEYS:
             raise RunnerError("rendered-pixel case has an unexpected schema shape")
-        case_id = record.get("id")
-        if not isinstance(case_id, str) or not case_id or case_id in case_ids:
-            raise RunnerError("rendered-pixel case ID is empty or repeated")
+        case_id = report_safe_case_id(record.get("id"))
+        if case_id in case_ids:
+            raise RunnerError("rendered-pixel case ID is repeated")
         case_ids.add(case_id)
         input_path = common.safe_relative_path(record.get("input"), "rendered input")
         reference_path = common.safe_relative_path(
