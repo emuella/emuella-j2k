@@ -393,6 +393,36 @@ Project-owned regressions cover exact two-byte marker payloads, the 514-packet
 two-volume order and the narrow public request shape without embedding
 protected conformance bytes.
 
+### Native multi-tile spatial component decode
+
+The public partial API admits one origin-aligned raw Part 1 shape for spatial
+decode across tiles: one unsigned 8-bit unit-sampled component, reversible
+5/3 coding with exactly two decompositions, one LRCP quality layer, default
+precincts and one complete tile part per SIZ tile. Output remains planar at
+full resolution. A non-empty image-relative region may intersect any number of
+tiles, while `TileSelection` resolves to exactly one checked SIZ tile rectangle
+clipped to the image. Region and tile selection are mutually exclusive;
+`All` and component zero, full and zero-discard resolution, and unlimited and
+one-layer requests are equivalent within this one-component, one-layer shape.
+
+Prepared planning retains only intersecting tile payloads and assembles their
+cropped output directly into caller rows. Synthetic 3-by-3-tile regressions
+cover one-, two- and four-tile regions, clipped edge and corner tiles,
+partition-and-stitch equivalence, positioned sources, caller padding,
+selective-work counters and both bounded-window and full-tile synthesis copy
+paths. Origins, reduction, signed or higher-precision samples, subsampling,
+MCT, irreversible 9/7, extra layers, progression changes, coding or
+quantisation overrides, ROI, packet relocation, inline markers, fragmented
+tile parts and interleaved output remain fail closed at this boundary.
+
+The checked image, tile and component geometry follows ISO/IEC 15444-1:2024,
+Annex A, A.5.1 and Annex B, B.1–B.5, PDF pages 41–44 and 79–85. Coding-style
+and tile-part structure follow Annex A, A.6 and A.4.2, and packet progression
+follows Annex B. The canonical transcription consulted was retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). Tests use only the
+project-authored multi-tile encoder fixture.
+
 ## Inline packet markers
 
 The native subsampled and unit-sampled component paths consume inline SOP and
