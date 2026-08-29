@@ -6691,6 +6691,7 @@ struct PreparedPart1TileDecode<'a> {
     payload: PreparedTilePayload<'a>,
     contributions: Vec<PacketCodeBlockContribution>,
     synthesis_window: SynthesisWindowPlan,
+    component_plans: Vec<PreparedPart1TileComponentDecode>,
     #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
     selected_contribution_indices: Vec<usize>,
     #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
@@ -6699,6 +6700,30 @@ struct PreparedPart1TileDecode<'a> {
     full_selected_contribution_indices: Vec<usize>,
     #[cfg(test)]
     force_full_synthesis_oracle: bool,
+}
+
+#[derive(Debug)]
+struct PreparedPart1TileComponentDecode {
+    component_index: u16,
+    synthesis_window: SynthesisWindowPlan,
+    selected_contribution_indices: Vec<usize>,
+    bounded_selected_contribution_indices: Vec<usize>,
+    full_selected_contribution_indices: Vec<usize>,
+}
+
+/// Checked native output geometry and sample representation for one selected
+/// Part 1 component plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Part1ComponentOutputInfo {
+    pub component_index: u16,
+    pub x_origin: u32,
+    pub y_origin: u32,
+    pub width: u32,
+    pub height: u32,
+    pub horizontal_separation: u8,
+    pub vertical_separation: u8,
+    pub bits_per_sample: u8,
+    pub signed: bool,
 }
 
 /// Structurally validated selective Part 1 work retained for one or more
@@ -6715,6 +6740,8 @@ pub struct PreparedPart1ComponentDecode<'a> {
     source_to_output: Vec<u16>,
     region: TileRegionRequest,
     output_region: TileRegionRequest,
+    component_outputs: Vec<Part1ComponentOutputInfo>,
+    native_component_geometry: bool,
     discard_levels: u8,
     component_sample_bytes: Vec<usize>,
     tiles: Vec<PreparedPart1TileDecode<'a>>,
@@ -6730,6 +6757,11 @@ impl PreparedPart1ComponentDecode<'_> {
     /// Output dimensions after applying the retained discard level.
     pub fn output_dimensions(&self) -> (u32, u32) {
         (self.output_region.width, self.output_region.height)
+    }
+
+    /// Per-selected-component native output descriptors in caller plane order.
+    pub fn component_outputs(&self) -> &[Part1ComponentOutputInfo] {
+        &self.component_outputs
     }
 
     /// Selected source components in caller-visible output order.
@@ -6801,6 +6833,13 @@ impl PreparedPart1ComponentDecode<'_> {
             tile.selected_contribution_indices.clear();
             tile.selected_contribution_indices
                 .extend_from_slice(&tile.full_selected_contribution_indices);
+            for component in &mut tile.component_plans {
+                component.synthesis_window.use_windowed_synthesis = false;
+                component.selected_contribution_indices.clear();
+                component
+                    .selected_contribution_indices
+                    .extend_from_slice(&component.full_selected_contribution_indices);
+            }
             prepared_code_blocks = prepared_code_blocks
                 .saturating_add(tile.full_selected_contribution_indices.len() as u64);
         }
@@ -6825,6 +6864,9 @@ fn prepared_part1_execution_parallelism(
             return (DecodeParallelAxis::Scalar, 1);
         }
         let prepared = _prepared;
+        if prepared.native_component_geometry {
+            return (DecodeParallelAxis::Scalar, 1);
+        }
         let selected_code_blocks = prepared
             .tiles
             .iter()
@@ -6882,6 +6924,9 @@ fn prepared_part1_plan_memory(
         .saturating_add(capacity_bytes::<usize>(
             prepared.component_sample_bytes.capacity(),
         ))
+        .saturating_add(capacity_bytes::<Part1ComponentOutputInfo>(
+            prepared.component_outputs.capacity(),
+        ))
         .saturating_add(capacity_bytes::<PreparedPart1TileDecode<'_>>(
             prepared.tiles.capacity(),
         ))
@@ -6924,7 +6969,25 @@ fn prepared_part1_plan_memory(
             ))
             .saturating_add(capacity_bytes::<ResolutionWindowPlan>(
                 tile.synthesis_window.levels.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<PreparedPart1TileComponentDecode>(
+                tile.component_plans.capacity(),
             ));
+        for component in &tile.component_plans {
+            retained_heap_bytes = retained_heap_bytes
+                .saturating_add(capacity_bytes::<usize>(
+                    component.selected_contribution_indices.capacity(),
+                ))
+                .saturating_add(capacity_bytes::<usize>(
+                    component.bounded_selected_contribution_indices.capacity(),
+                ))
+                .saturating_add(capacity_bytes::<usize>(
+                    component.full_selected_contribution_indices.capacity(),
+                ))
+                .saturating_add(capacity_bytes::<ResolutionWindowPlan>(
+                    component.synthesis_window.levels.capacity(),
+                ));
+        }
         prepared_range_count =
             prepared_range_count.saturating_add(tile.payload.span_count() as u64);
         for contribution_index in &tile.full_selected_contribution_indices {
@@ -8446,6 +8509,119 @@ pub fn encode_planar_u8_no_decomp_test_fixture(
         components: &components,
         multiple_component_transform: false,
     })
+}
+
+/// One project-authored native component plane for a deterministic subsampled
+/// Part 1 test fixture.
+#[doc(hidden)]
+pub struct SubsampledU8TestComponent<'a> {
+    pub horizontal_separation: u8,
+    pub vertical_separation: u8,
+    pub samples: &'a [u8],
+}
+
+/// Build a deterministic raw Part 1 fixture whose component planes use their
+/// declared native sampling grids.
+///
+/// This is test support rather than a general encoder surface.
+#[doc(hidden)]
+pub fn encode_planar_u8_subsampled_no_decomp_test_fixture(
+    reference_width: u32,
+    reference_height: u32,
+    component_planes: &[SubsampledU8TestComponent<'_>],
+) -> Result<Vec<u8>> {
+    if component_planes.is_empty() || component_planes.len() > usize::from(u8::MAX) {
+        return Err(invalid(
+            None,
+            Some(Marker::Siz),
+            "subsampled planar test fixture requires one to 255 components",
+        ));
+    }
+    let components = component_planes
+        .iter()
+        .map(|component| {
+            if component.horizontal_separation == 0 || component.vertical_separation == 0 {
+                return Err(CodestreamError::SizeOverflow);
+            }
+            let width = reference_width.div_ceil(u32::from(component.horizontal_separation));
+            let height = reference_height.div_ceil(u32::from(component.vertical_separation));
+            let sample_count = checked_component_sample_count(width, height)?;
+            if component.samples.len() != sample_count {
+                return Err(CodestreamError::SizeOverflow);
+            }
+            Ok((
+                width,
+                height,
+                NativeNoDecompComponent {
+                    coefficients: component
+                        .samples
+                        .iter()
+                        .map(|sample| i32::from(*sample) - 128)
+                        .collect(),
+                    available_bitplanes: 8,
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut segments = Vec::new();
+    let mut encoded = Vec::with_capacity(components.len());
+    let mut tier1_encode_scratch = tier1::CodeBlockEncodeScratch::new();
+    for (width, height, component) in &components {
+        let cols =
+            u16::try_from(ceil_div(*width, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
+        let rows =
+            u16::try_from(ceil_div(*height, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
+        let blocks = encode_no_decomp_component_blocks(
+            *width,
+            *height,
+            component,
+            cols,
+            rows,
+            &mut segments,
+            &mut tier1_encode_scratch,
+        )?;
+        encoded.push((cols, rows, blocks));
+    }
+
+    let mut packet = Vec::new();
+    for (cols, rows, blocks) in &encoded {
+        write_native_no_decomp_packets(
+            &mut packet,
+            *cols,
+            *rows,
+            core::slice::from_ref(blocks),
+            &segments,
+        )?;
+    }
+    let mut codestream = Vec::new();
+    write_native_part1_main_header(
+        &mut codestream,
+        reference_width,
+        reference_height,
+        reference_width,
+        reference_height,
+        8,
+        u16::try_from(component_planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        false,
+        0,
+        &[8],
+    )?;
+    let siz = find_marker(&codestream, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    for (index, component) in component_planes.iter().enumerate() {
+        let entry = siz
+            .checked_add(40)
+            .and_then(|offset| offset.checked_add(index.checked_mul(3)?))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        *codestream
+            .get_mut(entry + 1)
+            .ok_or(CodestreamError::SizeOverflow)? = component.horizontal_separation;
+        *codestream
+            .get_mut(entry + 2)
+            .ok_or(CodestreamError::SizeOverflow)? = component.vertical_separation;
+    }
+    write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
 }
 
 #[cfg(test)]
@@ -20560,103 +20736,55 @@ pub fn decode_baseline_owned_component_region_selected_with_max_layers(
     request: TileRegionRequest,
     max_layers: Option<u16>,
 ) -> Result<DecodedImage> {
-    let (codestream, _) = parse_with_selected_region(input, Some(request))?;
-    validate_component_selection(&codestream, component_indices)?;
-    let coding_style = validate_supported_selective_native_component_profile(input, &codestream)?;
-    if codestream
-        .siz
-        .components
-        .iter()
-        .any(|component| component.horizontal_separation != 1 || component.vertical_separation != 1)
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Siz),
-            UnsupportedConstruct::ComponentSampling,
-            "component-region decode requires unit component sampling; native subsampled grids are currently full-plane only",
-        ));
-    }
-    if coding_style.multiple_component_transform {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::Transform,
-            "selective component-region decode does not split multiple-component-transform inputs",
-        ));
-    }
-    let plan = plan_tile_region_decode(&codestream, request)?;
-    if plan.tiles.is_empty() {
-        return Err(CodestreamError::SizeOverflow);
-    }
-
-    let output_width = usize::try_from(request.width).map_err(|_| CodestreamError::SizeOverflow)?;
-    let output_height =
-        usize::try_from(request.height).map_err(|_| CodestreamError::SizeOverflow)?;
-    let output_samples = output_width
-        .checked_mul(output_height)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let component_sample_bytes = component_indices
-        .iter()
-        .map(|component_index| {
-            codestream
-                .siz
-                .components
-                .get(usize::from(*component_index))
-                .ok_or(CodestreamError::SizeOverflow)
-                .and_then(|component| component_sample_byte_width(component.bits_per_sample))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut components = component_sample_bytes
-        .iter()
-        .map(|bytes_per_sample| {
-            output_samples
-                .checked_mul(*bytes_per_sample)
-                .map(|len| DecodedComponent {
-                    samples: alloc::vec![0_u8; len],
-                })
-                .ok_or(CodestreamError::SizeOverflow)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut no_timings: Option<&mut DecodeStageTimings> = None;
-    let mut workspace = Part1ComponentDecodeWorkspace::new();
-    for planned in plan.tiles {
-        let tile_components = decode_multitile_tile_component_samples_selected(
-            input,
-            &codestream,
-            coding_style,
-            planned.tile,
+    let prepared = prepare_part1_component_decode(
+        input,
+        Part1ComponentDecodeRequest {
             component_indices,
-            &mut no_timings,
-            &mut workspace,
+            region: request,
+            discard_levels: 0,
             max_layers,
-            0,
-            PacketOrganisationConfig::DEFAULT,
-        )?;
-        for (((output, tile_samples), bytes_per_sample), _) in components
-            .iter_mut()
-            .zip(&tile_components)
-            .zip(&component_sample_bytes)
-            .zip(component_indices)
-        {
-            copy_tile_intersection_to_region(
-                &mut output.samples,
-                output_width
-                    .checked_mul(*bytes_per_sample)
+        },
+    )?;
+    let mut components = prepared
+        .component_outputs()
+        .iter()
+        .map(|output| {
+            let bytes_per_sample = component_sample_byte_width(output.bits_per_sample)?;
+            let len = usize::try_from(output.width)
+                .map_err(|_| CodestreamError::SizeOverflow)?
+                .checked_mul(
+                    usize::try_from(output.height).map_err(|_| CodestreamError::SizeOverflow)?,
+                )
+                .and_then(|samples| samples.checked_mul(bytes_per_sample))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            Ok(DecodedComponent {
+                samples: alloc::vec![0_u8; len],
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut output_planes = components
+        .iter_mut()
+        .zip(prepared.component_outputs())
+        .map(|(component, output)| {
+            let bytes_per_sample = component_sample_byte_width(output.bits_per_sample)?;
+            Ok(ComponentPlaneMut {
+                samples: &mut component.samples,
+                stride_bytes: usize::try_from(output.width)
+                    .map_err(|_| CodestreamError::SizeOverflow)?
+                    .checked_mul(bytes_per_sample)
                     .ok_or(CodestreamError::SizeOverflow)?,
-                *bytes_per_sample,
-                request,
-                planned.tile,
-                planned.intersection,
-                tile_samples,
-            )?;
-        }
-    }
-
-    let first_selected = codestream
-        .siz
-        .components
-        .get(usize::from(component_indices[0]))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut workspace = Part1ComponentDecodeWorkspace::new();
+    execute_prepared_part1_component_decode_into_with_workspace(
+        &prepared,
+        &mut output_planes,
+        &mut workspace,
+    )?;
+    let first_selected = prepared
+        .component_outputs()
+        .first()
         .ok_or(CodestreamError::SizeOverflow)?;
     Ok(DecodedImage {
         width: request.width,
@@ -20904,6 +21032,108 @@ fn planned_tile_synthesis_window(
     )
 }
 
+fn selected_component_output_info(
+    siz: &SizMarker,
+    component_index: u16,
+    region: TileRegionRequest,
+    discard_levels: u8,
+) -> Result<Part1ComponentOutputInfo> {
+    let component = siz
+        .components
+        .get(usize::from(component_index))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let native = siz
+        .absolute_reference_region(region)?
+        .to_component_grid(
+            component.horizontal_separation,
+            component.vertical_separation,
+        )
+        .map_err(|_| {
+            invalid(
+                None,
+                Some(Marker::Siz),
+                "non-empty reference region maps to an empty native component rectangle",
+            )
+        })?
+        .reduce(discard_levels)
+        .map_err(|_| {
+            invalid(
+                None,
+                Some(Marker::Siz),
+                "non-empty reference region maps to an empty reduced component rectangle",
+            )
+        })?;
+    Ok(Part1ComponentOutputInfo {
+        component_index,
+        x_origin: native.x0(),
+        y_origin: native.y0(),
+        width: native.width(),
+        height: native.height(),
+        horizontal_separation: component.horizontal_separation,
+        vertical_separation: component.vertical_separation,
+        bits_per_sample: component.bits_per_sample,
+        signed: component.signed,
+    })
+}
+
+fn planned_tile_component_synthesis_window(
+    siz: &SizMarker,
+    planned: &PlannedTileRegion,
+    component: &ComponentParameters,
+    coding_style: CodingStyleMarker,
+    discard_levels: u8,
+) -> Result<SynthesisWindowPlan> {
+    let retained_resolution = coding_style
+        .decomposition_levels
+        .checked_sub(discard_levels)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile = siz
+        .absolute_reference_region(TileRegionRequest {
+            x: planned.tile.x,
+            y: planned.tile.y,
+            width: planned.tile.width,
+            height: planned.tile.height,
+        })?
+        .to_component_grid(
+            component.horizontal_separation,
+            component.vertical_separation,
+        )?
+        .reduce(discard_levels)?;
+    let intersection = siz
+        .absolute_reference_region(planned.intersection)?
+        .to_component_grid(
+            component.horizontal_separation,
+            component.vertical_separation,
+        )
+        .map_err(|_| {
+            invalid(
+                None,
+                Some(Marker::Siz),
+                "selected tile intersection maps to an empty native component rectangle",
+            )
+        })?
+        .reduce(discard_levels)?;
+    let output_region = AxisAlignedRegion {
+        x: intersection
+            .x0()
+            .checked_sub(tile.x0())
+            .ok_or(CodestreamError::SizeOverflow)?,
+        y: intersection
+            .y0()
+            .checked_sub(tile.y0())
+            .ok_or(CodestreamError::SizeOverflow)?,
+        width: intersection.width(),
+        height: intersection.height(),
+    };
+    plan_synthesis_window(
+        tile.width(),
+        tile.height(),
+        retained_resolution,
+        output_region,
+        coding_style.transform,
+    )
+}
+
 const fn window_subband(subband: PacketSubbandKind) -> transform::WindowSubband {
     match subband {
         PacketSubbandKind::LowLow => transform::WindowSubband::LowLow,
@@ -20977,20 +21207,18 @@ where
         &codestream,
         enforce_total_sample_guard,
     )?;
-    let bounded_maxshift = parse_bounded_tile_maxshift(marker_input, &codestream)?;
-    if codestream
-        .siz
-        .components
-        .iter()
-        .any(|component| component.horizontal_separation != 1 || component.vertical_separation != 1)
-    {
+    let subsampled = codestream.siz.components.iter().any(|component| {
+        component.horizontal_separation != 1 || component.vertical_separation != 1
+    });
+    if subsampled && coding_style.transform != WaveletTransform::Reversible53 {
         return Err(unsupported(
             None,
-            Some(Marker::Siz),
-            UnsupportedConstruct::ComponentSampling,
-            "direct caller-owned decode requires unit component sampling; native subsampled grids are currently owned full-plane only",
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "selective subsampled component regions require reversible 5/3 coding",
         ));
     }
+    let bounded_maxshift = parse_bounded_tile_maxshift(marker_input, &codestream)?;
     if coding_style.multiple_component_transform {
         return Err(unsupported(
             None,
@@ -21032,6 +21260,25 @@ where
         }
     }
     let output_region = reduced_part1_region(&codestream.siz, region, request.discard_levels)?;
+    let component_outputs = component_indices
+        .iter()
+        .map(|component_index| {
+            selected_component_output_info(
+                &codestream.siz,
+                *component_index,
+                region,
+                request.discard_levels,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let native_component_geometry = component_outputs.iter().any(|output| {
+        output.horizontal_separation != 1
+            || output.vertical_separation != 1
+            || output.x_origin != output_region.x
+            || output.y_origin != output_region.y
+            || output.width != output_region.width
+            || output.height != output_region.height
+    });
     let component_sample_bytes = component_indices
         .iter()
         .map(|component_index| {
@@ -21050,12 +21297,36 @@ where
 
     let mut prepared_tiles = Vec::with_capacity(plan.tiles.len());
     for planned in plan.tiles {
-        let synthesis_window = planned_tile_synthesis_window(
-            &codestream.siz,
-            &planned,
-            coding_style,
-            request.discard_levels,
-        )?;
+        let component_windows = component_indices
+            .iter()
+            .map(|component_index| {
+                let component = codestream
+                    .siz
+                    .components
+                    .get(usize::from(*component_index))
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                planned_tile_component_synthesis_window(
+                    &codestream.siz,
+                    &planned,
+                    component,
+                    coding_style,
+                    request.discard_levels,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let synthesis_window = if native_component_geometry {
+            component_windows
+                .first()
+                .cloned()
+                .ok_or(CodestreamError::SizeOverflow)?
+        } else {
+            planned_tile_synthesis_window(
+                &codestream.siz,
+                &planned,
+                coding_style,
+                request.discard_levels,
+            )?
+        };
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
         let payload = payload_for_tile(&codestream, planned.tile)?;
@@ -21110,31 +21381,76 @@ where
             .saturating_add(skipped)
             .saturating_add(parsed_packets.excluded_body_bytes);
 
-        let mut selected_contribution_indices = Vec::new();
-        let mut bounded_selected_contribution_indices = Vec::new();
-        let mut full_selected_contribution_indices = Vec::new();
+        let mut component_plans = component_indices
+            .iter()
+            .copied()
+            .zip(component_windows)
+            .map(
+                |(component_index, synthesis_window)| PreparedPart1TileComponentDecode {
+                    component_index,
+                    synthesis_window,
+                    selected_contribution_indices: Vec::new(),
+                    bounded_selected_contribution_indices: Vec::new(),
+                    full_selected_contribution_indices: Vec::new(),
+                },
+            )
+            .collect::<Vec<_>>();
         let mut spatially_skipped_bytes = 0_u64;
         for (contribution_index, contribution) in parsed_packets.contributions.iter().enumerate() {
-            let selected_component = source_to_output
+            let output_position = source_to_output
                 .get(usize::from(contribution.component_index))
                 .copied()
-                .unwrap_or(u16::MAX)
-                != u16::MAX;
-            if !selected_component {
+                .unwrap_or(u16::MAX);
+            if output_position == u16::MAX {
                 continue;
             }
+            let component_plan = component_plans
+                .get_mut(usize::from(output_position))
+                .ok_or(CodestreamError::SizeOverflow)?;
             payload.preflight_contribution(contribution)?;
-            full_selected_contribution_indices.push(contribution_index);
-            if synthesis_window_dependency_selects_contribution(&synthesis_window, contribution)? {
-                bounded_selected_contribution_indices.push(contribution_index);
+            component_plan
+                .full_selected_contribution_indices
+                .push(contribution_index);
+            if synthesis_window_dependency_selects_contribution(
+                &component_plan.synthesis_window,
+                contribution,
+            )? {
+                component_plan
+                    .bounded_selected_contribution_indices
+                    .push(contribution_index);
             }
-            if !synthesis_window_selects_contribution(&synthesis_window, contribution)? {
+            if !synthesis_window_selects_contribution(
+                &component_plan.synthesis_window,
+                contribution,
+            )? {
                 spatially_skipped_bytes =
                     spatially_skipped_bytes.saturating_add(contribution.codeword_len as u64);
                 continue;
             }
-            selected_contribution_indices.push(contribution_index);
+            component_plan
+                .selected_contribution_indices
+                .push(contribution_index);
         }
+        let mut selected_contribution_indices = component_plans
+            .iter()
+            .flat_map(|component| component.selected_contribution_indices.iter().copied())
+            .collect::<Vec<_>>();
+        selected_contribution_indices.sort_unstable();
+        let mut bounded_selected_contribution_indices = component_plans
+            .iter()
+            .flat_map(|component| {
+                component
+                    .bounded_selected_contribution_indices
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        bounded_selected_contribution_indices.sort_unstable();
+        let mut full_selected_contribution_indices = component_plans
+            .iter()
+            .flat_map(|component| component.full_selected_contribution_indices.iter().copied())
+            .collect::<Vec<_>>();
+        full_selected_contribution_indices.sort_unstable();
         timings.prepared_code_blocks = timings
             .prepared_code_blocks
             .saturating_add(full_selected_contribution_indices.len() as u64);
@@ -21152,6 +21468,7 @@ where
             payload,
             contributions: parsed_packets.contributions,
             synthesis_window,
+            component_plans,
             selected_contribution_indices,
             bounded_selected_contribution_indices,
             full_selected_contribution_indices,
@@ -21167,6 +21484,8 @@ where
         source_to_output,
         region,
         output_region,
+        component_outputs,
+        native_component_geometry,
         discard_levels: request.discard_levels,
         component_sample_bytes,
         tiles: prepared_tiles,
@@ -21254,11 +21573,15 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
             "caller output plane count must match selected component count",
         ));
     }
-    let output_width =
-        usize::try_from(prepared.output_region.width).map_err(|_| CodestreamError::SizeOverflow)?;
-    let output_height = usize::try_from(prepared.output_region.height)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    for (output, bytes_per_sample) in output_planes.iter().zip(&prepared.component_sample_bytes) {
+    for ((output, bytes_per_sample), component_output) in output_planes
+        .iter()
+        .zip(&prepared.component_sample_bytes)
+        .zip(&prepared.component_outputs)
+    {
+        let output_width =
+            usize::try_from(component_output.width).map_err(|_| CodestreamError::SizeOverflow)?;
+        let output_height =
+            usize::try_from(component_output.height).map_err(|_| CodestreamError::SizeOverflow)?;
         let row_bytes = output_width
             .checked_mul(*bytes_per_sample)
             .ok_or(CodestreamError::SizeOverflow)?;
@@ -21303,6 +21626,114 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
     }
     timings.execution_axis = execution_axis;
     timings.execution_workers = execution_workers;
+    if prepared.native_component_geometry {
+        if prepared.tiles.len() != 1 {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let tile = &prepared.tiles[0];
+        for (output_position, output) in output_planes.iter_mut().enumerate() {
+            let (_, samples, component_timings) = decode_prepared_part1_tile_component(
+                prepared,
+                tile,
+                output_position,
+                workspace,
+                options,
+            )?;
+            timings.add_assign(&component_timings);
+            let geometry = prepared
+                .component_outputs
+                .get(output_position)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let bytes_per_sample = *prepared
+                .component_sample_bytes
+                .get(output_position)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let row_bytes = usize::try_from(geometry.width)
+                .map_err(|_| CodestreamError::SizeOverflow)?
+                .checked_mul(bytes_per_sample)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let rows =
+                usize::try_from(geometry.height).map_err(|_| CodestreamError::SizeOverflow)?;
+            let component_plan = tile
+                .component_plans
+                .get(output_position)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let packed_len = row_bytes
+                .checked_mul(rows)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let full_row_bytes = usize::try_from(component_plan.synthesis_window.width)
+                .map_err(|_| CodestreamError::SizeOverflow)?
+                .checked_mul(bytes_per_sample)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let full_len = full_row_bytes
+                .checked_mul(
+                    usize::try_from(component_plan.synthesis_window.height)
+                        .map_err(|_| CodestreamError::SizeOverflow)?,
+                )
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let source_origin = if samples.len() == packed_len {
+                0
+            } else if samples.len() == full_len {
+                usize::try_from(component_plan.synthesis_window.output_region.y)
+                    .map_err(|_| CodestreamError::SizeOverflow)?
+                    .checked_mul(full_row_bytes)
+                    .and_then(|offset| {
+                        usize::try_from(component_plan.synthesis_window.output_region.x)
+                            .ok()
+                            .and_then(|x| x.checked_mul(bytes_per_sample))
+                            .and_then(|x| offset.checked_add(x))
+                    })
+                    .ok_or(CodestreamError::SizeOverflow)?
+            } else {
+                return Err(CodestreamError::SizeOverflow);
+            };
+            let source_stride = if samples.len() == packed_len {
+                row_bytes
+            } else {
+                full_row_bytes
+            };
+            for row in 0..rows {
+                let source_start = source_origin
+                    .checked_add(
+                        row.checked_mul(source_stride)
+                            .ok_or(CodestreamError::SizeOverflow)?,
+                    )
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                let destination_start = row
+                    .checked_mul(output.stride_bytes)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                output.samples[destination_start..destination_start + row_bytes]
+                    .copy_from_slice(&samples[source_start..source_start + row_bytes]);
+            }
+        }
+        timings.output_samples = prepared
+            .component_outputs
+            .iter()
+            .fold(0_u64, |total, output| {
+                total.saturating_add(
+                    u64::from(output.width).saturating_mul(u64::from(output.height)),
+                )
+            });
+        timings.full_output_allocation_bytes = 0;
+        timings.synthesis_output_bytes_written = prepared
+            .component_outputs
+            .iter()
+            .zip(&prepared.component_sample_bytes)
+            .fold(0_u64, |total, (output, bytes)| {
+                total.saturating_add(
+                    u64::from(output.width)
+                        .saturating_mul(u64::from(output.height))
+                        .saturating_mul(*bytes as u64),
+                )
+            });
+        timings.caller_output_bytes = timings.synthesis_output_bytes_written;
+        #[cfg(feature = "std")]
+        {
+            timings.execute_ns = execute_started.elapsed().as_nanos();
+            timings.total_ns = timings.prepare_ns.saturating_add(timings.execute_ns);
+        }
+        return Ok(timings);
+    }
     #[cfg(feature = "parallel")]
     let phase_direct_component = matches!(
         execution_axis,
@@ -21454,19 +21885,24 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
                 || options.instrumentation == DecodeInstrumentation::DetailedProfile,
         )?;
     }
-    timings.output_samples = u64::from(prepared.output_region.width)
-        .saturating_mul(u64::from(prepared.output_region.height))
-        .saturating_mul(prepared.component_indices.len() as u64);
+    timings.output_samples = prepared
+        .component_outputs
+        .iter()
+        .fold(0_u64, |total, output| {
+            total.saturating_add(u64::from(output.width).saturating_mul(u64::from(output.height)))
+        });
     timings.full_output_allocation_bytes = 0;
-    timings.synthesis_output_bytes_written = u64::from(prepared.output_region.width)
-        .saturating_mul(u64::from(prepared.output_region.height))
-        .saturating_mul(
-            prepared
-                .component_sample_bytes
-                .iter()
-                .map(|bytes| *bytes as u64)
-                .sum::<u64>(),
-        );
+    timings.synthesis_output_bytes_written = prepared
+        .component_outputs
+        .iter()
+        .zip(&prepared.component_sample_bytes)
+        .fold(0_u64, |total, (output, bytes)| {
+            total.saturating_add(
+                u64::from(output.width)
+                    .saturating_mul(u64::from(output.height))
+                    .saturating_mul(*bytes as u64),
+            )
+        });
     timings.caller_output_bytes = timings.synthesis_output_bytes_written;
     #[cfg(feature = "std")]
     {
@@ -22592,7 +23028,6 @@ fn decode_prepared_part1_tile_components_parallel(
     })
 }
 
-#[cfg(feature = "parallel")]
 fn decode_prepared_part1_tile_component(
     prepared: &PreparedPart1ComponentDecode<'_>,
     tile: &PreparedPart1TileDecode<'_>,
@@ -22605,6 +23040,11 @@ fn decode_prepared_part1_tile_component(
         .get(output_position)
         .ok_or(CodestreamError::SizeOverflow)?;
     let selected_component = [component_index];
+    let component_plan = tile
+        .component_plans
+        .get(output_position)
+        .filter(|plan| plan.component_index == component_index)
+        .ok_or(CodestreamError::SizeOverflow)?;
     let mut timings = DecodeStageTimings {
         collect_tier1_work_counters: options.collect_tier1_work_counters,
         ..DecodeStageTimings::default()
@@ -22629,8 +23069,8 @@ fn decode_prepared_part1_tile_component(
             prepared.coding_style,
             tile.planned.tile,
             &tile.contributions,
-            Some(&tile.selected_contribution_indices),
-            Some(&tile.synthesis_window),
+            Some(&component_plan.selected_contribution_indices),
+            Some(&component_plan.synthesis_window),
             &selected_component,
             None,
             tile.maxshift,
@@ -22650,8 +23090,8 @@ fn decode_prepared_part1_tile_component(
             tile.planned.tile,
             tile.maxshift,
             &tile.contributions,
-            Some(&tile.selected_contribution_indices),
-            Some(&tile.synthesis_window),
+            Some(&component_plan.selected_contribution_indices),
+            Some(&component_plan.synthesis_window),
             &selected_component,
             None,
             detailed_profile,
@@ -45743,7 +46183,7 @@ fn decode_htj2k_contribution_parallel(
     if coefficients.len() < coefficient_count {
         coefficients.resize(coefficient_count, 0);
     }
-    let (decoded, dispatch_progress) = block.decode_code_block_input_into_with_progress(
+    let (decoded, _dispatch_progress) = block.decode_code_block_input_into_with_progress(
         code_block_input,
         &mut coefficients[..coefficient_count],
     )?;
