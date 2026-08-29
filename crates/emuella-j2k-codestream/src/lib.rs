@@ -15893,8 +15893,11 @@ pub fn is_supported_grayscale_u8_two_decomposition_multitile_encode_compatible_p
 /// This is intentionally stricter than the encoder-compatibility and general
 /// native-component predicates. It admits exactly the topology for which the
 /// public partial API exposes arbitrary regions and tile selection.
-pub fn is_supported_part1_native_multitile_partial_profile(codestream: &Codestream) -> bool {
-    validate_supported_part1_native_multitile_partial_profile(codestream).is_ok()
+pub fn is_supported_part1_native_multitile_partial_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> bool {
+    validate_supported_part1_native_multitile_partial_profile(input, codestream).is_ok()
 }
 
 /// True when parsed codestream metadata is inside the native RGB u16
@@ -16905,6 +16908,7 @@ fn validate_supported_native_grayscale_u8_two_decomp_multitile_profile(
 }
 
 fn validate_supported_part1_native_multitile_partial_profile(
+    input: &[u8],
     codestream: &Codestream,
 ) -> Result<CodingStyleMarker> {
     let coding_style =
@@ -16934,28 +16938,108 @@ fn validate_supported_part1_native_multitile_partial_profile(
             "native multi-tile partial decode requires one-layer LRCP coding with the encoder-compatible default code-block style",
         ));
     }
-    if codestream.component_coding_styles.is_empty()
-        && codestream.markers.iter().all(|segment| {
-            matches!(
-                segment.marker,
-                Marker::Soc
-                    | Marker::Siz
-                    | Marker::Cod
-                    | Marker::Qcd
-                    | Marker::Sot
-                    | Marker::Sod
-                    | Marker::Eoc
-            )
-        })
-    {
-        return Ok(coding_style);
+    if !codestream.component_coding_styles.is_empty() {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "native multi-tile partial decode rejects component coding-style overrides",
+        ));
     }
-    Err(unsupported(
-        None,
-        None,
-        UnsupportedConstruct::MarkerSegment,
-        "native multi-tile partial decode rejects coding, quantisation, progression, ROI, packet-relocation and tile-header overrides",
-    ))
+    let tile_count = codestream
+        .siz
+        .tile_count_x()?
+        .checked_mul(codestream.siz.tile_count_y()?)
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let expected_markers = 3_usize
+        .checked_add(
+            tile_count
+                .checked_mul(2)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .and_then(|count| count.checked_add(1))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if codestream.markers.len() != expected_markers
+        || input.get(..2) != Some(&[0xff, 0x4f])
+        || codestream
+            .markers
+            .first()
+            .is_none_or(|segment| segment.marker != Marker::Siz)
+        || codestream
+            .markers
+            .get(1)
+            .is_none_or(|segment| segment.marker != Marker::Cod)
+        || codestream
+            .markers
+            .get(2)
+            .is_none_or(|segment| segment.marker != Marker::Qcd)
+    {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "native multi-tile partial decode requires exactly one ordered main-header SOC, SIZ, COD and QCD sequence",
+        ));
+    }
+    if codestream.tiles.len() != tile_count {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::MarkerSegment,
+            "native multi-tile partial decode requires one ordered SOT/SOD pair for every SIZ tile",
+        ));
+    }
+    for (tile_position, tile) in codestream.tiles.iter().enumerate() {
+        let marker_position = 3_usize
+            .checked_add(
+                tile_position
+                    .checked_mul(2)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let tile_index = u16::try_from(tile_position).map_err(|_| CodestreamError::SizeOverflow)?;
+        if tile.tile_index != tile_index
+            || tile.tile_part_index != 0
+            || tile.tile_part_count != Some(1)
+            || codestream
+                .markers
+                .get(marker_position)
+                .is_none_or(|segment| segment.marker != Marker::Sot)
+            || codestream
+                .markers
+                .get(marker_position + 1)
+                .is_none_or(|segment| segment.marker != Marker::Sod)
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Sot),
+                UnsupportedConstruct::MarkerSegment,
+                "native multi-tile partial decode requires ordered single-part SOT/SOD tile structures without tile-header overrides",
+            ));
+        }
+    }
+    let eoc = codestream
+        .markers
+        .last()
+        .filter(|segment| segment.marker == Marker::Eoc)
+        .ok_or_else(|| {
+            unsupported(
+                None,
+                Some(Marker::Eoc),
+                UnsupportedConstruct::MarkerSegment,
+                "native multi-tile partial decode requires exactly one terminal EOC marker",
+            )
+        })?;
+    if eoc.offset.checked_add(2) != Some(input.len()) {
+        return Err(unsupported(
+            Some(eoc.offset),
+            Some(Marker::Eoc),
+            UnsupportedConstruct::MarkerSegment,
+            "native multi-tile partial decode requires EOC to terminate the raw codestream bytes",
+        ));
+    }
+    Ok(coding_style)
 }
 
 fn validate_supported_native_rgb_u8_two_decomp_multitile_profile(

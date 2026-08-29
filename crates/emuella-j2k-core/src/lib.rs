@@ -1746,8 +1746,16 @@ fn is_direct_selective_part1_component_profile(codestream_bytes: &[u8]) -> bool 
     })
 }
 
-fn is_native_multitile_partial_profile(codestream: &codestream::Codestream) -> bool {
-    codestream::is_supported_part1_native_multitile_partial_profile(codestream)
+fn is_native_multitile_partial_profile(
+    metadata: &Metadata,
+    codestream_bytes: &[u8],
+    codestream: &codestream::Codestream,
+) -> bool {
+    metadata.format == InputFormat::J2kCodestream
+        && codestream::is_supported_part1_native_multitile_partial_profile(
+            codestream_bytes,
+            codestream,
+        )
 }
 
 fn has_multiple_part1_tiles(codestream: &codestream::Codestream) -> bool {
@@ -1852,20 +1860,11 @@ fn direct_part1_region(
     codestream: &codestream::Codestream,
     options: &PartialDecodeOptions,
 ) -> Result<Region> {
-    if options.region.is_some() && options.tile.is_some() {
+    if options.tile.is_some() {
         return Err(unsupported(
             UnsupportedFeature::PartialDecodeMode,
-            "a native partial request must select either a region or a tile, not both",
+            "direct selective Part 1 tile decode requires an admitted high-level raw-codestream route",
         ));
-    }
-    if let Some(tile) = options.tile {
-        if !is_native_multitile_partial_profile(codestream) {
-            return Err(unsupported(
-                UnsupportedFeature::PartialDecodeMode,
-                "direct selective Part 1 tile decode requires the bounded native multi-tile profile",
-            ));
-        }
-        return direct_part1_tile_region(&codestream.siz, tile);
     }
     direct_part1_discard_levels(codestream, options)?;
     if options.max_quality_layers == Some(0) {
@@ -1959,10 +1958,12 @@ fn direct_part1_tile_region(siz: &codestream::SizMarker, tile: TileSelection) ->
 }
 
 fn validate_native_multitile_partial_options(
+    metadata: &Metadata,
+    codestream_bytes: &[u8],
     codestream: &codestream::Codestream,
     options: &PartialDecodeOptions,
 ) -> Result<(Region, Vec<u16>)> {
-    if !is_native_multitile_partial_profile(codestream) {
+    if !is_native_multitile_partial_profile(metadata, codestream_bytes, codestream) {
         return Err(unsupported(
             UnsupportedFeature::PartialDecodeMode,
             "input is outside the bounded native multi-tile partial profile",
@@ -1996,7 +1997,17 @@ fn validate_native_multitile_partial_options(
             "native multi-tile partial decode selects its sole component",
         ));
     }
-    Ok((direct_part1_region(codestream, options)?, component_indices))
+    let region = match (options.region, options.tile) {
+        (Some(_), Some(_)) => {
+            return Err(unsupported(
+                UnsupportedFeature::PartialDecodeMode,
+                "a native partial request must select either a region or a tile, not both",
+            ));
+        }
+        (None, Some(tile)) => direct_part1_tile_region(&codestream.siz, tile)?,
+        (_, None) => direct_part1_region(codestream, options)?,
+    };
+    Ok((region, component_indices))
 }
 
 fn direct_part1_discard_levels(
@@ -2696,7 +2707,7 @@ fn decode_owned_selective_part1_partial(
         return Ok(None);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-    if is_native_multitile_partial_profile(&parsed) {
+    if is_native_multitile_partial_profile(metadata, codestream_bytes, &parsed) {
         return decode_owned_prepared_part1(input, options).map(Some);
     }
     if has_multiple_part1_tiles(&parsed) && (options.region.is_some() || options.tile.is_some()) {
@@ -2911,13 +2922,17 @@ pub(crate) fn plan_partial_decode_work(
     let metadata = inspect(input, &InspectOptions::default())?;
     let codestream_bytes = primary_part1_codestream_bytes(input, &metadata)?;
     if let Some((codestream_bytes, parsed)) = codestream_bytes.and_then(|bytes| {
-        codestream::parse(bytes)
-            .ok()
-            .filter(is_native_multitile_partial_profile)
-            .map(|parsed| (bytes, parsed))
+        codestream::parse(bytes).ok().and_then(|parsed| {
+            is_native_multitile_partial_profile(&metadata, bytes, &parsed)
+                .then_some((bytes, parsed))
+        })
     }) {
-        let (region, selected_components) =
-            validate_native_multitile_partial_options(&parsed, options)?;
+        let (region, selected_components) = validate_native_multitile_partial_options(
+            &metadata,
+            codestream_bytes,
+            &parsed,
+            options,
+        )?;
         return Ok(PartialDecodeWorkPlan {
             request: options.clone(),
             selected_resolution: PlannedResolution {
@@ -2934,6 +2949,22 @@ pub(crate) fn plan_partial_decode_work(
             ),
             evidence: PartialDecodePlanEvidence::TrueCodestreamPartialCandidate,
         });
+    }
+    let unsupported_spatial_multitile = if options.region.is_some() || options.tile.is_some() {
+        codestream_bytes
+            .filter(|bytes| is_direct_selective_part1_component_profile(bytes))
+            .map(codestream::parse)
+            .transpose()
+            .map_err(map_codestream_error)?
+            .is_some_and(|parsed| has_multiple_part1_tiles(&parsed))
+    } else {
+        false
+    };
+    if unsupported_spatial_multitile {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "spatial multi-tile decode requires the bounded native two-decomposition grayscale profile",
+        ));
     }
     if let Some(plan) = plan_selective_part1_discard(input, &metadata, options)? {
         return Ok(plan);
@@ -3250,7 +3281,8 @@ pub fn prepare_part1_decode<'a>(
             "prepared selective component decode does not split MCT inputs",
         ));
     }
-    let native_multitile_partial = is_native_multitile_partial_profile(&parsed);
+    let native_multitile_partial =
+        is_native_multitile_partial_profile(&metadata, codestream_bytes, &parsed);
     if has_multiple_part1_tiles(&parsed)
         && (options.region.is_some() || options.tile.is_some())
         && !native_multitile_partial
@@ -3284,7 +3316,7 @@ pub fn prepare_part1_decode<'a>(
         ));
     }
     let (region, component_indices) = if native_multitile_partial {
-        validate_native_multitile_partial_options(&parsed, options)?
+        validate_native_multitile_partial_options(&metadata, codestream_bytes, &parsed, options)?
     } else if native_subsampled {
         (
             direct_part1_region(&parsed, options)?,
@@ -3529,7 +3561,7 @@ fn decode_partial_part1_components_into_direct(
         return Ok(false);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-    if is_native_multitile_partial_profile(&parsed) {
+    if is_native_multitile_partial_profile(&metadata, codestream_bytes, &parsed) {
         let prepared = prepare_part1_decode(input, options)?;
         execute_prepared_part1_decode_into_with_workspace(
             &prepared,
@@ -5824,9 +5856,13 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
     let metadata = inspect(input, &InspectOptions::default())?;
     if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, &metadata)? {
         let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-        if is_native_multitile_partial_profile(&parsed) {
-            let (region, component_indices) =
-                validate_native_multitile_partial_options(&parsed, options)?;
+        if is_native_multitile_partial_profile(&metadata, codestream_bytes, &parsed) {
+            let (region, component_indices) = validate_native_multitile_partial_options(
+                &metadata,
+                codestream_bytes,
+                &parsed,
+                options,
+            )?;
             return ImageInfo::new(
                 region.width,
                 region.height,
@@ -6837,6 +6873,35 @@ mod effective_coding_style_tests {
         (fixture, samples)
     }
 
+    fn jp2_wrapped_native_multitile_fixture(codestream: &[u8]) -> Vec<u8> {
+        let info = ImageInfo::new(
+            131,
+            99,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut output = Vec::new();
+        write_jp2_encode_output(
+            &info,
+            codestream,
+            &EncodeOptions {
+                format: OutputFormat::Jp2,
+                decomposition_levels: 2,
+                tile_size: Some(TileSize {
+                    width: 64,
+                    height: 48,
+                }),
+                ..EncodeOptions::default()
+            },
+            &mut output,
+        )
+        .unwrap();
+        output
+    }
+
     fn crop_u8(samples: &[u8], image_width: u32, region: Region) -> Vec<u8> {
         let image_width = usize::try_from(image_width).unwrap();
         let x = usize::try_from(region.x).unwrap();
@@ -7253,6 +7318,19 @@ mod effective_coding_style_tests {
         assert!(samples.iter().all(|sample| *sample == 0x9b));
     }
 
+    fn assert_native_partial_rejected_across_routes(
+        input: &[u8],
+        options: &PartialDecodeOptions,
+        target_info: &ImageInfo,
+    ) {
+        assert!(decode_partial(input, options).is_err());
+        assert!(decode_partial_info(input, options).is_err());
+        assert!(decode_partial_component_info(input, options).is_err());
+        assert!(prepare_part1_decode(input, options).is_err());
+        assert!(plan_partial_decode_work(input, options).is_err());
+        assert_partial_rejected_without_mutation(input, options, target_info);
+    }
+
     #[test]
     fn native_multitile_partial_preflight_is_atomic_and_profile_is_narrow() {
         let (fixture, _) = native_multitile_fixture();
@@ -7267,6 +7345,13 @@ mod effective_coding_style_tests {
             ..PartialDecodeOptions::default()
         };
         let target_info = decode_partial_info(&fixture, &options).unwrap();
+
+        let jp2 = jp2_wrapped_native_multitile_fixture(&fixture);
+        assert_eq!(
+            inspect(&jp2, &InspectOptions::default()).unwrap().format,
+            InputFormat::Jp2
+        );
+        assert_native_partial_rejected_across_routes(&jp2, &options, &target_info);
 
         for excluded in [
             PartialDecodeOptions {
@@ -7396,6 +7481,40 @@ mod effective_coding_style_tests {
         let cod = marker_offset(&fixture, codestream::Marker::Cod, 0);
         let mut nearby = Vec::new();
 
+        let lsiz = usize::from(u16::from_be_bytes(
+            fixture[siz + 2..siz + 4].try_into().unwrap(),
+        ));
+        let siz_segment = fixture[siz..siz + 2 + lsiz].to_vec();
+        let mut duplicate_main_siz = fixture.clone();
+        duplicate_main_siz.splice(cod..cod, siz_segment.iter().copied());
+        let parsed_duplicate_main_siz = codestream::parse(&duplicate_main_siz).unwrap();
+        assert!(
+            !codestream::is_supported_part1_native_multitile_partial_profile(
+                &duplicate_main_siz,
+                &parsed_duplicate_main_siz,
+            )
+        );
+        nearby.push(duplicate_main_siz);
+        let tile_header_siz = insert_first_tile_header_segment(fixture.clone(), &siz_segment);
+        let parsed_tile_header_siz = codestream::parse(&tile_header_siz).unwrap();
+        assert!(
+            !codestream::is_supported_part1_native_multitile_partial_profile(
+                &tile_header_siz,
+                &parsed_tile_header_siz,
+            )
+        );
+        nearby.push(tile_header_siz);
+        let mut bytes_after_eoc = fixture.clone();
+        bytes_after_eoc.extend_from_slice(&[0, 1]);
+        let parsed_bytes_after_eoc = codestream::parse(&bytes_after_eoc).unwrap();
+        assert!(
+            !codestream::is_supported_part1_native_multitile_partial_profile(
+                &bytes_after_eoc,
+                &parsed_bytes_after_eoc,
+            )
+        );
+        nearby.push(bytes_after_eoc);
+
         let mut nonzero_origin = fixture.clone();
         nonzero_origin[siz + 6..siz + 10].copy_from_slice(&132_u32.to_be_bytes());
         nonzero_origin[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
@@ -7474,7 +7593,14 @@ mod effective_coding_style_tests {
         );
 
         for candidate in nearby {
-            assert_partial_rejected_without_mutation(&candidate, &options, &target_info);
+            if let Ok(parsed) = codestream::parse(&candidate) {
+                assert!(
+                    !codestream::is_supported_part1_native_multitile_partial_profile(
+                        &candidate, &parsed,
+                    )
+                );
+            }
+            assert_native_partial_rejected_across_routes(&candidate, &options, &target_info);
         }
     }
 
