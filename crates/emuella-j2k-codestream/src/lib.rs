@@ -15887,6 +15887,16 @@ pub fn is_supported_grayscale_u8_two_decomposition_multitile_encode_compatible_p
     validate_supported_native_grayscale_u8_two_decomp_multitile_profile(codestream).is_ok()
 }
 
+/// True when parsed metadata is inside the narrow public spatial-decode
+/// profile for native unsigned 8-bit grayscale multi-tile codestreams.
+///
+/// This is intentionally stricter than the encoder-compatibility and general
+/// native-component predicates. It admits exactly the topology for which the
+/// public partial API exposes arbitrary regions and tile selection.
+pub fn is_supported_part1_native_multitile_partial_profile(codestream: &Codestream) -> bool {
+    validate_supported_part1_native_multitile_partial_profile(codestream).is_ok()
+}
+
 /// True when parsed codestream metadata is inside the native RGB u16
 /// two-decomposition multi-tile profile emitted by the repo-owned encoder.
 pub fn is_supported_rgb_u16_two_decomposition_multitile_encode_compatible_profile(
@@ -16892,6 +16902,60 @@ fn validate_supported_native_grayscale_u8_two_decomp_multitile_profile(
     codestream: &Codestream,
 ) -> Result<CodingStyleMarker> {
     validate_supported_native_two_decomp_multitile_profile(codestream, 8, 1, false, "grayscale")
+}
+
+fn validate_supported_part1_native_multitile_partial_profile(
+    codestream: &Codestream,
+) -> Result<CodingStyleMarker> {
+    let coding_style =
+        validate_supported_native_grayscale_u8_two_decomp_multitile_profile(codestream)?;
+    if codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::MultipleTiles,
+            "native multi-tile partial decode requires zero image and tile origins",
+        ));
+    }
+    if coding_style.progression_order != ProgressionOrder::Lrcp
+        || coding_style.layers != 1
+        || coding_style.code_block_width_exponent != 6
+        || coding_style.code_block_height_exponent != 6
+        || coding_style.code_block_style != 0
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "native multi-tile partial decode requires one-layer LRCP coding with the encoder-compatible default code-block style",
+        ));
+    }
+    if codestream.component_coding_styles.is_empty()
+        && codestream.markers.iter().all(|segment| {
+            matches!(
+                segment.marker,
+                Marker::Soc
+                    | Marker::Siz
+                    | Marker::Cod
+                    | Marker::Qcd
+                    | Marker::Sot
+                    | Marker::Sod
+                    | Marker::Eoc
+            )
+        })
+    {
+        return Ok(coding_style);
+    }
+    Err(unsupported(
+        None,
+        None,
+        UnsupportedConstruct::MarkerSegment,
+        "native multi-tile partial decode rejects coding, quantisation, progression, ROI, packet-relocation and tile-header overrides",
+    ))
 }
 
 fn validate_supported_native_rgb_u8_two_decomp_multitile_profile(
