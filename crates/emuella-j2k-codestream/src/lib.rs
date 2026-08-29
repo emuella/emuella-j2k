@@ -20863,6 +20863,7 @@ fn plan_synthesis_window(
 }
 
 fn planned_tile_synthesis_window(
+    siz: &SizMarker,
     planned: &PlannedTileRegion,
     coding_style: CodingStyleMarker,
     discard_levels: u8,
@@ -20871,33 +20872,32 @@ fn planned_tile_synthesis_window(
         .decomposition_levels
         .checked_sub(discard_levels)
         .ok_or(CodestreamError::SizeOverflow)?;
-    let (width, height) = resolution_dimensions(
-        planned.tile.width,
-        planned.tile.height,
-        coding_style.decomposition_levels,
-        retained_resolution,
+    let reduced_tile = reduced_part1_region(
+        siz,
+        TileRegionRequest {
+            x: planned.tile.x,
+            y: planned.tile.y,
+            width: planned.tile.width,
+            height: planned.tile.height,
+        },
+        discard_levels,
     )?;
-    let reduced_intersection = reduced_tile_region(planned.intersection, discard_levels)?;
-    let scale = 1_u32
-        .checked_shl(u32::from(discard_levels))
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let tile_x = planned.tile.x / scale;
-    let tile_y = planned.tile.y / scale;
+    let reduced_intersection = reduced_part1_region(siz, planned.intersection, discard_levels)?;
     let output_region = AxisAlignedRegion {
         x: reduced_intersection
             .x
-            .checked_sub(tile_x)
+            .checked_sub(reduced_tile.x)
             .ok_or(CodestreamError::SizeOverflow)?,
         y: reduced_intersection
             .y
-            .checked_sub(tile_y)
+            .checked_sub(reduced_tile.y)
             .ok_or(CodestreamError::SizeOverflow)?,
         width: reduced_intersection.width,
         height: reduced_intersection.height,
     };
     plan_synthesis_window(
-        width,
-        height,
+        reduced_tile.width,
+        reduced_tile.height,
         retained_resolution,
         output_region,
         coding_style.transform,
@@ -21031,7 +21031,7 @@ where
             ));
         }
     }
-    let output_region = reduced_tile_region(region, request.discard_levels)?;
+    let output_region = reduced_part1_region(&codestream.siz, region, request.discard_levels)?;
     let component_sample_bytes = component_indices
         .iter()
         .map(|component_index| {
@@ -21050,8 +21050,12 @@ where
 
     let mut prepared_tiles = Vec::with_capacity(plan.tiles.len());
     for planned in plan.tiles {
-        let synthesis_window =
-            planned_tile_synthesis_window(&planned, coding_style, request.discard_levels)?;
+        let synthesis_window = planned_tile_synthesis_window(
+            &codestream.siz,
+            &planned,
+            coding_style,
+            request.discard_levels,
+        )?;
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
         let payload = payload_for_tile(&codestream, planned.tile)?;
@@ -21488,8 +21492,11 @@ fn copy_decoded_prepared_part1_tile(
         .zip(&prepared.component_sample_bytes)
     {
         if tile.synthesis_window.use_windowed_synthesis {
-            let intersection =
-                reduced_tile_region(tile.planned.intersection, prepared.discard_levels)?;
+            let intersection = reduced_part1_region(
+                &prepared.codestream.siz,
+                tile.planned.intersection,
+                prepared.discard_levels,
+            )?;
             let destination_x = intersection
                 .x
                 .checked_sub(prepared.output_region.x)
@@ -21550,27 +21557,31 @@ fn copy_decoded_prepared_part1_tile(
                 tile_samples,
             )?;
         } else {
-            let (tile_width, tile_height) = resolution_dimensions(
-                tile.planned.tile.width,
-                tile.planned.tile.height,
+            let reduced_tile = reduced_part1_region(
+                &prepared.codestream.siz,
+                TileRegionRequest {
+                    x: tile.planned.tile.x,
+                    y: tile.planned.tile.y,
+                    width: tile.planned.tile.width,
+                    height: tile.planned.tile.height,
+                },
                 prepared.discard_levels,
-                0,
             )?;
-            let reduced_intersection =
-                reduced_tile_region(tile.planned.intersection, prepared.discard_levels)?;
-            let scale = 1_u32
-                .checked_shl(u32::from(prepared.discard_levels))
-                .ok_or(CodestreamError::SizeOverflow)?;
+            let reduced_intersection = reduced_part1_region(
+                &prepared.codestream.siz,
+                tile.planned.intersection,
+                prepared.discard_levels,
+            )?;
             copy_tile_intersection_to_region(
                 output.samples,
                 output.stride_bytes,
                 *bytes_per_sample,
                 prepared.output_region,
                 TileRect {
-                    x: tile.planned.tile.x / scale,
-                    y: tile.planned.tile.y / scale,
-                    width: tile_width,
-                    height: tile_height,
+                    x: reduced_tile.x,
+                    y: reduced_tile.y,
+                    width: reduced_tile.width,
+                    height: reduced_tile.height,
                     ..tile.planned.tile
                 },
                 reduced_intersection,
@@ -24608,27 +24619,20 @@ pub fn decode_part1_component_request_into_with_workspace(
     execute_prepared_part1_component_decode_into_with_workspace(&prepared, output_planes, workspace)
 }
 
-fn reduced_tile_region(region: TileRegionRequest, discard_levels: u8) -> Result<TileRegionRequest> {
-    let scale = 1_u32
-        .checked_shl(u32::from(discard_levels))
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let end_x = region
-        .x
-        .checked_add(region.width)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let end_y = region
-        .y
-        .checked_add(region.height)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let x = region.x / scale;
-    let y = region.y / scale;
-    let end_x = ceil_div(end_x, scale)?;
-    let end_y = ceil_div(end_y, scale)?;
+fn reduced_part1_region(
+    siz: &SizMarker,
+    region: TileRegionRequest,
+    discard_levels: u8,
+) -> Result<TileRegionRequest> {
+    let reduced = siz
+        .absolute_reference_region(region)?
+        .to_component_grid(1, 1)?
+        .reduce(discard_levels)?;
     Ok(TileRegionRequest {
-        x,
-        y,
-        width: end_x.checked_sub(x).ok_or(CodestreamError::SizeOverflow)?,
-        height: end_y.checked_sub(y).ok_or(CodestreamError::SizeOverflow)?,
+        x: reduced.x0(),
+        y: reduced.y0(),
+        width: reduced.width(),
+        height: reduced.height(),
     })
 }
 

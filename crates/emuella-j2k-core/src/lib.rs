@@ -6156,6 +6156,132 @@ mod effective_coding_style_tests {
     }
 
     #[test]
+    fn odd_origin_reduced_region_matches_info_owned_caller_and_stitch_paths() {
+        let samples = (0..64 * 64)
+            .map(|sample| ((sample * 29 + sample / 64 * 7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let codestream =
+            codestream::encode_grayscale_u8_one_decomp(codestream::GrayscaleU8Encode {
+                width: 64,
+                height: 64,
+                samples: &samples,
+                stride_bytes: 64,
+            })
+            .unwrap();
+        let options = PartialDecodeOptions {
+            region: Some(Region {
+                x: 1,
+                y: 3,
+                width: 15,
+                height: 13,
+            }),
+            resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+            ..PartialDecodeOptions::default()
+        };
+
+        let info = decode_partial_info(&codestream, &options).unwrap();
+        assert_eq!((info.width, info.height), (7, 6));
+        let owned = decode_partial(&codestream, &options).unwrap();
+        assert_eq!(owned.info, info);
+        assert_eq!(
+            owned.component_info[0],
+            ComponentInfo {
+                source_component: Some(0),
+                width: 7,
+                height: 6,
+                x_origin: 1,
+                y_origin: 2,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+                sample_format: SampleFormat::U8,
+            }
+        );
+        let ImageData::Planes(owned_planes) = &owned.data else {
+            panic!("planar partial decode returned interleaved data");
+        };
+        let owned_plane = &owned_planes[0];
+
+        let mut caller_samples = vec![0xa5; usize::try_from(info.width * info.height).unwrap()];
+        let mut caller_planes = [PlaneMut::new(
+            &mut caller_samples,
+            info.width,
+            info.height,
+            usize::try_from(info.width).unwrap(),
+            info.sample_format,
+        )
+        .unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut caller_planes,
+        };
+        decode_partial_into(&codestream, &mut target, &options).unwrap();
+        assert_eq!(&caller_samples, owned_plane);
+
+        let full = decode_partial(
+            &codestream,
+            &PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        let ImageData::Planes(full_planes) = full.data else {
+            panic!("planar full reduced decode returned interleaved data");
+        };
+        let expected_from_full = (2_usize..8)
+            .flat_map(|y| {
+                let row = &full_planes[0][y * 32..(y + 1) * 32];
+                row[1..8].iter().copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(owned_plane, &expected_from_full);
+
+        let left = decode_partial(
+            &codestream,
+            &PartialDecodeOptions {
+                region: Some(Region {
+                    x: 1,
+                    y: 3,
+                    width: 7,
+                    height: 13,
+                }),
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        let right = decode_partial(
+            &codestream,
+            &PartialDecodeOptions {
+                region: Some(Region {
+                    x: 8,
+                    y: 3,
+                    width: 8,
+                    height: 13,
+                }),
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((left.info.width, right.info.width), (3, 4));
+        let (ImageData::Planes(left_planes), ImageData::Planes(right_planes)) =
+            (left.data, right.data)
+        else {
+            panic!("partitioned planar decode returned interleaved data");
+        };
+        let stitched = (0..6_usize)
+            .flat_map(|row| {
+                left_planes[0][row * 3..(row + 1) * 3]
+                    .iter()
+                    .chain(&right_planes[0][row * 4..(row + 1) * 4])
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stitched, *owned_plane);
+    }
+
+    #[test]
     fn inspect_classifies_structural_coc_precincts_before_decode_admission() {
         let samples = (0..16).map(|sample| sample as u8).collect::<Vec<_>>();
         let codestream =
