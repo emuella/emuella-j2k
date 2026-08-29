@@ -1741,7 +1741,31 @@ fn part1_component_info(
     selection: &ComponentSelection,
     region: Option<Region>,
 ) -> Result<Vec<ComponentInfo>> {
+    part1_component_info_at_resolution(codestream_bytes, selection, region, 0)
+}
+
+fn part1_component_info_at_resolution(
+    codestream_bytes: &[u8],
+    selection: &ComponentSelection,
+    region: Option<Region>,
+    discard_levels: u8,
+) -> Result<Vec<ComponentInfo>> {
     let codestream = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    let image = codestream
+        .siz
+        .image_reference_rect()
+        .map_err(map_codestream_error)?;
+    let reference_region = match region {
+        Some(region) => codestream::geometry::ReferenceGridRect::from_image_relative(
+            image,
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+        )
+        .map_err(map_codestream_error)?,
+        None => image,
+    };
     let component_indices = match selection {
         ComponentSelection::All => (0..codestream.siz.component_count()).collect::<Vec<_>>(),
         ComponentSelection::Indices(indices) => indices.clone(),
@@ -1754,48 +1778,35 @@ fn part1_component_info(
                 .components
                 .get(usize::from(component_index))
                 .ok_or_else(sample_size_overflow)?;
-            let x_separation = u32::from(component.horizontal_separation);
-            let y_separation = u32::from(component.vertical_separation);
-            let (reference_x0, reference_y0, reference_x1, reference_y1) = match region {
-                Some(region) => {
-                    let x0 = codestream
-                        .siz
-                        .image_origin_x
-                        .checked_add(region.x)
-                        .ok_or_else(sample_size_overflow)?;
-                    let y0 = codestream
-                        .siz
-                        .image_origin_y
-                        .checked_add(region.y)
-                        .ok_or_else(sample_size_overflow)?;
-                    let x1 = x0
-                        .checked_add(region.width)
-                        .ok_or_else(sample_size_overflow)?;
-                    let y1 = y0
-                        .checked_add(region.height)
-                        .ok_or_else(sample_size_overflow)?;
-                    (x0, y0, x1, y1)
-                }
-                None => (
-                    codestream.siz.image_origin_x,
-                    codestream.siz.image_origin_y,
-                    codestream.siz.reference_grid_width,
-                    codestream.siz.reference_grid_height,
-                ),
+            let component_region = reference_region
+                .to_component_grid(
+                    component.horizontal_separation,
+                    component.vertical_separation,
+                )
+                .map_err(map_codestream_error)?;
+            let (x_origin, y_origin, width, height) = if discard_levels == 0 {
+                (
+                    component_region.x0(),
+                    component_region.y0(),
+                    component_region.width(),
+                    component_region.height(),
+                )
+            } else {
+                let reduced = component_region
+                    .reduce(discard_levels)
+                    .map_err(map_codestream_error)?;
+                (
+                    reduced.x0(),
+                    reduced.y0(),
+                    reduced.width(),
+                    reduced.height(),
+                )
             };
-            let x_origin = ceil_div_u32(reference_x0, x_separation)?;
-            let y_origin = ceil_div_u32(reference_y0, y_separation)?;
-            let x_end = ceil_div_u32(reference_x1, x_separation)?;
-            let y_end = ceil_div_u32(reference_y1, y_separation)?;
             let byte_order = (component.bits_per_sample > 8).then_some(SampleEndian::Little);
             Ok(ComponentInfo {
                 source_component: Some(component_index),
-                width: x_end
-                    .checked_sub(x_origin)
-                    .ok_or_else(sample_size_overflow)?,
-                height: y_end
-                    .checked_sub(y_origin)
-                    .ok_or_else(sample_size_overflow)?,
+                width,
+                height,
                 x_origin,
                 y_origin,
                 horizontal_separation: component.horizontal_separation,
@@ -2046,13 +2057,8 @@ fn decode_owned_part1_p0_08_heterogeneous_reversible(
     let decoded =
         codestream::decode_part1_p0_08_heterogeneous_reversible_component_zero(codestream_bytes, 5)
             .map_err(map_codestream_error)?;
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
-    for component in &mut component_info {
-        component.width = 17;
-        component.height = 96;
-        component.x_origin = 0;
-        component.y_origin = 0;
-    }
+    let component_info =
+        part1_component_info_at_resolution(codestream_bytes, &options.components, None, 5)?;
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
         requested_components: options.components.clone(),
@@ -2099,13 +2105,8 @@ fn decode_owned_part1_p0_07_progression_change(
     let decoded =
         codestream::decode_part1_p0_07_progression_change_component_zero(codestream_bytes)
             .map_err(map_codestream_error)?;
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
-    for component in &mut component_info {
-        component.width = 128;
-        component.height = 128;
-        component.x_origin = 0;
-        component.y_origin = 0;
-    }
+    let component_info =
+        part1_component_info(codestream_bytes, &options.components, options.region)?;
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
         requested_components: options.components.clone(),
@@ -2149,27 +2150,12 @@ fn decode_owned_part1_reduced_reversible_mct(
         discard_levels,
     )
     .map_err(map_codestream_error)?;
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
-    let image = metadata.image.as_ref().ok_or_else(|| {
-        unsupported(
-            UnsupportedFeature::PartialDecodeMode,
-            "Profile-0 reduced MCT decode requires image dimensions",
-        )
-    })?;
-    let source_region = options.region.unwrap_or(Region {
-        x: 0,
-        y: 0,
-        width: image.width,
-        height: image.height,
-    });
-    let reduced_region =
-        reduced_roi_region(source_region, discard_levels, image.width, image.height)?;
-    for component in &mut component_info {
-        component.width = reduced_region.width;
-        component.height = reduced_region.height;
-        component.x_origin = reduced_region.x;
-        component.y_origin = reduced_region.y;
-    }
+    let component_info = part1_component_info_at_resolution(
+        codestream_bytes,
+        &options.components,
+        options.region,
+        discard_levels,
+    )?;
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
         requested_components: options.components.clone(),
@@ -2212,30 +2198,12 @@ fn decode_owned_part1_reduced_irreversible_mct(
         discard_levels,
     )
     .map_err(map_codestream_error)?;
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
-    let image = metadata.image.as_ref().ok_or_else(|| {
-        unsupported(
-            UnsupportedFeature::PartialDecodeMode,
-            "Profile-0 reduced irreversible MCT decode requires image dimensions",
-        )
-    })?;
-    let reduced_region = reduced_roi_region(
-        Region {
-            x: 0,
-            y: 0,
-            width: image.width,
-            height: image.height,
-        },
+    let component_info = part1_component_info_at_resolution(
+        codestream_bytes,
+        &options.components,
+        None,
         discard_levels,
-        image.width,
-        image.height,
     )?;
-    for component in &mut component_info {
-        component.width = reduced_region.width;
-        component.height = reduced_region.height;
-        component.x_origin = reduced_region.x;
-        component.y_origin = reduced_region.y;
-    }
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
         requested_components: options.components.clone(),
@@ -2278,30 +2246,12 @@ fn decode_owned_part1_reduced_heterogeneous_irreversible(
         discard_levels,
     )
     .map_err(map_codestream_error)?;
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
-    let image = metadata.image.as_ref().ok_or_else(|| {
-        unsupported(
-            UnsupportedFeature::PartialDecodeMode,
-            "Profile-0 reduced heterogeneous component decode requires image dimensions",
-        )
-    })?;
-    let reduced_region = reduced_roi_region(
-        Region {
-            x: 0,
-            y: 0,
-            width: image.width,
-            height: image.height,
-        },
+    let component_info = part1_component_info_at_resolution(
+        codestream_bytes,
+        &options.components,
+        None,
         discard_levels,
-        image.width,
-        image.height,
     )?;
-    for component in &mut component_info {
-        component.width = reduced_region.width;
-        component.height = reduced_region.height;
-        component.x_origin = reduced_region.x;
-        component.y_origin = reduced_region.y;
-    }
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
         requested_components: options.components.clone(),
@@ -2344,30 +2294,12 @@ fn decode_owned_part1_reduced_roi_irreversible(
         discard_levels,
     )
     .map_err(map_codestream_error)?;
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
-    let image = metadata.image.as_ref().ok_or_else(|| {
-        unsupported(
-            UnsupportedFeature::PartialDecodeMode,
-            "Profile-0 reduced ROI component decode requires image dimensions",
-        )
-    })?;
-    let reduced_region = reduced_roi_region(
-        Region {
-            x: 0,
-            y: 0,
-            width: image.width,
-            height: image.height,
-        },
+    let component_info = part1_component_info_at_resolution(
+        codestream_bytes,
+        &options.components,
+        None,
         discard_levels,
-        image.width,
-        image.height,
     )?;
-    for component in &mut component_info {
-        component.width = reduced_region.width;
-        component.height = reduced_region.height;
-        component.x_origin = reduced_region.x;
-        component.y_origin = reduced_region.y;
-    }
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
         requested_components: options.components.clone(),
@@ -2445,7 +2377,6 @@ fn decode_owned_selective_part1_discard(
             return Ok(None);
         }
     }
-    let mut component_info = part1_component_info(codestream_bytes, &options.components, None)?;
     let image = metadata.image.as_ref().ok_or_else(|| {
         unsupported(
             UnsupportedFeature::PartialDecodeMode,
@@ -2458,20 +2389,24 @@ fn decode_owned_selective_part1_discard(
         width: image.width,
         height: image.height,
     });
-    let reduced_region = reduced_roi_region(
-        source_region,
-        match options.resolution {
-            ResolutionLevel::Reduced { discard_levels } => discard_levels,
-            ResolutionLevel::Full => 0,
-        },
-        image.width,
-        image.height,
+    let discard_levels = match options.resolution {
+        ResolutionLevel::Reduced { discard_levels } => discard_levels,
+        ResolutionLevel::Full => 0,
+    };
+    let component_info = part1_component_info_at_resolution(
+        codestream_bytes,
+        &options.components,
+        Some(source_region),
+        discard_levels,
     )?;
-    for component in &mut component_info {
-        component.width = info.width;
-        component.height = info.height;
-        component.x_origin = reduced_region.x;
-        component.y_origin = reduced_region.y;
+    if component_info
+        .iter()
+        .any(|component| component.width != info.width || component.height != info.height)
+    {
+        return Err(J2kError::InternalInvariant {
+            message: "planned native component geometry did not match decoded plane dimensions"
+                .into(),
+        });
     }
     Ok(Some(Image {
         info,
@@ -2671,40 +2606,26 @@ fn plan_selective_part1_discard(
     }))
 }
 
-fn reduced_roi_region(
+fn reduced_part1_region(
+    siz: &codestream::SizMarker,
     region: Region,
     discard_levels: u8,
-    image_width: u32,
-    image_height: u32,
 ) -> Result<Region> {
-    let scale = 1_u32
-        .checked_shl(u32::from(discard_levels))
-        .ok_or_else(sample_size_overflow)?;
-    let x1 = region
-        .x
-        .checked_add(region.width)
-        .ok_or_else(sample_size_overflow)?;
-    let y1 = region
-        .y
-        .checked_add(region.height)
-        .ok_or_else(sample_size_overflow)?;
-    if x1 > image_width || y1 > image_height {
-        return Err(J2kError::InvalidParameter {
-            parameter: "region",
-            message: "partial decode region must fit inside the image bounds",
-        });
-    }
-
-    let rx0 = region.x / scale;
-    let ry0 = region.y / scale;
-    let rx1 = ceil_div_u32(x1, scale)?;
-    let ry1 = ceil_div_u32(y1, scale)?;
-
+    let reduced = siz
+        .absolute_reference_region(codestream::TileRegionRequest {
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
+        })
+        .and_then(|region| region.to_component_grid(1, 1))
+        .and_then(|region| region.reduce(discard_levels))
+        .map_err(map_codestream_error)?;
     Ok(Region {
-        x: rx0,
-        y: ry0,
-        width: rx1.checked_sub(rx0).ok_or_else(sample_size_overflow)?,
-        height: ry1.checked_sub(ry0).ok_or_else(sample_size_overflow)?,
+        x: reduced.x0(),
+        y: reduced.y0(),
+        width: reduced.width(),
+        height: reduced.height(),
     })
 }
 
@@ -5144,10 +5065,12 @@ fn apply_partial_selection(
             component.height = region.height;
             component.x_origin = component
                 .x_origin
-                .saturating_add(region.x / u32::from(component.horizontal_separation));
+                .checked_add(region.x / u32::from(component.horizontal_separation))
+                .ok_or_else(sample_size_overflow)?;
             component.y_origin = component
                 .y_origin
-                .saturating_add(region.y / u32::from(component.vertical_separation));
+                .checked_add(region.y / u32::from(component.vertical_separation))
+                .ok_or_else(sample_size_overflow)?;
             Ok(component)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -5545,8 +5468,7 @@ fn selective_part1_discard_target_info(
         return Ok(None);
     }
     let component_indices = partial_component_indices(metadata, &options.components)?;
-    let reduced_region =
-        reduced_roi_region(full_region, discard_levels, image.width, image.height)?;
+    let reduced_region = reduced_part1_region(&parsed.siz, full_region, discard_levels)?;
     ImageInfo::new(
         reduced_region.width,
         reduced_region.height,
@@ -5564,10 +5486,7 @@ fn ceil_div_u32(value: u32, divisor: u32) -> Result<u32> {
             message: "division by zero while deriving tile grid".into(),
         });
     }
-    value
-        .checked_add(divisor - 1)
-        .map(|value| value / divisor)
-        .ok_or_else(sample_size_overflow)
+    Ok(value.div_ceil(divisor))
 }
 
 fn split_interleaved_to_planes(
@@ -6097,6 +6016,86 @@ mod effective_coding_style_tests {
         coc.extend_from_slice(parameters);
         codestream.splice(sot..sot, coc);
         codestream
+    }
+
+    #[test]
+    fn component_info_retains_checked_absolute_native_geometry() {
+        let samples = (0_u8..16).collect::<Vec<_>>();
+        let mut fixture =
+            codestream::encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples, &samples])
+                .unwrap();
+        let siz = fixture
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x51])
+            .unwrap();
+        fixture[siz + 6..siz + 10].copy_from_slice(&20_u32.to_be_bytes());
+        fixture[siz + 10..siz + 14].copy_from_slice(&18_u32.to_be_bytes());
+        fixture[siz + 14..siz + 18].copy_from_slice(&3_u32.to_be_bytes());
+        fixture[siz + 18..siz + 22].copy_from_slice(&5_u32.to_be_bytes());
+        fixture[siz + 22..siz + 26].copy_from_slice(&20_u32.to_be_bytes());
+        fixture[siz + 26..siz + 30].copy_from_slice(&18_u32.to_be_bytes());
+        fixture[siz + 30..siz + 34].copy_from_slice(&1_u32.to_be_bytes());
+        fixture[siz + 34..siz + 38].copy_from_slice(&2_u32.to_be_bytes());
+        fixture[siz + 43] = 0x80 | 10;
+        fixture[siz + 44] = 2;
+        fixture[siz + 45] = 3;
+
+        let info = part1_component_info_at_resolution(
+            &fixture,
+            &ComponentSelection::All,
+            Some(Region {
+                x: 2,
+                y: 1,
+                width: 9,
+                height: 8,
+            }),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(
+            info[0],
+            ComponentInfo {
+                source_component: Some(0),
+                width: 4,
+                height: 4,
+                x_origin: 3,
+                y_origin: 3,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+                sample_format: SampleFormat::U8,
+            }
+        );
+        assert_eq!(
+            info[1],
+            ComponentInfo {
+                source_component: Some(1),
+                width: 2,
+                height: 2,
+                x_origin: 2,
+                y_origin: 1,
+                horizontal_separation: 2,
+                vertical_separation: 3,
+                sample_format: SampleFormat::with_byte_order(11, true, Some(SampleEndian::Little),)
+                    .unwrap(),
+            }
+        );
+
+        let parsed = codestream::parse(&fixture).unwrap();
+        let plan = codestream::plan_tile_region_decode(
+            &parsed,
+            codestream::TileRegionRequest {
+                x: 2,
+                y: 1,
+                width: 9,
+                height: 8,
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.tiles.len(), 1);
+        assert_eq!(plan.tiles[0].tile.x, 0);
+        assert_eq!(plan.tiles[0].tile.y, 0);
+        assert_eq!(plan.tiles[0].intersection, plan.request);
     }
 
     #[test]
