@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_REFERENCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_COMPARISON_SAMPLES: u64 = 100_000_000;
+const MAX_TIFF_TRAILING_ZERO_PADDING: usize = 4;
 const RENDERED_LIMIT_EXCEEDED: &str = "rendered samples exceed the comparison limit";
 
 fn usage() -> &'static str {
@@ -1240,8 +1241,16 @@ fn parse_tiff_rgb_u8_contiguous(bytes: &[u8]) -> Result<TiffRgbImage, String> {
             samples.extend_from_slice(&strip);
         }
     }
-    if ranges.iter().map(|(_, end)| *end).max() != Some(bytes.len()) {
-        return Err("TIFF contains an unreferenced trailing range".to_owned());
+    let referenced_end = ranges
+        .iter()
+        .map(|(_, end)| *end)
+        .max()
+        .ok_or_else(|| "TIFF contains no referenced ranges".to_owned())?;
+    let trailing = bytes
+        .get(referenced_end..)
+        .ok_or_else(|| "TIFF referenced range exceeds the file".to_owned())?;
+    if trailing.len() > MAX_TIFF_TRAILING_ZERO_PADDING || trailing.iter().any(|&value| value != 0) {
+        return Err("TIFF contains unsupported unreferenced trailing data".to_owned());
     }
     if samples.len()
         != usize::try_from(sample_count)
@@ -2282,9 +2291,22 @@ mod tests {
         write_tiff_u32(&mut overflow, height_entry + 8, u32::MAX, endian);
         assert!(parse_tiff_rgb_u8_contiguous(&overflow).is_err());
 
-        let mut trailing = valid;
-        trailing.push(0);
-        assert!(parse_tiff_rgb_u8_contiguous(&trailing).is_err());
+        for padding in 1..=MAX_TIFF_TRAILING_ZERO_PADDING {
+            let mut padded = valid.clone();
+            padded.extend(std::iter::repeat_n(0, padding));
+            assert_eq!(
+                parse_tiff_rgb_u8_contiguous(&padded)
+                    .expect("bounded zero terminal padding is inert")
+                    .samples,
+                samples
+            );
+        }
+        let mut non_zero_trailing = valid.clone();
+        non_zero_trailing.push(1);
+        assert!(parse_tiff_rgb_u8_contiguous(&non_zero_trailing).is_err());
+        let mut oversized_trailing = valid;
+        oversized_trailing.extend(std::iter::repeat_n(0, MAX_TIFF_TRAILING_ZERO_PADDING + 1));
+        assert!(parse_tiff_rgb_u8_contiguous(&oversized_trailing).is_err());
     }
 
     #[test]

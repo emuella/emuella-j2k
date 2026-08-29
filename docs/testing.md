@@ -262,8 +262,9 @@ inert metadata with their exact BYTE and UNDEFINED TIFF types; their counts,
 offsets and ranges are checked, but their contents are neither interpreted nor
 reported. All other tags or compression, palette colour, planar samples,
 alpha, non-8-bit samples, additional IFDs, duplicate metadata, inconsistent
-counts, invalid LZW codes or expansion, overlapping ranges, trailing sample
-bytes and unreferenced trailing file data fail closed.
+counts, invalid LZW codes or expansion, overlapping ranges and trailing sample
+bytes fail closed. At most four zero bytes of terminal file padding are inert;
+non-zero or longer unreferenced trailing data fails closed.
 
 Every logical RGB byte is compared in memory and the inclusive peak-error
 limit decides the result. Worker output is exactly
