@@ -78,7 +78,12 @@ This admission establishes container and codestream consistency only. It does
 not produce presentation pixels or select palette application, component
 mapping, channel or alpha interpretation, ICC transforms, colour conversion,
 resampling, resolution handling or multiple-codestream composition. The known
-unimplemented presentation boxes and colour transforms fail closed.
+unimplemented presentation metadata is reported by support classification
+without making an otherwise well-formed container invalid. Component-mode
+decode may still expose admitted raw codestream planes and applies no
+presentation transform. Rendered requests fail closed before output allocation
+or mutation for palette, component mapping, channel definition, sYCC, ICC,
+vendor, reserved or unrecognised colour metadata.
 
 The authority is ISO/IEC 15444-1:2024, Annex A, A.5.1, PDF pages 41–44, and
 Annex I, I.2.2, I.5.3–I.5.4, PDF pages 160–171 and 181. The reviewed retrieval

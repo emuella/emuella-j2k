@@ -106,6 +106,44 @@ mod jp2_header_validation_tests {
             - 4
     }
 
+    fn append_jp2_header_child(input: &mut Vec<u8>, child: Vec<u8>) {
+        let jp2c = box_offset(input, container::boxes::CONTIGUOUS_CODESTREAM);
+        let jp2h = box_offset(input, container::boxes::JP2_HEADER);
+        let old_len = u32::from_be_bytes(input[jp2h..jp2h + 4].try_into().unwrap());
+        input[jp2h..jp2h + 4]
+            .copy_from_slice(&(old_len + u32::try_from(child.len()).unwrap()).to_be_bytes());
+        input.splice(jp2c..jp2c, child);
+    }
+
+    fn set_first_colour(input: &mut [u8], method: u8, enumerated: Option<u32>) {
+        let colr = box_offset(input, container::boxes::COLOR_SPECIFICATION);
+        input[colr + 8] = method;
+        if let Some(value) = enumerated {
+            input[colr + 11..colr + 15].copy_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    fn colour_box(method: container::ColorSpecificationMethod, space: Option<u32>) -> Vec<u8> {
+        let mut output = Vec::new();
+        container::write_color_specification_box(
+            &mut output,
+            container::ColorSpecificationBox {
+                method,
+                precedence: 0,
+                approximation: 0,
+                enumerated_color_space: space.map(container::EnumeratedColorSpace::Unknown),
+            },
+        )
+        .unwrap();
+        output
+    }
+
+    fn presentation_box(box_type: container::FourCc, contents: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        container::write_box(&mut output, box_type, contents).unwrap();
+        output
+    }
+
     #[test]
     fn validates_uniform_and_varying_jp2_header_precision_against_siz() {
         let uniform = codestream(1);
@@ -232,40 +270,211 @@ mod jp2_header_validation_tests {
     }
 
     #[test]
-    fn unimplemented_jp2_presentation_mechanisms_fail_closed() {
+    fn inspect_classifies_unsupported_jp2_presentation_without_parse_failure() {
         let raw = codestream(1);
         let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
-        let jp2c = box_offset(&palette, container::boxes::CONTIGUOUS_CODESTREAM);
-        let mut palette_box = Vec::new();
-        container::write_box(
-            &mut palette_box,
-            container::boxes::PALETTE,
-            &[0, 1, 1, 7, 0],
-        )
-        .unwrap();
-        let jp2h = box_offset(&palette, container::boxes::JP2_HEADER);
-        let old_len = u32::from_be_bytes(palette[jp2h..jp2h + 4].try_into().unwrap());
-        palette[jp2h..jp2h + 4]
-            .copy_from_slice(&(old_len + palette_box.len() as u32).to_be_bytes());
-        palette.splice(jp2c..jp2c, palette_box);
-        assert!(matches!(
-            inspect(&palette, &InspectOptions::default()),
-            Err(J2kError::Unsupported {
-                feature: UnsupportedFeature::ContainerBox,
-                ..
-            })
-        ));
+        append_jp2_header_child(
+            &mut palette,
+            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+        );
 
         let mut icc = wrap_jp2(&raw, 5, 3, 1, 7, None);
-        let colr = box_offset(&icc, container::boxes::COLOR_SPECIFICATION);
-        icc[colr + 8] = 2;
+        set_first_colour(&mut icc, 2, None);
+        let mut reserved = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut reserved, 4, None);
+        let mut sycc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut sycc, 1, Some(18));
+
+        for (input, expected_feature, fragment) in [
+            (&palette, UnsupportedFeature::ContainerBox, "pclr"),
+            (&icc, UnsupportedFeature::ColorModel, "ICC"),
+            (&reserved, UnsupportedFeature::ColorModel, "reserved"),
+            (&sycc, UnsupportedFeature::ColorModel, "sYCC"),
+        ] {
+            let metadata = inspect(input, &InspectOptions::default()).unwrap();
+            assert!(matches!(
+                metadata.support,
+                SupportStatus::Unsupported {
+                    feature,
+                    ref detail,
+                } if feature == expected_feature && detail.contains(fragment)
+            ));
+            let metadata = inspect(
+                input,
+                &InspectOptions {
+                    classify_support: false,
+                    ..InspectOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                metadata.support,
+                SupportStatus::Unknown {
+                    detail: "support classification was not requested".into()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn first_jp2_colour_specification_controls_presentation_support() {
+        let raw = codestream(1);
+        let mut supported_then_reserved = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_jp2_header_child(
+            &mut supported_then_reserved,
+            colour_box(container::ColorSpecificationMethod::Vendor(4), None),
+        );
+        assert_eq!(
+            inspect(&supported_then_reserved, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Supported
+        );
+
+        let mut reserved_then_supported = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut reserved_then_supported, 4, None);
+        append_jp2_header_child(
+            &mut reserved_then_supported,
+            colour_box(container::ColorSpecificationMethod::Enumerated, Some(17)),
+        );
         assert!(matches!(
-            inspect(&icc, &InspectOptions::default()),
-            Err(J2kError::Unsupported {
+            inspect(&reserved_then_supported, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
                 feature: UnsupportedFeature::ColorModel,
-                ..
-            })
+                ref detail,
+            } if detail.contains("reserved")
         ));
+    }
+
+    #[test]
+    fn component_decode_ignores_unsupported_jp2_presentation_metadata() {
+        let raw = codestream(1);
+        let reference = decode(
+            &raw,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                target_layout: ComponentLayout::Planar,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+        let mut inputs = Vec::new();
+
+        let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_jp2_header_child(
+            &mut palette,
+            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+        );
+        inputs.push(palette);
+        for method in [2, 4] {
+            let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
+            set_first_colour(&mut input, method, None);
+            inputs.push(input);
+        }
+        let mut sycc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut sycc, 1, Some(18));
+        inputs.push(sycc);
+
+        for input in inputs {
+            let decoded = decode(
+                &input,
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    target_layout: ComponentLayout::Planar,
+                    ..DecodeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(decoded, reference);
+            assert_eq!(
+                decode_partial(&input, &PartialDecodeOptions::default()).unwrap(),
+                reference
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_routes_reject_unsupported_jp2_presentation_before_mutation() {
+        let raw = codestream(1);
+        let mut inputs = Vec::new();
+        for box_type in [
+            container::boxes::PALETTE,
+            container::boxes::COMPONENT_MAPPING,
+            container::boxes::CHANNEL_DEFINITION,
+        ] {
+            let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
+            append_jp2_header_child(&mut input, presentation_box(box_type, &[0, 0, 0, 0]));
+            inputs.push((input, UnsupportedFeature::ContainerBox));
+        }
+        for (method, enumerated) in [(1, Some(18)), (2, None), (4, None), (1, Some(99))] {
+            let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
+            set_first_colour(&mut input, method, enumerated);
+            inputs.push((input, UnsupportedFeature::ColorModel));
+        }
+
+        for (input, expected_feature) in inputs {
+            for result in [
+                decode(&input, &DecodeOptions::default()).map(|_| ()),
+                decode_shape(&input, &DecodeOptions::default()).map(|_| ()),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(J2kError::Unsupported { feature, .. }) if feature == expected_feature
+                ));
+            }
+
+            let info = ImageInfo::new(
+                5,
+                3,
+                1,
+                SampleFormat::U8,
+                ColorModel::Grayscale,
+                ComponentLayout::Planar,
+            )
+            .unwrap();
+            let mut samples = vec![0x6d; 15];
+            {
+                let plane = PlaneMut::new(&mut samples, 5, 3, 5, SampleFormat::U8).unwrap();
+                let mut planes = [plane];
+                let mut target = ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                };
+                assert!(matches!(
+                    decode_into(&input, &mut target, &DecodeOptions::default()),
+                    Err(J2kError::Unsupported { feature, .. }) if feature == expected_feature
+                ));
+            }
+            assert!(samples.iter().all(|sample| *sample == 0x6d));
+        }
+    }
+
+    #[test]
+    fn direct_enumerated_srgb_and_greyscale_preserve_admitted_decode() {
+        for components in [1, 3] {
+            let raw = codestream(components);
+            let jp2 = wrap_jp2(&raw, 5, 3, u16::try_from(components).unwrap(), 7, None);
+            assert_eq!(
+                inspect(&jp2, &InspectOptions::default()).unwrap().support,
+                SupportStatus::Supported
+            );
+            for options in [
+                DecodeOptions::default(),
+                DecodeOptions {
+                    mode: DecodeMode::Components,
+                    target_layout: ComponentLayout::Planar,
+                    ..DecodeOptions::default()
+                },
+            ] {
+                assert_eq!(
+                    decode(&jp2, &options),
+                    decode(&raw, &options),
+                    "JP2 direct colour metadata must not change the admitted raw-codestream result"
+                );
+            }
+        }
     }
 }
 
@@ -1416,7 +1625,7 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
     #[cfg(feature = "std")]
     if let Some(image) = decode_algorithmic_htj2k(input, &metadata, options)? {
@@ -1467,7 +1676,7 @@ pub fn decode_htj2k_with_workspace(
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
     validate_max_quality_layer_profile(input, &metadata, options)?;
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     decode_algorithmic_htj2k_with_workspace(input, &metadata, options, workspace)
 }
 
@@ -1503,7 +1712,7 @@ pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     decode_htj2k_cleanup_vlc_output_probe_from_metadata(input, &metadata, workspace)
 }
 
@@ -1533,7 +1742,7 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
 
     if let Some(shape) = p0_13_high_component_progression_decode_shape(input, &metadata, options)? {
@@ -1553,10 +1762,6 @@ fn decode_owned_baseline(
     metadata: &Metadata,
     options: &DecodeOptions,
 ) -> Result<Option<Image>> {
-    if !matches!(metadata.support, SupportStatus::Supported) {
-        return Ok(None);
-    }
-
     let codestream_bytes = primary_part1_codestream_bytes(input, metadata)?;
     let Some(codestream_bytes) = codestream_bytes else {
         return Ok(None);
@@ -1774,13 +1979,25 @@ fn primary_htj2k_codestream_bytes<'a>(
 }
 
 fn reject_unsupported_rendered_projection(
+    input: &[u8],
     metadata: &Metadata,
     options: &DecodeOptions,
 ) -> Result<()> {
-    if options.mode == DecodeMode::Rendered
-        && metadata.image.as_ref().is_some_and(|image| {
-            image.sample_format.bits_per_sample > 8 || image.sample_format.signed
-        })
+    if options.mode != DecodeMode::Rendered {
+        return Ok(());
+    }
+
+    if metadata.format == InputFormat::Jp2 {
+        let container = container::parse(input).map_err(map_container_error)?;
+        if let Some((feature, detail)) = unsupported_jp2_presentation(&container)? {
+            return Err(unsupported(feature, detail));
+        }
+    }
+
+    if metadata
+        .image
+        .as_ref()
+        .is_some_and(|image| image.sample_format.bits_per_sample > 8 || image.sample_format.signed)
     {
         return Err(unsupported(
             UnsupportedFeature::ColorModel,
@@ -2602,7 +2819,18 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
     let region = partial_output_region(&metadata, options)?;
     let component_indices = partial_component_indices(&metadata, &options.components)?;
+    let mode = if metadata.format == InputFormat::Jp2 {
+        let container = container::parse(input).map_err(map_container_error)?;
+        if unsupported_jp2_presentation(&container)?.is_some() {
+            DecodeMode::Components
+        } else {
+            DecodeMode::Rendered
+        }
+    } else {
+        DecodeMode::Rendered
+    };
     let mut decode_options = DecodeOptions {
+        mode,
         target_layout: ComponentLayout::Planar,
         ..DecodeOptions::default()
     };
@@ -5365,11 +5593,13 @@ fn metadata_from_container(
     {
         validate_jp2_header_against_siz(&container, codestream)?;
     }
-    reject_unimplemented_jp2_presentation(&container)?;
+    let unsupported_presentation = unsupported_jp2_presentation(&container)?;
     let support = if !options.classify_support {
         SupportStatus::Unknown {
             detail: "support classification was not requested".into(),
         }
+    } else if let Some((feature, detail)) = unsupported_presentation {
+        SupportStatus::Unsupported { feature, detail }
     } else {
         match (&container.kind, &parsed_codestream) {
             (container::ContainerKind::Jph, Some(codestream))
@@ -5426,16 +5656,18 @@ fn metadata_from_container(
     })
 }
 
-fn reject_unimplemented_jp2_presentation(container: &container::Container) -> Result<()> {
+fn unsupported_jp2_presentation(
+    container: &container::Container,
+) -> Result<Option<(UnsupportedFeature, String)>> {
     if container.kind != container::ContainerKind::Jp2 {
-        return Ok(());
+        return Ok(None);
     }
     let Some(header) = container
         .boxes
         .iter()
         .find(|record| record.box_type == container::boxes::JP2_HEADER)
     else {
-        return Ok(());
+        return Ok(None);
     };
     let header_end = header
         .data_offset
@@ -5454,31 +5686,38 @@ fn reject_unimplemented_jp2_presentation(container: &container::Container) -> Re
                     | container::boxes::CHANNEL_DEFINITION
             )
     }) {
-        return Err(unsupported(
+        return Ok(Some((
             UnsupportedFeature::ContainerBox,
             alloc::format!(
                 "JP2 `{}` presentation is not implemented; palette, component mapping, and channel definition remain fail-closed",
                 record.box_type
             ),
-        ));
+        )));
     }
-    if let Some(colour) = container.color_specification
-        && (colour.method != container::ColorSpecificationMethod::Enumerated
-            || !matches!(
-                colour.enumerated_color_space,
+    if let Some(colour) = container.color_specification {
+        let detail = match (colour.method, colour.enumerated_color_space) {
+            (
+                container::ColorSpecificationMethod::Enumerated,
                 Some(
                     container::EnumeratedColorSpace::SRgb
-                        | container::EnumeratedColorSpace::Greyscale
-                        | container::EnumeratedColorSpace::SYcc
-                )
-            ))
-    {
-        return Err(unsupported(
-            UnsupportedFeature::ColorModel,
-            "JP2 ICC, vendor, and unrecognised colour transforms remain fail-closed",
-        ));
+                    | container::EnumeratedColorSpace::Greyscale,
+                ),
+            ) => None,
+            (
+                container::ColorSpecificationMethod::Enumerated,
+                Some(container::EnumeratedColorSpace::SYcc),
+            ) => {
+                Some("JP2 sYCC rendered output requires a colour transform that is not implemented")
+            }
+            _ => Some(
+                "JP2 ICC, vendor, reserved, and unrecognised colour metadata is not implemented for rendered output",
+            ),
+        };
+        if let Some(detail) = detail {
+            return Ok(Some((UnsupportedFeature::ColorModel, detail.into())));
+        }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn validate_jp2_header_against_siz(
