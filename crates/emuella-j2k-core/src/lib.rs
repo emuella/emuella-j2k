@@ -1840,15 +1840,7 @@ fn direct_part1_region(
             "direct selective Part 1 component decode does not accept tile selection",
         ));
     }
-    if !matches!(
-        options.resolution,
-        ResolutionLevel::Full | ResolutionLevel::Reduced { discard_levels: 0 }
-    ) {
-        return Err(unsupported(
-            UnsupportedFeature::PartialDecodeMode,
-            "subsampled selective Part 1 component decode requires full resolution",
-        ));
-    }
+    direct_part1_discard_levels(codestream, options)?;
     if options.max_quality_layers == Some(0) {
         return Err(J2kError::InvalidParameter {
             parameter: "max_quality_layers",
@@ -1882,6 +1874,37 @@ fn direct_part1_region(
         });
     }
     Ok(region)
+}
+
+fn direct_part1_discard_levels(
+    codestream: &codestream::Codestream,
+    options: &PartialDecodeOptions,
+) -> Result<u8> {
+    match options.resolution {
+        ResolutionLevel::Full | ResolutionLevel::Reduced { discard_levels: 0 } => Ok(0),
+        ResolutionLevel::Reduced { discard_levels: 1 } => {
+            let coding_style = codestream.uniform_effective_coding_style().ok_or_else(|| {
+                unsupported(
+                    UnsupportedFeature::PartialDecodeMode,
+                    "reduced subsampled selective decode requires one uniform coding style",
+                )
+            })?;
+            if coding_style.transform != codestream::WaveletTransform::Reversible53
+                || coding_style.decomposition_levels < 1
+                || coding_style.multiple_component_transform
+            {
+                return Err(unsupported(
+                    UnsupportedFeature::PartialDecodeMode,
+                    "one-level reduced subsampled selective decode requires reversible 5/3 coding with at least one decomposition and no MCT",
+                ));
+            }
+            Ok(1)
+        }
+        ResolutionLevel::Reduced { .. } => Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "subsampled selective Part 1 component decode supports at most one discarded resolution level",
+        )),
+    }
 }
 
 fn direct_part1_component_indices(
@@ -2541,11 +2564,7 @@ fn decode_owned_selective_part1_partial(
     metadata: &Metadata,
     options: &PartialDecodeOptions,
 ) -> Result<Option<Image>> {
-    if !matches!(
-        options.resolution,
-        ResolutionLevel::Full | ResolutionLevel::Reduced { discard_levels: 0 }
-    ) || options.tile.is_some()
-    {
+    if options.tile.is_some() {
         return Ok(None);
     }
     let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
@@ -2570,6 +2589,14 @@ fn decode_owned_selective_part1_partial(
         ));
     }
     if !native_subsampled
+        && !matches!(
+            options.resolution,
+            ResolutionLevel::Full | ResolutionLevel::Reduced { discard_levels: 0 }
+        )
+    {
+        return Ok(None);
+    }
+    if !native_subsampled
         && options.region.is_none()
         && options.max_quality_layers.is_none()
         && matches!(options.components, ComponentSelection::All)
@@ -2589,6 +2616,62 @@ fn decode_owned_selective_part1_partial(
             partial_component_indices(metadata, &options.components)?,
         )
     };
+    let discard_levels = direct_part1_discard_levels(&parsed, options)?;
+    if native_subsampled && discard_levels == 1 {
+        let prepared = prepare_part1_decode(input, options)?;
+        let mut output = prepared
+            .component_info()
+            .iter()
+            .map(|component| {
+                let bytes_per_sample =
+                    public_bytes_per_sample("sample_format", component.sample_format)?;
+                let len = usize::try_from(component.width)
+                    .map_err(|_| sample_size_overflow())?
+                    .checked_mul(
+                        usize::try_from(component.height).map_err(|_| sample_size_overflow())?,
+                    )
+                    .and_then(|samples| samples.checked_mul(bytes_per_sample))
+                    .ok_or_else(sample_size_overflow)?;
+                Ok(alloc::vec![0_u8; len])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        {
+            let mut planes = output
+                .iter_mut()
+                .zip(prepared.component_info())
+                .map(|(samples, component)| {
+                    let bytes_per_sample =
+                        public_bytes_per_sample("sample_format", component.sample_format)?;
+                    let stride = usize::try_from(component.width)
+                        .map_err(|_| sample_size_overflow())?
+                        .checked_mul(bytes_per_sample)
+                        .ok_or_else(sample_size_overflow)?;
+                    PlaneMut::new(
+                        samples,
+                        component.width,
+                        component.height,
+                        stride,
+                        component.sample_format,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut target = ImageViewMut::Planar {
+                info: prepared.info(),
+                planes: &mut planes,
+            };
+            execute_prepared_part1_decode_into_with_workspace(
+                &prepared,
+                &mut target,
+                &mut Part1DecodeWorkspace::new(),
+                codestream::PreparedPart1ExecutionOptions::default(),
+            )?;
+        }
+        return Ok(Some(Image {
+            info: prepared.info().clone(),
+            component_info: prepared.component_info().to_vec(),
+            data: ImageData::Planes(output),
+        }));
+    }
     let decoded = codestream::decode_baseline_owned_component_region_selected_with_max_layers(
         codestream_bytes,
         &component_indices,
@@ -2712,11 +2795,23 @@ fn plan_selective_part1_discard(
     metadata: &Metadata,
     options: &PartialDecodeOptions,
 ) -> Result<Option<PartialDecodeWorkPlan>> {
-    let Some(info) = selective_part1_discard_target_info(input, metadata, options)? else {
-        return Ok(None);
-    };
     let ResolutionLevel::Reduced { discard_levels } = options.resolution else {
         return Ok(None);
+    };
+    let codestream_bytes = primary_part1_codestream_bytes(input, metadata)?;
+    let native_subsampled = discard_levels == 1
+        && codestream_bytes
+            .and_then(|bytes| codestream::parse(bytes).ok())
+            .is_some_and(|parsed| {
+                codestream::is_supported_part1_native_subsampled_component_profile(&parsed)
+            });
+    let info = if native_subsampled {
+        partial_decode_target_info(input, options)?
+    } else {
+        let Some(info) = selective_part1_discard_target_info(input, metadata, options)? else {
+            return Ok(None);
+        };
+        info
     };
     let image = metadata.image.as_ref().ok_or_else(|| {
         unsupported(
@@ -2724,7 +2819,6 @@ fn plan_selective_part1_discard(
             "partial discard planning requires image dimensions",
         )
     })?;
-    let codestream_bytes = primary_part1_codestream_bytes(input, metadata)?;
     let selected_components = partial_component_indices(metadata, &options.components)?;
     let selected_region = options.region.unwrap_or(Region {
         x: 0,
@@ -2950,11 +3044,11 @@ pub fn prepare_part1_decode<'a>(
     };
     let native_subsampled =
         codestream::is_supported_part1_native_subsampled_component_profile(&parsed);
-    if discard_levels == 0 && !native_subsampled {
+    if native_subsampled {
+        direct_part1_discard_levels(&parsed, options)?;
+    } else if discard_levels == 0 {
         validate_partial_options_without_support(&metadata, options)?;
-    } else if selective_part1_discard_target_info(input, &metadata, options)?.is_none()
-        && discard_levels != 0
-    {
+    } else if selective_part1_discard_target_info(input, &metadata, options)?.is_none() {
         return Err(unsupported(
             UnsupportedFeature::PartialDecodeMode,
             "input is outside the direct selective Part 1 discard profile",
@@ -3012,6 +3106,12 @@ pub fn prepare_part1_decode_from_source<'a>(
 ) -> Result<PreparedPart1Decode<'a>> {
     let codestream = codestream::prepare_part1_component_decode_from_source(source, request)
         .map_err(map_codestream_error)?;
+    if request.discard_levels > 1 && codestream.codestream_has_subsampled_components() {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "source-backed subsampled selective decode supports at most one discarded resolution level",
+        ));
+    }
     let (width, height) = codestream.output_dimensions();
     let components = u16::try_from(codestream.component_indices().len()).map_err(|_| {
         unsupported(
@@ -3198,11 +3298,11 @@ fn decode_partial_part1_components_into_direct(
     }
     let native_subsampled =
         codestream::is_supported_part1_native_subsampled_component_profile(&parsed);
-    if discard_levels == 0 && !native_subsampled {
+    if native_subsampled {
+        direct_part1_discard_levels(&parsed, options)?;
+    } else if discard_levels == 0 {
         validate_partial_options_without_support(&metadata, options)?;
-    } else if selective_part1_discard_target_info(input, &metadata, options)?.is_none()
-        && discard_levels != 0
-    {
+    } else if selective_part1_discard_target_info(input, &metadata, options)?.is_none() {
         return Ok(false);
     }
     let region = if native_subsampled {
@@ -5478,18 +5578,21 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
             }
             let region = direct_part1_region(&parsed, options)?;
             let component_indices = direct_part1_component_indices(&parsed, &options.components)?;
-            let descriptors = part1_component_info(
+            let discard_levels = direct_part1_discard_levels(&parsed, options)?;
+            let descriptors = part1_component_info_at_resolution(
                 codestream_bytes,
                 &ComponentSelection::Indices(component_indices.clone()),
                 Some(region),
+                discard_levels,
             )?;
             let sample_format = descriptors
                 .first()
                 .map(|component| component.sample_format)
                 .ok_or_else(sample_size_overflow)?;
+            let output_region = reduced_part1_region(&parsed.siz, region, discard_levels)?;
             return ImageInfo::new(
-                region.width,
-                region.height,
+                output_region.width,
+                output_region.height,
                 u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
                 sample_format,
                 ColorModel::Unknown,
@@ -5633,6 +5736,12 @@ fn selective_part1_discard_target_info(
         return Ok(None);
     };
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {
+        // Native subsampled reductions retain per-component output geometry
+        // and are handled by the direct planar route rather than this uniform
+        // reduced-image compatibility path.
+        return Ok(None);
+    }
     let reduced_mct_component_zero = matches!(
         &options.components,
         ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16]
@@ -6353,6 +6462,42 @@ mod effective_coding_style_tests {
         (codestream, planes)
     }
 
+    fn reduced_subsampled_fixture(width: u32, height: u32) -> Vec<u8> {
+        let sampling = [(1_u8, 1_u8), (2, 1), (2, 2)];
+        let planes = sampling
+            .iter()
+            .enumerate()
+            .map(|(component, (horizontal, vertical))| {
+                let native_width = width.div_ceil(u32::from(*horizontal));
+                let native_height = height.div_ceil(u32::from(*vertical));
+                (0..native_width * native_height)
+                    .map(|sample| {
+                        u8::try_from(
+                            (sample * (13 + component as u32 * 10)
+                                + sample / native_width * 7
+                                + component as u32 * 53)
+                                % 251,
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let components = planes
+            .iter()
+            .zip(sampling)
+            .map(|(samples, (horizontal_separation, vertical_separation))| {
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation,
+                    vertical_separation,
+                    samples,
+                }
+            })
+            .collect::<Vec<_>>();
+        codestream::encode_planar_u8_subsampled_one_decomp_test_fixture(width, height, &components)
+            .unwrap()
+    }
+
     fn planar_bytes(image: &Image) -> &[Vec<u8>] {
         let ImageData::Planes(planes) = &image.data else {
             panic!("native component decode returned interleaved samples");
@@ -6435,6 +6580,519 @@ mod effective_coding_style_tests {
             decode_partial_into(&fixture, &mut target, &zero_discard_options).unwrap();
         }
         assert_eq!(caller_buffers, planar_bytes(&full));
+    }
+
+    #[test]
+    fn reduced_subsampled_full_request_preserves_per_component_geometry() {
+        let fixture = reduced_subsampled_fixture(129, 67);
+        let options = PartialDecodeOptions {
+            resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+            ..PartialDecodeOptions::default()
+        };
+        let info = decode_partial_info(&fixture, &options).unwrap();
+        assert_eq!((info.width, info.height, info.components), (65, 34, 3));
+        let descriptors = decode_partial_component_info(&fixture, &options).unwrap();
+        assert_eq!(
+            descriptors
+                .iter()
+                .map(|component| (
+                    component.source_component,
+                    component.x_origin,
+                    component.y_origin,
+                    component.width,
+                    component.height,
+                    component.horizontal_separation,
+                    component.vertical_separation,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(0), 0, 0, 65, 34, 1, 1),
+                (Some(1), 0, 0, 33, 34, 2, 1),
+                (Some(2), 0, 0, 33, 17, 2, 2),
+            ]
+        );
+        let decoded = decode_partial(&fixture, &options).unwrap();
+        assert_eq!(decoded.info, info);
+        assert_eq!(decoded.component_info, descriptors);
+        assert_eq!(planar_bytes(&decoded)[0].len(), 65 * 34);
+        assert_eq!(planar_bytes(&decoded)[1].len(), 33 * 34);
+        assert_eq!(planar_bytes(&decoded)[2].len(), 33 * 17);
+    }
+
+    #[test]
+    fn reduced_subsampled_region_crop_stitch_routes_and_work_are_consistent() {
+        let fixture = reduced_subsampled_fixture(257, 131);
+        let reduced = ResolutionLevel::Reduced { discard_levels: 1 };
+        let full_options = PartialDecodeOptions {
+            resolution: reduced,
+            ..PartialDecodeOptions::default()
+        };
+        let region = Region {
+            x: 64,
+            y: 32,
+            width: 128,
+            height: 64,
+        };
+        let region_options = PartialDecodeOptions {
+            region: Some(region),
+            resolution: reduced,
+            ..PartialDecodeOptions::default()
+        };
+        let full = decode_partial(&fixture, &full_options).unwrap();
+        let strict = decode_partial(&fixture, &region_options).unwrap();
+        let work_plan = plan_partial_decode_work(&fixture, &region_options).unwrap();
+        assert!(!work_plan.full_image_full_resolution_fallback);
+        assert_eq!(work_plan.selected_resolution.discard_levels, 1);
+        assert_eq!(
+            (
+                work_plan.selected_resolution.width,
+                work_plan.selected_resolution.height
+            ),
+            (64, 32)
+        );
+        assert_eq!((strict.info.width, strict.info.height), (64, 32));
+        assert_eq!(
+            strict
+                .component_info
+                .iter()
+                .map(|component| (
+                    component.source_component,
+                    component.x_origin,
+                    component.y_origin,
+                    component.width,
+                    component.height,
+                    component.horizontal_separation,
+                    component.vertical_separation,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(0), 32, 16, 64, 32, 1, 1),
+                (Some(1), 16, 16, 32, 32, 2, 1),
+                (Some(2), 16, 8, 32, 16, 2, 2),
+            ]
+        );
+        for ((strict_plane, strict_info), (full_plane, full_info)) in planar_bytes(&strict)
+            .iter()
+            .zip(&strict.component_info)
+            .zip(planar_bytes(&full).iter().zip(&full.component_info))
+        {
+            let x = usize::try_from(strict_info.x_origin - full_info.x_origin).unwrap();
+            let y = usize::try_from(strict_info.y_origin - full_info.y_origin).unwrap();
+            let width = usize::try_from(strict_info.width).unwrap();
+            let full_width = usize::try_from(full_info.width).unwrap();
+            let expected = (0..usize::try_from(strict_info.height).unwrap())
+                .flat_map(|row| {
+                    let start = (y + row) * full_width + x;
+                    full_plane[start..start + width].iter().copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(strict_plane, &expected);
+        }
+
+        let left = decode_partial(
+            &fixture,
+            &PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 128,
+                    height: 131,
+                }),
+                resolution: reduced,
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        let right = decode_partial(
+            &fixture,
+            &PartialDecodeOptions {
+                region: Some(Region {
+                    x: 128,
+                    y: 0,
+                    width: 129,
+                    height: 131,
+                }),
+                resolution: reduced,
+                ..PartialDecodeOptions::default()
+            },
+        )
+        .unwrap();
+        for component in 0..3 {
+            let full_info = &full.component_info[component];
+            let left_info = &left.component_info[component];
+            let right_info = &right.component_info[component];
+            assert_eq!(left_info.x_origin + left_info.width, right_info.x_origin);
+            assert_eq!(left_info.width + right_info.width, full_info.width);
+            let left_width = usize::try_from(left_info.width).unwrap();
+            let right_width = usize::try_from(right_info.width).unwrap();
+            let stitched = (0..usize::try_from(full_info.height).unwrap())
+                .flat_map(|row| {
+                    planar_bytes(&left)[component][row * left_width..(row + 1) * left_width]
+                        .iter()
+                        .chain(
+                            &planar_bytes(&right)[component]
+                                [row * right_width..(row + 1) * right_width],
+                        )
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stitched, planar_bytes(&full)[component]);
+        }
+
+        let descriptors = strict.component_info.clone();
+        let mut padded = descriptors
+            .iter()
+            .map(|component| {
+                vec![0xa5; usize::try_from((component.width + 7) * component.height).unwrap()]
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut planes = padded
+                .iter_mut()
+                .zip(&descriptors)
+                .map(|(samples, component)| {
+                    PlaneMut::new(
+                        samples,
+                        component.width,
+                        component.height,
+                        usize::try_from(component.width + 7).unwrap(),
+                        component.sample_format,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut target = ImageViewMut::Planar {
+                info: &strict.info,
+                planes: &mut planes,
+            };
+            decode_partial_into(&fixture, &mut target, &region_options).unwrap();
+        }
+        for ((buffer, descriptor), expected) in
+            padded.iter().zip(&descriptors).zip(planar_bytes(&strict))
+        {
+            let width = usize::try_from(descriptor.width).unwrap();
+            let stride = width + 7;
+            let actual = buffer
+                .chunks_exact(stride)
+                .flat_map(|row| row[..width].iter().copied())
+                .collect::<Vec<_>>();
+            assert_eq!(&actual, expected);
+            assert!(
+                buffer
+                    .chunks_exact(stride)
+                    .all(|row| row[width..].iter().all(|sample| *sample == 0xa5))
+            );
+        }
+
+        let execute = |prepared: &PreparedPart1Decode<'_>| {
+            let mut buffers = prepared
+                .component_info()
+                .iter()
+                .map(|component| {
+                    vec![0_u8; usize::try_from(component.width * component.height).unwrap()]
+                })
+                .collect::<Vec<_>>();
+            let timings = {
+                let mut planes = buffers
+                    .iter_mut()
+                    .zip(prepared.component_info())
+                    .map(|(samples, component)| {
+                        PlaneMut::new(
+                            samples,
+                            component.width,
+                            component.height,
+                            usize::try_from(component.width).unwrap(),
+                            component.sample_format,
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let mut target = ImageViewMut::Planar {
+                    info: prepared.info(),
+                    planes: &mut planes,
+                };
+                execute_prepared_part1_decode_into_with_workspace(
+                    prepared,
+                    &mut target,
+                    &mut Part1DecodeWorkspace::new(),
+                    codestream::PreparedPart1ExecutionOptions {
+                        instrumentation: codestream::DecodeInstrumentation::WorkCounters,
+                        parallelism: codestream::DecodeExecutionParallelism::Serial,
+                        ..codestream::PreparedPart1ExecutionOptions::default()
+                    },
+                )
+                .unwrap()
+            };
+            (buffers, timings)
+        };
+        let full_prepared = prepare_part1_decode(&fixture, &full_options).unwrap();
+        let strict_prepared = prepare_part1_decode(&fixture, &region_options).unwrap();
+        let selected_options = PartialDecodeOptions {
+            components: ComponentSelection::Indices(vec![2]),
+            ..region_options.clone()
+        };
+        let selected_prepared = prepare_part1_decode(&fixture, &selected_options).unwrap();
+        let (full_buffers, full_work) = execute(&full_prepared);
+        let (strict_buffers, strict_work) = execute(&strict_prepared);
+        let (selected_buffers, selected_work) = execute(&selected_prepared);
+        assert_eq!(full_buffers, planar_bytes(&full));
+        assert_eq!(strict_buffers, planar_bytes(&strict));
+        assert_eq!(selected_buffers, planar_bytes(&strict)[2..3]);
+        assert!(strict_work.executed_code_blocks < full_work.executed_code_blocks);
+        assert!(strict_work.output_samples < full_work.output_samples);
+        assert!(selected_work.executed_code_blocks < strict_work.executed_code_blocks);
+        assert!(selected_work.output_samples < strict_work.output_samples);
+        assert!(full_work.packet_body_bytes_skipped > 0);
+        assert!(strict_work.packet_body_bytes_skipped > full_work.packet_body_bytes_skipped);
+        assert!(selected_work.packet_body_bytes_skipped > strict_work.packet_body_bytes_skipped);
+        assert_eq!(full_work.full_output_allocation_bytes, 0);
+        assert_eq!(strict_work.full_output_allocation_bytes, 0);
+        assert_eq!(selected_work.full_output_allocation_bytes, 0);
+
+        let source = codestream::source::SliceSource::new(&fixture);
+        let components = [0_u16, 1, 2];
+        let source_prepared = prepare_part1_decode_from_source(
+            &source,
+            codestream::Part1ComponentDecodeRequest {
+                component_indices: &components,
+                region: codestream::TileRegionRequest {
+                    x: region.x,
+                    y: region.y,
+                    width: region.width,
+                    height: region.height,
+                },
+                discard_levels: 1,
+                max_layers: Some(1),
+            },
+        )
+        .unwrap();
+        let (source_buffers, source_work) = execute(&source_prepared);
+        assert_eq!(source_buffers, planar_bytes(&strict));
+        assert_eq!(source_work.full_output_allocation_bytes, 0);
+
+        for max_quality_layers in [Some(1), Some(2)] {
+            let limited = decode_partial(
+                &fixture,
+                &PartialDecodeOptions {
+                    max_quality_layers,
+                    ..region_options.clone()
+                },
+            )
+            .unwrap();
+            assert_eq!(limited, strict);
+        }
+    }
+
+    #[test]
+    fn reduced_subsampled_rejections_and_malformed_preflight_fail_closed() {
+        let fixture = reduced_subsampled_fixture(129, 67);
+        let options = PartialDecodeOptions {
+            region: Some(Region {
+                x: 32,
+                y: 16,
+                width: 64,
+                height: 32,
+            }),
+            resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+            ..PartialDecodeOptions::default()
+        };
+        let info = decode_partial_info(&fixture, &options).unwrap();
+        let descriptors = decode_partial_component_info(&fixture, &options).unwrap();
+
+        let mut malformed = fixture.clone();
+        let sot = malformed
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x90])
+            .unwrap();
+        let psot = u32::from_be_bytes(malformed[sot + 6..sot + 10].try_into().unwrap());
+        malformed[sot + 6..sot + 10].copy_from_slice(&(psot + 32).to_be_bytes());
+        let mut buffers = descriptors
+            .iter()
+            .map(|component| {
+                vec![0x6d; usize::try_from(component.width * component.height).unwrap()]
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut planes = buffers
+                .iter_mut()
+                .zip(&descriptors)
+                .map(|(samples, component)| {
+                    PlaneMut::new(
+                        samples,
+                        component.width,
+                        component.height,
+                        usize::try_from(component.width).unwrap(),
+                        component.sample_format,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_partial_into(&malformed, &mut target, &options).is_err());
+        }
+        assert!(buffers.iter().flatten().all(|sample| *sample == 0x6d));
+
+        for excluded in [
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 2 },
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                region: None,
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(0),
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 1,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                }),
+                components: ComponentSelection::Indices(vec![0]),
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 128,
+                    y: 0,
+                    width: 2,
+                    height: 1,
+                }),
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![]),
+                ..options.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![3]),
+                ..options.clone()
+            },
+        ] {
+            assert!(decode_partial(&fixture, &excluded).is_err());
+        }
+
+        let cod = fixture
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x52])
+            .unwrap();
+        let siz = fixture
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x51])
+            .unwrap();
+        let mut mutations = Vec::new();
+        let mut irreversible = fixture.clone();
+        irreversible[cod + 13] = 0;
+        mutations.push(irreversible);
+        let mut mct = fixture.clone();
+        mct[cod + 8] = 1;
+        mutations.push(mct);
+        let mut precinct = fixture.clone();
+        precinct[cod + 4] = 1;
+        mutations.push(precinct);
+        let mut non_zero_origin = fixture.clone();
+        non_zero_origin[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
+        mutations.push(non_zero_origin);
+        let mut second_tile = fixture.clone();
+        second_tile[siz + 22..siz + 26].copy_from_slice(&64_u32.to_be_bytes());
+        mutations.push(second_tile);
+        for mutation in mutations {
+            assert!(decode_partial(&mutation, &options).is_err());
+        }
+    }
+
+    #[test]
+    fn source_backed_discard_classifies_complete_sampling_before_selection() {
+        let width = 129_u32;
+        let height = 67_u32;
+        let sampling = [(1_u8, 1_u8), (2, 2)];
+        let planes = sampling
+            .iter()
+            .enumerate()
+            .map(|(component, (horizontal, vertical))| {
+                let native_width = width.div_ceil(u32::from(*horizontal));
+                let native_height = height.div_ceil(u32::from(*vertical));
+                (0..native_width * native_height)
+                    .map(|sample| ((sample * (19 + component as u32 * 12) + 23) % 251) as u8)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let components = planes
+            .iter()
+            .zip(sampling)
+            .map(|(samples, (horizontal_separation, vertical_separation))| {
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation,
+                    vertical_separation,
+                    samples,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mixed = codestream::encode_planar_u8_subsampled_two_decomp_test_fixture(
+            width,
+            height,
+            &components,
+        )
+        .unwrap();
+        let mixed_source = codestream::source::SliceSource::new(&mixed);
+        let selected_unit_component = [0_u16];
+        let request = codestream::Part1ComponentDecodeRequest {
+            component_indices: &selected_unit_component,
+            region: codestream::TileRegionRequest {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            discard_levels: 2,
+            max_layers: None,
+        };
+        assert!(matches!(
+            prepare_part1_decode_from_source(&mixed_source, request),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::PartialDecodeMode,
+                ..
+            })
+        ));
+
+        let unit_samples = (0..width * height)
+            .map(|sample| ((sample * 29 + 11) % 251) as u8)
+            .collect::<Vec<_>>();
+        let unit = codestream::encode_grayscale_u8_two_decomp(codestream::GrayscaleU8Encode {
+            width,
+            height,
+            samples: &unit_samples,
+            stride_bytes: usize::try_from(width).unwrap(),
+        })
+        .unwrap();
+        let unit_source = codestream::source::SliceSource::new(&unit);
+        let prepared = prepare_part1_decode_from_source(&unit_source, request).unwrap();
+        assert_eq!((prepared.info().width, prepared.info().height), (33, 17));
+        assert_eq!(prepared.component_info().len(), 1);
+        assert_eq!(
+            (
+                prepared.component_info()[0].width,
+                prepared.component_info()[0].height,
+                prepared.component_info()[0].horizontal_separation,
+                prepared.component_info()[0].vertical_separation,
+            ),
+            (33, 17, 1, 1)
+        );
     }
 
     #[test]
