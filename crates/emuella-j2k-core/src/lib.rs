@@ -2011,6 +2011,9 @@ fn decode_part1_components_into_direct(
         return Ok(false);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {
+        return Ok(false);
+    }
     if parsed
         .uniform_effective_coding_style()
         .is_some_and(|coding_style| coding_style.multiple_component_transform)
@@ -2538,7 +2541,11 @@ fn decode_owned_selective_part1_partial(
     metadata: &Metadata,
     options: &PartialDecodeOptions,
 ) -> Result<Option<Image>> {
-    if options.resolution != ResolutionLevel::Full || options.tile.is_some() {
+    if !matches!(
+        options.resolution,
+        ResolutionLevel::Full | ResolutionLevel::Reduced { discard_levels: 0 }
+    ) || options.tile.is_some()
+    {
         return Ok(None);
     }
     let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? else {
@@ -6351,6 +6358,83 @@ mod effective_coding_style_tests {
             panic!("native component decode returned interleaved samples");
         };
         planes
+    }
+
+    #[test]
+    fn full_decode_into_rejects_subsampled_native_planes_without_mutation() {
+        let (fixture, _) = subsampled_fixture(9, 5);
+        let options = DecodeOptions {
+            mode: DecodeMode::Components,
+            requested_components: ComponentSelection::Indices(vec![1]),
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        let info = decode_shape(&fixture, &options)
+            .unwrap()
+            .image_info()
+            .unwrap();
+        assert_eq!((info.width, info.height, info.components), (9, 5, 1));
+        let mut samples = vec![0x6d; 45];
+        {
+            let plane = PlaneMut::new(&mut samples, 9, 5, 9, info.sample_format).unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_into(&fixture, &mut target, &options).is_err());
+        }
+        assert!(samples.iter().all(|sample| *sample == 0x6d));
+    }
+
+    #[test]
+    fn subsampled_zero_discard_matches_full_owned_caller_and_info() {
+        let (fixture, _) = subsampled_fixture(9, 5);
+        let full_options = PartialDecodeOptions::default();
+        let zero_discard_options = PartialDecodeOptions {
+            resolution: ResolutionLevel::Reduced { discard_levels: 0 },
+            ..PartialDecodeOptions::default()
+        };
+        let full_info = decode_partial_info(&fixture, &full_options).unwrap();
+        let zero_discard_info = decode_partial_info(&fixture, &zero_discard_options).unwrap();
+        assert_eq!(zero_discard_info, full_info);
+        let full_components = decode_partial_component_info(&fixture, &full_options).unwrap();
+        let zero_discard_components =
+            decode_partial_component_info(&fixture, &zero_discard_options).unwrap();
+        assert_eq!(zero_discard_components, full_components);
+
+        let full = decode_partial(&fixture, &full_options).unwrap();
+        let zero_discard = decode_partial(&fixture, &zero_discard_options).unwrap();
+        assert_eq!(zero_discard, full);
+
+        let mut caller_buffers = zero_discard_components
+            .iter()
+            .map(|component| {
+                vec![0xa5; usize::try_from(component.width * component.height).unwrap()]
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut caller_planes = caller_buffers
+                .iter_mut()
+                .zip(&zero_discard_components)
+                .map(|(samples, component)| {
+                    PlaneMut::new(
+                        samples,
+                        component.width,
+                        component.height,
+                        usize::try_from(component.width).unwrap(),
+                        component.sample_format,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut target = ImageViewMut::Planar {
+                info: &zero_discard_info,
+                planes: &mut caller_planes,
+            };
+            decode_partial_into(&fixture, &mut target, &zero_discard_options).unwrap();
+        }
+        assert_eq!(caller_buffers, planar_bytes(&full));
     }
 
     #[test]
