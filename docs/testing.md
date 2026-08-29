@@ -430,6 +430,17 @@ errors, duplicate or unsignalled markers, missing required EPH, unqualified
 SOP/precinct combinations, and unsupported tile-part topology. Other decoder
 profiles retain their existing packet-marker support boundary.
 
+The native `HTONLY` lossless path reuses this same inline packet walker for
+SOP-only, EPH-only and combined packets within its existing single-effective-
+precinct profile. Marker admission does not widen its reversible-transform,
+tile, component, decomposition, progression or precinct-topology boundaries.
+Project-authored HT fixtures cover zero and three decompositions, malformed and
+unsignalled markers, sequence and duplication errors, and PLT packet-boundary
+crossings. The bounded profile requires coding style to come from the main
+header: any tile-header COD is rejected before packed-header or SOP/EPH
+validation, including an otherwise identical override with unchanged marker
+flags.
+
 ## Bounded tile-header Maxshift
 
 The byte-verified bounded-POC selective component path accepts the single

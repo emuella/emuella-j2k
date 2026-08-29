@@ -13003,6 +13003,78 @@ fn recheck_validator_granted_p0_06_effective_maxshift(
     Ok((granted.tile_index == tile_index).then_some(granted))
 }
 
+/// Insert SOP and EPH into every packet of a project-authored, single-layer
+/// test fixture while preserving the original packet bodies.
+#[cfg(test)]
+fn add_inline_packet_markers(mut codestream: Vec<u8>, sop: bool, eph: bool) -> Vec<u8> {
+    let parsed = parse(&codestream).unwrap();
+    let coding_style = parsed.coding_style.unwrap();
+    assert_eq!(coding_style.layers, 1);
+    assert_eq!(parsed.siz.component_count(), 1);
+    let tile_rects = tile_rects(&parsed).unwrap();
+    let sot_offsets = parsed
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Sot)
+        .map(|segment| segment.offset)
+        .collect::<Vec<_>>();
+    assert_eq!(sot_offsets.len(), parsed.tiles.len());
+
+    let mut replacements = Vec::new();
+    for (tile_part, sot_offset) in parsed.tiles.iter().zip(sot_offsets) {
+        let payload_offset = tile_part.payload_offset.unwrap();
+        let payload_len = tile_part.payload_len.unwrap();
+        let payload = &codestream[payload_offset..payload_offset + payload_len];
+        let tile_rect = tile_rects[usize::from(tile_part.tile_index)];
+        let contributions =
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload).unwrap();
+        let mut packet_start = 0_usize;
+        let mut marked_payload = Vec::new();
+        for resolution in 0..=coding_style.decomposition_levels {
+            let packet_contributions = contributions
+                .iter()
+                .filter(|contribution| contribution.resolution == resolution)
+                .collect::<Vec<_>>();
+            let header_end = packet_contributions
+                .iter()
+                .map(|contribution| contribution.payload_offset)
+                .min()
+                .unwrap();
+            let packet_end = packet_contributions
+                .iter()
+                .map(|contribution| contribution.payload_offset + contribution.codeword_len)
+                .max()
+                .unwrap();
+            assert!(packet_start <= header_end);
+            assert!(header_end <= packet_end);
+
+            if sop {
+                marked_payload.extend_from_slice(&Marker::Sop.code().to_be_bytes());
+                marked_payload.extend_from_slice(&4_u16.to_be_bytes());
+                marked_payload.extend_from_slice(&u16::from(resolution).to_be_bytes());
+            }
+            marked_payload.extend_from_slice(&payload[packet_start..header_end]);
+            if eph {
+                marked_payload.extend_from_slice(&Marker::Eph.code().to_be_bytes());
+            }
+            marked_payload.extend_from_slice(&payload[header_end..packet_end]);
+            packet_start = packet_end;
+        }
+        assert_eq!(packet_start, payload.len());
+        replacements.push((sot_offset, payload_offset, payload_len, marked_payload));
+    }
+
+    for (sot_offset, payload_offset, payload_len, marked_payload) in replacements.into_iter().rev()
+    {
+        let delta = u32::try_from(marked_payload.len().checked_sub(payload_len).unwrap()).unwrap();
+        let psot = read_u32(&codestream, sot_offset + 6).unwrap();
+        codestream[sot_offset + 6..sot_offset + 10]
+            .copy_from_slice(&psot.checked_add(delta).unwrap().to_be_bytes());
+        codestream.splice(payload_offset..payload_offset + payload_len, marked_payload);
+    }
+    codestream
+}
+
 /// Validate the informational CRG form carried by the locked P0.03 path.
 ///
 /// ISO/IEC 15444-1:2024, Annex A, A.9–A.9.1 and Table A.42 (PDF pages
@@ -13416,78 +13488,6 @@ mod bounded_poc_tests {
             &mut Part1ComponentDecodeWorkspace::new(),
         )?;
         Ok(output)
-    }
-
-    fn add_inline_packet_markers(mut codestream: Vec<u8>, sop: bool, eph: bool) -> Vec<u8> {
-        let parsed = parse(&codestream).unwrap();
-        let coding_style = parsed.coding_style.unwrap();
-        assert_eq!(coding_style.layers, 1);
-        assert_eq!(parsed.siz.component_count(), 1);
-        let tile_rects = tile_rects(&parsed).unwrap();
-        let sot_offsets = parsed
-            .markers
-            .iter()
-            .filter(|segment| segment.marker == Marker::Sot)
-            .map(|segment| segment.offset)
-            .collect::<Vec<_>>();
-        assert_eq!(sot_offsets.len(), parsed.tiles.len());
-
-        let mut replacements = Vec::new();
-        for (tile_part, sot_offset) in parsed.tiles.iter().zip(sot_offsets) {
-            let payload_offset = tile_part.payload_offset.unwrap();
-            let payload_len = tile_part.payload_len.unwrap();
-            let payload = &codestream[payload_offset..payload_offset + payload_len];
-            let tile_rect = tile_rects[usize::from(tile_part.tile_index)];
-            let contributions =
-                parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)
-                    .unwrap();
-            let mut packet_start = 0_usize;
-            let mut marked_payload = Vec::new();
-            for resolution in 0..=coding_style.decomposition_levels {
-                let packet_contributions = contributions
-                    .iter()
-                    .filter(|contribution| contribution.resolution == resolution)
-                    .collect::<Vec<_>>();
-                let header_end = packet_contributions
-                    .iter()
-                    .map(|contribution| contribution.payload_offset)
-                    .min()
-                    .unwrap();
-                let packet_end = packet_contributions
-                    .iter()
-                    .map(|contribution| contribution.payload_offset + contribution.codeword_len)
-                    .max()
-                    .unwrap();
-                assert!(packet_start <= header_end);
-                assert!(header_end <= packet_end);
-
-                if sop {
-                    marked_payload.extend_from_slice(&Marker::Sop.code().to_be_bytes());
-                    marked_payload.extend_from_slice(&4_u16.to_be_bytes());
-                    marked_payload.extend_from_slice(&u16::from(resolution).to_be_bytes());
-                }
-                marked_payload.extend_from_slice(&payload[packet_start..header_end]);
-                if eph {
-                    marked_payload.extend_from_slice(&Marker::Eph.code().to_be_bytes());
-                }
-                marked_payload.extend_from_slice(&payload[header_end..packet_end]);
-                packet_start = packet_end;
-            }
-            assert_eq!(packet_start, payload.len());
-            replacements.push((sot_offset, payload_offset, payload_len, marked_payload));
-        }
-
-        for (sot_offset, payload_offset, payload_len, marked_payload) in
-            replacements.into_iter().rev()
-        {
-            let delta =
-                u32::try_from(marked_payload.len().checked_sub(payload_len).unwrap()).unwrap();
-            let psot = read_u32(&codestream, sot_offset + 6).unwrap();
-            codestream[sot_offset + 6..sot_offset + 10]
-                .copy_from_slice(&psot.checked_add(delta).unwrap().to_be_bytes());
-            codestream.splice(payload_offset..payload_offset + payload_len, marked_payload);
-        }
-        codestream
     }
 
     fn bounded_poc_marker_fixture(sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
@@ -42818,6 +42818,18 @@ fn htj2k_multilevel_quantization_override(codestream: &Codestream) -> Option<Mar
     })
 }
 
+fn htj2k_tile_header_cod(codestream: &Codestream) -> Option<&MarkerSegment> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)?
+        .offset;
+    codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Cod && segment.offset > first_tile_offset)
+}
+
 fn classify_htj2k_lossless_profile_markers(
     codestream: &Codestream,
 ) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
@@ -42825,6 +42837,12 @@ fn classify_htj2k_lossless_profile_markers(
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::EntropyCoder,
             "the native HTJ2K lossless profile requires an HTJ2K codestream",
+        ));
+    }
+    if htj2k_tile_header_cod(codestream).is_some() {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K lossless decode does not accept tile-header COD overrides",
         ));
     }
 
@@ -42842,8 +42860,28 @@ fn classify_htj2k_lossless_profile_markers(
             ));
         }
     }
+    if uniform_effective_coding_style(codestream)
+        .ok()
+        .and_then(|style| htj2k_non_inline_packet_marker_source(codestream, style))
+        .is_some()
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K SOP/EPH decode requires inline packet headers",
+        ));
+    }
 
     Ok(())
+}
+
+fn htj2k_non_inline_packet_marker_source(
+    codestream: &Codestream,
+    coding_style: CodingStyleMarker,
+) -> Option<Marker> {
+    (coding_style.sop_markers || coding_style.eph_markers).then_some(())?;
+    codestream.markers.iter().find_map(|segment| {
+        matches!(segment.marker, Marker::Ppm | Marker::Ppt).then_some(segment.marker)
+    })
 }
 
 #[cfg(feature = "std")]
@@ -43247,6 +43285,354 @@ mod htj2k_lossless_profile_classifier_tests {
         );
         codestream.splice(sod..sod, segment.iter().copied());
         codestream
+    }
+
+    fn with_tile_cod_scod(codestream: Vec<u8>, scod: u8) -> Vec<u8> {
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        let mut segment = codestream[cod..cod + 2 + lcod].to_vec();
+        segment[4] = scod;
+        insert_tile_header_segment(codestream, &segment)
+    }
+
+    fn relocate_single_packet_header(
+        mut codestream: Vec<u8>,
+        kind: PacketHeaderSourceKind,
+    ) -> Vec<u8> {
+        let parsed = parse(&codestream).unwrap();
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let tile_part = parsed.tiles[0];
+        let payload_offset = tile_part.payload_offset.unwrap();
+        let payload_len = tile_part.payload_len.unwrap();
+        let payload = &codestream[payload_offset..payload_offset + payload_len];
+        let contributions =
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload).unwrap();
+        let body_start = contributions
+            .iter()
+            .map(|contribution| contribution.payload_offset)
+            .min()
+            .unwrap();
+        let header_start = usize::from(payload.starts_with(&Marker::Sop.code().to_be_bytes())) * 6;
+        assert!(header_start < body_start);
+        let headers = payload[header_start..body_start].to_vec();
+        let mut bodies = payload[..header_start].to_vec();
+        bodies.extend_from_slice(&payload[body_start..]);
+
+        let mut data = vec![0];
+        if kind == PacketHeaderSourceKind::Ppm {
+            data.extend_from_slice(&u32::try_from(headers.len()).unwrap().to_be_bytes());
+        }
+        data.extend_from_slice(&headers);
+        let marker = match kind {
+            PacketHeaderSourceKind::Ppm => Marker::Ppm,
+            PacketHeaderSourceKind::Ppt => Marker::Ppt,
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        };
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&data);
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        let tile_header_delta = if kind == PacketHeaderSourceKind::Ppt {
+            segment.len()
+        } else {
+            0
+        };
+        let new_psot = usize::try_from(psot)
+            .unwrap()
+            .checked_sub(headers.len())
+            .and_then(|length| length.checked_add(tile_header_delta))
+            .and_then(|length| u32::try_from(length).ok())
+            .unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(&new_psot.to_be_bytes());
+        codestream.splice(payload_offset..payload_offset + payload_len, bodies);
+        let insertion = if kind == PacketHeaderSourceKind::Ppm {
+            sot
+        } else {
+            find_marker(&codestream, sot, Marker::Sod).unwrap()
+        };
+        codestream.splice(insertion..insertion, segment);
+        parse(&codestream).unwrap();
+        codestream
+    }
+
+    fn assert_tile_cod_rejected(codestream: &[u8]) {
+        let parsed = parse(codestream).unwrap();
+        assert_eq!(
+            diagnostic_for(codestream, &parsed),
+            Some((
+                UnsupportedConstruct::MarkerSegment,
+                "native HTJ2K lossless decode does not accept tile-header COD overrides".into(),
+            ))
+        );
+        assert!(!is_htj2k_lossless_profile(codestream, &parsed));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(codestream),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::MarkerSegment,
+                message: "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
+                ..
+            })
+        ));
+        assert_eq!(
+            htj2k_lossless_no_decomp_workload_profile(codestream).unwrap(),
+            None
+        );
+    }
+
+    fn ht_marker_fixture(levels: u8, sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
+        let (codestream, samples) = if levels == 0 {
+            let codestream = fixture();
+            let samples = decode_htj2k_lossless_owned(&codestream)
+                .unwrap()
+                .unwrap()
+                .components[0]
+                .samples
+                .clone();
+            (codestream, samples)
+        } else {
+            multilevel_fixture(levels)
+        };
+        let mut codestream = add_inline_packet_markers(codestream, sop, eph);
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 4] |= (u8::from(sop) << 1) | (u8::from(eph) << 2);
+        (codestream, samples)
+    }
+
+    fn add_to_first_psot(codestream: &mut [u8], delta: usize) {
+        let sot = find_marker(codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(delta).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+    }
+
+    fn truncate_first_tile_payload(mut codestream: Vec<u8>, retained_len: usize) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let payload_offset = sod + 2;
+        let eoc = find_marker(&codestream, payload_offset, Marker::Eoc).unwrap();
+        let retained_end = payload_offset.checked_add(retained_len).unwrap();
+        assert!(retained_end < eoc);
+        let removed = eoc - retained_end;
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_sub(u32::try_from(removed).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.drain(retained_end..eoc);
+        codestream
+    }
+
+    fn encode_test_packet_length(mut value: usize) -> Vec<u8> {
+        let mut reversed = Vec::new();
+        loop {
+            reversed.push((value & 0x7f) as u8);
+            value >>= 7;
+            if value == 0 {
+                break;
+            }
+        }
+        reversed.reverse();
+        let last = reversed.len() - 1;
+        for encoded in &mut reversed[..last] {
+            *encoded |= 0x80;
+        }
+        reversed
+    }
+
+    fn insert_first_tile_plt(mut codestream: Vec<u8>, lengths: &[usize]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let mut encoded = Vec::new();
+        for length in lengths {
+            encoded.extend_from_slice(&encode_test_packet_length(*length));
+        }
+        let mut segment = Marker::Plt.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&u16::try_from(encoded.len() + 3).unwrap().to_be_bytes());
+        segment.push(0);
+        segment.extend_from_slice(&encoded);
+        add_to_first_psot(&mut codestream, segment.len());
+        codestream.splice(sod..sod, segment);
+        codestream
+    }
+
+    fn assert_ht_packet_marker_error(codestream: &[u8], marker: Marker) {
+        let parsed = parse(codestream).unwrap();
+        assert!(!is_htj2k_lossless_profile(codestream, &parsed));
+        assert!(matches!(
+            diagnostic(codestream),
+            Some((UnsupportedConstruct::PacketDecode, detail))
+                if detail.contains("packet parsing failed")
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(actual),
+                ..
+            }) if actual == marker
+        ));
+    }
+
+    #[test]
+    fn ht_lossless_decode_reuses_strict_inline_sop_and_eph_walker() {
+        for levels in [0, 3] {
+            for (sop, eph) in [(true, false), (false, true), (true, true)] {
+                let (codestream, samples) = ht_marker_fixture(levels, sop, eph);
+                let parsed = parse(&codestream).unwrap();
+                assert!(is_htj2k_lossless_profile(&codestream, &parsed));
+                assert_eq!(diagnostic(&codestream), None);
+
+                let decoded = decode_htj2k_lossless_owned(&codestream).unwrap().unwrap();
+                assert_eq!(decoded.components.len(), 1);
+                assert_eq!(decoded.components[0].samples, samples);
+            }
+        }
+    }
+
+    #[test]
+    fn ht_rejects_tile_cod_before_main_sop_true_tile_false_packet_validation() {
+        let (inline, _) = ht_marker_fixture(0, true, false);
+        let cod = find_marker(&inline, 0, Marker::Cod).unwrap();
+        let tile_scod = inline[cod + 4] & !0x02;
+        for codestream in [
+            inline.clone(),
+            relocate_single_packet_header(inline.clone(), PacketHeaderSourceKind::Ppm),
+            relocate_single_packet_header(inline, PacketHeaderSourceKind::Ppt),
+        ] {
+            let codestream = with_tile_cod_scod(codestream, tile_scod);
+            assert_tile_cod_rejected(&codestream);
+        }
+    }
+
+    #[test]
+    fn ht_rejects_tile_cod_before_main_eph_false_tile_true_packet_validation() {
+        let inline = fixture();
+        let cod = find_marker(&inline, 0, Marker::Cod).unwrap();
+        let tile_scod = inline[cod + 4] | 0x04;
+        for codestream in [
+            inline.clone(),
+            relocate_single_packet_header(inline.clone(), PacketHeaderSourceKind::Ppm),
+            relocate_single_packet_header(inline, PacketHeaderSourceKind::Ppt),
+        ] {
+            let codestream = with_tile_cod_scod(codestream, tile_scod);
+            assert_tile_cod_rejected(&codestream);
+        }
+    }
+
+    #[test]
+    fn ht_rejects_tile_cod_even_when_marker_flags_are_unchanged() {
+        let codestream = fixture();
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let scod = codestream[cod + 4];
+        let codestream = with_tile_cod_scod(codestream, scod);
+        assert_tile_cod_rejected(&codestream);
+    }
+
+    #[test]
+    fn ht_lossless_eph_fails_closed_when_truncated_unsignalled_or_duplicated() {
+        let (codestream, _) = ht_marker_fixture(0, false, true);
+        let sod = find_marker(&codestream, 0, Marker::Sod).unwrap();
+        let eph = find_marker(&codestream, sod + 2, Marker::Eph).unwrap();
+        let truncated = truncate_first_tile_payload(codestream.clone(), eph - (sod + 2) + 1);
+        assert_ht_packet_marker_error(&truncated, Marker::Eph);
+
+        let mut unsignalled = codestream.clone();
+        let cod = find_marker(&unsignalled, 0, Marker::Cod).unwrap();
+        unsignalled[cod + 4] &= !0x04;
+        assert_ht_packet_marker_error(&unsignalled, Marker::Eph);
+
+        let mut duplicate = codestream;
+        duplicate.splice(eph + 2..eph + 2, Marker::Eph.code().to_be_bytes());
+        add_to_first_psot(&mut duplicate, 2);
+        assert_ht_packet_marker_error(&duplicate, Marker::Eph);
+    }
+
+    #[test]
+    fn ht_lossless_sop_fails_closed_when_truncated_missequenced_or_duplicated() {
+        let (codestream, _) = ht_marker_fixture(0, true, false);
+        let truncated = truncate_first_tile_payload(codestream.clone(), 5);
+        let parsed = parse(&truncated).unwrap();
+        assert!(!is_htj2k_lossless_profile(&truncated, &parsed));
+        assert!(matches!(
+            diagnostic(&truncated),
+            Some((UnsupportedConstruct::PacketDecode, detail))
+                if detail.contains("packet parsing failed")
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&truncated),
+            Err(CodestreamError::TruncatedInput { .. })
+        ));
+
+        let mut wrong_sequence = codestream.clone();
+        let sod = find_marker(&wrong_sequence, 0, Marker::Sod).unwrap();
+        wrong_sequence[sod + 6..sod + 8].copy_from_slice(&1_u16.to_be_bytes());
+        assert_ht_packet_marker_error(&wrong_sequence, Marker::Sop);
+
+        let mut duplicate = codestream;
+        let packet_start = sod + 2;
+        let sop = duplicate[packet_start..packet_start + 6].to_vec();
+        duplicate.splice(packet_start + 6..packet_start + 6, sop);
+        add_to_first_psot(&mut duplicate, 6);
+        assert_ht_packet_marker_error(&duplicate, Marker::Sop);
+    }
+
+    #[test]
+    fn ht_lossless_inline_marker_cannot_cross_a_plt_packet_boundary() {
+        let (codestream, _) = ht_marker_fixture(0, true, false);
+        let parsed = parse(&codestream).unwrap();
+        let payload_len = parsed.tiles[0].payload_len.unwrap();
+        assert!(payload_len > 5);
+        let codestream = insert_first_tile_plt(codestream, &[5, payload_len - 5]);
+        assert_ht_packet_marker_error(&codestream, Marker::Sop);
+    }
+
+    #[test]
+    fn ht_packet_markers_do_not_widen_multitile_or_precinct_topology() {
+        let mut multitile = multitile_fixture(1, 1);
+        let cod = find_marker(&multitile, 0, Marker::Cod).unwrap();
+        multitile[cod + 4] |= 0x02;
+        let sot = find_marker(&multitile, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&multitile, sot, Marker::Sod).unwrap();
+        let sop = [0xff, 0x91, 0, 4, 0, 0];
+        multitile.splice(sod + 2..sod + 2, sop);
+        add_to_first_psot(&mut multitile, sop.len());
+        assert!(matches!(
+            diagnostic(&multitile),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail.contains("multi-tile HTJ2K lossless decode requires zero decomposition")
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&multitile),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::WaveletTransform,
+                ..
+            })
+        ));
+
+        let (mut precincts, _) = ht_marker_fixture(0, true, false);
+        let cod = find_marker(&precincts, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&precincts, cod + 2).unwrap());
+        precincts[cod + 4] |= 0x01;
+        precincts[cod + 2..cod + 4]
+            .copy_from_slice(&u16::try_from(lcod + 1).unwrap().to_be_bytes());
+        precincts.insert(cod + 2 + lcod, 0x11);
+        let parsed = parse(&precincts).unwrap();
+        assert!(matches!(
+            ht_decode_candidate(&parsed),
+            Some(Err(ht::HtClassification {
+                reason: ht::HtUnsupportedReason::Precincts,
+                ..
+            }))
+        ));
+        assert!(!is_htj2k_lossless_profile(&precincts, &parsed));
     }
 
     #[test]
@@ -43838,6 +44224,9 @@ pub fn htj2k_lossless_no_decomp_workload_profile(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    if htj2k_tile_header_cod(&codestream).is_some() {
+        return Ok(None);
+    }
     let Ok(coding_style) = uniform_effective_coding_style(&codestream) else {
         return Ok(None);
     };
@@ -44049,7 +44438,11 @@ fn byte_stuffing_profile(bytes: &[u8]) -> (usize, usize) {
 /// unsigned 8- to 16-bit components may use the reversible multiple-component
 /// transform; decoded RGB samples are returned after inverse DWT and RCT.
 /// Multi-tile decode currently requires zero decomposition levels and exactly
-/// one tile-part per tile.
+/// one tile-part per tile. Inline SOP and EPH are admitted only through the
+/// shared strict packet walker; they do not widen the tile, precinct,
+/// progression or transform profile.
+/// Tile-header COD overrides remain outside this bounded profile and are
+/// rejected before packet-header location or SOP/EPH validation.
 #[cfg(feature = "std")]
 pub fn decode_htj2k_lossless_owned_with_workspace(
     input: &[u8],
@@ -44058,6 +44451,14 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     let codestream = parse(input)?;
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
+    }
+    if let Some(segment) = htj2k_tile_header_cod(&codestream) {
+        return Err(unsupported(
+            Some(segment.offset),
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
+        ));
     }
 
     let candidate = match ht_decode_candidate(&codestream) {
@@ -44080,6 +44481,14 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
         }
     };
     let coding_style = uniform_effective_coding_style(&codestream)?;
+    if let Some(marker) = htj2k_non_inline_packet_marker_source(&codestream, coding_style) {
+        return Err(unsupported(
+            None,
+            Some(marker),
+            UnsupportedConstruct::MarkerSegment,
+            "benchmark-oriented HTJ2K SOP/EPH decode requires inline packet headers",
+        ));
+    }
     if coding_style.decomposition_levels > 3 {
         return Err(unsupported(
             None,
