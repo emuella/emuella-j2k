@@ -39,6 +39,17 @@ The command-line adapter installs the `emuella-j2k` executable:
 emuella-j2k inspect image.jp2
 ```
 
+Its dedicated rendered conformance worker compares one bounded full-frame JP2
+rendered decode with one bounded baseline RGB TIFF entirely in memory:
+
+```sh
+emuella-j2k compare-rendered-tiff-rgb image.jp2 reference.tif \
+  --width 480 --height 640 --components 3 --peak-error-limit 4
+```
+
+This low-level worker is intended for the verified opt-in Layer 2 runner. It
+prints aggregate fields only and does not acquire, copy or persist pixels.
+
 ## Workspace
 
 - `emuella-j2k`: stable public facade for application users.

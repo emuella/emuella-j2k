@@ -1,19 +1,54 @@
 use emuella_j2k_core::{
-    ComponentLayout, ComponentSelection, DecodeMode, DecodeOptions, ImageData, InspectOptions,
-    PartialDecodeOptions, Region, ResolutionLevel, SampleEndian, SampleFormat, decode,
-    decode_partial, inspect,
+    ColorModel, ComponentLayout, ComponentSelection, DecodeMode, DecodeOptions, ImageData,
+    InputFormat, InspectOptions, PartialDecodeOptions, Region, ResolutionLevel, SampleEndian,
+    SampleFormat, decode, decode_partial, inspect,
 };
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_REFERENCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_COMPARISON_SAMPLES: u64 = 100_000_000;
+const RENDERED_LIMIT_EXCEEDED: &str = "rendered samples exceed the comparison limit";
 
 fn usage() -> &'static str {
-    "usage:\n  emuella-j2k inspect INPUT\n  emuella-j2k compare-pgx INPUT REFERENCE --component N (--full-component|--output-window) --resolution-reduction N --output-origin-x N --output-origin-y N --width N --height N --bits-per-sample N (--signed|--unsigned) --peak-error-limit N --mean-squared-error-limit N"
+    "usage:\n  emuella-j2k inspect INPUT\n  emuella-j2k compare-pgx INPUT REFERENCE --component N (--full-component|--output-window) --resolution-reduction N --output-origin-x N --output-origin-y N --width N --height N --bits-per-sample N (--signed|--unsigned) --peak-error-limit N --mean-squared-error-limit N\n  emuella-j2k compare-rendered-tiff-rgb INPUT REFERENCE --width N --height N --components 3 --peak-error-limit N"
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RenderedComparisonContract {
+    width: u32,
+    height: u32,
+    components: u16,
+    peak_error_limit: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RenderedErrorAggregates {
+    samples: u64,
+    peak_error: u64,
+}
+
+impl RenderedErrorAggregates {
+    fn passes(self, contract: RenderedComparisonContract) -> bool {
+        self.peak_error <= contract.peak_error_limit
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TiffEndian {
+    Little,
+    Big,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TiffRgbImage {
+    width: u32,
+    height: u32,
+    samples: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -163,6 +198,79 @@ fn parse_comparison_arguments(
     Ok((input, reference, contract))
 }
 
+fn parse_rendered_comparison_arguments(
+    arguments: Vec<OsString>,
+) -> Result<(PathBuf, PathBuf, RenderedComparisonContract), String> {
+    if arguments.len() < 2 {
+        return Err(usage().to_owned());
+    }
+    let input = PathBuf::from(&arguments[0]);
+    let reference = PathBuf::from(&arguments[1]);
+    let arguments = arguments[2..]
+        .iter()
+        .map(|argument| {
+            argument
+                .clone()
+                .into_string()
+                .map_err(|_| "rendered comparison options must be valid UTF-8".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut width = None;
+    let mut height = None;
+    let mut components = None;
+    let mut peak_error_limit = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--width" if width.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--width")?;
+                width = Some(parse_number(&value, "width")?);
+            }
+            "--height" if height.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--height")?;
+                height = Some(parse_number(&value, "height")?);
+            }
+            "--components" if components.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--components")?;
+                components = Some(parse_number(&value, "components")?);
+            }
+            "--peak-error-limit" if peak_error_limit.is_none() => {
+                let value = take_flag_value(&arguments, &mut index, "--peak-error-limit")?;
+                peak_error_limit = Some(parse_number(&value, "peak-error limit")?);
+            }
+            _ => return Err(usage().to_owned()),
+        }
+        index += 1;
+    }
+    let contract = RenderedComparisonContract {
+        width: width.ok_or_else(|| usage().to_owned())?,
+        height: height.ok_or_else(|| usage().to_owned())?,
+        components: components.ok_or_else(|| usage().to_owned())?,
+        peak_error_limit: peak_error_limit.ok_or_else(|| usage().to_owned())?,
+    };
+    validate_rendered_contract(contract)?;
+    Ok((input, reference, contract))
+}
+
+fn validate_rendered_contract(contract: RenderedComparisonContract) -> Result<(), String> {
+    if contract.components != 3 {
+        return Err("rendered comparison requires exactly three components".to_owned());
+    }
+    let samples = u64::from(contract.width)
+        .checked_mul(u64::from(contract.height))
+        .and_then(|pixels| pixels.checked_mul(u64::from(contract.components)))
+        .ok_or_else(|| "rendered comparison dimensions overflow".to_owned())?;
+    if samples == 0 || samples > MAX_COMPARISON_SAMPLES {
+        return Err(
+            "rendered comparison sample count is zero or exceeds the worker bound".to_owned(),
+        );
+    }
+    if contract.peak_error_limit > u64::from(u8::MAX) {
+        return Err("rendered peak-error limit exceeds the 8-bit sample range".to_owned());
+    }
+    Ok(())
+}
+
 fn validate_contract(contract: ComparisonContract) -> Result<(), String> {
     let samples = u64::from(contract.width)
         .checked_mul(u64::from(contract.height))
@@ -227,6 +335,30 @@ fn read_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, Strin
         ));
     }
     fs::read(path).map_err(|error| format!("failed to read {label} {}: {error}", path.display()))
+}
+
+fn read_bounded_scrubbed(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|_| format!("cannot open {label}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| format!("cannot inspect {label}"))?;
+    if !metadata.is_file() || metadata.len() > maximum {
+        return Err(format!(
+            "{label} is not a regular file within the worker size bound"
+        ));
+    }
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| format!("{label} size exceeds the host range"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| format!("cannot read {label}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
+        return Err(format!(
+            "{label} exceeds the worker size bound while reading"
+        ));
+    }
+    Ok(bytes)
 }
 
 fn parse_pgx(bytes: &[u8]) -> Result<PgxImage, String> {
@@ -374,6 +506,756 @@ fn logical_sample(
     }
 }
 
+fn tiff_u16(bytes: &[u8], offset: usize, endian: TiffEndian) -> Result<u16, String> {
+    let value = bytes
+        .get(
+            offset
+                ..offset
+                    .checked_add(2)
+                    .ok_or_else(|| "TIFF offset overflow".to_owned())?,
+        )
+        .ok_or_else(|| "TIFF field is truncated".to_owned())?;
+    Ok(match endian {
+        TiffEndian::Little => u16::from_le_bytes([value[0], value[1]]),
+        TiffEndian::Big => u16::from_be_bytes([value[0], value[1]]),
+    })
+}
+
+fn tiff_u32(bytes: &[u8], offset: usize, endian: TiffEndian) -> Result<u32, String> {
+    let value = bytes
+        .get(
+            offset
+                ..offset
+                    .checked_add(4)
+                    .ok_or_else(|| "TIFF offset overflow".to_owned())?,
+        )
+        .ok_or_else(|| "TIFF field is truncated".to_owned())?;
+    Ok(match endian {
+        TiffEndian::Little => u32::from_le_bytes([value[0], value[1], value[2], value[3]]),
+        TiffEndian::Big => u32::from_be_bytes([value[0], value[1], value[2], value[3]]),
+    })
+}
+
+fn register_tiff_range(
+    ranges: &mut Vec<(usize, usize)>,
+    start: usize,
+    length: usize,
+    file_length: usize,
+) -> Result<(), String> {
+    if length == 0 {
+        return Err("TIFF contains an empty referenced range".to_owned());
+    }
+    let end = start
+        .checked_add(length)
+        .ok_or_else(|| "TIFF referenced range overflows".to_owned())?;
+    if end > file_length {
+        return Err("TIFF referenced range is truncated".to_owned());
+    }
+    if ranges
+        .iter()
+        .any(|(other_start, other_end)| start < *other_end && *other_start < end)
+    {
+        return Err("TIFF referenced ranges overlap".to_owned());
+    }
+    ranges.push((start, end));
+    Ok(())
+}
+
+fn tiff_type_size(field_type: u16) -> Result<usize, String> {
+    match field_type {
+        1 | 7 => Ok(1),
+        3 => Ok(2),
+        4 => Ok(4),
+        5 => Ok(8),
+        _ => Err("TIFF field uses an unsupported type".to_owned()),
+    }
+}
+
+fn tiff_entry_data<'a>(
+    bytes: &'a [u8],
+    endian: TiffEndian,
+    field_type: u16,
+    count: u32,
+    value_field_offset: usize,
+    ranges: &mut Vec<(usize, usize)>,
+) -> Result<&'a [u8], String> {
+    if count == 0 {
+        return Err("TIFF field has an empty value count".to_owned());
+    }
+    let length = usize::try_from(count)
+        .ok()
+        .and_then(|value_count| value_count.checked_mul(tiff_type_size(field_type).ok()?))
+        .ok_or_else(|| "TIFF field length overflows".to_owned())?;
+    let start = if length <= 4 {
+        value_field_offset
+    } else {
+        usize::try_from(tiff_u32(bytes, value_field_offset, endian)?)
+            .map_err(|_| "TIFF value offset exceeds the host range".to_owned())?
+    };
+    if length > 4 {
+        register_tiff_range(ranges, start, length, bytes.len())?;
+    }
+    let end = start
+        .checked_add(length)
+        .ok_or_else(|| "TIFF field range overflows".to_owned())?;
+    bytes
+        .get(start..end)
+        .ok_or_else(|| "TIFF field value is truncated".to_owned())
+}
+
+fn tiff_unsigned_values(
+    bytes: &[u8],
+    endian: TiffEndian,
+    field_type: u16,
+    count: u32,
+    value_field_offset: usize,
+    ranges: &mut Vec<(usize, usize)>,
+) -> Result<Vec<u32>, String> {
+    if !matches!(field_type, 3 | 4) {
+        return Err("TIFF integer field has an unsupported type".to_owned());
+    }
+    let data = tiff_entry_data(bytes, endian, field_type, count, value_field_offset, ranges)?;
+    let width = tiff_type_size(field_type)?;
+    (0..usize::try_from(count).map_err(|_| "TIFF value count is too large".to_owned())?)
+        .map(|index| {
+            let offset = index
+                .checked_mul(width)
+                .ok_or_else(|| "TIFF value offset overflows".to_owned())?;
+            if field_type == 3 {
+                tiff_u16(data, offset, endian).map(u32::from)
+            } else {
+                tiff_u32(data, offset, endian)
+            }
+        })
+        .collect()
+}
+
+fn tiff_scalar(
+    bytes: &[u8],
+    endian: TiffEndian,
+    field_type: u16,
+    count: u32,
+    value_field_offset: usize,
+    ranges: &mut Vec<(usize, usize)>,
+) -> Result<u32, String> {
+    if count != 1 {
+        return Err("TIFF scalar field has a conflicting value count".to_owned());
+    }
+    tiff_unsigned_values(bytes, endian, field_type, count, value_field_offset, ranges)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "TIFF scalar field has no value".to_owned())
+}
+
+fn validate_tiff_rational(
+    bytes: &[u8],
+    endian: TiffEndian,
+    field_type: u16,
+    count: u32,
+    value_field_offset: usize,
+    ranges: &mut Vec<(usize, usize)>,
+) -> Result<(), String> {
+    if field_type != 5 || count != 1 {
+        return Err("TIFF resolution field has an unsupported shape".to_owned());
+    }
+    let data = tiff_entry_data(bytes, endian, field_type, count, value_field_offset, ranges)?;
+    if tiff_u32(data, 4, endian)? == 0 {
+        return Err("TIFF resolution denominator is zero".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_tiff_inert_bytes(
+    bytes: &[u8],
+    endian: TiffEndian,
+    field_type: u16,
+    expected_type: u16,
+    count: u32,
+    value_field_offset: usize,
+    ranges: &mut Vec<(usize, usize)>,
+) -> Result<(), String> {
+    if field_type != expected_type {
+        return Err("TIFF inert metadata field has an unsupported type".to_owned());
+    }
+    tiff_entry_data(bytes, endian, field_type, count, value_field_offset, ranges)?;
+    Ok(())
+}
+
+struct TiffLzwBitReader<'a> {
+    bytes: &'a [u8],
+    bit_offset: usize,
+}
+
+impl<'a> TiffLzwBitReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            bit_offset: 0,
+        }
+    }
+
+    fn read(&mut self, width: u8) -> Result<u16, String> {
+        let end = self
+            .bit_offset
+            .checked_add(usize::from(width))
+            .ok_or_else(|| "TIFF LZW bit offset overflows".to_owned())?;
+        let available = self
+            .bytes
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| "TIFF LZW input length overflows".to_owned())?;
+        if end > available {
+            return Err("TIFF LZW code is truncated".to_owned());
+        }
+        let mut value = 0_u16;
+        for bit in self.bit_offset..end {
+            value = (value << 1) | u16::from((self.bytes[bit / 8] >> (7 - bit % 8)) & 1);
+        }
+        self.bit_offset = end;
+        Ok(value)
+    }
+
+    fn require_zero_padding(self) -> Result<(), String> {
+        let available = self
+            .bytes
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| "TIFF LZW input length overflows".to_owned())?;
+        let remaining = available
+            .checked_sub(self.bit_offset)
+            .ok_or_else(|| "TIFF LZW bit accounting underflows".to_owned())?;
+        if remaining >= 8 {
+            return Err("TIFF LZW stream has trailing bytes".to_owned());
+        }
+        for bit in self.bit_offset..available {
+            if (self.bytes[bit / 8] >> (7 - bit % 8)) & 1 != 0 {
+                return Err("TIFF LZW stream has non-zero padding".to_owned());
+            }
+        }
+        Ok(())
+    }
+}
+
+fn expand_tiff_lzw_code(
+    code: u16,
+    next_code: u16,
+    prefixes: &[u16; 4096],
+    suffixes: &[u8; 4096],
+    lengths: &[usize; 4096],
+    scratch: &mut Vec<u8>,
+    output_bound: usize,
+) -> Result<u8, String> {
+    if code >= next_code || code == 256 || code == 257 {
+        return Err("TIFF LZW code is outside the current dictionary".to_owned());
+    }
+    let expected_length = if code < 256 {
+        1
+    } else {
+        lengths[usize::from(code)]
+    };
+    if expected_length == 0 || expected_length > output_bound {
+        return Err("TIFF LZW expansion exceeds its output bound".to_owned());
+    }
+    scratch.clear();
+    scratch.reserve(expected_length);
+    let mut current = code;
+    let mut steps = 0_usize;
+    while current >= 258 {
+        if current >= next_code || steps >= 4096 {
+            return Err("TIFF LZW dictionary chain is invalid".to_owned());
+        }
+        scratch.push(suffixes[usize::from(current)]);
+        current = prefixes[usize::from(current)];
+        steps += 1;
+    }
+    if current >= 256 {
+        return Err("TIFF LZW dictionary chain reaches a control code".to_owned());
+    }
+    let first = u8::try_from(current).expect("literal LZW code fits u8");
+    scratch.push(first);
+    if scratch.len() != expected_length {
+        return Err("TIFF LZW dictionary length is inconsistent".to_owned());
+    }
+    scratch.reverse();
+    Ok(first)
+}
+
+fn decode_tiff_lzw(bytes: &[u8], expected_output: usize) -> Result<Vec<u8>, String> {
+    if bytes.is_empty() || expected_output == 0 {
+        return Err("TIFF LZW input or output bound is empty".to_owned());
+    }
+    let mut reader = TiffLzwBitReader::new(bytes);
+    let mut prefixes = [0_u16; 4096];
+    let mut suffixes = [0_u8; 4096];
+    let mut lengths = [0_usize; 4096];
+    let mut scratch = Vec::new();
+    let mut output = Vec::with_capacity(expected_output);
+    let mut next_code = 258_u16;
+    let mut code_width = 9_u8;
+    let mut previous = None;
+    let mut require_literal_after_clear = true;
+    if reader.read(code_width)? != 256 {
+        return Err("TIFF LZW strip does not begin with a clear code".to_owned());
+    }
+    loop {
+        let code = reader.read(code_width)?;
+        match code {
+            256 => {
+                if require_literal_after_clear {
+                    return Err("TIFF LZW strip repeats a clear code".to_owned());
+                }
+                next_code = 258;
+                code_width = 9;
+                previous = None;
+                require_literal_after_clear = true;
+            }
+            257 => {
+                if output.len() != expected_output {
+                    return Err("TIFF LZW output length disagrees with its strip".to_owned());
+                }
+                reader.require_zero_padding()?;
+                return Ok(output);
+            }
+            _ => {
+                let remaining = expected_output
+                    .checked_sub(output.len())
+                    .ok_or_else(|| "TIFF LZW output length exceeds its bound".to_owned())?;
+                let first = if code == next_code {
+                    let previous_code = previous.ok_or_else(|| {
+                        "TIFF LZW special code has no previous dictionary entry".to_owned()
+                    })?;
+                    let first = expand_tiff_lzw_code(
+                        previous_code,
+                        next_code,
+                        &prefixes,
+                        &suffixes,
+                        &lengths,
+                        &mut scratch,
+                        remaining,
+                    )?;
+                    let expanded = scratch
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| "TIFF LZW expansion length overflows".to_owned())?;
+                    if expanded > remaining {
+                        return Err("TIFF LZW expansion exceeds its output bound".to_owned());
+                    }
+                    output.extend_from_slice(&scratch);
+                    output.push(first);
+                    first
+                } else {
+                    let first = expand_tiff_lzw_code(
+                        code,
+                        next_code,
+                        &prefixes,
+                        &suffixes,
+                        &lengths,
+                        &mut scratch,
+                        remaining,
+                    )?;
+                    if scratch.len() > remaining {
+                        return Err("TIFF LZW expansion exceeds its output bound".to_owned());
+                    }
+                    output.extend_from_slice(&scratch);
+                    first
+                };
+                if let Some(previous_code) = previous
+                    && next_code < 4096
+                {
+                    let previous_length = if previous_code < 256 {
+                        1
+                    } else {
+                        lengths[usize::from(previous_code)]
+                    };
+                    let new_length = previous_length
+                        .checked_add(1)
+                        .ok_or_else(|| "TIFF LZW dictionary length overflows".to_owned())?;
+                    if new_length > expected_output {
+                        return Err("TIFF LZW dictionary entry exceeds its output bound".to_owned());
+                    }
+                    prefixes[usize::from(next_code)] = previous_code;
+                    suffixes[usize::from(next_code)] = first;
+                    lengths[usize::from(next_code)] = new_length;
+                    next_code += 1;
+                    if code_width < 12 && next_code == (1_u16 << code_width) - 1 {
+                        code_width += 1;
+                    }
+                }
+                previous = Some(code);
+                require_literal_after_clear = false;
+            }
+        }
+    }
+}
+
+fn reverse_tiff_horizontal_predictor(samples: &mut [u8], row_bytes: usize) -> Result<(), String> {
+    if row_bytes == 0 || !row_bytes.is_multiple_of(3) || !samples.len().is_multiple_of(row_bytes) {
+        return Err("TIFF horizontal predictor geometry is inconsistent".to_owned());
+    }
+    for row in samples.chunks_exact_mut(row_bytes) {
+        for index in 3..row.len() {
+            row[index] = row[index].wrapping_add(row[index - 3]);
+        }
+    }
+    Ok(())
+}
+
+fn parse_tiff_rgb_u8_contiguous(bytes: &[u8]) -> Result<TiffRgbImage, String> {
+    if bytes.len() < 8 {
+        return Err("TIFF header is truncated".to_owned());
+    }
+    let endian = match &bytes[..2] {
+        b"II" => TiffEndian::Little,
+        b"MM" => TiffEndian::Big,
+        _ => return Err("TIFF byte-order marker is invalid".to_owned()),
+    };
+    if tiff_u16(bytes, 2, endian)? != 42 {
+        return Err("TIFF classic-file marker is invalid".to_owned());
+    }
+    let ifd_offset = usize::try_from(tiff_u32(bytes, 4, endian)?)
+        .map_err(|_| "TIFF IFD offset exceeds the host range".to_owned())?;
+    let entry_count = usize::from(tiff_u16(bytes, ifd_offset, endian)?);
+    if entry_count == 0 || entry_count > 64 {
+        return Err("TIFF IFD entry count is outside the worker bound".to_owned());
+    }
+    let table_length = entry_count
+        .checked_mul(12)
+        .and_then(|entries| entries.checked_add(6))
+        .ok_or_else(|| "TIFF IFD length overflows".to_owned())?;
+    let mut ranges = Vec::new();
+    register_tiff_range(&mut ranges, 0, 8, bytes.len())?;
+    register_tiff_range(&mut ranges, ifd_offset, table_length, bytes.len())?;
+    let next_ifd_offset = ifd_offset
+        .checked_add(2)
+        .and_then(|start| start.checked_add(entry_count.checked_mul(12)?))
+        .ok_or_else(|| "TIFF next-IFD offset overflows".to_owned())?;
+    if tiff_u32(bytes, next_ifd_offset, endian)? != 0 {
+        return Err("TIFF contains an unsupported additional IFD".to_owned());
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut width = None;
+    let mut height = None;
+    let mut bits_per_sample = None;
+    let mut compression = None;
+    let mut photometric = None;
+    let mut strip_offsets = None;
+    let mut samples_per_pixel = None;
+    let mut rows_per_strip = None;
+    let mut strip_byte_counts = None;
+    let mut planar_configuration = None;
+    let mut predictor = None;
+    for index in 0..entry_count {
+        let entry = ifd_offset
+            .checked_add(2)
+            .and_then(|start| start.checked_add(index.checked_mul(12)?))
+            .ok_or_else(|| "TIFF entry offset overflows".to_owned())?;
+        let tag = tiff_u16(bytes, entry, endian)?;
+        let field_type = tiff_u16(bytes, entry + 2, endian)?;
+        let count = tiff_u32(bytes, entry + 4, endian)?;
+        let value_field_offset = entry + 8;
+        if !seen.insert(tag) {
+            return Err("TIFF IFD repeats a tag".to_owned());
+        }
+        match tag {
+            254 => {
+                if tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )? != 0
+                {
+                    return Err("TIFF subfile type is unsupported".to_owned());
+                }
+            }
+            256 => {
+                width = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            257 => {
+                height = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            258 => {
+                if field_type != 3 || count != 3 {
+                    return Err("TIFF BitsPerSample has an unsupported shape".to_owned());
+                }
+                bits_per_sample = Some(tiff_unsigned_values(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            259 => {
+                compression = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            262 => {
+                photometric = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            266 => {
+                if tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )? != 1
+                {
+                    return Err("TIFF fill order is unsupported".to_owned());
+                }
+            }
+            273 => {
+                strip_offsets = Some(tiff_unsigned_values(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            274 => {
+                if tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )? != 1
+                {
+                    return Err("TIFF orientation is unsupported".to_owned());
+                }
+            }
+            277 => {
+                samples_per_pixel = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            278 => {
+                rows_per_strip = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            279 => {
+                strip_byte_counts = Some(tiff_unsigned_values(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            282 | 283 => validate_tiff_rational(
+                bytes,
+                endian,
+                field_type,
+                count,
+                value_field_offset,
+                &mut ranges,
+            )?,
+            284 => {
+                planar_configuration = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            296 => {
+                let unit = tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?;
+                if !(1..=3).contains(&unit) {
+                    return Err("TIFF resolution unit is unsupported".to_owned());
+                }
+            }
+            317 => {
+                predictor = Some(tiff_scalar(
+                    bytes,
+                    endian,
+                    field_type,
+                    count,
+                    value_field_offset,
+                    &mut ranges,
+                )?);
+            }
+            320 => return Err("TIFF palette colour is unsupported".to_owned()),
+            338 => return Err("TIFF extra samples are unsupported".to_owned()),
+            34377 => validate_tiff_inert_bytes(
+                bytes,
+                endian,
+                field_type,
+                1,
+                count,
+                value_field_offset,
+                &mut ranges,
+            )?,
+            37724 => validate_tiff_inert_bytes(
+                bytes,
+                endian,
+                field_type,
+                7,
+                count,
+                value_field_offset,
+                &mut ranges,
+            )?,
+            _ => return Err("TIFF IFD contains an unsupported tag".to_owned()),
+        }
+    }
+
+    let width = width.ok_or_else(|| "TIFF lacks ImageWidth".to_owned())?;
+    let height = height.ok_or_else(|| "TIFF lacks ImageLength".to_owned())?;
+    if width == 0 || height == 0 {
+        return Err("TIFF dimensions must be positive".to_owned());
+    }
+    if bits_per_sample.as_deref() != Some(&[8, 8, 8]) {
+        return Err("TIFF requires three unsigned 8-bit samples".to_owned());
+    }
+    let compression = compression.ok_or_else(|| "TIFF lacks Compression".to_owned())?;
+    match (compression, predictor) {
+        (1, None | Some(1)) | (5, Some(2)) => {}
+        (5, _) => {
+            return Err("TIFF LZW compression requires horizontal Predictor 2".to_owned());
+        }
+        (1, Some(_)) => {
+            return Err("TIFF uncompressed data has an unsupported predictor".to_owned());
+        }
+        _ => return Err("TIFF compression is unsupported".to_owned()),
+    }
+    if photometric != Some(2) {
+        return Err("TIFF photometric interpretation is not RGB".to_owned());
+    }
+    if samples_per_pixel != Some(3) {
+        return Err("TIFF SamplesPerPixel must be three".to_owned());
+    }
+    if planar_configuration != Some(1) {
+        return Err("TIFF requires contiguous sample layout".to_owned());
+    }
+    let rows_per_strip = rows_per_strip
+        .filter(|rows| *rows != 0)
+        .ok_or_else(|| "TIFF RowsPerStrip is absent or zero".to_owned())?;
+    let strip_offsets = strip_offsets.ok_or_else(|| "TIFF lacks StripOffsets".to_owned())?;
+    let strip_byte_counts =
+        strip_byte_counts.ok_or_else(|| "TIFF lacks StripByteCounts".to_owned())?;
+    let expected_strips = height.div_ceil(rows_per_strip);
+    let expected_strips = usize::try_from(expected_strips)
+        .map_err(|_| "TIFF strip count exceeds the host range".to_owned())?;
+    if strip_offsets.len() != expected_strips || strip_byte_counts.len() != expected_strips {
+        return Err("TIFF strip count disagrees with RowsPerStrip".to_owned());
+    }
+    let row_bytes = u64::from(width)
+        .checked_mul(3)
+        .ok_or_else(|| "TIFF row length overflows".to_owned())?;
+    let sample_count = row_bytes
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| "TIFF sample count overflows".to_owned())?;
+    if sample_count == 0 || sample_count > MAX_COMPARISON_SAMPLES {
+        return Err("TIFF sample count exceeds the worker bound".to_owned());
+    }
+    let mut samples = Vec::with_capacity(
+        usize::try_from(sample_count)
+            .map_err(|_| "TIFF sample count exceeds the host range".to_owned())?,
+    );
+    for (index, (&offset, &byte_count)) in strip_offsets.iter().zip(&strip_byte_counts).enumerate()
+    {
+        let first_row = u32::try_from(index)
+            .ok()
+            .and_then(|strip| strip.checked_mul(rows_per_strip))
+            .ok_or_else(|| "TIFF strip row offset overflows".to_owned())?;
+        let rows = rows_per_strip.min(height - first_row);
+        let expected_bytes = row_bytes
+            .checked_mul(u64::from(rows))
+            .ok_or_else(|| "TIFF strip byte count overflows".to_owned())?;
+        let start = usize::try_from(offset)
+            .map_err(|_| "TIFF strip offset exceeds the host range".to_owned())?;
+        let length = usize::try_from(byte_count)
+            .map_err(|_| "TIFF strip length exceeds the host range".to_owned())?;
+        register_tiff_range(&mut ranges, start, length, bytes.len())?;
+        let expected_bytes = usize::try_from(expected_bytes)
+            .map_err(|_| "TIFF strip output length exceeds the host range".to_owned())?;
+        if compression == 1 {
+            if length != expected_bytes {
+                return Err("TIFF strip contains missing or trailing sample bytes".to_owned());
+            }
+            samples.extend_from_slice(&bytes[start..start + length]);
+        } else {
+            let mut strip = decode_tiff_lzw(&bytes[start..start + length], expected_bytes)?;
+            reverse_tiff_horizontal_predictor(
+                &mut strip,
+                usize::try_from(row_bytes)
+                    .map_err(|_| "TIFF row length exceeds the host range".to_owned())?,
+            )?;
+            samples.extend_from_slice(&strip);
+        }
+    }
+    if ranges.iter().map(|(_, end)| *end).max() != Some(bytes.len()) {
+        return Err("TIFF contains an unreferenced trailing range".to_owned());
+    }
+    if samples.len()
+        != usize::try_from(sample_count)
+            .map_err(|_| "TIFF sample count exceeds the host range".to_owned())?
+    {
+        return Err("TIFF logical sample length is inconsistent".to_owned());
+    }
+    Ok(TiffRgbImage {
+        width,
+        height,
+        samples,
+    })
+}
+
 fn decoded_logical_samples(samples: &[u8], format: SampleFormat) -> Result<Vec<i64>, String> {
     let bytes_per_sample = usize::from(format.bits_per_sample).div_ceil(8);
     if !samples.len().is_multiple_of(bytes_per_sample) {
@@ -492,6 +1374,68 @@ fn compare_j2k_to_pgx(
     compare_samples(&samples, &reference.samples)
 }
 
+fn compare_rendered_jp2_to_tiff(
+    jp2: &[u8],
+    tiff_bytes: &[u8],
+    contract: RenderedComparisonContract,
+) -> Result<RenderedErrorAggregates, String> {
+    validate_rendered_contract(contract)?;
+    let metadata = inspect(jp2, &InspectOptions::default())
+        .map_err(|error| format!("input inspection failed: {error}"))?;
+    if metadata.format != InputFormat::Jp2 {
+        return Err("rendered comparison input is not JP2".to_owned());
+    }
+    let reference = parse_tiff_rgb_u8_contiguous(tiff_bytes)?;
+    if reference.width != contract.width || reference.height != contract.height {
+        return Err("TIFF metadata disagrees with the comparison contract".to_owned());
+    }
+    let decoded = decode(
+        jp2,
+        &DecodeOptions {
+            allow_best_effort_backend_decode: false,
+            mode: DecodeMode::Rendered,
+            requested_components: ComponentSelection::All,
+            max_quality_layers: None,
+            target_layout: ComponentLayout::Interleaved,
+        },
+    )
+    .map_err(|error| format!("rendered decode failed: {error}"))?;
+    if decoded.info.width != contract.width
+        || decoded.info.height != contract.height
+        || decoded.info.components != contract.components
+        || decoded.info.sample_format != SampleFormat::U8
+        || decoded.info.color_model != ColorModel::Rgb
+        || decoded.info.layout != ComponentLayout::Interleaved
+        || decoded.component_info.len() != usize::from(contract.components)
+        || decoded.component_info.iter().any(|component| {
+            component.width != contract.width
+                || component.height != contract.height
+                || component.sample_format != SampleFormat::U8
+                || component.source_component.is_some()
+        })
+    {
+        return Err("rendered decode metadata disagrees with the comparison contract".to_owned());
+    }
+    let samples = match decoded.data {
+        ImageData::Interleaved(samples) => samples,
+        _ => return Err("rendered decode did not produce one interleaved buffer".to_owned()),
+    };
+    if samples.len() != reference.samples.len() || samples.is_empty() {
+        return Err("rendered and reference sample counts differ or are empty".to_owned());
+    }
+    let peak_error = samples
+        .iter()
+        .zip(&reference.samples)
+        .map(|(actual, expected)| u64::from(actual.abs_diff(*expected)))
+        .max()
+        .ok_or_else(|| "rendered comparison has no samples".to_owned())?;
+    Ok(RenderedErrorAggregates {
+        samples: u64::try_from(samples.len())
+            .map_err(|_| "rendered sample count overflow".to_owned())?,
+        peak_error,
+    })
+}
+
 fn run_inspect(input: &Path) -> Result<(), String> {
     let bytes =
         fs::read(input).map_err(|error| format!("failed to read {}: {error}", input.display()))?;
@@ -526,6 +1470,29 @@ fn run_compare(arguments: Vec<OsString>) -> Result<(), String> {
     }
 }
 
+fn run_rendered_compare(arguments: Vec<OsString>) -> Result<(), String> {
+    let (input, reference, contract) = parse_rendered_comparison_arguments(arguments)?;
+    let jp2 = read_bounded_scrubbed(&input, MAX_INPUT_BYTES, "input")?;
+    let tiff = read_bounded_scrubbed(&reference, MAX_REFERENCE_BYTES, "reference")?;
+    let aggregates = compare_rendered_jp2_to_tiff(&jp2, &tiff, contract)?;
+    let passed = aggregates.passes(contract);
+    println!(
+        "components={} width={} height={} samples={} peak={} limit={} passed={}",
+        contract.components,
+        contract.width,
+        contract.height,
+        aggregates.samples,
+        aggregates.peak_error,
+        contract.peak_error_limit,
+        passed
+    );
+    if passed {
+        Ok(())
+    } else {
+        Err(RENDERED_LIMIT_EXCEEDED.to_owned())
+    }
+}
+
 fn run_arguments(arguments: Vec<OsString>) -> Result<(), String> {
     let mut arguments = arguments.into_iter();
     let command = arguments.next().ok_or_else(|| usage().to_owned())?;
@@ -533,6 +1500,7 @@ fn run_arguments(arguments: Vec<OsString>) -> Result<(), String> {
     match command.to_str() {
         Some("inspect") if remaining.len() == 1 => run_inspect(Path::new(&remaining[0])),
         Some("compare-pgx") => run_compare(remaining),
+        Some("compare-rendered-tiff-rgb") => run_rendered_compare(remaining),
         _ => Err(usage().to_owned()),
     }
 }
@@ -543,7 +1511,9 @@ fn run() -> Result<(), String> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("emuella-j2k: {error}");
+        if error != RENDERED_LIMIT_EXCEEDED {
+            eprintln!("emuella-j2k: {error}");
+        }
         std::process::exit(2);
     }
 }
@@ -551,7 +1521,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emuella_j2k_core::{ColorModel, EncodeOptions, ImageInfo, ImageView, OutputFormat, encode};
+    use emuella_j2k_core::{EncodeOptions, ImageInfo, ImageView, OutputFormat, encode};
 
     fn grayscale_gradient(width: u32, height: u32) -> Vec<u8> {
         (0..height)
@@ -586,6 +1556,417 @@ mod tests {
             },
         )
         .map_err(|error| error.to_string())
+    }
+
+    fn rgb_gradient(width: u32, height: u32) -> Vec<u8> {
+        (0..height)
+            .flat_map(|y| {
+                (0..width).flat_map(move |x| {
+                    [
+                        ((x * 19 + y * 7) & 0xff) as u8,
+                        ((x * 3 + y * 23 + 41) & 0xff) as u8,
+                        ((x * 11 + y * 5 + 97) & 0xff) as u8,
+                    ]
+                })
+            })
+            .collect()
+    }
+
+    fn generate_rgb(width: u32, height: u32, format: OutputFormat) -> Result<Vec<u8>, String> {
+        let samples = rgb_gradient(width, height);
+        let info = ImageInfo::new(
+            width,
+            height,
+            3,
+            SampleFormat::U8,
+            ColorModel::Rgb,
+            ComponentLayout::Interleaved,
+        )
+        .map_err(|error| error.to_string())?;
+        encode(
+            ImageView::Interleaved {
+                info: &info,
+                samples: &samples,
+                stride_bytes: width as usize * 3,
+            },
+            &EncodeOptions {
+                format,
+                ..EncodeOptions::default()
+            },
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn append_tiff_u16(bytes: &mut Vec<u8>, value: u16, endian: TiffEndian) {
+        let encoded = match endian {
+            TiffEndian::Little => value.to_le_bytes(),
+            TiffEndian::Big => value.to_be_bytes(),
+        };
+        bytes.extend_from_slice(&encoded);
+    }
+
+    fn append_tiff_u32(bytes: &mut Vec<u8>, value: u32, endian: TiffEndian) {
+        let encoded = match endian {
+            TiffEndian::Little => value.to_le_bytes(),
+            TiffEndian::Big => value.to_be_bytes(),
+        };
+        bytes.extend_from_slice(&encoded);
+    }
+
+    fn write_tiff_u16(bytes: &mut [u8], offset: usize, value: u16, endian: TiffEndian) {
+        let value = match endian {
+            TiffEndian::Little => value.to_le_bytes(),
+            TiffEndian::Big => value.to_be_bytes(),
+        };
+        bytes[offset..offset + 2].copy_from_slice(&value);
+    }
+
+    fn write_tiff_u32(bytes: &mut [u8], offset: usize, value: u32, endian: TiffEndian) {
+        let value = match endian {
+            TiffEndian::Little => value.to_le_bytes(),
+            TiffEndian::Big => value.to_be_bytes(),
+        };
+        bytes[offset..offset + 4].copy_from_slice(&value);
+    }
+
+    fn tiff_entry_offset(bytes: &[u8], endian: TiffEndian, wanted: u16) -> usize {
+        let ifd = tiff_u32(bytes, 4, endian).unwrap() as usize;
+        let count = tiff_u16(bytes, ifd, endian).unwrap() as usize;
+        (0..count)
+            .map(|index| ifd + 2 + index * 12)
+            .find(|offset| tiff_u16(bytes, *offset, endian).unwrap() == wanted)
+            .expect("synthetic TIFF contains requested tag")
+    }
+
+    fn tiff_rgb(
+        width: u32,
+        height: u32,
+        samples: &[u8],
+        endian: TiffEndian,
+        rows_per_strip: u32,
+        reverse_physical_strips: bool,
+    ) -> Vec<u8> {
+        assert_eq!(samples.len(), width as usize * height as usize * 3);
+        assert!(rows_per_strip > 0);
+        let strip_count = height.div_ceil(rows_per_strip) as usize;
+        let ifd_offset = 8_u32;
+        let ifd_length = 2 + 10 * 12 + 4;
+        let bits_offset = ifd_offset as usize + ifd_length;
+        let offsets_array_length = if strip_count > 1 { strip_count * 4 } else { 0 };
+        let counts_array_length = if strip_count > 1 { strip_count * 4 } else { 0 };
+        let offsets_offset = bits_offset + 6;
+        let counts_offset = offsets_offset + offsets_array_length;
+        let pixel_offset = counts_offset + counts_array_length;
+        let row_bytes = width as usize * 3;
+        let strip_lengths = (0..strip_count)
+            .map(|index| {
+                let first_row = index as u32 * rows_per_strip;
+                rows_per_strip.min(height - first_row) as usize * row_bytes
+            })
+            .collect::<Vec<_>>();
+        let physical_order = if reverse_physical_strips {
+            (0..strip_count).rev().collect::<Vec<_>>()
+        } else {
+            (0..strip_count).collect::<Vec<_>>()
+        };
+        let mut strip_offsets = vec![0_u32; strip_count];
+        let mut next_offset = pixel_offset;
+        for &logical_index in &physical_order {
+            strip_offsets[logical_index] = next_offset as u32;
+            next_offset += strip_lengths[logical_index];
+        }
+
+        let mut bytes = Vec::with_capacity(next_offset);
+        bytes.extend_from_slice(match endian {
+            TiffEndian::Little => b"II",
+            TiffEndian::Big => b"MM",
+        });
+        append_tiff_u16(&mut bytes, 42, endian);
+        append_tiff_u32(&mut bytes, ifd_offset, endian);
+        append_tiff_u16(&mut bytes, 10, endian);
+        let mut entry = |tag: u16, field_type: u16, count: u32, value: u32| {
+            append_tiff_u16(&mut bytes, tag, endian);
+            append_tiff_u16(&mut bytes, field_type, endian);
+            append_tiff_u32(&mut bytes, count, endian);
+            if field_type == 3 && count == 1 {
+                append_tiff_u16(&mut bytes, value as u16, endian);
+                append_tiff_u16(&mut bytes, 0, endian);
+            } else {
+                append_tiff_u32(&mut bytes, value, endian);
+            }
+        };
+        entry(256, 4, 1, width);
+        entry(257, 4, 1, height);
+        entry(258, 3, 3, bits_offset as u32);
+        entry(259, 3, 1, 1);
+        entry(262, 3, 1, 2);
+        entry(
+            273,
+            4,
+            strip_count as u32,
+            if strip_count == 1 {
+                strip_offsets[0]
+            } else {
+                offsets_offset as u32
+            },
+        );
+        entry(277, 3, 1, 3);
+        entry(278, 4, 1, rows_per_strip);
+        entry(
+            279,
+            4,
+            strip_count as u32,
+            if strip_count == 1 {
+                strip_lengths[0] as u32
+            } else {
+                counts_offset as u32
+            },
+        );
+        entry(284, 3, 1, 1);
+        append_tiff_u32(&mut bytes, 0, endian);
+        for _ in 0..3 {
+            append_tiff_u16(&mut bytes, 8, endian);
+        }
+        if strip_count > 1 {
+            for &offset in &strip_offsets {
+                append_tiff_u32(&mut bytes, offset, endian);
+            }
+            for &length in &strip_lengths {
+                append_tiff_u32(&mut bytes, length as u32, endian);
+            }
+        }
+        for logical_index in physical_order {
+            let first_row = logical_index as u32 * rows_per_strip;
+            let start = first_row as usize * row_bytes;
+            bytes.extend_from_slice(&samples[start..start + strip_lengths[logical_index]]);
+        }
+        bytes
+    }
+
+    fn pack_tiff_lzw_codes(codes: &[u16]) -> (Vec<u8>, u8) {
+        let mut bytes = Vec::new();
+        let mut current = 0_u8;
+        let mut used = 0_u8;
+        let mut width = 9_u8;
+        let mut maximum_width = width;
+        let mut next_code = 258_u16;
+        let mut previous = None;
+        for &code in codes {
+            assert!(code < (1_u16 << width));
+            for shift in (0..width).rev() {
+                current = (current << 1) | ((code >> shift) & 1) as u8;
+                used += 1;
+                if used == 8 {
+                    bytes.push(current);
+                    current = 0;
+                    used = 0;
+                }
+            }
+            match code {
+                256 => {
+                    width = 9;
+                    next_code = 258;
+                    previous = None;
+                }
+                257 => {}
+                _ => {
+                    if previous.is_some() && next_code < 4096 {
+                        next_code += 1;
+                        if width < 12 && next_code == (1_u16 << width) - 1 {
+                            width += 1;
+                            maximum_width = maximum_width.max(width);
+                        }
+                    }
+                    previous = Some(code);
+                }
+            }
+        }
+        if used != 0 {
+            bytes.push(current << (8 - used));
+        }
+        (bytes, maximum_width)
+    }
+
+    fn encode_tiff_lzw(samples: &[u8], reset_at: Option<u16>) -> (Vec<u8>, u8, usize) {
+        assert!(!samples.is_empty());
+        let mut dictionary = std::collections::BTreeMap::<Vec<u8>, u16>::new();
+        let initialise = |dictionary: &mut std::collections::BTreeMap<Vec<u8>, u16>| {
+            dictionary.clear();
+            for value in 0_u16..=255 {
+                dictionary.insert(vec![value as u8], value);
+            }
+        };
+        initialise(&mut dictionary);
+        let mut codes = vec![256];
+        let mut clears = 1;
+        let mut next_code = 258_u16;
+        let mut current = vec![samples[0]];
+        for &sample in &samples[1..] {
+            let mut extended = current.clone();
+            extended.push(sample);
+            if dictionary.contains_key(&extended) {
+                current = extended;
+                continue;
+            }
+            codes.push(dictionary[&current]);
+            if reset_at.is_some_and(|limit| next_code >= limit) || next_code >= 4096 {
+                codes.push(256);
+                clears += 1;
+                initialise(&mut dictionary);
+                next_code = 258;
+            } else {
+                dictionary.insert(extended, next_code);
+                next_code += 1;
+            }
+            current = vec![sample];
+        }
+        codes.push(dictionary[&current]);
+        codes.push(257);
+        let (bytes, maximum_width) = pack_tiff_lzw_codes(&codes);
+        (bytes, maximum_width, clears)
+    }
+
+    fn apply_horizontal_predictor(samples: &[u8], row_bytes: usize) -> Vec<u8> {
+        let mut predicted = samples.to_vec();
+        for row in predicted.chunks_exact_mut(row_bytes) {
+            for index in (3..row.len()).rev() {
+                row[index] = row[index].wrapping_sub(row[index - 3]);
+            }
+        }
+        predicted
+    }
+
+    fn tiff_rgb_lzw(
+        width: u32,
+        height: u32,
+        samples: &[u8],
+        endian: TiffEndian,
+        rows_per_strip: u32,
+        reverse_physical_strips: bool,
+        reset_at: Option<u16>,
+    ) -> (Vec<u8>, u8, usize) {
+        assert_eq!(samples.len(), width as usize * height as usize * 3);
+        let strip_count = height.div_ceil(rows_per_strip) as usize;
+        let row_bytes = width as usize * 3;
+        let mut maximum_width = 9_u8;
+        let mut clear_count = 0_usize;
+        let compressed = (0..strip_count)
+            .map(|index| {
+                let first_row = index as u32 * rows_per_strip;
+                let rows = rows_per_strip.min(height - first_row) as usize;
+                let start = first_row as usize * row_bytes;
+                let predicted = apply_horizontal_predictor(
+                    &samples[start..start + rows * row_bytes],
+                    row_bytes,
+                );
+                let (encoded, width, clears) = encode_tiff_lzw(&predicted, reset_at);
+                maximum_width = maximum_width.max(width);
+                clear_count += clears;
+                encoded
+            })
+            .collect::<Vec<_>>();
+
+        let ifd_offset = 8_u32;
+        let ifd_length = 2 + 13 * 12 + 4;
+        let bits_offset = ifd_offset as usize + ifd_length;
+        let offsets_array_length = if strip_count > 1 { strip_count * 4 } else { 0 };
+        let counts_array_length = if strip_count > 1 { strip_count * 4 } else { 0 };
+        let offsets_offset = bits_offset + 6;
+        let counts_offset = offsets_offset + offsets_array_length;
+        let photoshop_offset = counts_offset + counts_array_length;
+        let photoshop = b"photo";
+        let document_offset = photoshop_offset + photoshop.len();
+        let document = b"docblk";
+        let pixel_offset = document_offset + document.len();
+        let physical_order = if reverse_physical_strips {
+            (0..strip_count).rev().collect::<Vec<_>>()
+        } else {
+            (0..strip_count).collect::<Vec<_>>()
+        };
+        let mut strip_offsets = vec![0_u32; strip_count];
+        let mut next_offset = pixel_offset;
+        for &logical_index in &physical_order {
+            strip_offsets[logical_index] = next_offset as u32;
+            next_offset += compressed[logical_index].len();
+        }
+
+        let mut bytes = Vec::with_capacity(next_offset);
+        bytes.extend_from_slice(match endian {
+            TiffEndian::Little => b"II",
+            TiffEndian::Big => b"MM",
+        });
+        append_tiff_u16(&mut bytes, 42, endian);
+        append_tiff_u32(&mut bytes, ifd_offset, endian);
+        append_tiff_u16(&mut bytes, 13, endian);
+        let mut entry = |tag: u16, field_type: u16, count: u32, value: u32| {
+            append_tiff_u16(&mut bytes, tag, endian);
+            append_tiff_u16(&mut bytes, field_type, endian);
+            append_tiff_u32(&mut bytes, count, endian);
+            if field_type == 3 && count == 1 {
+                append_tiff_u16(&mut bytes, value as u16, endian);
+                append_tiff_u16(&mut bytes, 0, endian);
+            } else {
+                append_tiff_u32(&mut bytes, value, endian);
+            }
+        };
+        entry(256, 4, 1, width);
+        entry(257, 4, 1, height);
+        entry(258, 3, 3, bits_offset as u32);
+        entry(259, 3, 1, 5);
+        entry(262, 3, 1, 2);
+        entry(
+            273,
+            4,
+            strip_count as u32,
+            if strip_count == 1 {
+                strip_offsets[0]
+            } else {
+                offsets_offset as u32
+            },
+        );
+        entry(277, 3, 1, 3);
+        entry(278, 4, 1, rows_per_strip);
+        entry(
+            279,
+            4,
+            strip_count as u32,
+            if strip_count == 1 {
+                compressed[0].len() as u32
+            } else {
+                counts_offset as u32
+            },
+        );
+        entry(284, 3, 1, 1);
+        entry(317, 3, 1, 2);
+        entry(34377, 1, photoshop.len() as u32, photoshop_offset as u32);
+        entry(37724, 7, document.len() as u32, document_offset as u32);
+        append_tiff_u32(&mut bytes, 0, endian);
+        for _ in 0..3 {
+            append_tiff_u16(&mut bytes, 8, endian);
+        }
+        if strip_count > 1 {
+            for &offset in &strip_offsets {
+                append_tiff_u32(&mut bytes, offset, endian);
+            }
+            for strip in &compressed {
+                append_tiff_u32(&mut bytes, strip.len() as u32, endian);
+            }
+        }
+        bytes.extend_from_slice(photoshop);
+        bytes.extend_from_slice(document);
+        for logical_index in physical_order {
+            bytes.extend_from_slice(&compressed[logical_index]);
+        }
+        (bytes, maximum_width, clear_count)
+    }
+
+    fn rendered_contract(width: u32, height: u32, limit: u64) -> RenderedComparisonContract {
+        RenderedComparisonContract {
+            width,
+            height,
+            components: 3,
+            peak_error_limit: limit,
+        }
     }
 
     fn pgx(width: u32, height: u32, samples: &[u8]) -> Vec<u8> {
@@ -675,6 +2056,357 @@ mod tests {
         .expect("synthetic mismatch produces aggregates");
         assert_eq!(mismatch.peak_error, 1);
         assert_eq!(mismatch.mean_squared_error, 1.0 / 12.0);
+    }
+
+    #[test]
+    fn parses_little_and_big_endian_tiff_with_odd_multi_strip_geometry() {
+        let width = 3;
+        let height = 5;
+        let samples = rgb_gradient(width, height);
+        for endian in [TiffEndian::Little, TiffEndian::Big] {
+            let parsed =
+                parse_tiff_rgb_u8_contiguous(&tiff_rgb(width, height, &samples, endian, 2, true))
+                    .expect("project-authored multi-strip TIFF parses");
+            assert_eq!(parsed.width, width);
+            assert_eq!(parsed.height, height);
+            assert_eq!(parsed.samples, samples);
+        }
+    }
+
+    #[test]
+    fn decodes_tiff_lzw_controls_width_transitions_and_dictionary_resets() {
+        let (special, _) = pack_tiff_lzw_codes(&[256, 65, 258, 257]);
+        assert_eq!(decode_tiff_lzw(&special, 3).unwrap(), b"AAA");
+
+        let mut seed = 0x1234_5678_u32;
+        let varied = (0..2_000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 24) as u8
+            })
+            .collect::<Vec<_>>();
+        let (transitioned, maximum_width, clears) = encode_tiff_lzw(&varied, None);
+        assert_eq!(
+            maximum_width, 12,
+            "fixture must cross every TIFF LZW code-width boundary"
+        );
+        assert_eq!(clears, 1);
+        assert_eq!(
+            decode_tiff_lzw(&transitioned, varied.len()).unwrap(),
+            varied
+        );
+
+        let (reset, reset_width, clears) = encode_tiff_lzw(&varied, Some(300));
+        assert!(reset_width >= 9);
+        assert!(
+            clears > 2,
+            "fixture must exercise repeated dictionary reset"
+        );
+        assert_eq!(decode_tiff_lzw(&reset, varied.len()).unwrap(), varied);
+    }
+
+    #[test]
+    fn rejects_invalid_truncated_and_over_bound_tiff_lzw_streams() {
+        for codes in [[256, 258, 257].as_slice(), [256, 65, 300, 257].as_slice()] {
+            let (encoded, _) = pack_tiff_lzw_codes(codes);
+            assert!(decode_tiff_lzw(&encoded, 1).is_err());
+        }
+
+        let (valid, _) = pack_tiff_lzw_codes(&[256, 65, 258, 257]);
+        assert!(decode_tiff_lzw(&valid, 2).is_err());
+        let mut truncated = valid.clone();
+        truncated.pop();
+        assert!(decode_tiff_lzw(&truncated, 3).is_err());
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        assert!(decode_tiff_lzw(&trailing, 3).is_err());
+        let mut non_zero_padding = valid;
+        let last = non_zero_padding.last_mut().unwrap();
+        *last |= 1;
+        assert!(decode_tiff_lzw(&non_zero_padding, 3).is_err());
+
+        let (reset, _) = pack_tiff_lzw_codes(&[256, 65, 66, 256, 67, 68, 257]);
+        assert_eq!(decode_tiff_lzw(&reset, 4).unwrap(), b"ABCD");
+    }
+
+    #[test]
+    fn parses_lzw_predictor_strips_and_inert_adobe_metadata() {
+        let width = 5;
+        let height = 7;
+        let samples = rgb_gradient(width, height);
+        for endian in [TiffEndian::Little, TiffEndian::Big] {
+            let (tiff, _, clears) =
+                tiff_rgb_lzw(width, height, &samples, endian, 2, true, Some(270));
+            assert!(clears > height.div_ceil(2) as usize);
+            let parsed = parse_tiff_rgb_u8_contiguous(&tiff)
+                .expect("project-authored LZW predictor TIFF parses");
+            assert_eq!(parsed.width, width);
+            assert_eq!(parsed.height, height);
+            assert_eq!(parsed.samples, samples);
+        }
+    }
+
+    #[test]
+    fn compares_project_authored_rendered_jp2_with_lzw_tiff() {
+        let width = 7;
+        let height = 5;
+        let samples = rgb_gradient(width, height);
+        let jp2 = generate_rgb(width, height, OutputFormat::Jp2).expect("synthetic JP2 encodes");
+        let (tiff, _, _) = tiff_rgb_lzw(width, height, &samples, TiffEndian::Little, 2, true, None);
+        let aggregates =
+            compare_rendered_jp2_to_tiff(&jp2, &tiff, rendered_contract(width, height, 0))
+                .expect("synthetic LZW rendered comparison succeeds");
+        assert_eq!(aggregates.peak_error, 0);
+        assert_eq!(aggregates.samples, u64::from(width) * u64::from(height) * 3);
+    }
+
+    #[test]
+    fn compares_project_authored_rendered_jp2_and_tiff_in_memory() {
+        let width = 3;
+        let height = 5;
+        let samples = rgb_gradient(width, height);
+        let jp2 = generate_rgb(width, height, OutputFormat::Jp2).expect("synthetic JP2 encodes");
+        let exact = compare_rendered_jp2_to_tiff(
+            &jp2,
+            &tiff_rgb(width, height, &samples, TiffEndian::Little, 2, false),
+            rendered_contract(width, height, 0),
+        )
+        .expect("synthetic rendered comparison succeeds");
+        assert_eq!(exact.samples, u64::from(width) * u64::from(height) * 3);
+        assert_eq!(exact.peak_error, 0);
+
+        let mut changed = samples;
+        changed[7] = changed[7].saturating_add(4);
+        let mismatch = compare_rendered_jp2_to_tiff(
+            &jp2,
+            &tiff_rgb(width, height, &changed, TiffEndian::Big, height, false),
+            rendered_contract(width, height, 4),
+        )
+        .expect("synthetic rendered mismatch produces aggregates");
+        assert_eq!(mismatch.peak_error, 4);
+        assert!(mismatch.passes(rendered_contract(width, height, 4)));
+        assert!(!mismatch.passes(rendered_contract(width, height, 3)));
+    }
+
+    #[test]
+    fn rendered_worker_requires_the_jp2_rendered_route_and_declared_shape() {
+        let width = 2;
+        let height = 3;
+        let samples = rgb_gradient(width, height);
+        let tiff = tiff_rgb(width, height, &samples, TiffEndian::Little, height, false);
+        let jp2 = generate_rgb(width, height, OutputFormat::Jp2).expect("synthetic JP2 encodes");
+        compare_rendered_jp2_to_tiff(&jp2, &tiff, rendered_contract(width, height, 0))
+            .expect("JP2 rendered route succeeds");
+        let j2k = generate_rgb(width, height, OutputFormat::J2kCodestream)
+            .expect("synthetic J2K encodes");
+        assert!(
+            compare_rendered_jp2_to_tiff(&j2k, &tiff, rendered_contract(width, height, 0))
+                .unwrap_err()
+                .contains("not JP2")
+        );
+        assert!(
+            compare_rendered_jp2_to_tiff(&jp2, &tiff, rendered_contract(width + 1, height, 0))
+                .unwrap_err()
+                .contains("TIFF metadata")
+        );
+        assert!(
+            validate_rendered_contract(RenderedComparisonContract {
+                components: 4,
+                ..rendered_contract(width, height, 0)
+            })
+            .is_err()
+        );
+        assert!(validate_rendered_contract(rendered_contract(width, height, 256)).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_tiff_headers_ifds_and_ranges() {
+        let endian = TiffEndian::Little;
+        let samples = rgb_gradient(2, 3);
+        let valid = tiff_rgb(2, 3, &samples, endian, 2, false);
+
+        for malformed in [Vec::new(), b"ZZ\x2a\0\x08\0\0\0".to_vec()] {
+            assert!(parse_tiff_rgb_u8_contiguous(&malformed).is_err());
+        }
+        let mut bad_magic = valid.clone();
+        write_tiff_u16(&mut bad_magic, 2, 43, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&bad_magic).is_err());
+
+        let mut duplicate = valid.clone();
+        let planar = tiff_entry_offset(&duplicate, endian, 284);
+        write_tiff_u16(&mut duplicate, planar, 256, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&duplicate).is_err());
+
+        let mut additional_ifd = valid.clone();
+        let ifd = tiff_u32(&additional_ifd, 4, endian).unwrap() as usize;
+        let count = tiff_u16(&additional_ifd, ifd, endian).unwrap() as usize;
+        write_tiff_u32(&mut additional_ifd, ifd + 2 + count * 12, 8, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&additional_ifd).is_err());
+
+        let mut bad_type = valid.clone();
+        let width_entry = tiff_entry_offset(&bad_type, endian, 256);
+        write_tiff_u16(&mut bad_type, width_entry + 2, 5, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&bad_type).is_err());
+
+        let mut bad_count = valid.clone();
+        let bits = tiff_entry_offset(&bad_count, endian, 258);
+        write_tiff_u32(&mut bad_count, bits + 4, 2, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&bad_count).is_err());
+
+        let mut bad_offset = valid.clone();
+        let bits = tiff_entry_offset(&bad_offset, endian, 258);
+        write_tiff_u32(&mut bad_offset, bits + 8, u32::MAX, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&bad_offset).is_err());
+
+        let mut duplicate_strips = valid.clone();
+        let offsets_entry = tiff_entry_offset(&duplicate_strips, endian, 273);
+        let offsets = tiff_u32(&duplicate_strips, offsets_entry + 8, endian).unwrap() as usize;
+        let first_offset = tiff_u32(&duplicate_strips, offsets, endian).unwrap();
+        write_tiff_u32(&mut duplicate_strips, offsets + 4, first_offset, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&duplicate_strips).is_err());
+
+        let mut trailing_strip = valid.clone();
+        let counts_entry = tiff_entry_offset(&trailing_strip, endian, 279);
+        let counts = tiff_u32(&trailing_strip, counts_entry + 8, endian).unwrap() as usize;
+        let first_count = tiff_u32(&trailing_strip, counts, endian).unwrap();
+        write_tiff_u32(&mut trailing_strip, counts, first_count + 1, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&trailing_strip).is_err());
+
+        let mut truncated = valid.clone();
+        truncated.pop();
+        assert!(parse_tiff_rgb_u8_contiguous(&truncated).is_err());
+        let mut overflow = valid.clone();
+        let width_entry = tiff_entry_offset(&overflow, endian, 256);
+        let height_entry = tiff_entry_offset(&overflow, endian, 257);
+        write_tiff_u32(&mut overflow, width_entry + 8, u32::MAX, endian);
+        write_tiff_u32(&mut overflow, height_entry + 8, u32::MAX, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&overflow).is_err());
+
+        let mut trailing = valid;
+        trailing.push(0);
+        assert!(parse_tiff_rgb_u8_contiguous(&trailing).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_tiff_pixel_models() {
+        let endian = TiffEndian::Big;
+        let samples = rgb_gradient(2, 2);
+        let valid = tiff_rgb(2, 2, &samples, endian, 2, false);
+        for (tag, value) in [(259, 5), (262, 3), (277, 4), (284, 2)] {
+            let mut malformed = valid.clone();
+            let entry = tiff_entry_offset(&malformed, endian, tag);
+            write_tiff_u16(&mut malformed, entry + 8, value, endian);
+            assert!(
+                parse_tiff_rgb_u8_contiguous(&malformed).is_err(),
+                "tag {tag} value {value} must be rejected"
+            );
+        }
+        let mut non_u8 = valid;
+        let bits_entry = tiff_entry_offset(&non_u8, endian, 258);
+        let bits = tiff_u32(&non_u8, bits_entry + 8, endian).unwrap() as usize;
+        write_tiff_u16(&mut non_u8, bits, 16, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&non_u8).is_err());
+
+        for unsupported_tag in [320, 338] {
+            let mut tagged = tiff_rgb(2, 2, &samples, endian, 2, false);
+            let planar = tiff_entry_offset(&tagged, endian, 284);
+            write_tiff_u16(&mut tagged, planar, unsupported_tag, endian);
+            assert!(parse_tiff_rgb_u8_contiguous(&tagged).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_lzw_predictor_and_inert_metadata_shapes() {
+        let endian = TiffEndian::Little;
+        let samples = rgb_gradient(4, 3);
+        let (valid, _, _) = tiff_rgb_lzw(4, 3, &samples, endian, 2, false, None);
+        let predictor = tiff_entry_offset(&valid, endian, 317);
+        let compression = tiff_entry_offset(&valid, endian, 259);
+
+        let mut wrong_predictor = valid.clone();
+        write_tiff_u16(&mut wrong_predictor, predictor + 8, 1, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&wrong_predictor).is_err());
+
+        let mut missing_predictor = valid.clone();
+        write_tiff_u16(&mut missing_predictor, predictor, 274, endian);
+        write_tiff_u16(&mut missing_predictor, predictor + 8, 1, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&missing_predictor).is_err());
+
+        let mut illegal_uncompressed_predictor = valid.clone();
+        write_tiff_u16(
+            &mut illegal_uncompressed_predictor,
+            compression + 8,
+            1,
+            endian,
+        );
+        assert!(parse_tiff_rgb_u8_contiguous(&illegal_uncompressed_predictor).is_err());
+
+        let photoshop = tiff_entry_offset(&valid, endian, 34377);
+        let document = tiff_entry_offset(&valid, endian, 37724);
+        let mut wrong_type = valid.clone();
+        write_tiff_u16(&mut wrong_type, photoshop + 2, 7, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&wrong_type).is_err());
+
+        let mut empty_metadata = valid.clone();
+        write_tiff_u32(&mut empty_metadata, photoshop + 4, 0, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&empty_metadata).is_err());
+
+        let mut truncated_metadata = valid.clone();
+        write_tiff_u32(&mut truncated_metadata, document + 8, u32::MAX, endian);
+        assert!(parse_tiff_rgb_u8_contiguous(&truncated_metadata).is_err());
+
+        let document_offset = tiff_u32(&valid, document + 8, endian).unwrap();
+        let mut overlapping_metadata = valid;
+        write_tiff_u32(
+            &mut overlapping_metadata,
+            photoshop + 8,
+            document_offset,
+            endian,
+        );
+        assert!(parse_tiff_rgb_u8_contiguous(&overlapping_metadata).is_err());
+    }
+
+    #[test]
+    fn rendered_worker_rejects_decoded_model_mismatch_and_scrubs_open_paths() {
+        let width = 2;
+        let height = 2;
+        let reference = tiff_rgb(
+            width,
+            height,
+            &rgb_gradient(width, height),
+            TiffEndian::Little,
+            height,
+            false,
+        );
+        let greyscale = grayscale_gradient(width, height);
+        let info = ImageInfo::new(
+            width,
+            height,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        let jp2 = encode(
+            ImageView::Interleaved {
+                info: &info,
+                samples: &greyscale,
+                stride_bytes: width as usize,
+            },
+            &EncodeOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            compare_rendered_jp2_to_tiff(&jp2, &reference, rendered_contract(width, height, 0))
+                .unwrap_err()
+                .contains("metadata")
+        );
+
+        let absent = Path::new("/project-authored/secret/absent.jp2");
+        let diagnostic = read_bounded_scrubbed(absent, MAX_INPUT_BYTES, "input").unwrap_err();
+        assert_eq!(diagnostic, "cannot open input");
+        assert!(!diagnostic.contains("secret"));
     }
 
     #[test]

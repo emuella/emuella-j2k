@@ -9,6 +9,7 @@ python3 scripts/test-package-legal-policy.py
 python3 scripts/test-layer2-conformance-inspection.py
 python3 scripts/test-layer2-decoded-pixel-canary.py
 python3 scripts/test-layer2-derived-set.py
+python3 scripts/test-layer2-rendered-pixel.py
 python3 scripts/audit-public-tree.py
 python3 scripts/generate-binary-dependency-notices.py --check
 cargo fmt --all --check
