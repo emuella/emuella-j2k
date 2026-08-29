@@ -18421,6 +18421,34 @@ fn parse_p0_13_main_maxshift(input: &[u8], codestream: &Codestream) -> Result<Bo
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidatedP013MainMaxshift(BoundedTileMaxshift);
+
+fn recheck_validator_granted_p0_13_main_maxshift(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_index: u16,
+    granted: Option<ValidatedP013MainMaxshift>,
+) -> Result<Option<BoundedTileMaxshift>> {
+    let Some(ValidatedP013MainMaxshift(granted)) = granted else {
+        return Ok(None);
+    };
+    let exact = BoundedTileMaxshift {
+        tile_index: 0,
+        component_index: 3,
+        shift: 11,
+    };
+    if granted != exact || parse_p0_13_main_maxshift(input, codestream)? != granted {
+        return Err(unsupported(
+            None,
+            Some(Marker::Rgn),
+            UnsupportedConstruct::PacketDecode,
+            "the validator-granted main-header Maxshift must match the exact P0.13 tile-zero/component-three shift-eleven assignment",
+        ));
+    }
+    Ok((granted.tile_index == tile_index).then_some(granted))
+}
+
 fn p0_13_effective_style_matches(style: CodingStyleMarker, component_index: u16) -> bool {
     style.entropy_coder == EntropyCoder::ClassicTier1
         && !style.sop_markers
@@ -18436,10 +18464,16 @@ fn p0_13_effective_style_matches(style: CodingStyleMarker, component_index: u16)
         && !style.precincts_declared
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidatedP013PacketRoute {
+    coding_style: CodingStyleMarker,
+    main_maxshift: ValidatedP013MainMaxshift,
+}
+
 fn validate_part1_p0_13_high_component_progression_profile(
     input: &[u8],
     codestream: &Codestream,
-) -> Result<CodingStyleMarker> {
+) -> Result<ValidatedP013PacketRoute> {
     if codestream.kind != CodestreamKind::J2k
         || codestream.siz.capabilities != 1
         || codestream.siz.reference_grid_width != 1
@@ -18546,7 +18580,7 @@ fn validate_part1_p0_13_high_component_progression_profile(
             "the qualified Profile-0 P0.13 path requires its exact COD, COC, QCD, QCC, POC and COM field lengths",
         ));
     }
-    parse_p0_13_main_maxshift(input, codestream)?;
+    let main_maxshift = ValidatedP013MainMaxshift(parse_p0_13_main_maxshift(input, codestream)?);
 
     let coding_style = codestream.coding_style.ok_or_else(|| {
         invalid(
@@ -18629,7 +18663,10 @@ fn validate_part1_p0_13_high_component_progression_profile(
             ));
         }
     }
-    Ok(coding_style)
+    Ok(ValidatedP013PacketRoute {
+        coding_style,
+        main_maxshift,
+    })
 }
 
 /// True when the codestream matches the exact 257-component progression and
@@ -20230,7 +20267,8 @@ pub fn decode_part1_p0_13_high_component_progression_component_zero(
     input: &[u8],
 ) -> Result<DecodedImage> {
     let codestream = parse(input)?;
-    let coding_style = validate_part1_p0_13_high_component_progression_profile(input, &codestream)?;
+    let validated = validate_part1_p0_13_high_component_progression_profile(input, &codestream)?;
+    let coding_style = validated.coding_style;
     let tile_rect = tile_rects(&codestream)?
         .into_iter()
         .next()
@@ -20247,7 +20285,7 @@ pub fn decode_part1_p0_13_high_component_progression_component_zero(
         &mut workspace,
         None,
         0,
-        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P013),
+        PacketOrganisationConfig::validated_two_volume_514(validated.main_maxshift),
     )?;
     let samples = components.pop().ok_or(CodestreamError::SizeOverflow)?;
     if !components.is_empty() || samples.len() != 1 {
@@ -24978,7 +25016,6 @@ fn decode_multitile_components_selected_validated(
 enum ComponentPacketProfile {
     Default,
     Profile0P007,
-    Profile0P013,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25002,11 +25039,18 @@ enum UniformSinglePrecinctPermission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TwoVolumeSinglePrecinctPermission {
+    None,
+    ValidatedRlcpCprl257Components514Packets(ValidatedP013MainMaxshift),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PacketOrganisationConfig {
     component_profile: ComponentPacketProfile,
     explicit_precinct_permission: ExplicitPrecinctPermission,
     heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission,
     uniform_single_precinct_permission: UniformSinglePrecinctPermission,
+    two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission,
     validator_granted_effective_maxshift: Option<BoundedTileMaxshift>,
 }
 
@@ -25020,6 +25064,7 @@ impl PacketOrganisationConfig {
         explicit_precinct_permission: ExplicitPrecinctPermission::ValidatedProfile0P004,
         heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
         uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+        two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission::None,
         validator_granted_effective_maxshift: None,
     };
     // The exact heterogeneous-component validator is the only production
@@ -25032,6 +25077,7 @@ impl PacketOrganisationConfig {
         heterogeneous_single_precinct_permission:
             HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets,
         uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+        two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission::None,
         validator_granted_effective_maxshift: None,
     };
 
@@ -25045,6 +25091,7 @@ impl PacketOrganisationConfig {
         heterogeneous_single_precinct_permission:
             HeterogeneousSinglePrecinctPermission::ValidatedCprl720Packets,
         uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+        two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission::None,
         validator_granted_effective_maxshift: None,
     };
 
@@ -25057,6 +25104,7 @@ impl PacketOrganisationConfig {
         explicit_precinct_permission: ExplicitPrecinctPermission::None,
         heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
         uniform_single_precinct_permission: UniformSinglePrecinctPermission::ValidatedLrcp24Packets,
+        two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission::None,
         validator_granted_effective_maxshift: None,
     };
 
@@ -25072,7 +25120,35 @@ impl PacketOrganisationConfig {
             heterogeneous_single_precinct_permission:
                 HeterogeneousSinglePrecinctPermission::ValidatedRpcl112Packets,
             uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+            two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission::None,
             validator_granted_effective_maxshift: Some(effective_maxshift),
+        }
+    }
+
+    // Constructed only from the exact public P0.13 admission result. Shared
+    // packet planning rechecks the 257-component selector domain, effective
+    // styles, topology and both progression volumes before packet use. The
+    // separately typed Maxshift proof does not grant general RGN handling.
+    const fn validated_two_volume_514(main_maxshift: ValidatedP013MainMaxshift) -> Self {
+        Self {
+            component_profile: ComponentPacketProfile::Default,
+            explicit_precinct_permission: ExplicitPrecinctPermission::None,
+            heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
+            uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+            two_volume_single_precinct_permission:
+                TwoVolumeSinglePrecinctPermission::ValidatedRlcpCprl257Components514Packets(
+                    main_maxshift,
+                ),
+            validator_granted_effective_maxshift: None,
+        }
+    }
+
+    const fn p0_13_main_maxshift_grant(self) -> Option<ValidatedP013MainMaxshift> {
+        match self.two_volume_single_precinct_permission {
+            TwoVolumeSinglePrecinctPermission::ValidatedRlcpCprl257Components514Packets(grant) => {
+                Some(grant)
+            }
+            TwoVolumeSinglePrecinctPermission::None => None,
         }
     }
 
@@ -25082,6 +25158,7 @@ impl PacketOrganisationConfig {
             explicit_precinct_permission: ExplicitPrecinctPermission::None,
             heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
             uniform_single_precinct_permission: UniformSinglePrecinctPermission::None,
+            two_volume_single_precinct_permission: TwoVolumeSinglePrecinctPermission::None,
             validator_granted_effective_maxshift: None,
         }
     }
@@ -25400,11 +25477,18 @@ fn decode_multitile_tile_component_planes_selected(
     );
 
     let detailed_profile = timings.is_some();
-    let maxshift = match packet_organisation.component_profile {
-        ComponentPacketProfile::Profile0P013 => Some(parse_p0_13_main_maxshift(input, codestream)?),
-        _ => parse_bounded_tile_maxshift(input, codestream)?,
-    }
-    .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index);
+    let p0_13_main_maxshift_grant = packet_organisation.p0_13_main_maxshift_grant();
+    let maxshift = if p0_13_main_maxshift_grant.is_some() {
+        recheck_validator_granted_p0_13_main_maxshift(
+            input,
+            codestream,
+            tile_rect.tile_index,
+            p0_13_main_maxshift_grant,
+        )?
+    } else {
+        parse_bounded_tile_maxshift(input, codestream)?
+            .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index)
+    };
     reconstruct_default_precinct_component_planes_selected(
         &payload,
         codestream,
@@ -27253,12 +27337,10 @@ fn packet_component_styles(
     packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<CodingStyleMarker>> {
     let component_count = usize::from(codestream.siz.component_count());
-    let heterogeneous_styles_granted = matches!(
-        packet_organisation.component_profile,
-        ComponentPacketProfile::Profile0P013
-    ) || packet_organisation
-        .heterogeneous_single_precinct_permission
-        != HeterogeneousSinglePrecinctPermission::None;
+    let heterogeneous_styles_granted = packet_organisation.heterogeneous_single_precinct_permission
+        != HeterogeneousSinglePrecinctPermission::None
+        || packet_organisation.two_volume_single_precinct_permission
+            != TwoVolumeSinglePrecinctPermission::None;
     if !heterogeneous_styles_granted {
         let uniform = uniform_effective_coding_style(codestream)?;
         return Ok(alloc::vec![uniform; component_count]);
@@ -27358,6 +27440,101 @@ fn recheck_validator_granted_uniform_single_precinct_schedule(
     Ok(())
 }
 
+fn recheck_validator_granted_two_volume_single_precinct_schedule(
+    permission: TwoVolumeSinglePrecinctPermission,
+    codestream: &Codestream,
+    component_styles: &[CodingStyleMarker],
+    component_topologies: &[Part1PrecinctTopology],
+    progression_volumes: &[ProgressionVolume],
+    expected_packet_count: usize,
+) -> Result<()> {
+    if !matches!(
+        permission,
+        TwoVolumeSinglePrecinctPermission::ValidatedRlcpCprl257Components514Packets(_)
+    ) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Poc),
+            UnsupportedConstruct::PacketDecode,
+            "the heterogeneous two-volume packet schedule requires an exact-validator grant",
+        ));
+    }
+
+    let component_count = usize::from(codestream.siz.component_count());
+    let selector_domain_is_two_bytes = component_selector_len(&codestream.siz) == 2;
+    let styles_match_effective_state = component_styles.len() == component_count
+        && (0..codestream.siz.component_count()).all(|component_index| {
+            codestream.effective_coding_style(component_index)
+                == component_styles.get(usize::from(component_index)).copied()
+        });
+    let heterogeneous_style_shape = component_styles.first().is_some_and(|default| {
+        component_styles
+            .iter()
+            .enumerate()
+            .all(|(component, style)| {
+                style.layers == 1
+                    && style.decomposition_levels == 1
+                    && if component == 2 {
+                        *style != *default
+                    } else {
+                        *style == *default
+                    }
+            })
+    });
+    let single_precinct_topologies = component_topologies.len() == component_count
+        && component_topologies
+            .iter()
+            .enumerate()
+            .all(|(component, topology)| {
+                topology.component_index == u16::try_from(component).unwrap_or(u16::MAX)
+                    && topology.resolutions.len()
+                        == component_styles
+                            .get(component)
+                            .map_or(0, |style| usize::from(style.decomposition_levels) + 1)
+                    && topology
+                        .resolutions
+                        .iter()
+                        .all(|resolution| resolution.precinct_count == 1)
+            });
+    let exact_volumes = matches!(
+        progression_volumes,
+        [first, second]
+            if first.resolution_start == 0
+                && first.component_start == 0
+                && first.layer_end == 1
+                && first.resolution_end == 33
+                && first.component_end == 128
+                && first.progression_order == ProgressionOrder::Rlcp
+                && first.declared_tile_part == 0
+                && first.marker_offset.is_some()
+                && second.resolution_start == 0
+                && second.component_start == 128
+                && second.layer_end == 1
+                && second.resolution_end == 33
+                && second.component_end == 257
+                && second.progression_order == ProgressionOrder::Cprl
+                && second.declared_tile_part == 0
+                && second.marker_offset == first.marker_offset
+    );
+    if component_count != 257
+        || !selector_domain_is_two_bytes
+        || !styles_match_effective_state
+        || !heterogeneous_style_shape
+        || !single_precinct_topologies
+        || !exact_volumes
+        || expected_packet_count != 514
+        || expected_packet_count > MAX_PACKETS_PER_TILE
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Poc),
+            UnsupportedConstruct::PacketDecode,
+            "the validator-granted packet path requires 257 two-byte-selector components, heterogeneous effective styles, one precinct per resolution and its exact RLCP/CPRL 514-packet schedule",
+        ));
+    }
+    Ok(())
+}
+
 fn packet_precinct_grid_supported(
     codestream: &Codestream,
     tile_rect: TileRect,
@@ -27365,12 +27542,11 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
-    let bounded_heterogeneous_single_precincts = (matches!(
-        packet_organisation.component_profile,
-        ComponentPacketProfile::Profile0P013
-    ) || packet_organisation
+    let bounded_heterogeneous_single_precincts = (packet_organisation
         .heterogeneous_single_precinct_permission
-        != HeterogeneousSinglePrecinctPermission::None)
+        != HeterogeneousSinglePrecinctPermission::None
+        || packet_organisation.two_volume_single_precinct_permission
+            != TwoVolumeSinglePrecinctPermission::None)
         && component_styles
             .iter()
             .zip(&codestream.siz.components)
@@ -27385,6 +27561,8 @@ fn packet_precinct_grid_supported(
             });
     if packet_organisation.heterogeneous_single_precinct_permission
         != HeterogeneousSinglePrecinctPermission::None
+        || packet_organisation.two_volume_single_precinct_permission
+            != TwoVolumeSinglePrecinctPermission::None
     {
         return bounded_heterogeneous_single_precincts;
     }
@@ -27510,14 +27688,6 @@ fn parse_default_precinct_packets_from_source(
             "the qualified Profile-0 P0.07 path requires exactly 96 tile-zero packets",
         ));
     }
-    if packet_profile == ComponentPacketProfile::Profile0P013 && expected_packet_count != 514 {
-        return Err(unsupported(
-            None,
-            Some(Marker::Poc),
-            UnsupportedConstruct::PacketDecode,
-            "the qualified Profile-0 P0.13 path requires exactly 514 packets in its two progression volumes",
-        ));
-    }
     let max_resolution_end = component_styles
         .iter()
         .map(|style| style.decomposition_levels)
@@ -27532,6 +27702,18 @@ fn parse_default_precinct_packets_from_source(
         coding_style.layers,
         max_resolution_end,
     )?;
+    if packet_organisation.two_volume_single_precinct_permission
+        != TwoVolumeSinglePrecinctPermission::None
+    {
+        recheck_validator_granted_two_volume_single_precinct_schedule(
+            packet_organisation.two_volume_single_precinct_permission,
+            codestream,
+            &component_styles,
+            &component_topologies,
+            &progression_volumes,
+            expected_packet_count,
+        )?;
+    }
 
     let retained_tile_part_order;
     let tile_part_order = match physical_tile_part_order {
@@ -27590,14 +27772,16 @@ fn parse_default_precinct_packets_from_source(
             tile_rect.tile_index,
             packet_organisation.validator_granted_effective_maxshift,
         )?
+    } else if packet_organisation.p0_13_main_maxshift_grant().is_some() {
+        recheck_validator_granted_p0_13_main_maxshift(
+            input,
+            codestream,
+            tile_rect.tile_index,
+            packet_organisation.p0_13_main_maxshift_grant(),
+        )?
     } else {
-        match packet_profile {
-            ComponentPacketProfile::Profile0P013 => {
-                Some(parse_p0_13_main_maxshift(input, codestream)?)
-            }
-            _ => parse_bounded_tile_maxshift(input, codestream)?,
-        }
-        .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index)
+        parse_bounded_tile_maxshift(input, codestream)?
+            .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index)
     };
     let mut component_states = component_quantization
         .iter()
@@ -31414,6 +31598,83 @@ mod heterogeneous_packet_order_tests {
         codestream
     }
 
+    fn p0_13_exact_synthetic_fixture() -> Vec<u8> {
+        let planes = (0..255).map(|_| vec![128_u8]).collect::<Vec<_>>();
+        let views = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut codestream = encode_planar_u8_no_decomp_test_fixture(1, 1, &views).unwrap();
+
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        let old_siz_len = usize::from(read_u16(&codestream, siz + 2).unwrap());
+        let old_siz_end = siz + 2 + old_siz_len;
+        codestream.splice(old_siz_end..old_siz_end, [7, 1, 1, 7, 1, 1]);
+        codestream[siz + 2..siz + 4]
+            .copy_from_slice(&u16::try_from(old_siz_len + 6).unwrap().to_be_bytes());
+        codestream[siz + 4..siz + 6].copy_from_slice(&1_u16.to_be_bytes());
+        codestream[siz + 38..siz + 40].copy_from_slice(&257_u16.to_be_bytes());
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        codestream.splice(
+            cod..cod + 2 + lcod,
+            packet_profile_marker_segment(
+                Marker::Cod,
+                &[0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x03, 0x03, 0x10, 0x01],
+            ),
+        );
+
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        let lqcd = usize::from(read_u16(&codestream, qcd + 2).unwrap());
+        codestream.splice(
+            qcd..qcd + 2 + lqcd,
+            packet_profile_marker_segment(Marker::Qcd, &[0x40, 0x40, 0x48, 0x48, 0x50]),
+        );
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+        codestream.splice(
+            qcd..qcd,
+            packet_profile_marker_segment(
+                Marker::Coc,
+                &[0x00, 0x02, 0x00, 0x01, 0x04, 0x04, 0x00, 0x01],
+            ),
+        );
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let mut trailing_main_header = Vec::new();
+        trailing_main_header.extend(packet_profile_marker_segment(
+            Marker::Qcc,
+            &[0x00, 0x01, 0x60, 0x48, 0x50, 0x50, 0x58],
+        ));
+        trailing_main_header.extend(packet_profile_marker_segment(
+            Marker::Qcc,
+            &[0x00, 0x02, 0x40, 0x48, 0x50, 0x50, 0x58],
+        ));
+        trailing_main_header.extend(packet_profile_marker_segment(
+            Marker::Rgn,
+            &[0x00, 0x03, 0x00, 0x0b],
+        ));
+        trailing_main_header.extend(packet_profile_marker_segment(
+            Marker::Poc,
+            &[
+                0x00, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00, 0x80, 0x01, 0x00, 0x00, 0x80, 0x00, 0x01,
+                0x21, 0x01, 0x01, 0x04,
+            ],
+        ));
+        let mut comment = vec![0_u8; 43];
+        comment[1] = 1;
+        trailing_main_header.extend(packet_profile_marker_segment(Marker::Com, &comment));
+        codestream.splice(sot..sot, trailing_main_header);
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream[sot + 10] = 0;
+        codestream[sot + 11] = 1;
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        codestream.splice(sod + 2..eoc, core::iter::repeat_n(0, 514));
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&u32::try_from(eoc - sot).unwrap().to_be_bytes());
+        codestream
+    }
+
     #[test]
     fn visits_the_bounded_175_packet_pcrl_shape_by_effective_component_style() {
         let counts = vec![vec![1; 7], vec![1; 4], vec![1; 7], vec![1; 7]];
@@ -31996,6 +32257,302 @@ mod heterogeneous_packet_order_tests {
         let mut changed_poc = poc;
         changed_poc[17] = 1;
         assert!(!p0_13_poc_payload_matches(&changed_poc));
+    }
+
+    #[test]
+    fn p0_13_exact_synthetic_route_preserves_packet_order_and_component_zero_output() {
+        let input = p0_13_exact_synthetic_fixture();
+        let codestream = parse(&input).unwrap();
+        let validated =
+            validate_part1_p0_13_high_component_progression_profile(&input, &codestream).unwrap();
+        let granted = PacketOrganisationConfig::validated_two_volume_514(validated.main_maxshift);
+        assert!(is_supported_part1_p0_13_high_component_progression_profile(
+            &input,
+            &codestream,
+        ));
+        assert!(packet_component_styles(&codestream, PacketOrganisationConfig::DEFAULT).is_err());
+
+        let styles = packet_component_styles(&codestream, granted).unwrap();
+        assert_eq!(styles.len(), 257);
+        assert_ne!(styles[2], styles[0]);
+        assert!(
+            styles
+                .iter()
+                .enumerate()
+                .all(|(component, style)| component == 2 || *style == styles[0])
+        );
+        let tile = tile_rects(&codestream).unwrap()[0];
+        let topologies = styles
+            .iter()
+            .enumerate()
+            .map(|(component, style)| {
+                Part1PrecinctTopology::new(&codestream.siz, tile, component as u16, *style).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(topologies.iter().all(|topology| {
+            topology.resolutions.len() == 2
+                && topology
+                    .resolutions
+                    .iter()
+                    .all(|resolution| resolution.precinct_count == 1)
+        }));
+        let volumes = effective_progression_volumes(&input, &codestream, 0, 1, 2).unwrap();
+        recheck_validator_granted_two_volume_single_precinct_schedule(
+            granted.two_volume_single_precinct_permission,
+            &codestream,
+            &styles,
+            &topologies,
+            &volumes,
+            514,
+        )
+        .unwrap();
+
+        let mut packets = Vec::new();
+        let count = visit_progression_volumes(
+            &codestream.siz,
+            0,
+            (0, 0),
+            1,
+            &styles,
+            &topologies,
+            &volumes,
+            |scheduled| {
+                packets.push(scheduled.key);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 514);
+        assert_eq!(packets.len(), 514);
+        for (index, resolution, component) in [
+            (0, 0, 0),
+            (127, 0, 127),
+            (128, 1, 0),
+            (255, 1, 127),
+            (256, 0, 128),
+            (257, 1, 128),
+            (513, 1, 256),
+        ] {
+            assert_eq!(
+                (packets[index].resolution, packets[index].component),
+                (resolution, component),
+            );
+        }
+
+        let decoded = decode_part1_p0_13_high_component_progression_component_zero(&input).unwrap();
+        assert_eq!((decoded.width, decoded.height), (1, 1));
+        assert_eq!((decoded.bits_per_sample, decoded.signed), (8, false));
+        assert_eq!(decoded.components.len(), 1);
+        assert_eq!(decoded.components[0].samples, [128]);
+        assert!(decode_baseline_owned_components(&input).is_err());
+        assert!(decode_baseline_owned_components_selected(&input, &[0]).is_err());
+    }
+
+    #[test]
+    fn p0_13_wide_component_markers_reject_truncation_and_malformed_selectors() {
+        let input = p0_13_exact_synthetic_fixture();
+        let rejected = |candidate: &[u8]| {
+            parse(candidate).is_err()
+                || parse(candidate).is_ok_and(|parsed| {
+                    !is_supported_part1_p0_13_high_component_progression_profile(candidate, &parsed)
+                })
+        };
+        let truncate_payload = |marker: Marker, occurrence: usize| {
+            let mut candidate = input.clone();
+            let mut search = 0;
+            let mut offset = 0;
+            for _ in 0..=occurrence {
+                offset = find_marker(&candidate, search, marker).unwrap();
+                search = offset + 2;
+            }
+            let length = usize::from(read_u16(&candidate, offset + 2).unwrap());
+            candidate.drain(offset + 1 + length..offset + 2 + length);
+            candidate[offset + 2..offset + 4]
+                .copy_from_slice(&u16::try_from(length - 1).unwrap().to_be_bytes());
+            candidate
+        };
+
+        for (marker, occurrence) in [
+            (Marker::Coc, 0),
+            (Marker::Qcc, 0),
+            (Marker::Qcc, 1),
+            (Marker::Poc, 0),
+            (Marker::Rgn, 0),
+        ] {
+            assert!(rejected(&truncate_payload(marker, occurrence)));
+        }
+
+        let mut out_of_range_coc = input.clone();
+        let coc = find_marker(&out_of_range_coc, 0, Marker::Coc).unwrap();
+        out_of_range_coc[coc + 4..coc + 6].copy_from_slice(&257_u16.to_be_bytes());
+        assert!(rejected(&out_of_range_coc));
+
+        let mut out_of_range_qcc = input.clone();
+        let qcc = find_marker(&out_of_range_qcc, 0, Marker::Qcc).unwrap();
+        out_of_range_qcc[qcc + 4..qcc + 6].copy_from_slice(&257_u16.to_be_bytes());
+        assert!(rejected(&out_of_range_qcc));
+
+        let mut out_of_range_rgn = input.clone();
+        let rgn = find_marker(&out_of_range_rgn, 0, Marker::Rgn).unwrap();
+        out_of_range_rgn[rgn + 4..rgn + 6].copy_from_slice(&257_u16.to_be_bytes());
+        assert!(rejected(&out_of_range_rgn));
+
+        let mut reserved_poc_order = input;
+        let poc = find_marker(&reserved_poc_order, 0, Marker::Poc).unwrap();
+        reserved_poc_order[poc + 4 + 17] = 5;
+        assert!(rejected(&reserved_poc_order));
+    }
+
+    #[test]
+    fn p0_13_packet_grant_rechecks_style_topology_volumes_count_and_selector_domain() {
+        let input = p0_13_exact_synthetic_fixture();
+        let codestream = parse(&input).unwrap();
+        let validated =
+            validate_part1_p0_13_high_component_progression_profile(&input, &codestream).unwrap();
+        let granted = PacketOrganisationConfig::validated_two_volume_514(validated.main_maxshift);
+        let styles = packet_component_styles(&codestream, granted).unwrap();
+        let tile = tile_rects(&codestream).unwrap()[0];
+        let topologies = styles
+            .iter()
+            .enumerate()
+            .map(|(component, style)| {
+                Part1PrecinctTopology::new(&codestream.siz, tile, component as u16, *style).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let volumes = effective_progression_volumes(&input, &codestream, 0, 1, 2).unwrap();
+        let recheck = |codestream: &Codestream,
+                       styles: &[CodingStyleMarker],
+                       topologies: &[Part1PrecinctTopology],
+                       volumes: &[ProgressionVolume],
+                       packet_count| {
+            recheck_validator_granted_two_volume_single_precinct_schedule(
+                granted.two_volume_single_precinct_permission,
+                codestream,
+                styles,
+                topologies,
+                volumes,
+                packet_count,
+            )
+        };
+        recheck(&codestream, &styles, &topologies, &volumes, 514).unwrap();
+
+        for packet_count in [0, 513, 515, MAX_PACKETS_PER_TILE.saturating_add(1)] {
+            assert!(recheck(&codestream, &styles, &topologies, &volumes, packet_count).is_err());
+        }
+        assert!(
+            recheck_validator_granted_two_volume_single_precinct_schedule(
+                TwoVolumeSinglePrecinctPermission::None,
+                &codestream,
+                &styles,
+                &topologies,
+                &volumes,
+                514,
+            )
+            .is_err()
+        );
+
+        let mut uniform_styles = styles.clone();
+        uniform_styles[2] = uniform_styles[0];
+        assert!(recheck(&codestream, &uniform_styles, &topologies, &volumes, 514).is_err());
+        let mut changed_style = styles.clone();
+        changed_style[256].decomposition_levels = 2;
+        assert!(recheck(&codestream, &changed_style, &topologies, &volumes, 514).is_err());
+
+        let mut multiple_precincts = topologies.clone();
+        multiple_precincts[256].resolutions[1].precinct_count = 2;
+        assert!(recheck(&codestream, &styles, &multiple_precincts, &volumes, 514).is_err());
+
+        let mut overlap = volumes.clone();
+        overlap[1].component_start = 127;
+        assert!(recheck(&codestream, &styles, &topologies, &overlap, 514).is_err());
+        let mut gap = volumes.clone();
+        gap[1].component_start = 129;
+        assert!(recheck(&codestream, &styles, &topologies, &gap, 514).is_err());
+        let mut wrong_order = volumes.clone();
+        wrong_order[1].progression_order = ProgressionOrder::Rlcp;
+        assert!(recheck(&codestream, &styles, &topologies, &wrong_order, 514).is_err());
+        let mut wrong_bounds = volumes.clone();
+        wrong_bounds[0].resolution_end = 2;
+        assert!(recheck(&codestream, &styles, &topologies, &wrong_bounds, 514).is_err());
+
+        let mut narrow_domain = codestream.clone();
+        narrow_domain.siz.components.pop();
+        assert!(
+            recheck(
+                &narrow_domain,
+                &styles[..256],
+                &topologies[..256],
+                &volumes,
+                512
+            )
+            .is_err()
+        );
+
+        let pcrl_grant = PacketOrganisationConfig::VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175;
+        assert!(
+            validate_heterogeneous_single_precinct_schedule(
+                pcrl_grant.heterogeneous_single_precinct_permission,
+                styles[0],
+                514,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn p0_13_maxshift_proof_is_exact_route_only_and_rechecked_at_each_use() {
+        let input = p0_13_exact_synthetic_fixture();
+        let codestream = parse(&input).unwrap();
+        let validated =
+            validate_part1_p0_13_high_component_progression_profile(&input, &codestream).unwrap();
+        let granted = PacketOrganisationConfig::validated_two_volume_514(validated.main_maxshift);
+        let expected = BoundedTileMaxshift {
+            tile_index: 0,
+            component_index: 3,
+            shift: 11,
+        };
+        for _use_site in 0..2 {
+            assert_eq!(
+                recheck_validator_granted_p0_13_main_maxshift(
+                    &input,
+                    &codestream,
+                    0,
+                    granted.p0_13_main_maxshift_grant(),
+                )
+                .unwrap(),
+                Some(expected),
+            );
+        }
+        assert_eq!(
+            recheck_validator_granted_p0_13_main_maxshift(&input, &codestream, 0, None).unwrap(),
+            None,
+        );
+        assert!(
+            recheck_validator_granted_p0_13_main_maxshift(
+                &input,
+                &codestream,
+                0,
+                Some(ValidatedP013MainMaxshift(BoundedTileMaxshift {
+                    shift: 10,
+                    ..expected
+                })),
+            )
+            .is_err()
+        );
+
+        let mut changed_input = input;
+        let rgn = find_marker(&changed_input, 0, Marker::Rgn).unwrap();
+        changed_input[rgn + 7] = 10;
+        let changed_codestream = parse(&changed_input).unwrap();
+        assert!(
+            recheck_validator_granted_p0_13_main_maxshift(
+                &changed_input,
+                &changed_codestream,
+                0,
+                granted.p0_13_main_maxshift_grant(),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -33820,7 +34377,7 @@ fn parse_component_quantization_for_styles(
         .find(|marker| marker.marker == Marker::Sot)
         .map(|marker| marker.offset)
         .unwrap_or(input.len());
-    let component_index_bytes = if component_count <= 256 { 1 } else { 2 };
+    let component_index_bytes = component_selector_len(&codestream.siz);
     let mut has_qcc_override = alloc::vec![false; component_count];
     for qcc in codestream
         .markers
@@ -44267,7 +44824,7 @@ fn parse_coc(
     siz: &SizMarker,
     default: CodingStyleMarker,
 ) -> Result<ComponentCodingStyleMarker> {
-    let component_bytes = if siz.component_count() < 257 { 1 } else { 2 };
+    let component_bytes = component_selector_len(siz);
     let fixed_len = component_bytes + 1 + 5;
     if segment.len() < fixed_len {
         return Err(invalid(
@@ -44475,13 +45032,17 @@ fn coding_style_subband_count(style: CodingStyleMarker) -> Result<usize> {
         .ok_or(CodestreamError::SizeOverflow)
 }
 
+fn component_selector_len(siz: &SizMarker) -> usize {
+    if siz.component_count() < 257 { 1 } else { 2 }
+}
+
 fn component_selector(
     segment: &[u8],
     marker_offset: usize,
     marker: Marker,
     siz: &SizMarker,
 ) -> Result<(u16, usize)> {
-    let selector_len = if siz.component_count() < 257 { 1 } else { 2 };
+    let selector_len = component_selector_len(siz);
     if segment.len() <= selector_len {
         return Err(invalid(
             Some(marker_offset),
