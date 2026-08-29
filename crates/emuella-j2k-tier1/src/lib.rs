@@ -1590,6 +1590,62 @@ pub fn encode_baseline_code_block_with_strided_scratch(
     encode_prepared_baseline_code_block(&mut ctx, max_magnitude, spec, output, None)
 }
 
+/// Encode a strided fixture block and return independently terminated segment
+/// lengths from the production Tier-1 encoder.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub fn encode_baseline_code_block_segments_with_strided_scratch(
+    coefficients: &[i32],
+    row_stride: usize,
+    spec: CodeBlockEncodeSpec,
+    output: &mut Vec<u8>,
+    segment_byte_lengths: &mut Vec<usize>,
+    scratch: &mut CodeBlockEncodeScratch,
+) -> Result<CodeBlockEncode> {
+    segment_byte_lengths.clear();
+    spec.validate()?;
+
+    let width = usize::from(spec.dimensions.width());
+    let height = usize::from(spec.dimensions.height());
+    if row_stride < width {
+        return Err(Tier1Error::CoefficientBufferTooSmall {
+            required: width,
+            actual: row_stride,
+        });
+    }
+    let required_len = (height - 1)
+        .checked_mul(row_stride)
+        .and_then(|offset| offset.checked_add(width))
+        .ok_or(Tier1Error::MalformedBitstream {
+            reason: "code-block coefficient view size overflows usize",
+        })?;
+    if coefficients.len() < required_len {
+        return Err(Tier1Error::CoefficientBufferTooSmall {
+            required: required_len,
+            actual: coefficients.len(),
+        });
+    }
+
+    let (mut ctx, max_magnitude) =
+        scratch.prepare_strided_with_max(width, height, spec.subband, coefficients, row_stride);
+    if max_magnitude == 0 {
+        return Ok(CodeBlockEncode {
+            pass_count: 0,
+            included: false,
+            missing_bitplanes: spec.available_bitplanes,
+            byte_len: 0,
+        });
+    }
+
+    encode_prepared_baseline_code_block(
+        &mut ctx,
+        max_magnitude,
+        spec,
+        output,
+        Some(segment_byte_lengths),
+    )
+}
+
 fn encode_prepared_baseline_code_block(
     ctx: &mut BitPlaneEncodeContext<'_>,
     max_magnitude: u32,
@@ -1878,6 +1934,32 @@ fn validate_code_block_segments(
         return Err(Tier1Error::MalformedBitstream {
             reason: "multiple arithmetic segments require a terminating code-block style",
         });
+    }
+    let mut byte_offset = 0_usize;
+    let mut coding_pass = 0_u16;
+    for entry in coding_segments {
+        let end =
+            byte_offset
+                .checked_add(entry.byte_len)
+                .ok_or(Tier1Error::MalformedBitstream {
+                    reason: "code-block segment byte count overflows usize",
+                })?;
+        if !is_raw_coding_pass(spec.style, coding_pass)
+            && segment[byte_offset..end]
+                .windows(2)
+                .any(|pair| pair[0] == 0xff && pair[1] > 0x8f)
+        {
+            return Err(Tier1Error::MalformedBitstream {
+                reason: "marker prefix found inside MQ-coded code-block segment",
+            });
+        }
+        byte_offset = end;
+        coding_pass =
+            coding_pass
+                .checked_add(entry.coding_passes)
+                .ok_or(Tier1Error::MalformedBitstream {
+                    reason: "code-block segment pass count overflows u16",
+                })?;
     }
     Ok(())
 }
@@ -3907,6 +3989,293 @@ mod tests {
                     "sparse {subband:?} style {style_bits:#04x}"
                 );
             }
+        }
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    fn independently_encode_termall_prefix(
+        coefficients: &[i32],
+        dimensions: CodeBlockDimensions,
+        subband: Subband,
+        available_bitplanes: u8,
+        coding_passes: u16,
+    ) -> (Vec<u8>, Vec<usize>) {
+        let width = usize::from(dimensions.width());
+        let height = usize::from(dimensions.height());
+        let max_magnitude = coefficients
+            .iter()
+            .map(|coefficient| coefficient.unsigned_abs())
+            .max()
+            .unwrap();
+        let coded_bitplanes = u8::try_from(32 - max_magnitude.leading_zeros()).unwrap();
+        assert!(coded_bitplanes <= available_bitplanes);
+        let mut scratch = CodeBlockEncodeScratch::new();
+        let mut ctx = scratch.prepare(width, height, subband, coefficients);
+        let mut bytes = Vec::new();
+        let mut segment_lengths = Vec::new();
+        {
+            let mut encoder = ArithmeticEncoder::new(&mut bytes);
+            encode_coding_passes::<false, false>(
+                &mut ctx,
+                &mut encoder,
+                CodeBlockStyle::from_bits(CodeBlockStyle::TERMINATE_EACH_PASS),
+                coded_bitplanes,
+                coding_passes,
+                Some(&mut segment_lengths),
+            )
+            .unwrap();
+        }
+        (bytes, segment_lengths)
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn termall_pass_prefixes_are_independently_decode_complete() {
+        let shapes = [(3_u16, 5_u16), (8, 8), (17, 11), (32, 19)];
+        let subbands = [
+            Subband::LowLow,
+            Subband::LowHigh,
+            Subband::HighLow,
+            Subband::HighHigh,
+        ];
+        let mut proved_prefixes = 0_usize;
+        for seed in 0..64_u32 {
+            let (width, height) = shapes[seed as usize % shapes.len()];
+            let subband = subbands[(seed as usize / shapes.len()) % subbands.len()];
+            let dimensions = CodeBlockDimensions::new(width, height).unwrap();
+            let coefficient_count = dimensions.coefficient_count();
+            let mut coefficients = (0..coefficient_count)
+                .map(|index| {
+                    let mixed = (index as u32)
+                        .wrapping_mul(1_103_515_245)
+                        .wrapping_add(seed.wrapping_mul(12_345))
+                        .rotate_left((seed & 15) + 1);
+                    let magnitude = (mixed & 0x3ff) as i32;
+                    if mixed & 0x400 == 0 {
+                        magnitude
+                    } else {
+                        -magnitude
+                    }
+                })
+                .collect::<Vec<_>>();
+            coefficients[0] = 1023;
+            let encode_spec = CodeBlockEncodeSpec {
+                dimensions,
+                subband,
+                available_bitplanes: 10,
+                code_block_style: CodeBlockStyle::TERMINATE_EACH_PASS,
+            };
+            let mut complete_codeword = Vec::new();
+            let mut complete_segment_lengths = Vec::new();
+            let encoded = encode_baseline_code_block_segments_with_strided_scratch(
+                &coefficients,
+                usize::from(width),
+                encode_spec,
+                &mut complete_codeword,
+                &mut complete_segment_lengths,
+                &mut CodeBlockEncodeScratch::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                complete_segment_lengths.len(),
+                usize::from(encoded.pass_count)
+            );
+
+            for retained_passes in 1..encoded.pass_count {
+                let retained = usize::from(retained_passes);
+                let prefix_len = complete_segment_lengths[..retained].iter().sum::<usize>();
+                let complete_prefix = &complete_codeword[..prefix_len];
+                let (independent_prefix, independent_lengths) = independently_encode_termall_prefix(
+                    &coefficients,
+                    dimensions,
+                    subband,
+                    encode_spec.available_bitplanes,
+                    retained_passes,
+                );
+                assert_eq!(complete_prefix, independent_prefix);
+                assert_eq!(
+                    &complete_segment_lengths[..retained],
+                    independent_lengths.as_slice()
+                );
+
+                let coding_segments = complete_segment_lengths[..retained]
+                    .iter()
+                    .map(|byte_len| CodeBlockSegment {
+                        byte_len: *byte_len,
+                        coding_passes: 1,
+                    })
+                    .collect::<Vec<_>>();
+                let decode_spec = CodeBlockDecodeSpec {
+                    dimensions,
+                    available_bitplanes: encode_spec.available_bitplanes,
+                    missing_most_significant_bitplanes: encoded.missing_bitplanes,
+                    coding_passes: retained_passes,
+                    style: CodeBlockStyle::from_bits(encode_spec.code_block_style),
+                    subband,
+                };
+                let mut from_complete = vec![0; coefficient_count];
+                decode_baseline_code_block_segments(
+                    complete_prefix,
+                    &coding_segments,
+                    decode_spec,
+                    &mut from_complete,
+                )
+                .unwrap();
+                let mut from_independent = vec![0; coefficient_count];
+                decode_baseline_code_block_segments(
+                    &independent_prefix,
+                    &coding_segments,
+                    decode_spec,
+                    &mut from_independent,
+                )
+                .unwrap();
+                assert_eq!(from_complete, from_independent);
+                proved_prefixes += 1;
+            }
+        }
+        assert_eq!(proved_prefixes, 64 * 27);
+    }
+
+    #[test]
+    fn default_mq_stuffing_is_rejected_by_every_decode_dispatch_family() {
+        fn assert_marker_error<T>(result: Result<T>) {
+            assert!(matches!(
+                result,
+                Err(Tier1Error::MalformedBitstream {
+                    reason: "marker prefix found inside MQ-coded code-block segment"
+                })
+            ));
+        }
+
+        let segment = [0xff, 0x90];
+        let dimensions = CodeBlockDimensions::new(1, 1).unwrap();
+        let spec = CodeBlockDecodeSpec {
+            dimensions,
+            available_bitplanes: 1,
+            missing_most_significant_bitplanes: 0,
+            coding_passes: 1,
+            style: CodeBlockStyle::NONE,
+            subband: Subband::LowLow,
+        };
+        let coding_segments = [CodeBlockSegment {
+            byte_len: segment.len(),
+            coding_passes: 1,
+        }];
+
+        let mut coefficients = [0];
+        assert_marker_error(decode_baseline_code_block_segments_with_scratch(
+            &segment,
+            &coding_segments,
+            spec,
+            &mut coefficients,
+            &mut CodeBlockDecodeScratch::new(),
+        ));
+        assert_marker_error(decode_irreversible_code_block_segments_with_scratch(
+            &segment,
+            &coding_segments,
+            spec,
+            &mut coefficients,
+            &mut CodeBlockDecodeScratch::new(),
+        ));
+        assert_marker_error(
+            decode_baseline_code_block_segments_with_packed_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+            ),
+        );
+        assert_marker_error(
+            decode_irreversible_code_block_segments_with_packed_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+            ),
+        );
+        assert_marker_error(
+            decode_baseline_code_block_segments_with_sparse_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+            ),
+        );
+        assert_marker_error(
+            decode_irreversible_code_block_segments_with_sparse_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+            ),
+        );
+        assert_marker_error(
+            decode_baseline_code_block_segments_with_adaptive_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+            ),
+        );
+        assert_marker_error(
+            decode_irreversible_code_block_segments_with_adaptive_scratch_outcome(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+            ),
+        );
+
+        #[cfg(feature = "std")]
+        {
+            let mut timings = CodeBlockDecodeTimings::default();
+            let mut counters = CodeBlockDecodeWorkCounters::default();
+            assert_marker_error(decode_baseline_code_block_segments_with_scratch_profiled(
+                &segment,
+                &coding_segments,
+                spec,
+                &mut coefficients,
+                &mut CodeBlockDecodeScratch::new(),
+                &mut timings,
+            ));
+            assert_marker_error(
+                decode_irreversible_code_block_segments_with_scratch_profiled(
+                    &segment,
+                    &coding_segments,
+                    spec,
+                    &mut coefficients,
+                    &mut CodeBlockDecodeScratch::new(),
+                    &mut timings,
+                ),
+            );
+            assert_marker_error(
+                decode_baseline_code_block_segments_with_scratch_profiled_and_counters(
+                    &segment,
+                    &coding_segments,
+                    spec,
+                    &mut coefficients,
+                    &mut CodeBlockDecodeScratch::new(),
+                    &mut timings,
+                    &mut counters,
+                ),
+            );
+            assert_marker_error(
+                decode_irreversible_code_block_segments_with_scratch_profiled_and_counters(
+                    &segment,
+                    &coding_segments,
+                    spec,
+                    &mut coefficients,
+                    &mut CodeBlockDecodeScratch::new(),
+                    &mut timings,
+                    &mut counters,
+                ),
+            );
         }
     }
 
