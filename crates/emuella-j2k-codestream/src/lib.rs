@@ -14420,6 +14420,43 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
             )
         );
 
+        assert!(packet_component_styles(&parsed, PacketOrganisationConfig::DEFAULT).is_err());
+        let granted_styles = packet_component_styles(
+            &parsed,
+            PacketOrganisationConfig::VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175,
+        )
+        .unwrap();
+        assert_eq!(
+            granted_styles
+                .iter()
+                .map(|style| style.decomposition_levels)
+                .collect::<Vec<_>>(),
+            [6, 3, 6, 6]
+        );
+        let tile = tile_rects(&parsed).unwrap()[0];
+        assert!(packet_precinct_grid_supported(
+            &parsed,
+            tile,
+            &granted_styles,
+            granted_styles[0],
+            PacketOrganisationConfig::VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175,
+        ));
+        let granted = HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets;
+        validate_heterogeneous_single_precinct_schedule(granted, granted_styles[0], 175).unwrap();
+        assert!(
+            validate_heterogeneous_single_precinct_schedule(granted, granted_styles[0], 174)
+                .is_err()
+        );
+        assert!(
+            validate_heterogeneous_single_precinct_schedule(granted, granted_styles[0], 176)
+                .is_err()
+        );
+        let mut wrong_order = granted_styles[0];
+        wrong_order.progression_order = ProgressionOrder::Rpcl;
+        assert!(
+            validate_heterogeneous_single_precinct_schedule(granted, wrong_order, 175).is_err()
+        );
+
         let styles = (0..4)
             .map(|component| parsed.effective_coding_style(component).unwrap())
             .collect::<Vec<_>>();
@@ -14512,6 +14549,85 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
                 &with_rgn, &parsed, 3,
             )
         );
+    }
+
+    #[test]
+    fn rejects_nearby_progression_precinct_qcc_tile_header_and_truncated_shapes() {
+        let codestream = fixture();
+
+        let mut wrong_progression = codestream.clone();
+        let cod = find_marker(&wrong_progression, 0, Marker::Cod).unwrap();
+        wrong_progression[cod + 5] = 2;
+        let parsed = parse(&wrong_progression).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &wrong_progression,
+                &parsed,
+                3,
+            )
+        );
+
+        let mut multiple_precincts = codestream.clone();
+        let cod = find_marker(&multiple_precincts, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&multiple_precincts, cod + 2).unwrap());
+        multiple_precincts.splice(
+            cod..cod + 2 + lcod,
+            [
+                0xff, 0x52, 0, 19, 1, 3, 0, 7, 0, 6, 3, 3, 0, 0, 0x44, 0x44, 0x44, 0x44, 0x44,
+                0x44, 0x44,
+            ],
+        );
+        let parsed = parse(&multiple_precincts).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &multiple_precincts,
+                &parsed,
+                3,
+            )
+        );
+        let styles = packet_component_styles(
+            &parsed,
+            PacketOrganisationConfig::VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175,
+        )
+        .unwrap();
+        let tile = tile_rects(&parsed).unwrap()[0];
+        assert!(!packet_precinct_grid_supported(
+            &parsed,
+            tile,
+            &styles,
+            styles[0],
+            PacketOrganisationConfig::VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175,
+        ));
+
+        let mut wrong_qcc_component = codestream.clone();
+        let first_qcc = find_marker(&wrong_qcc_component, 0, Marker::Qcc).unwrap();
+        let second_qcc = find_marker(&wrong_qcc_component, first_qcc + 2, Marker::Qcc).unwrap();
+        wrong_qcc_component[second_qcc + 4] = 2;
+        let parsed = parse(&wrong_qcc_component).unwrap();
+        assert!(
+            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                &wrong_qcc_component,
+                &parsed,
+                3,
+            )
+        );
+
+        let qcc = find_marker(&codestream, 0, Marker::Qcc).unwrap();
+        let lqcc = usize::from(read_u16(&codestream, qcc + 2).unwrap());
+        let tile_qcc =
+            insert_tile_header_segment(codestream.clone(), &codestream[qcc..qcc + 2 + lqcc]);
+        match parse(&tile_qcc) {
+            Ok(parsed) => assert!(
+                !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
+                    &tile_qcc, &parsed, 3,
+                )
+            ),
+            Err(CodestreamError::InvalidMarker { .. }) => {}
+            Err(error) => panic!("unexpected tile-header QCC result: {error:?}"),
+        }
+
+        let qcc = find_marker(&codestream, 0, Marker::Qcc).unwrap();
+        assert!(parse(&codestream[..qcc + 5]).is_err());
     }
 
     #[test]
@@ -19635,7 +19751,7 @@ pub fn decode_part1_reduced_heterogeneous_irreversible_component_zero(
         &mut workspace,
         None,
         discard_levels,
-        PacketOrganisationConfig::for_component_profile(ComponentPacketProfile::Profile0P005),
+        PacketOrganisationConfig::VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175,
     )?
     .into_iter()
     .map(|samples| DecodedComponent { samples })
@@ -24641,7 +24757,6 @@ fn decode_multitile_components_selected_validated(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComponentPacketProfile {
     Default,
-    Profile0P005,
     Profile0P006,
     Profile0P007,
     Profile0P008,
@@ -24656,9 +24771,16 @@ enum ExplicitPrecinctPermission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeterogeneousSinglePrecinctPermission {
+    None,
+    ValidatedPcrl175Packets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PacketOrganisationConfig {
     component_profile: ComponentPacketProfile,
     explicit_precinct_permission: ExplicitPrecinctPermission,
+    heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission,
 }
 
 impl PacketOrganisationConfig {
@@ -24669,12 +24791,24 @@ impl PacketOrganisationConfig {
     const PROFILE0_P004: Self = Self {
         component_profile: ComponentPacketProfile::Default,
         explicit_precinct_permission: ExplicitPrecinctPermission::ValidatedProfile0P004,
+        heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
+    };
+    // The exact heterogeneous-component validator is the only production
+    // caller that grants this fixed packet-organisation capability. The
+    // shared walker rechecks every component-resolution precinct and the
+    // validator-proved PCRL packet bound before consuming packet bytes.
+    const VALIDATED_HETEROGENEOUS_SINGLE_PRECINCT_PCRL_175: Self = Self {
+        component_profile: ComponentPacketProfile::Default,
+        explicit_precinct_permission: ExplicitPrecinctPermission::None,
+        heterogeneous_single_precinct_permission:
+            HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets,
     };
 
     const fn for_component_profile(component_profile: ComponentPacketProfile) -> Self {
         Self {
             component_profile,
             explicit_precinct_permission: ExplicitPrecinctPermission::None,
+            heterogeneous_single_precinct_permission: HeterogeneousSinglePrecinctPermission::None,
         }
     }
 }
@@ -26835,6 +26969,96 @@ fn tile_part_packet_lengths_from_plt(
     Ok(Some((lengths, first_marker_offset)))
 }
 
+fn packet_component_styles(
+    codestream: &Codestream,
+    packet_organisation: PacketOrganisationConfig,
+) -> Result<Vec<CodingStyleMarker>> {
+    let component_count = usize::from(codestream.siz.component_count());
+    let heterogeneous_styles_granted = matches!(
+        packet_organisation.component_profile,
+        ComponentPacketProfile::Profile0P006
+            | ComponentPacketProfile::Profile0P008
+            | ComponentPacketProfile::Profile0P013
+    ) || packet_organisation
+        .heterogeneous_single_precinct_permission
+        == HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets;
+    if !heterogeneous_styles_granted {
+        let uniform = uniform_effective_coding_style(codestream)?;
+        return Ok(alloc::vec![uniform; component_count]);
+    }
+    (0..codestream.siz.component_count())
+        .map(|component_index| {
+            codestream
+                .effective_coding_style(component_index)
+                .ok_or_else(|| {
+                    invalid(
+                        None,
+                        Some(Marker::Cod),
+                        "packet parsing requires an effective coding style for every component",
+                    )
+                })
+        })
+        .collect()
+}
+
+fn validate_heterogeneous_single_precinct_schedule(
+    permission: HeterogeneousSinglePrecinctPermission,
+    coding_style: CodingStyleMarker,
+    expected_packet_count: usize,
+) -> Result<()> {
+    if permission == HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets
+        && (coding_style.progression_order != ProgressionOrder::Pcrl
+            || expected_packet_count != 175)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::PacketDecode,
+            "the validator-granted heterogeneous single-precinct path requires exactly 175 PCRL packets",
+        ));
+    }
+    Ok(())
+}
+
+fn packet_precinct_grid_supported(
+    codestream: &Codestream,
+    tile_rect: TileRect,
+    component_styles: &[CodingStyleMarker],
+    coding_style: CodingStyleMarker,
+    packet_organisation: PacketOrganisationConfig,
+) -> bool {
+    let bounded_heterogeneous_single_precincts = (matches!(
+        packet_organisation.component_profile,
+        ComponentPacketProfile::Profile0P006
+            | ComponentPacketProfile::Profile0P008
+            | ComponentPacketProfile::Profile0P013
+    ) || packet_organisation
+        .heterogeneous_single_precinct_permission
+        == HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets)
+        && component_styles
+            .iter()
+            .zip(&codestream.siz.components)
+            .all(|(style, component)| {
+                component_tile_rect(codestream, tile_rect, component).is_ok_and(|component_tile| {
+                    coding_style_has_single_precinct(
+                        *style,
+                        component_tile.width,
+                        component_tile.height,
+                    )
+                })
+            });
+    if packet_organisation.heterogeneous_single_precinct_permission
+        == HeterogeneousSinglePrecinctPermission::ValidatedPcrl175Packets
+    {
+        return bounded_heterogeneous_single_precincts;
+    }
+    coding_style_has_supported_precinct_grid(coding_style, tile_rect)
+        || (packet_organisation.explicit_precinct_permission
+            == ExplicitPrecinctPermission::ValidatedProfile0P004
+            && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
+        || bounded_heterogeneous_single_precincts
+}
+
 fn parse_default_precinct_packets_from_source(
     input: &[u8],
     codestream: &Codestream,
@@ -26847,31 +27071,9 @@ fn parse_default_precinct_packets_from_source(
     physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
     let packet_profile = packet_organisation.component_profile;
-    let component_count = usize::from(codestream.siz.component_count());
-    let component_styles = if matches!(
-        packet_profile,
-        ComponentPacketProfile::Profile0P005
-            | ComponentPacketProfile::Profile0P006
-            | ComponentPacketProfile::Profile0P008
-            | ComponentPacketProfile::Profile0P013
-    ) {
-        (0..codestream.siz.component_count())
-            .map(|component_index| {
-                codestream
-                    .effective_coding_style(component_index)
-                    .ok_or_else(|| {
-                        invalid(
-                            None,
-                            Some(Marker::Cod),
-                            "packet parsing requires an effective coding style for every component",
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?
-    } else {
-        let uniform = uniform_effective_coding_style(codestream)?;
-        alloc::vec![uniform; component_count]
-    };
+    let heterogeneous_single_precinct_permission =
+        packet_organisation.heterogeneous_single_precinct_permission;
+    let component_styles = packet_component_styles(codestream, packet_organisation)?;
     let coding_style = *component_styles
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
@@ -26880,29 +27082,13 @@ fn parse_default_precinct_packets_from_source(
         tile_rect,
         &component_styles,
     )?;
-    let bounded_heterogeneous_single_precincts = matches!(
-        packet_profile,
-        ComponentPacketProfile::Profile0P005
-            | ComponentPacketProfile::Profile0P006
-            | ComponentPacketProfile::Profile0P008
-            | ComponentPacketProfile::Profile0P013
-    ) && component_styles
-        .iter()
-        .zip(&codestream.siz.components)
-        .all(|(style, component)| {
-            component_tile_rect(codestream, tile_rect, component).is_ok_and(|component_tile| {
-                coding_style_has_single_precinct(
-                    *style,
-                    component_tile.width,
-                    component_tile.height,
-                )
-            })
-        });
-    let supported_precinct_grid = coding_style_has_supported_precinct_grid(coding_style, tile_rect)
-        || (packet_organisation.explicit_precinct_permission
-            == ExplicitPrecinctPermission::ValidatedProfile0P004
-            && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
-        || bounded_heterogeneous_single_precincts;
+    let supported_precinct_grid = packet_precinct_grid_supported(
+        codestream,
+        tile_rect,
+        &component_styles,
+        coding_style,
+        packet_organisation,
+    );
     if !default_precinct_layer_count_supported(coding_style.layers) || !supported_precinct_grid {
         return Err(unsupported(
             None,
@@ -26964,14 +27150,11 @@ fn parse_default_precinct_packets_from_source(
             "packet count exceeds the bounded tile parser state",
         ));
     }
-    if packet_profile == ComponentPacketProfile::Profile0P005 && expected_packet_count != 175 {
-        return Err(unsupported(
-            None,
-            Some(Marker::Coc),
-            UnsupportedConstruct::PacketDecode,
-            "the qualified Profile-0 P0.05 path requires exactly 175 single-precinct PCRL packets",
-        ));
-    }
+    validate_heterogeneous_single_precinct_schedule(
+        heterogeneous_single_precinct_permission,
+        coding_style,
+        expected_packet_count,
+    )?;
     if packet_profile == ComponentPacketProfile::Profile0P006 && expected_packet_count != 112 {
         return Err(unsupported(
             None,
