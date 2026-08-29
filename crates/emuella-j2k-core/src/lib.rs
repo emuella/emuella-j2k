@@ -3106,12 +3106,7 @@ pub fn prepare_part1_decode_from_source<'a>(
 ) -> Result<PreparedPart1Decode<'a>> {
     let codestream = codestream::prepare_part1_component_decode_from_source(source, request)
         .map_err(map_codestream_error)?;
-    if request.discard_levels > 1
-        && codestream
-            .component_outputs()
-            .iter()
-            .any(|output| output.horizontal_separation != 1 || output.vertical_separation != 1)
-    {
+    if request.discard_levels > 1 && codestream.codestream_has_subsampled_components() {
         return Err(unsupported(
             UnsupportedFeature::PartialDecodeMode,
             "source-backed subsampled selective decode supports at most one discarded resolution level",
@@ -7019,6 +7014,85 @@ mod effective_coding_style_tests {
         for mutation in mutations {
             assert!(decode_partial(&mutation, &options).is_err());
         }
+    }
+
+    #[test]
+    fn source_backed_discard_classifies_complete_sampling_before_selection() {
+        let width = 129_u32;
+        let height = 67_u32;
+        let sampling = [(1_u8, 1_u8), (2, 2)];
+        let planes = sampling
+            .iter()
+            .enumerate()
+            .map(|(component, (horizontal, vertical))| {
+                let native_width = width.div_ceil(u32::from(*horizontal));
+                let native_height = height.div_ceil(u32::from(*vertical));
+                (0..native_width * native_height)
+                    .map(|sample| ((sample * (19 + component as u32 * 12) + 23) % 251) as u8)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let components = planes
+            .iter()
+            .zip(sampling)
+            .map(|(samples, (horizontal_separation, vertical_separation))| {
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation,
+                    vertical_separation,
+                    samples,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mixed = codestream::encode_planar_u8_subsampled_two_decomp_test_fixture(
+            width,
+            height,
+            &components,
+        )
+        .unwrap();
+        let mixed_source = codestream::source::SliceSource::new(&mixed);
+        let selected_unit_component = [0_u16];
+        let request = codestream::Part1ComponentDecodeRequest {
+            component_indices: &selected_unit_component,
+            region: codestream::TileRegionRequest {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            discard_levels: 2,
+            max_layers: None,
+        };
+        assert!(matches!(
+            prepare_part1_decode_from_source(&mixed_source, request),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::PartialDecodeMode,
+                ..
+            })
+        ));
+
+        let unit_samples = (0..width * height)
+            .map(|sample| ((sample * 29 + 11) % 251) as u8)
+            .collect::<Vec<_>>();
+        let unit = codestream::encode_grayscale_u8_two_decomp(codestream::GrayscaleU8Encode {
+            width,
+            height,
+            samples: &unit_samples,
+            stride_bytes: usize::try_from(width).unwrap(),
+        })
+        .unwrap();
+        let unit_source = codestream::source::SliceSource::new(&unit);
+        let prepared = prepare_part1_decode_from_source(&unit_source, request).unwrap();
+        assert_eq!((prepared.info().width, prepared.info().height), (33, 17));
+        assert_eq!(prepared.component_info().len(), 1);
+        assert_eq!(
+            (
+                prepared.component_info()[0].width,
+                prepared.component_info()[0].height,
+                prepared.component_info()[0].horizontal_separation,
+                prepared.component_info()[0].vertical_separation,
+            ),
+            (33, 17, 1, 1)
+        );
     }
 
     #[test]

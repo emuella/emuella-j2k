@@ -6764,6 +6764,15 @@ impl PreparedPart1ComponentDecode<'_> {
         &self.component_outputs
     }
 
+    /// Whether any SIZ component in the complete source codestream uses
+    /// non-unit sampling, independently of the selected output components.
+    #[doc(hidden)]
+    pub fn codestream_has_subsampled_components(&self) -> bool {
+        self.codestream.siz.components.iter().any(|component| {
+            component.horizontal_separation != 1 || component.vertical_separation != 1
+        })
+    }
+
     /// Selected source components in caller-visible output order.
     pub fn component_indices(&self) -> &[u16] {
         &self.component_indices
@@ -8635,6 +8644,42 @@ pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
     reference_height: u32,
     component_planes: &[SubsampledU8TestComponent<'_>],
 ) -> Result<Vec<u8>> {
+    encode_planar_u8_subsampled_decomp_test_fixture(
+        reference_width,
+        reference_height,
+        component_planes,
+        1,
+    )
+}
+
+/// Build a deterministic raw Part 1 fixture with two reversible 5/3
+/// decompositions whose component planes use their declared native sampling
+/// grids.
+///
+/// This is test support rather than a general encoder surface.
+#[doc(hidden)]
+pub fn encode_planar_u8_subsampled_two_decomp_test_fixture(
+    reference_width: u32,
+    reference_height: u32,
+    component_planes: &[SubsampledU8TestComponent<'_>],
+) -> Result<Vec<u8>> {
+    encode_planar_u8_subsampled_decomp_test_fixture(
+        reference_width,
+        reference_height,
+        component_planes,
+        2,
+    )
+}
+
+fn encode_planar_u8_subsampled_decomp_test_fixture(
+    reference_width: u32,
+    reference_height: u32,
+    component_planes: &[SubsampledU8TestComponent<'_>],
+    decomposition_levels: u8,
+) -> Result<Vec<u8>> {
+    if !matches!(decomposition_levels, 1 | 2) {
+        return Err(CodestreamError::SizeOverflow);
+    }
     if component_planes.is_empty() || component_planes.len() > usize::from(u8::MAX) {
         return Err(invalid(
             None,
@@ -8663,15 +8708,22 @@ pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
             width,
             height,
             &mut coefficients,
-            1,
+            decomposition_levels,
             "subsampled test fixture forward transform failed",
         )?;
         components.push((width, height, coefficients));
     }
 
-    let mut qcd_exponents = alloc::vec![1_u8; 4];
+    let exponent_count = 1_usize
+        .checked_add(
+            usize::from(decomposition_levels)
+                .checked_mul(3)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut qcd_exponents = alloc::vec![1_u8; exponent_count];
     for (width, height, coefficients) in &components {
-        for spec in decomp_subband_specs(*width, *height, 1)? {
+        for spec in decomp_subband_specs(*width, *height, decomposition_levels)? {
             let exponent = subband_available_bitplanes(
                 *width,
                 coefficients,
@@ -8691,8 +8743,8 @@ pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
     let mut component_subbands = Vec::with_capacity(components.len());
     let mut tier1_encode_scratch = tier1::CodeBlockEncodeScratch::new();
     for (width, height, coefficients) in &components {
-        let mut subbands = Vec::with_capacity(4);
-        for spec in decomp_subband_specs(*width, *height, 1)? {
+        let mut subbands = Vec::with_capacity(exponent_count);
+        for spec in decomp_subband_specs(*width, *height, decomposition_levels)? {
             let available_bitplanes = *qcd_exponents
                 .get(usize::from(spec.index))
                 .ok_or(CodestreamError::SizeOverflow)?;
@@ -8712,7 +8764,12 @@ pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
         &component_subbands,
         &segments,
     )?);
-    write_native_decomp_packets(&mut packet, 1, &component_subbands, &segments)?;
+    write_native_decomp_packets(
+        &mut packet,
+        decomposition_levels,
+        &component_subbands,
+        &segments,
+    )?;
 
     let mut codestream = Vec::with_capacity(native_single_tile_codestream_capacity_hint(
         packet.len(),
@@ -8728,7 +8785,7 @@ pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
         8,
         u16::try_from(component_planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
         false,
-        1,
+        decomposition_levels,
         &qcd_exponents,
     )?;
     let siz = find_marker(&codestream, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
