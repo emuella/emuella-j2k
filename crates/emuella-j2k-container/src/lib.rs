@@ -245,6 +245,9 @@ pub mod boxes {
     pub const IMAGE_HEADER: FourCc = FourCc::new(*b"ihdr");
     pub const BITS_PER_COMPONENT: FourCc = FourCc::new(*b"bpcc");
     pub const COLOR_SPECIFICATION: FourCc = FourCc::new(*b"colr");
+    pub const PALETTE: FourCc = FourCc::new(*b"pclr");
+    pub const COMPONENT_MAPPING: FourCc = FourCc::new(*b"cmap");
+    pub const CHANNEL_DEFINITION: FourCc = FourCc::new(*b"cdef");
     pub const CONTIGUOUS_CODESTREAM: FourCc = FourCc::new(*b"jp2c");
     pub const XML: FourCc = FourCc::new(*b"xml ");
     pub const UUID: FourCc = FourCc::new(*b"uuid");
@@ -365,6 +368,9 @@ pub fn parse(input: &[u8]) -> Result<Container> {
         .ok_or_else(|| invalid(None, None, "container must contain a file type box"))?;
     let file_type = parse_file_type(input, file_type_record)?;
     let kind = container_kind(&file_type)?;
+    if kind == ContainerKind::Jp2 {
+        validate_jp2_top_level_structure(&top_level)?;
+    }
 
     let mut image_header = None;
     let mut bits_per_component = None;
@@ -377,16 +383,30 @@ pub fn parse(input: &[u8]) -> Result<Container> {
         match record.box_type {
             boxes::JP2_HEADER => {
                 let children = parse_box_range(input, record.data_offset, record.end_offset()?)?;
+                if kind == ContainerKind::Jp2 {
+                    validate_jp2_header_structure(&children, record)?;
+                }
                 for child in &children {
                     match child.box_type {
                         boxes::IMAGE_HEADER => {
-                            image_header = Some(parse_image_header(input, child)?);
+                            image_header = Some(parse_image_header(
+                                input,
+                                child,
+                                kind == ContainerKind::Jp2,
+                            )?);
                         }
                         boxes::BITS_PER_COMPONENT => {
-                            bits_per_component = Some(parse_bits_per_component(input, child)?);
+                            bits_per_component = Some(parse_bits_per_component(
+                                input,
+                                child,
+                                kind == ContainerKind::Jp2,
+                            )?);
                         }
                         boxes::COLOR_SPECIFICATION => {
-                            color_specification = Some(parse_color_specification(input, child)?);
+                            let parsed = parse_color_specification(input, child)?;
+                            if color_specification.is_none() || kind == ContainerKind::Jph {
+                                color_specification = Some(parsed);
+                            }
                         }
                         boxes::XML | boxes::UUID => {
                             metadata.push(preserve_metadata(input, child)?);
@@ -414,7 +434,11 @@ pub fn parse(input: &[u8]) -> Result<Container> {
         }
     }
 
-    validate_header_consistency(image_header, bits_per_component.as_ref())?;
+    if kind == ContainerKind::Jp2 {
+        validate_jp2_header_fields(image_header, bits_per_component.as_ref(), &boxes)?;
+    } else {
+        validate_header_consistency(image_header, bits_per_component.as_ref())?;
+    }
 
     Ok(Container {
         kind,
@@ -667,7 +691,11 @@ fn parse_file_type(input: &[u8], record: &BoxRecord) -> Result<FileTypeBox> {
     })
 }
 
-fn parse_image_header(input: &[u8], record: &BoxRecord) -> Result<ImageHeaderBox> {
+fn parse_image_header(
+    input: &[u8],
+    record: &BoxRecord,
+    strict_jp2: bool,
+) -> Result<ImageHeaderBox> {
     if record.data_len != 14 {
         return Err(invalid(
             Some(record.header_offset),
@@ -686,20 +714,71 @@ fn parse_image_header(input: &[u8], record: &BoxRecord) -> Result<ImageHeaderBox
             "image dimensions and component count must be non-zero",
         ));
     }
+    if strict_jp2 && components > 16_384 {
+        return Err(invalid(
+            Some(record.data_offset + 8),
+            Some(record.box_type),
+            "JP2 image header component count exceeds 16384",
+        ));
+    }
+
+    let bits_per_component = input[record.data_offset + 10];
+    if strict_jp2 && bits_per_component != 255 && (bits_per_component & 0x7f) > 37 {
+        return Err(invalid(
+            Some(record.data_offset + 10),
+            Some(record.box_type),
+            "image header component precision is reserved",
+        ));
+    }
+    let compression_type = input[record.data_offset + 11];
+    if strict_jp2 && compression_type != 7 {
+        return Err(invalid(
+            Some(record.data_offset + 11),
+            Some(record.box_type),
+            "JP2 image header compression type must be 7",
+        ));
+    }
+    let unknown_color_space = input[record.data_offset + 12];
+    if strict_jp2 && unknown_color_space > 1 {
+        return Err(invalid(
+            Some(record.data_offset + 12),
+            Some(record.box_type),
+            "image header colourspace-known flag is reserved",
+        ));
+    }
+    let intellectual_property = input[record.data_offset + 13];
+    if strict_jp2 && intellectual_property > 1 {
+        return Err(invalid(
+            Some(record.data_offset + 13),
+            Some(record.box_type),
+            "image header intellectual-property flag is reserved",
+        ));
+    }
 
     Ok(ImageHeaderBox {
         height,
         width,
         components,
-        bits_per_component: input[record.data_offset + 10],
-        compression_type: input[record.data_offset + 11],
-        unknown_color_space: input[record.data_offset + 12] != 0,
-        intellectual_property: input[record.data_offset + 13] != 0,
+        bits_per_component,
+        compression_type,
+        unknown_color_space: unknown_color_space != 0,
+        intellectual_property: intellectual_property != 0,
     })
 }
 
-fn parse_bits_per_component(input: &[u8], record: &BoxRecord) -> Result<BitsPerComponentBox> {
+fn parse_bits_per_component(
+    input: &[u8],
+    record: &BoxRecord,
+    strict_jp2: bool,
+) -> Result<BitsPerComponentBox> {
     let bytes = checked_slice(input, record.data_offset, record.data_len)?;
+    if strict_jp2 && let Some(index) = bytes.iter().position(|byte| (*byte & 0x7f) > 37) {
+        return Err(invalid(
+            Some(record.data_offset + index),
+            Some(record.box_type),
+            "bits-per-component precision is reserved",
+        ));
+    }
     Ok(BitsPerComponentBox {
         components: bytes
             .iter()
@@ -819,6 +898,184 @@ fn validate_header_consistency(
     Ok(())
 }
 
+fn validate_jp2_top_level_structure(top_level: &[BoxRecord]) -> Result<()> {
+    let Some(first_codestream_index) = top_level
+        .iter()
+        .position(|record| record.box_type == boxes::CONTIGUOUS_CODESTREAM)
+    else {
+        let offset = top_level
+            .iter()
+            .find(|record| record.box_type == boxes::JP2_HEADER)
+            .map(|record| record.header_offset);
+        return Err(invalid(
+            offset,
+            Some(boxes::JP2_HEADER),
+            "JP2 must contain a contiguous codestream box",
+        ));
+    };
+
+    let header_indices = top_level
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (record.box_type == boxes::JP2_HEADER).then_some(index))
+        .collect::<Vec<_>>();
+    let Some(&header_index) = header_indices.first() else {
+        return Err(invalid(
+            Some(top_level[first_codestream_index].header_offset),
+            Some(boxes::CONTIGUOUS_CODESTREAM),
+            "JP2 header box must precede the first contiguous codestream box",
+        ));
+    };
+    if let Some(&duplicate_index) = header_indices.get(1) {
+        let duplicate = &top_level[duplicate_index];
+        return Err(invalid(
+            Some(duplicate.header_offset),
+            Some(duplicate.box_type),
+            "JP2 must contain exactly one JP2 header box",
+        ));
+    }
+    if header_index > first_codestream_index {
+        let header = &top_level[header_index];
+        return Err(invalid(
+            Some(header.header_offset),
+            Some(header.box_type),
+            "JP2 header box must precede the first contiguous codestream box",
+        ));
+    }
+    let file_type_index = top_level
+        .iter()
+        .position(|record| record.box_type == boxes::FILE_TYPE)
+        .ok_or_else(|| invalid(None, None, "container must contain a file type box"))?;
+    if header_index < file_type_index {
+        let header = &top_level[header_index];
+        return Err(invalid(
+            Some(header.header_offset),
+            Some(header.box_type),
+            "JP2 header box must follow the file type box",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_jp2_header_structure(children: &[BoxRecord], header: &BoxRecord) -> Result<()> {
+    let Some(first) = children.first() else {
+        return Err(invalid(
+            Some(header.header_offset),
+            Some(header.box_type),
+            "JP2 header box must begin with an image header box",
+        ));
+    };
+    if first.box_type != boxes::IMAGE_HEADER {
+        return Err(invalid(
+            Some(first.header_offset),
+            Some(first.box_type),
+            "image header box must be first in the JP2 header box",
+        ));
+    }
+    if let Some(duplicate) = children
+        .iter()
+        .skip(1)
+        .find(|record| record.box_type == boxes::IMAGE_HEADER)
+    {
+        return Err(invalid(
+            Some(duplicate.header_offset),
+            Some(duplicate.box_type),
+            "JP2 header box must contain exactly one image header box",
+        ));
+    }
+
+    let bits_per_component = children
+        .iter()
+        .filter(|record| record.box_type == boxes::BITS_PER_COMPONENT)
+        .collect::<Vec<_>>();
+    if let Some(duplicate) = bits_per_component.get(1) {
+        return Err(invalid(
+            Some(duplicate.header_offset),
+            Some(duplicate.box_type),
+            "JP2 header box must contain at most one bits-per-component box",
+        ));
+    }
+
+    let colour_indices = children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            (record.box_type == boxes::COLOR_SPECIFICATION).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let Some(&first_colour) = colour_indices.first() else {
+        return Err(invalid(
+            Some(header.header_offset),
+            Some(header.box_type),
+            "JP2 header box must contain at least one colour specification box",
+        ));
+    };
+    for (&previous, &current) in colour_indices.iter().zip(colour_indices.iter().skip(1)) {
+        if current != previous + 1 {
+            let record = &children[current];
+            return Err(invalid(
+                Some(record.header_offset),
+                Some(record.box_type),
+                "colour specification boxes must form one contiguous sequence",
+            ));
+        }
+    }
+    debug_assert!(first_colour > 0);
+    Ok(())
+}
+
+fn validate_jp2_header_fields(
+    image_header: Option<ImageHeaderBox>,
+    bits_per_component: Option<&BitsPerComponentBox>,
+    records: &[BoxRecord],
+) -> Result<()> {
+    let image_header = image_header.ok_or_else(|| {
+        invalid(
+            None,
+            Some(boxes::IMAGE_HEADER),
+            "JP2 header box must contain an image header box",
+        )
+    })?;
+    let header_record = records
+        .iter()
+        .find(|record| record.box_type == boxes::JP2_HEADER)
+        .ok_or(ContainerError::SizeOverflow)?;
+    let bits_record = records.iter().find(|record| {
+        record.box_type == boxes::BITS_PER_COMPONENT
+            && record.header_offset >= header_record.data_offset
+            && record.header_offset < header_record.data_offset + header_record.data_len
+    });
+
+    match (image_header.bits_per_component == 255, bits_per_component) {
+        (true, None) => {
+            return Err(invalid(
+                Some(header_record.header_offset),
+                Some(header_record.box_type),
+                "varying component precision requires a bits-per-component box",
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(invalid(
+                bits_record.map(|record| record.header_offset),
+                Some(boxes::BITS_PER_COMPONENT),
+                "uniform component precision forbids a bits-per-component box",
+            ));
+        }
+        _ => {}
+    }
+
+    if let Some(bits_per_component) = bits_per_component
+        && bits_per_component.components.len() != usize::from(image_header.components)
+    {
+        return Err(invalid(
+            bits_record.map(|record| record.header_offset),
+            Some(boxes::BITS_PER_COMPONENT),
+            "bits-per-component entry count must match image header component count",
+        ));
+    }
+    Ok(())
+}
+
 fn checked_slice(input: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
     let end = offset
         .checked_add(len)
@@ -883,5 +1140,376 @@ impl BoxRecord {
         self.data_offset
             .checked_add(self.data_len)
             .ok_or(ContainerError::SizeOverflow)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boxed(box_type: FourCc, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        write_box(&mut bytes, box_type, payload).unwrap();
+        bytes
+    }
+
+    fn image_header(components: u16, bpc: u8) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&3_u32.to_be_bytes());
+        payload.extend_from_slice(&5_u32.to_be_bytes());
+        payload.extend_from_slice(&components.to_be_bytes());
+        payload.extend_from_slice(&[bpc, 7, 0, 0]);
+        boxed(boxes::IMAGE_HEADER, &payload)
+    }
+
+    fn colour() -> Vec<u8> {
+        boxed(boxes::COLOR_SPECIFICATION, &[1, 0, 0, 0, 0, 0, 17])
+    }
+
+    fn jp2_header(children: &[Vec<u8>]) -> Vec<u8> {
+        boxed(
+            boxes::JP2_HEADER,
+            &children.iter().flatten().copied().collect::<Vec<_>>(),
+        )
+    }
+
+    fn file(kind: ContainerKind, top_level: &[Vec<u8>]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        write_signature_box(&mut bytes).unwrap();
+        write_file_type_box(&mut bytes, kind, 0, &[]).unwrap();
+        bytes.extend(top_level.iter().flatten().copied());
+        bytes
+    }
+
+    fn codestream_box() -> Vec<u8> {
+        boxed(boxes::CONTIGUOUS_CODESTREAM, &[0xff, 0x4f, 0xff, 0xd9])
+    }
+
+    fn valid_uniform_file() -> Vec<u8> {
+        file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[image_header(1, 7), colour()]),
+                codestream_box(),
+            ],
+        )
+    }
+
+    fn box_offset(input: &[u8], box_type: FourCc, occurrence: usize) -> usize {
+        input
+            .windows(4)
+            .enumerate()
+            .filter(|(_, bytes)| *bytes == box_type.as_bytes())
+            .map(|(offset, _)| offset - 4)
+            .nth(occurrence)
+            .unwrap()
+    }
+
+    #[test]
+    fn accepts_uniform_and_varying_precision_jp2_headers() {
+        let uniform = parse(&valid_uniform_file()).unwrap();
+        assert_eq!(
+            uniform.component_sample_formats().unwrap(),
+            vec![ComponentSampleFormat {
+                bits_per_sample: 8,
+                signed: false,
+            }]
+        );
+
+        let varying = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(2, 255),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7, 0x89]),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert_eq!(
+            parse(&varying).unwrap().component_sample_formats().unwrap(),
+            vec![
+                ComponentSampleFormat {
+                    bits_per_sample: 8,
+                    signed: false,
+                },
+                ComponentSampleFormat {
+                    bits_per_sample: 10,
+                    signed: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_missing_duplicate_and_misordered_image_headers() {
+        let missing = file(
+            ContainerKind::Jp2,
+            &[jp2_header(&[colour()]), codestream_box()],
+        );
+        assert!(matches!(
+            parse(&missing),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::COLOR_SPECIFICATION),
+                ..
+            })
+        ));
+
+        let duplicate = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[image_header(1, 7), colour(), image_header(1, 7)]),
+                codestream_box(),
+            ],
+        );
+        let expected = box_offset(&duplicate, boxes::IMAGE_HEADER, 1);
+        assert!(matches!(
+            parse(&duplicate),
+            Err(ContainerError::InvalidBox { offset: Some(offset), box_type: Some(boxes::IMAGE_HEADER), .. })
+                if offset == expected
+        ));
+
+        let misordered = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[colour(), image_header(1, 7)]),
+                codestream_box(),
+            ],
+        );
+        let expected = box_offset(&misordered, boxes::COLOR_SPECIFICATION, 0);
+        assert!(matches!(
+            parse(&misordered),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_late_and_duplicate_jp2_headers() {
+        let codestream = codestream_box();
+        let missing = file(ContainerKind::Jp2, core::slice::from_ref(&codestream));
+        let expected = box_offset(&missing, boxes::CONTIGUOUS_CODESTREAM, 0);
+        assert!(matches!(
+            parse(&missing),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+
+        let header = jp2_header(&[image_header(1, 7), colour()]);
+        let late = file(ContainerKind::Jp2, &[codestream.clone(), header.clone()]);
+        let expected = box_offset(&late, boxes::JP2_HEADER, 0);
+        assert!(matches!(
+            parse(&late),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+
+        let duplicate = file(ContainerKind::Jp2, &[header.clone(), codestream, header]);
+        let expected = box_offset(&duplicate, boxes::JP2_HEADER, 1);
+        assert!(matches!(
+            parse(&duplicate),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+
+        let missing_codestream = file(
+            ContainerKind::Jp2,
+            &[jp2_header(&[image_header(1, 7), colour()])],
+        );
+        let expected = box_offset(&missing_codestream, boxes::JP2_HEADER, 0);
+        assert!(matches!(
+            parse(&missing_codestream),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+    }
+
+    #[test]
+    fn rejects_absent_and_noncontiguous_colour_specifications() {
+        let absent = file(
+            ContainerKind::Jp2,
+            &[jp2_header(&[image_header(1, 7)]), codestream_box()],
+        );
+        let expected = box_offset(&absent, boxes::JP2_HEADER, 0);
+        assert!(matches!(
+            parse(&absent),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+
+        let interrupted = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    colour(),
+                    boxed(FourCc::new(*b"free"), &[1]),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        let expected = box_offset(&interrupted, boxes::COLOR_SPECIFICATION, 1);
+        assert!(matches!(
+            parse(&interrupted),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+    }
+
+    #[test]
+    fn accepts_contiguous_colours_and_preserves_unknown_boxes() {
+        let unknown = FourCc::new(*b"free");
+        let input = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    boxed(unknown, &[1, 2, 3]),
+                    colour(),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        let parsed = parse(&input).unwrap();
+        assert!(parsed.metadata.iter().any(|record| {
+            record.kind == MetadataBoxKind::Unknown
+                && record.box_type == unknown
+                && record.data == [1, 2, 3]
+        }));
+    }
+
+    #[test]
+    fn enforces_conditional_singular_bits_per_component() {
+        let absent = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[image_header(2, 255), colour()]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&absent),
+            Err(ContainerError::InvalidBox { .. })
+        ));
+
+        let unexpected = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7]),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&unexpected),
+            Err(ContainerError::InvalidBox { .. })
+        ));
+
+        let duplicate = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 255),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7]),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7]),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        let expected = box_offset(&duplicate, boxes::BITS_PER_COMPONENT, 1);
+        assert!(matches!(
+            parse(&duplicate),
+            Err(ContainerError::InvalidBox { offset: Some(offset), .. }) if offset == expected
+        ));
+    }
+
+    #[test]
+    fn rejects_bits_per_component_count_and_reserved_entries() {
+        let wrong_count = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(2, 255),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7]),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&wrong_count),
+            Err(ContainerError::InvalidBox { .. })
+        ));
+
+        let reserved = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(2, 255),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7, 38]),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        let expected = box_offset(&reserved, boxes::BITS_PER_COMPONENT, 0) + 9;
+        assert!(matches!(
+            parse(&reserved),
+            Err(ContainerError::InvalidBox { offset: Some(offset), box_type: Some(boxes::BITS_PER_COMPONENT), .. })
+                if offset == expected
+        ));
+    }
+
+    #[test]
+    fn rejects_reserved_image_header_values_at_exact_fields() {
+        for (field, value) in [(10_usize, 38_u8), (11, 6), (12, 2), (13, 2)] {
+            let mut header = image_header(1, 7);
+            header[8 + field] = value;
+            let input = file(
+                ContainerKind::Jp2,
+                &[jp2_header(&[header, colour()]), codestream_box()],
+            );
+            let expected = box_offset(&input, boxes::IMAGE_HEADER, 0) + 8 + field;
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox { offset: Some(offset), box_type: Some(boxes::IMAGE_HEADER), .. })
+                    if offset == expected
+            ));
+        }
+
+        let too_many_components = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[image_header(16_385, 7), colour()]),
+                codestream_box(),
+            ],
+        );
+        let expected = box_offset(&too_many_components, boxes::IMAGE_HEADER, 0) + 16;
+        assert!(matches!(
+            parse(&too_many_components),
+            Err(ContainerError::InvalidBox { offset: Some(offset), box_type: Some(boxes::IMAGE_HEADER), .. })
+                if offset == expected
+        ));
+    }
+
+    #[test]
+    fn reports_truncated_box_at_its_header_offset() {
+        let mut input = valid_uniform_file();
+        let expected = box_offset(&input, boxes::CONTIGUOUS_CODESTREAM, 0);
+        input.pop();
+        assert!(matches!(
+            parse(&input),
+            Err(ContainerError::TruncatedInput { offset, needed: 12, remaining: 11 })
+                if offset == expected
+        ));
+    }
+
+    #[test]
+    fn leaves_jph_header_cardinality_behaviour_unchanged() {
+        let input = file(ContainerKind::Jph, &[codestream_box()]);
+        let parsed = parse(&input).unwrap();
+        assert_eq!(parsed.kind, ContainerKind::Jph);
+        assert!(parsed.image_header.is_none());
+        assert_eq!(parsed.codestreams.len(), 1);
     }
 }

@@ -32,6 +32,243 @@ pub struct ProjectSummary {
     pub summary: &'static str,
 }
 
+#[cfg(test)]
+mod jp2_header_validation_tests {
+    use super::*;
+
+    fn codestream(components: usize) -> Vec<u8> {
+        let samples = (0..15)
+            .map(|index| u8::try_from(index * 13 + 7).unwrap())
+            .collect::<Vec<_>>();
+        let planes = (0..components)
+            .map(|_| samples.as_slice())
+            .collect::<Vec<_>>();
+        codestream::encode_planar_u8_no_decomp_test_fixture(5, 3, &planes).unwrap()
+    }
+
+    fn wrap_jp2(
+        codestream: &[u8],
+        width: u32,
+        height: u32,
+        components: u16,
+        bpc: u8,
+        bpcc: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let mut output = Vec::new();
+        container::write_signature_box(&mut output).unwrap();
+        container::write_file_type_box(&mut output, container::ContainerKind::Jp2, 0, &[]).unwrap();
+        let mut children = Vec::new();
+        container::write_image_header_box(
+            &mut children,
+            container::ImageHeaderBox {
+                width,
+                height,
+                components,
+                bits_per_component: bpc,
+                compression_type: 7,
+                unknown_color_space: false,
+                intellectual_property: false,
+            },
+        )
+        .unwrap();
+        if let Some(entries) = bpcc {
+            container::write_box(&mut children, container::boxes::BITS_PER_COMPONENT, entries)
+                .unwrap();
+        }
+        container::write_color_specification_box(
+            &mut children,
+            container::ColorSpecificationBox {
+                method: container::ColorSpecificationMethod::Enumerated,
+                precedence: 0,
+                approximation: 0,
+                enumerated_color_space: Some(if components == 1 {
+                    container::EnumeratedColorSpace::Greyscale
+                } else {
+                    container::EnumeratedColorSpace::SRgb
+                }),
+            },
+        )
+        .unwrap();
+        container::write_jp2_header_box(&mut output, &children).unwrap();
+        container::write_contiguous_codestream_box(&mut output, codestream).unwrap();
+        output
+    }
+
+    fn marker_offset(input: &[u8], marker: [u8; 2]) -> usize {
+        input.windows(2).position(|bytes| bytes == marker).unwrap()
+    }
+
+    fn box_offset(input: &[u8], box_type: container::FourCc) -> usize {
+        input
+            .windows(4)
+            .position(|bytes| bytes == box_type.as_bytes())
+            .unwrap()
+            - 4
+    }
+
+    #[test]
+    fn validates_uniform_and_varying_jp2_header_precision_against_siz() {
+        let uniform = codestream(1);
+        let uniform_jp2 = wrap_jp2(&uniform, 5, 3, 1, 7, None);
+        let metadata = inspect(&uniform_jp2, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jp2);
+        assert_eq!(metadata.image.unwrap().sample_format, SampleFormat::U8);
+
+        let mut first_codestream_wins = uniform_jp2.clone();
+        let different =
+            codestream::encode_planar_u8_no_decomp_test_fixture(1, 1, &[&[0x2a_u8][..]]).unwrap();
+        container::write_contiguous_codestream_box(&mut first_codestream_wins, &different).unwrap();
+        assert_eq!(
+            inspect(&first_codestream_wins, &InspectOptions::default())
+                .unwrap()
+                .image
+                .unwrap()
+                .width,
+            5
+        );
+
+        let mut varying = codestream(2);
+        let siz = marker_offset(&varying, [0xff, 0x51]);
+        varying[siz + 43] = 0x89;
+        let varying_jp2 = wrap_jp2(&varying, 5, 3, 2, 255, Some(&[7, 0x89]));
+        let metadata = inspect(&varying_jp2, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jp2);
+        assert_eq!(
+            metadata.codestream.unwrap().kind,
+            codestream::CodestreamKind::J2k
+        );
+    }
+
+    #[test]
+    fn rejects_ihdr_geometry_and_component_mismatches_at_exact_fields() {
+        let raw = codestream(1);
+        for (width, height, components, field_offset, message_fragment) in [
+            (5, 4, 1, 0_u64, "height"),
+            (6, 3, 1, 4, "width"),
+            (5, 3, 2, 8, "component count"),
+        ] {
+            let input = wrap_jp2(&raw, width, height, components, 7, None);
+            let expected =
+                (box_offset(&input, container::boxes::IMAGE_HEADER) + 8) as u64 + field_offset;
+            assert!(matches!(
+                inspect(&input, &InspectOptions::default()),
+                Err(J2kError::InvalidInput { offset: Some(offset), message })
+                    if offset == expected && message.contains(message_fragment)
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_uniform_and_varying_siz_sample_mismatches_at_exact_fields() {
+        let mut uniform = codestream(2);
+        let siz = marker_offset(&uniform, [0xff, 0x51]);
+        uniform[siz + 43] = 8;
+        let uniform_jp2 = wrap_jp2(&uniform, 5, 3, 2, 7, None);
+        let expected = (box_offset(&uniform_jp2, container::boxes::IMAGE_HEADER) + 18) as u64;
+        assert!(matches!(
+            inspect(&uniform_jp2, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { offset: Some(offset), .. }) if offset == expected
+        ));
+
+        let mut varying = codestream(2);
+        let siz = marker_offset(&varying, [0xff, 0x51]);
+        varying[siz + 43] = 0x89;
+        let varying_jp2 = wrap_jp2(&varying, 5, 3, 2, 255, Some(&[7, 9]));
+        let expected = (box_offset(&varying_jp2, container::boxes::BITS_PER_COMPONENT) + 9) as u64;
+        assert!(matches!(
+            inspect(&varying_jp2, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { offset: Some(offset), message })
+                if offset == expected && message.contains("entry 1")
+        ));
+    }
+
+    #[test]
+    fn invalid_jp2_metadata_does_not_mutate_caller_output() {
+        let raw = codestream(1);
+        let input = wrap_jp2(&raw, 6, 3, 1, 7, None);
+        let info = ImageInfo::new(
+            5,
+            3,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut samples = vec![0x6d; 15];
+        {
+            let plane = PlaneMut::new(&mut samples, 5, 3, 5, SampleFormat::U8).unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&input, &mut target, &DecodeOptions::default()),
+                Err(J2kError::InvalidInput { .. })
+            ));
+        }
+        assert!(samples.iter().all(|sample| *sample == 0x6d));
+    }
+
+    #[test]
+    fn raw_j2k_and_jph_paths_do_not_acquire_jp2_header_validation() {
+        let raw = codestream(1);
+        assert_eq!(
+            inspect(&raw, &InspectOptions::default()).unwrap().format,
+            InputFormat::J2kCodestream
+        );
+
+        let mut jph = Vec::new();
+        container::write_signature_box(&mut jph).unwrap();
+        container::write_file_type_box(&mut jph, container::ContainerKind::Jph, 0, &[]).unwrap();
+        container::write_contiguous_codestream_box(&mut jph, &raw).unwrap();
+        let metadata = inspect(&jph, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jph);
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn unimplemented_jp2_presentation_mechanisms_fail_closed() {
+        let raw = codestream(1);
+        let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        let jp2c = box_offset(&palette, container::boxes::CONTIGUOUS_CODESTREAM);
+        let mut palette_box = Vec::new();
+        container::write_box(
+            &mut palette_box,
+            container::boxes::PALETTE,
+            &[0, 1, 1, 7, 0],
+        )
+        .unwrap();
+        let jp2h = box_offset(&palette, container::boxes::JP2_HEADER);
+        let old_len = u32::from_be_bytes(palette[jp2h..jp2h + 4].try_into().unwrap());
+        palette[jp2h..jp2h + 4]
+            .copy_from_slice(&(old_len + palette_box.len() as u32).to_be_bytes());
+        palette.splice(jp2c..jp2c, palette_box);
+        assert!(matches!(
+            inspect(&palette, &InspectOptions::default()),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ContainerBox,
+                ..
+            })
+        ));
+
+        let mut icc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        let colr = box_offset(&icc, container::boxes::COLOR_SPECIFICATION);
+        icc[colr + 8] = 2;
+        assert!(matches!(
+            inspect(&icc, &InspectOptions::default()),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ColorModel,
+                ..
+            })
+        ));
+    }
+}
+
 pub fn bootstrap_summary() -> ProjectSummary {
     ProjectSummary {
         name: PROJECT_NAME,
@@ -5123,6 +5360,12 @@ fn metadata_from_container(
         Some(bytes) => Some(codestream::parse(bytes).map_err(map_codestream_error)?),
         None => None,
     };
+    if container.kind == container::ContainerKind::Jp2
+        && let Some(codestream) = &parsed_codestream
+    {
+        validate_jp2_header_against_siz(&container, codestream)?;
+    }
+    reject_unimplemented_jp2_presentation(&container)?;
     let support = if !options.classify_support {
         SupportStatus::Unknown {
             detail: "support classification was not requested".into(),
@@ -5180,6 +5423,159 @@ fn metadata_from_container(
         }),
         support,
         records,
+    })
+}
+
+fn reject_unimplemented_jp2_presentation(container: &container::Container) -> Result<()> {
+    if container.kind != container::ContainerKind::Jp2 {
+        return Ok(());
+    }
+    let Some(header) = container
+        .boxes
+        .iter()
+        .find(|record| record.box_type == container::boxes::JP2_HEADER)
+    else {
+        return Ok(());
+    };
+    let header_end = header
+        .data_offset
+        .checked_add(header.data_len)
+        .ok_or_else(|| J2kError::InvalidInput {
+            offset: None,
+            message: "container size overflowed parser limits".into(),
+        })?;
+    if let Some(record) = container.boxes.iter().find(|record| {
+        record.header_offset >= header.data_offset
+            && record.header_offset < header_end
+            && matches!(
+                record.box_type,
+                container::boxes::PALETTE
+                    | container::boxes::COMPONENT_MAPPING
+                    | container::boxes::CHANNEL_DEFINITION
+            )
+    }) {
+        return Err(unsupported(
+            UnsupportedFeature::ContainerBox,
+            alloc::format!(
+                "JP2 `{}` presentation is not implemented; palette, component mapping, and channel definition remain fail-closed",
+                record.box_type
+            ),
+        ));
+    }
+    if let Some(colour) = container.color_specification
+        && (colour.method != container::ColorSpecificationMethod::Enumerated
+            || !matches!(
+                colour.enumerated_color_space,
+                Some(
+                    container::EnumeratedColorSpace::SRgb
+                        | container::EnumeratedColorSpace::Greyscale
+                        | container::EnumeratedColorSpace::SYcc
+                )
+            ))
+    {
+        return Err(unsupported(
+            UnsupportedFeature::ColorModel,
+            "JP2 ICC, vendor, and unrecognised colour transforms remain fail-closed",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_jp2_header_against_siz(
+    container: &container::Container,
+    codestream: &codestream::Codestream,
+) -> Result<()> {
+    let image_header = container
+        .image_header
+        .ok_or_else(|| J2kError::InvalidInput {
+            offset: None,
+            message: "JP2 header box is missing its image header".into(),
+        })?;
+    let image_record =
+        jp2_child_record(container, container::boxes::IMAGE_HEADER).ok_or_else(|| {
+            J2kError::InvalidInput {
+                offset: None,
+                message: "JP2 image header location is unavailable".into(),
+            }
+        })?;
+    let mismatch = |field_offset: usize, message: &'static str| J2kError::InvalidInput {
+        offset: Some((image_record.data_offset + field_offset) as u64),
+        message: message.into(),
+    };
+
+    if image_header.height != codestream.image_height() {
+        return Err(mismatch(
+            0,
+            "JP2 image header height does not match the first codestream SIZ marker",
+        ));
+    }
+    if image_header.width != codestream.image_width() {
+        return Err(mismatch(
+            4,
+            "JP2 image header width does not match the first codestream SIZ marker",
+        ));
+    }
+    if image_header.components != codestream.siz.component_count() {
+        return Err(mismatch(
+            8,
+            "JP2 image header component count does not match the first codestream SIZ marker",
+        ));
+    }
+
+    if image_header.bits_per_component == 255 {
+        let bits = container
+            .bits_per_component
+            .as_ref()
+            .ok_or_else(|| mismatch(10, "JP2 varying precision is missing component entries"))?;
+        let bits_record = jp2_child_record(container, container::boxes::BITS_PER_COMPONENT)
+            .ok_or_else(|| mismatch(10, "JP2 bits-per-component location is unavailable"))?;
+        for (index, (header_component, siz_component)) in bits
+            .components
+            .iter()
+            .zip(&codestream.siz.components)
+            .enumerate()
+        {
+            if header_component.bits_per_sample != siz_component.bits_per_sample
+                || header_component.signed != siz_component.signed
+            {
+                return Err(J2kError::InvalidInput {
+                    offset: Some((bits_record.data_offset + index) as u64),
+                    message: alloc::format!(
+                        "JP2 bits-per-component entry {index} does not match the first codestream SIZ marker"
+                    ),
+                });
+            }
+        }
+    } else {
+        let header_format = image_header
+            .sample_format()
+            .ok_or_else(|| mismatch(10, "JP2 image header precision is invalid"))?;
+        if codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != header_format.bits_per_sample
+                || component.signed != header_format.signed
+        }) {
+            return Err(mismatch(
+                10,
+                "JP2 image header precision and signedness do not match every first-codestream SIZ component",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn jp2_child_record(
+    parsed: &container::Container,
+    box_type: container::FourCc,
+) -> Option<&container::BoxRecord> {
+    let header = parsed
+        .boxes
+        .iter()
+        .find(|record| record.box_type == container::boxes::JP2_HEADER)?;
+    let header_end = header.data_offset.checked_add(header.data_len)?;
+    parsed.boxes.iter().find(|record| {
+        record.box_type == box_type
+            && record.header_offset >= header.data_offset
+            && record.header_offset < header_end
     })
 }
 
