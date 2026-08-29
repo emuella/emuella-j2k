@@ -240,6 +240,45 @@ remain rejected. Caller-owned sentinels prove that every negative case fails
 before mutation. No protected corpus or external codec participates in these
 tests.
 
+### Rendered partial sYCC
+
+Layer 1 qualifies rendered partial decode with one project-authored in-memory
+129 × 65 JP2 fixture. It has reversible 5/3 coding with two decomposition
+levels, one tile, Y sampling at 1×1 and Cb/Cr sampling at 2×2. Non-linear
+algorithmic planes include periodic 0, 255 and 128 anchors. An independent test
+oracle applies the selected binary64 conversion, rounding and clipping without
+calling the production renderer.
+
+The x partitions 0, 31, 64 and 129 and y partitions 0, 17, 32 and 65 form nine
+requests. Their planar and interleaved results stitch to the full rendered
+image, and each request equals the corresponding full-frame crop. Focused
+65,33 + 17×9, edge 127,63 + 2×2 and full-frame requests cover preceding
+co-sited chroma at odd starts and held chroma at odd image edges. Shape, owned
+decode and caller-owned decode agree; output descriptors carry absolute
+origins, unit separation and no source-component identity. Absent and all-zero
+CRG forms are equivalent.
+
+Prepared-plan evidence checks that the focused request expands to the source
+rectangle 64,32 + 18×10, invokes only the selective route, skips positive
+packet-body bytes, allocates no full output, and executes fewer code blocks and
+source-output samples than the full prepared request. The fail-closed matrix
+covers invalid regions and option combinations, raw inputs, incompatible SIZ
+and coding shapes, CRG variants, MCT, multiple codestreams, indirect or
+additional colour metadata, unrecognised metadata, malformed container and
+codestream boundaries, and partial 9/7. Caller-owned sentinels prove that
+preflight, target-validation and selected reconstruction failures do not
+publish partial output. Native JP2 and raw J2K component results remain the
+unchanged control.
+
+The project authority is ISO/IEC 15444-1:2024, clauses A.5.1, A.9.1, B.1–B.3,
+I.5.3.1.1, I.5.3.3 Table I.10 and J.14, retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977`, reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`. ISO/IEC 15444-4:2024, Annex G,
+is the rendered comparison authority, retrieval revision
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`, reviewed bundle
+`7b3d8d60cd4d4f6c056cd108d928b7f99f492aa9`. Tests and prose are
+project-authored and do not reproduce standards expression.
+
 ### Rendered Annex G comparison
 
 The rendered-pixel Layer 2 journey consumes only the catalogue-owned

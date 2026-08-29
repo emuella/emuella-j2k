@@ -176,6 +176,134 @@ mod jp2_header_validation_tests {
         .unwrap()
     }
 
+    fn sycc_two_decomp_codestream(
+        width: u32,
+        height: u32,
+        luma: &[u8],
+        cb: &[u8],
+        cr: &[u8],
+    ) -> Vec<u8> {
+        codestream::encode_planar_u8_subsampled_two_decomp_test_fixture(
+            width,
+            height,
+            &[
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: luma,
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: cb,
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: cr,
+                },
+            ],
+        )
+        .unwrap()
+    }
+
+    fn rendered_partial_fixture() -> (Vec<u8>, Vec<Vec<u8>>) {
+        let width = 129_u32;
+        let height = 65_u32;
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
+        let mut luma = (0..width * height)
+            .map(|sample| ((sample * sample * 17 + sample * 29 + 37) % 256) as u8)
+            .collect::<Vec<_>>();
+        let mut cb = (0..chroma_width * chroma_height)
+            .map(|sample| ((sample * sample * 11 + sample * 47 + 19) % 256) as u8)
+            .collect::<Vec<_>>();
+        let mut cr = (0..chroma_width * chroma_height)
+            .map(|sample| ((sample * sample * 23 + sample * 31 + 211) % 256) as u8)
+            .collect::<Vec<_>>();
+        for (samples, step) in [(&mut luma, 257_usize), (&mut cb, 67), (&mut cr, 71)] {
+            for (anchor, value) in [0_u8, 255, 128].into_iter().enumerate() {
+                for offset in (anchor..samples.len()).step_by(step) {
+                    samples[offset] = value;
+                }
+            }
+        }
+        let expected = independent_sycc_oracle(width, height, &luma, &cb, &cr);
+        let raw = sycc_two_decomp_codestream(width, height, &luma, &cb, &cr);
+        (wrap_sycc_jp2(&raw, width, height), expected)
+    }
+
+    fn independent_sycc_oracle(
+        width: u32,
+        height: u32,
+        luma: &[u8],
+        cb: &[u8],
+        cr: &[u8],
+    ) -> Vec<Vec<u8>> {
+        let chroma_width = usize::try_from(width.div_ceil(2)).unwrap();
+        let mut output = [Vec::new(), Vec::new(), Vec::new()];
+        for y in 0..usize::try_from(height).unwrap() {
+            for x in 0..usize::try_from(width).unwrap() {
+                let y_sample = f64::from(luma[y * usize::try_from(width).unwrap() + x]);
+                let chroma = (y / 2) * chroma_width + x / 2;
+                let cb_sample = f64::from(cb[chroma]) - 128.0;
+                let cr_sample = f64::from(cr[chroma]) - 128.0;
+                for (plane, value) in output.iter_mut().zip([
+                    y_sample + 1.402 * cr_sample,
+                    y_sample - 0.344_13 * cb_sample - 0.714_14 * cr_sample,
+                    y_sample + 1.772 * cb_sample,
+                ]) {
+                    plane.push(value.round().clamp(0.0, 255.0) as u8);
+                }
+            }
+        }
+        output.into()
+    }
+
+    fn crop_rgb(planes: &[Vec<u8>], image_width: u32, region: Region) -> Vec<Vec<u8>> {
+        planes
+            .iter()
+            .map(|plane| {
+                (region.y..region.y + region.height)
+                    .flat_map(|y| {
+                        let start = usize::try_from(y * image_width + region.x).unwrap();
+                        plane[start..start + usize::try_from(region.width).unwrap()]
+                            .iter()
+                            .copied()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn rendered_partial_into_buffers(
+        input: &[u8],
+        options: &PartialDecodeOptions,
+    ) -> (ImageInfo, Vec<Vec<u8>>) {
+        let info = decode_rendered_partial_info(input, options).unwrap();
+        let plane_len = usize::try_from(info.width * info.height).unwrap();
+        let mut buffers = (0..3).map(|_| vec![0xa5; plane_len]).collect::<Vec<_>>();
+        let mut planes = buffers
+            .iter_mut()
+            .map(|samples| {
+                PlaneMut::new(
+                    samples,
+                    info.width,
+                    info.height,
+                    usize::try_from(info.width).unwrap(),
+                    SampleFormat::U8,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        decode_rendered_partial_into(input, &mut target, options).unwrap();
+        (info, buffers)
+    }
+
     fn high_precision_greyscale_codestream(bits_per_sample: u8) -> (Vec<u8>, Vec<u8>, Vec<u16>) {
         assert!((9..=16).contains(&bits_per_sample));
         let midpoint = 1_u16 << (bits_per_sample - 1);
@@ -1438,6 +1566,527 @@ mod jp2_header_validation_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn rendered_partial_sycc_matches_oracle_crops_stitching_and_all_output_routes() {
+        let (jp2, oracle) = rendered_partial_fixture();
+        let full_options = PartialDecodeOptions::default();
+        let full = decode_rendered_partial(&jp2, &full_options).unwrap();
+        assert_eq!(planar_bytes(&full), oracle.as_slice());
+        assert_eq!(decode(&jp2, &DecodeOptions::default()).unwrap(), full);
+        assert_eq!(
+            full.component_info
+                .iter()
+                .map(|component| (
+                    component.source_component,
+                    component.x_origin,
+                    component.y_origin,
+                    component.width,
+                    component.height,
+                    component.horizontal_separation,
+                    component.vertical_separation,
+                ))
+                .collect::<Vec<_>>(),
+            vec![(None, 0, 0, 129, 65, 1, 1); 3]
+        );
+
+        let interleaved_options = PartialDecodeOptions {
+            target_layout: ComponentLayout::Interleaved,
+            ..PartialDecodeOptions::default()
+        };
+        let interleaved = decode_rendered_partial(&jp2, &interleaved_options).unwrap();
+        let ImageData::Interleaved(interleaved_bytes) = interleaved.data else {
+            panic!("rendered partial interleaved output was not interleaved")
+        };
+        let expected_interleaved = (0..129_usize * 65)
+            .flat_map(|sample| oracle.iter().map(move |plane| plane[sample]))
+            .collect::<Vec<_>>();
+        assert_eq!(interleaved_bytes, expected_interleaved);
+        let interleaved_info = decode_rendered_partial_info(&jp2, &interleaved_options).unwrap();
+        let mut caller_interleaved = vec![0xa5; 129 * 65 * 3];
+        {
+            let mut target = ImageViewMut::Interleaved {
+                info: &interleaved_info,
+                samples: &mut caller_interleaved,
+                stride_bytes: 129 * 3,
+            };
+            decode_rendered_partial_into(&jp2, &mut target, &interleaved_options).unwrap();
+        }
+        assert_eq!(caller_interleaved, expected_interleaved);
+
+        let mut stitched = (0..3).map(|_| vec![0_u8; 129 * 65]).collect::<Vec<_>>();
+        let mut stitched_interleaved = vec![0_u8; 129 * 65 * 3];
+        for ys in [0_u32, 17, 32]
+            .windows(2)
+            .chain(core::iter::once(&[32, 65][..]))
+        {
+            for xs in [0_u32, 31, 64]
+                .windows(2)
+                .chain(core::iter::once(&[64, 129][..]))
+            {
+                let region = Region {
+                    x: xs[0],
+                    y: ys[0],
+                    width: xs[1] - xs[0],
+                    height: ys[1] - ys[0],
+                };
+                let options = PartialDecodeOptions {
+                    region: Some(region),
+                    ..PartialDecodeOptions::default()
+                };
+                let partial = decode_rendered_partial(&jp2, &options).unwrap();
+                let expected = crop_rgb(&oracle, 129, region);
+                assert_eq!(planar_bytes(&partial), expected.as_slice());
+                assert_eq!(
+                    partial.info,
+                    decode_rendered_partial_info(&jp2, &options).unwrap()
+                );
+                assert!(partial.component_info.iter().all(|component| {
+                    component.source_component.is_none()
+                        && component.x_origin == region.x
+                        && component.y_origin == region.y
+                        && component.width == region.width
+                        && component.height == region.height
+                        && component.horizontal_separation == 1
+                        && component.vertical_separation == 1
+                }));
+                let (_, into) = rendered_partial_into_buffers(&jp2, &options);
+                assert_eq!(into, expected);
+                for row in 0..region.height {
+                    for column in 0..region.width {
+                        let source = usize::try_from(row * region.width + column).unwrap();
+                        let destination =
+                            usize::try_from((region.y + row) * 129 + region.x + column).unwrap();
+                        for component in 0..3 {
+                            stitched[component][destination] = expected[component][source];
+                            stitched_interleaved[destination * 3 + component] =
+                                expected[component][source];
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(stitched, oracle);
+        assert_eq!(stitched_interleaved, expected_interleaved);
+
+        for region in [
+            Region {
+                x: 65,
+                y: 33,
+                width: 17,
+                height: 9,
+            },
+            Region {
+                x: 127,
+                y: 63,
+                width: 2,
+                height: 2,
+            },
+            Region {
+                x: 0,
+                y: 0,
+                width: 129,
+                height: 65,
+            },
+        ] {
+            let options = PartialDecodeOptions {
+                region: Some(region),
+                ..PartialDecodeOptions::default()
+            };
+            assert_eq!(
+                planar_bytes(&decode_rendered_partial(&jp2, &options).unwrap()),
+                crop_rgb(&oracle, 129, region).as_slice()
+            );
+        }
+
+        let narrow_options = PartialDecodeOptions {
+            region: Some(Region {
+                x: 65,
+                y: 33,
+                width: 17,
+                height: 9,
+            }),
+            ..PartialDecodeOptions::default()
+        };
+        let narrow_plan = prepare_bounded_jp2_sycc_partial(
+            &jp2,
+            &narrow_options,
+            BoundedSyccMetadataPolicy::DirectPartial,
+        )
+        .unwrap();
+        assert_eq!(
+            narrow_plan.route,
+            BoundedSyccPartialRoute::PreparedSelective
+        );
+        assert_eq!(
+            narrow_plan.prepared.region(),
+            codestream::TileRegionRequest {
+                x: 64,
+                y: 32,
+                width: 18,
+                height: 10,
+            }
+        );
+        let (_, narrow_work) =
+            execute_bounded_sycc_partial(&narrow_plan, ComponentLayout::Planar).unwrap();
+        let full_plan = prepare_bounded_jp2_sycc_partial(
+            &jp2,
+            &full_options,
+            BoundedSyccMetadataPolicy::DirectPartial,
+        )
+        .unwrap();
+        let (_, full_work) =
+            execute_bounded_sycc_partial(&full_plan, ComponentLayout::Planar).unwrap();
+        assert!(narrow_work.packet_body_bytes_skipped > 0);
+        assert!(narrow_work.executed_code_blocks < full_work.executed_code_blocks);
+        assert!(narrow_work.output_samples < full_work.output_samples);
+        assert_eq!(narrow_work.full_output_allocation_bytes, 0);
+    }
+
+    #[test]
+    fn reversible_full_sycc_preserves_inert_metadata_while_partial_remains_strict() {
+        let (jp2, _) = rendered_partial_fixture();
+        let full = decode(&jp2, &DecodeOptions::default()).unwrap();
+        let partial_options = PartialDecodeOptions {
+            region: Some(Region {
+                x: 65,
+                y: 33,
+                width: 17,
+                height: 9,
+            }),
+            ..PartialDecodeOptions::default()
+        };
+        for box_type in [
+            container::boxes::XML,
+            container::boxes::UUID,
+            container::FourCc::new(*b"vend"),
+        ] {
+            let mut with_metadata = jp2.clone();
+            container::write_box(&mut with_metadata, box_type, &[1, 2, 3, 4]).unwrap();
+            assert_eq!(
+                decode(&with_metadata, &DecodeOptions::default()).unwrap(),
+                full
+            );
+            assert!(decode_rendered_partial(&with_metadata, &partial_options).is_err());
+            assert!(decode_rendered_partial_info(&with_metadata, &partial_options).is_err());
+        }
+    }
+
+    #[test]
+    fn rendered_partial_sycc_fail_closed_matrix_and_atomicity() {
+        let (jp2, _) = rendered_partial_fixture();
+        let admitted = PartialDecodeOptions {
+            region: Some(Region {
+                x: 65,
+                y: 33,
+                width: 17,
+                height: 9,
+            }),
+            ..PartialDecodeOptions::default()
+        };
+        let mut raw = container::parse(&jp2)
+            .unwrap()
+            .primary_codestream(&jp2)
+            .unwrap()
+            .unwrap()
+            .to_vec();
+        let mut zero_crg = raw.clone();
+        insert_crg(&mut zero_crg, [0; 6]);
+        let zero_crg = wrap_sycc_jp2(&zero_crg, 129, 65);
+        assert_eq!(
+            decode_rendered_partial(&zero_crg, &admitted).unwrap(),
+            decode_rendered_partial(&jp2, &admitted).unwrap()
+        );
+
+        let parsed = codestream::parse(&raw).unwrap();
+        let tile = parsed.tiles.first().unwrap();
+        let payload_start = tile.payload_offset.unwrap();
+        let payload_end = payload_start + tile.payload_len.unwrap();
+        let full_options = PartialDecodeOptions::default();
+        let selected_entropy_failure =
+            (payload_start..payload_end.saturating_sub(1)).find_map(|offset| {
+                let mut malformed = raw.clone();
+                malformed[offset] = 0xff;
+                malformed[offset + 1] = 0x90;
+                let malformed = wrap_sycc_jp2(&malformed, 129, 65);
+                (decode_rendered_partial_info(&malformed, &full_options).is_ok()
+                    && decode_rendered_partial(&malformed, &full_options).is_err())
+                .then_some(malformed)
+            });
+        let selected_entropy_failure =
+            selected_entropy_failure.expect("selected entropy mutation must fail execution");
+        let full_info = decode_rendered_partial_info(&jp2, &full_options).unwrap();
+        let mut entropy_sentinels = (0..3)
+            .map(|component| vec![0x71 + component; 129 * 65])
+            .collect::<Vec<_>>();
+        {
+            let mut planes = entropy_sentinels
+                .iter_mut()
+                .map(|samples| PlaneMut::new(samples, 129, 65, 129, SampleFormat::U8).unwrap())
+                .collect::<Vec<_>>();
+            let mut target = ImageViewMut::Planar {
+                info: &full_info,
+                planes: &mut planes,
+            };
+            assert!(
+                decode_rendered_partial_into(
+                    &selected_entropy_failure,
+                    &mut target,
+                    &full_options,
+                )
+                .is_err()
+            );
+        }
+        for (component, samples) in entropy_sentinels.iter().enumerate() {
+            assert!(
+                samples
+                    .iter()
+                    .all(|sample| *sample == 0x71 + component as u8)
+            );
+        }
+
+        for options in [
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 1,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: u32::MAX,
+                    y: 0,
+                    width: 2,
+                    height: 1,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 128,
+                    y: 64,
+                    width: 2,
+                    height: 1,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                region: None,
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 0 },
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![0, 1, 2]),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(1),
+                ..admitted.clone()
+            },
+        ] {
+            assert!(decode_rendered_partial(&jp2, &options).is_err());
+            assert!(decode_rendered_partial_info(&jp2, &options).is_err());
+        }
+        assert!(decode_rendered_partial(&[], &admitted).is_err());
+        assert!(decode_rendered_partial(&raw, &admitted).is_err());
+
+        let cod = marker_offset(&raw, codestream::Marker::Cod.code().to_be_bytes());
+        raw[cod + 13] = 0;
+        let irreversible = wrap_sycc_jp2(&raw, 129, 65);
+        assert!(decode_rendered_partial(&irreversible, &admitted).is_err());
+
+        let mut negative_inputs = Vec::new();
+        let original_raw = container::parse(&jp2)
+            .unwrap()
+            .primary_codestream(&jp2)
+            .unwrap()
+            .unwrap()
+            .to_vec();
+        let mut nonzero_crg = original_raw.clone();
+        insert_crg(&mut nonzero_crg, [0, 0, 0, 1, 0, 0]);
+        negative_inputs.push(wrap_sycc_jp2(&nonzero_crg, 129, 65));
+        let mut duplicate_crg = original_raw.clone();
+        insert_crg(&mut duplicate_crg, [0; 6]);
+        insert_crg(&mut duplicate_crg, [0; 6]);
+        negative_inputs.push(wrap_sycc_jp2(&duplicate_crg, 129, 65));
+        let mut mct = original_raw.clone();
+        let cod = marker_offset(&mct, codestream::Marker::Cod.code().to_be_bytes());
+        mct[cod + 8] = 1;
+        negative_inputs.push(wrap_sycc_jp2(&mct, 129, 65));
+        for box_type in [
+            container::boxes::PALETTE,
+            container::boxes::COMPONENT_MAPPING,
+            container::boxes::CHANNEL_DEFINITION,
+            container::boxes::XML,
+            container::boxes::UUID,
+            container::FourCc::new(*b"vend"),
+        ] {
+            let mut candidate = jp2.clone();
+            append_jp2_header_child(&mut candidate, presentation_box(box_type, &[0, 0, 0, 0]));
+            negative_inputs.push(candidate);
+        }
+        let mut extra_colour = jp2.clone();
+        append_jp2_header_child(
+            &mut extra_colour,
+            colour_box(container::ColorSpecificationMethod::Enumerated, Some(16)),
+        );
+        negative_inputs.push(extra_colour);
+        let mut multiple_codestreams = jp2.clone();
+        container::write_contiguous_codestream_box(&mut multiple_codestreams, &original_raw)
+            .unwrap();
+        negative_inputs.push(multiple_codestreams);
+        for (label, offset, value) in [
+            ("signed", 40_usize, 0x87_u8),
+            ("nine bit", 40, 8),
+            ("wrong sampling", 44, 1),
+        ] {
+            let mut mutated = original_raw.clone();
+            let siz = marker_offset(&mutated, codestream::Marker::Siz.code().to_be_bytes());
+            if label == "signed" || label == "nine bit" {
+                for component in 0..3 {
+                    mutated[siz + offset + component * 3] = value;
+                }
+                let mut candidate = wrap_sycc_jp2(&mutated, 129, 65);
+                let ihdr = box_offset(&candidate, container::boxes::IMAGE_HEADER);
+                candidate[ihdr + 18] = value;
+                negative_inputs.push(candidate);
+            } else {
+                mutated[siz + offset] = value;
+                negative_inputs.push(wrap_sycc_jp2(&mutated, 129, 65));
+            }
+        }
+        for offset in [14_usize, 18, 30, 34] {
+            let mut mutated = original_raw.clone();
+            let siz = marker_offset(&mutated, codestream::Marker::Siz.code().to_be_bytes());
+            mutated[siz + offset..siz + offset + 4].copy_from_slice(&1_u32.to_be_bytes());
+            negative_inputs.push(wrap_sycc_jp2(&mutated, 129, 65));
+        }
+        let mut multiple_tiles = original_raw.clone();
+        let siz = marker_offset(
+            &multiple_tiles,
+            codestream::Marker::Siz.code().to_be_bytes(),
+        );
+        multiple_tiles[siz + 22..siz + 26].copy_from_slice(&64_u32.to_be_bytes());
+        negative_inputs.push(wrap_sycc_jp2(&multiple_tiles, 129, 65));
+        let mut ihdr_mismatch = jp2.clone();
+        let ihdr = box_offset(&ihdr_mismatch, container::boxes::IMAGE_HEADER);
+        ihdr_mismatch[ihdr + 12..ihdr + 16].copy_from_slice(&128_u32.to_be_bytes());
+        negative_inputs.push(ihdr_mismatch);
+        for (method, enumerated) in [(2_u8, None), (4, None), (1, Some(99))] {
+            let mut colour = jp2.clone();
+            set_first_colour(&mut colour, method, enumerated);
+            negative_inputs.push(colour);
+        }
+        let mut malformed_crg = original_raw.clone();
+        let sot = marker_offset(&malformed_crg, codestream::Marker::Sot.code().to_be_bytes());
+        let mut segment = codestream::Marker::Crg.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&13_u16.to_be_bytes());
+        segment.extend_from_slice(&[0; 11]);
+        malformed_crg.splice(sot..sot, segment);
+        negative_inputs.push(wrap_sycc_jp2(&malformed_crg, 129, 65));
+        let mut misplaced_crg = original_raw.clone();
+        let sot = marker_offset(&misplaced_crg, codestream::Marker::Sot.code().to_be_bytes());
+        let sod = marker_offset(&misplaced_crg, codestream::Marker::Sod.code().to_be_bytes());
+        let psot = u32::from_be_bytes(misplaced_crg[sot + 6..sot + 10].try_into().unwrap());
+        let mut segment = codestream::Marker::Crg.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&14_u16.to_be_bytes());
+        segment.extend_from_slice(&[0; 12]);
+        misplaced_crg[sot + 6..sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(segment.len()).unwrap()).to_be_bytes());
+        misplaced_crg.splice(sod..sod, segment);
+        negative_inputs.push(wrap_sycc_jp2(&misplaced_crg, 129, 65));
+        let mut jph = Vec::new();
+        container::write_signature_box(&mut jph).unwrap();
+        container::write_file_type_box(&mut jph, container::ContainerKind::Jph, 0, &[]).unwrap();
+        container::write_contiguous_codestream_box(&mut jph, &original_raw).unwrap();
+        negative_inputs.push(jph);
+        let mut truncated = jp2.clone();
+        truncated.truncate(truncated.len() - 3);
+        negative_inputs.push(truncated);
+        let mut missing_eoc = original_raw.clone();
+        missing_eoc.truncate(missing_eoc.len() - 2);
+        negative_inputs.push(wrap_sycc_jp2(&missing_eoc, 129, 65));
+        let mut trailing_codestream = original_raw.clone();
+        trailing_codestream.push(0);
+        negative_inputs.push(wrap_sycc_jp2(&trailing_codestream, 129, 65));
+        let mut bad_psot = original_raw.clone();
+        let sot = marker_offset(&bad_psot, codestream::Marker::Sot.code().to_be_bytes());
+        let psot = u32::from_be_bytes(bad_psot[sot + 6..sot + 10].try_into().unwrap());
+        bad_psot[sot + 6..sot + 10].copy_from_slice(&(psot + 1).to_be_bytes());
+        negative_inputs.push(wrap_sycc_jp2(&bad_psot, 129, 65));
+
+        let info = decode_rendered_partial_info(&jp2, &admitted).unwrap();
+        for (case, candidate) in negative_inputs.into_iter().enumerate() {
+            let mut buffers = (0..3)
+                .map(|component| vec![0x61 + component; 17 * 9])
+                .collect::<Vec<_>>();
+            {
+                let mut planes = buffers
+                    .iter_mut()
+                    .map(|samples| PlaneMut::new(samples, 17, 9, 17, SampleFormat::U8).unwrap())
+                    .collect::<Vec<_>>();
+                let mut target = ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                };
+                assert!(
+                    decode_rendered_partial_into(&candidate, &mut target, &admitted).is_err(),
+                    "negative rendered-partial input {case} was admitted"
+                );
+            }
+            for (component, buffer) in buffers.iter().enumerate() {
+                assert!(
+                    buffer
+                        .iter()
+                        .all(|sample| *sample == 0x61 + component as u8)
+                );
+            }
+        }
+
+        let mut samples = vec![0x6d; 17 * 9 * 3];
+        let wrong_info = ImageInfo {
+            width: 16,
+            ..ImageInfo::new(
+                17,
+                9,
+                3,
+                SampleFormat::U8,
+                ColorModel::Rgb,
+                ComponentLayout::Interleaved,
+            )
+            .unwrap()
+        };
+        {
+            let mut target = ImageViewMut::Interleaved {
+                info: &wrong_info,
+                samples: &mut samples,
+                stride_bytes: 17 * 3,
+            };
+            assert!(decode_rendered_partial_into(&jp2, &mut target, &admitted).is_err());
+        }
+        assert!(samples.iter().all(|sample| *sample == 0x6d));
     }
 }
 
@@ -2804,6 +3453,22 @@ fn decode_bounded_jp2_sycc_420(
     }
     let codestream_bytes =
         primary_part1_codestream_bytes(input, metadata)?.ok_or_else(sample_size_overflow)?;
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if parsed
+        .uniform_effective_coding_style()
+        .is_some_and(|style| style.transform == codestream::WaveletTransform::Reversible53)
+    {
+        let partial_options = PartialDecodeOptions {
+            target_layout: options.target_layout,
+            ..PartialDecodeOptions::default()
+        };
+        return decode_bounded_jp2_sycc_420_with_policy(
+            input,
+            &partial_options,
+            BoundedSyccMetadataPolicy::ExistingFullFrame,
+        )
+        .map(Some);
+    }
     let native = codestream::decode_baseline_owned_components(codestream_bytes)
         .map_err(map_codestream_error)?;
     let rendered = render_bounded_sycc_420(native)?;
@@ -2908,6 +3573,421 @@ fn round_and_clip_u8(value: f64) -> u8 {
     } else {
         (value + 0.5) as u8
     }
+}
+
+#[derive(Debug)]
+struct BoundedSyccPartialPlan<'a> {
+    requested_region: Region,
+    prepared: codestream::PreparedPart1ComponentDecode<'a>,
+    route: BoundedSyccPartialRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedSyccPartialRoute {
+    PreparedSelective,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedSyccMetadataPolicy {
+    ExistingFullFrame,
+    DirectPartial,
+}
+
+fn bounded_sycc_output_info(region: Region, layout: ComponentLayout) -> Result<ImageInfo> {
+    ImageInfo::new(
+        region.width,
+        region.height,
+        3,
+        SampleFormat::U8,
+        ColorModel::Rgb,
+        layout,
+    )
+}
+
+fn bounded_sycc_output_components(region: Region) -> Vec<ComponentInfo> {
+    (0..3)
+        .map(|_| ComponentInfo {
+            source_component: None,
+            width: region.width,
+            height: region.height,
+            x_origin: region.x,
+            y_origin: region.y,
+            horizontal_separation: 1,
+            vertical_separation: 1,
+            sample_format: SampleFormat::U8,
+        })
+        .collect()
+}
+
+fn validate_bounded_sycc_partial_options(
+    metadata: &Metadata,
+    options: &PartialDecodeOptions,
+) -> Result<Region> {
+    if options.tile.is_some() {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "rendered partial sYCC decode does not accept tile selection",
+        ));
+    }
+    if options.resolution != ResolutionLevel::Full {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "rendered partial sYCC decode supports full resolution only",
+        ));
+    }
+    if !matches!(options.components, ComponentSelection::All) {
+        return Err(unsupported(
+            UnsupportedFeature::ComponentLayout,
+            "rendered partial sYCC decode requires all rendered channels",
+        ));
+    }
+    if options.max_quality_layers.is_some() {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "rendered partial sYCC decode does not accept a quality-layer limit",
+        ));
+    }
+    if !matches!(
+        options.target_layout,
+        ComponentLayout::Planar | ComponentLayout::Interleaved
+    ) {
+        return Err(unsupported(
+            UnsupportedFeature::ComponentLayout,
+            "rendered partial sYCC decode requires planar or interleaved output",
+        ));
+    }
+    let image = metadata.image.as_ref().ok_or_else(|| {
+        unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "rendered partial decode requires JP2 image dimensions",
+        )
+    })?;
+    let region = options.region.unwrap_or(Region {
+        x: 0,
+        y: 0,
+        width: image.width,
+        height: image.height,
+    });
+    if region.width == 0 || region.height == 0 {
+        return Err(J2kError::InvalidParameter {
+            parameter: "region",
+            message: "rendered partial region dimensions must be greater than zero",
+        });
+    }
+    let x1 = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(sample_size_overflow)?;
+    let y1 = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(sample_size_overflow)?;
+    if x1 > image.width || y1 > image.height {
+        return Err(J2kError::InvalidParameter {
+            parameter: "region",
+            message: "rendered partial region must fit inside the JP2 image bounds",
+        });
+    }
+    Ok(region)
+}
+
+fn bounded_sycc_partial_metadata_is_direct(container: &container::Container) -> bool {
+    let Some(header) = container
+        .boxes
+        .iter()
+        .find(|record| record.box_type == container::boxes::JP2_HEADER)
+    else {
+        return false;
+    };
+    let Some(header_end) = header.data_offset.checked_add(header.data_len) else {
+        return false;
+    };
+    container.boxes.iter().all(|record| {
+        if record.header_offset >= header.data_offset && record.header_offset < header_end {
+            matches!(
+                record.box_type,
+                container::boxes::IMAGE_HEADER
+                    | container::boxes::BITS_PER_COMPONENT
+                    | container::boxes::COLOR_SPECIFICATION
+            )
+        } else {
+            matches!(
+                record.box_type,
+                container::boxes::SIGNATURE
+                    | container::boxes::FILE_TYPE
+                    | container::boxes::JP2_HEADER
+                    | container::boxes::CONTIGUOUS_CODESTREAM
+            )
+        }
+    })
+}
+
+fn prepare_bounded_jp2_sycc_partial<'a>(
+    input: &'a [u8],
+    options: &PartialDecodeOptions,
+    metadata_policy: BoundedSyccMetadataPolicy,
+) -> Result<BoundedSyccPartialPlan<'a>> {
+    if input.is_empty() {
+        return Err(J2kError::TruncatedInput {
+            needed: 1,
+            remaining: 0,
+        });
+    }
+    let metadata = inspect(input, &InspectOptions::default())?;
+    if metadata.format != InputFormat::Jp2 {
+        return Err(unsupported(
+            UnsupportedFeature::InputFormat,
+            "rendered partial decode requires one JP2 Part 1 image",
+        ));
+    }
+    let region = validate_bounded_sycc_partial_options(&metadata, options)?;
+    let container = container::parse(input).map_err(map_container_error)?;
+    let codestream_bytes = container
+        .primary_codestream(input)
+        .map_err(map_container_error)?
+        .ok_or_else(|| {
+            unsupported(
+                UnsupportedFeature::InputFormat,
+                "rendered partial JP2 input has no contiguous codestream",
+            )
+        })?;
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    let direct_partial_metadata = metadata_policy == BoundedSyccMetadataPolicy::DirectPartial;
+    if !is_bounded_jp2_sycc_420_profile(&container, codestream_bytes, &parsed)
+        || (direct_partial_metadata && !bounded_sycc_partial_metadata_is_direct(&container))
+        || (direct_partial_metadata
+            && !codestream_bytes.ends_with(&codestream::Marker::Eoc.code().to_be_bytes()))
+    {
+        return Err(unsupported(
+            UnsupportedFeature::ColorModel,
+            "rendered partial decode is limited to the direct unsigned 8-bit JP2 sYCC 4:2:0 profile",
+        ));
+    }
+    let coding_style = parsed.uniform_effective_coding_style().ok_or_else(|| {
+        unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "rendered partial decode requires one uniform Part 1 coding style",
+        )
+    })?;
+    if coding_style.transform != codestream::WaveletTransform::Reversible53 {
+        return Err(unsupported(
+            UnsupportedFeature::WaveletTransform,
+            "rendered partial decode requires reversible 5/3 coding",
+        ));
+    }
+    let x1 = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(sample_size_overflow)?;
+    let y1 = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(sample_size_overflow)?;
+    let source_x = region.x - region.x % 2;
+    let source_y = region.y - region.y % 2;
+    let components = [0_u16, 1, 2];
+    let prepared = codestream::prepare_part1_component_decode(
+        codestream_bytes,
+        codestream::Part1ComponentDecodeRequest {
+            component_indices: &components,
+            region: codestream::TileRegionRequest {
+                x: source_x,
+                y: source_y,
+                width: x1.checked_sub(source_x).ok_or_else(sample_size_overflow)?,
+                height: y1.checked_sub(source_y).ok_or_else(sample_size_overflow)?,
+            },
+            discard_levels: 0,
+            max_layers: None,
+        },
+    )
+    .map_err(map_codestream_error)?;
+    Ok(BoundedSyccPartialPlan {
+        requested_region: region,
+        prepared,
+        route: BoundedSyccPartialRoute::PreparedSelective,
+    })
+}
+
+fn execute_bounded_sycc_partial(
+    plan: &BoundedSyccPartialPlan<'_>,
+    layout: ComponentLayout,
+) -> Result<(Image, codestream::DecodeStageTimings)> {
+    debug_assert_eq!(plan.route, BoundedSyccPartialRoute::PreparedSelective);
+    let outputs = plan.prepared.component_outputs();
+    let mut native = outputs
+        .iter()
+        .map(|output| {
+            let len = usize::try_from(output.width)
+                .ok()
+                .and_then(|width| {
+                    usize::try_from(output.height)
+                        .ok()
+                        .and_then(|height| width.checked_mul(height))
+                })
+                .ok_or_else(sample_size_overflow)?;
+            Ok(alloc::vec![0_u8; len])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut planes = native
+        .iter_mut()
+        .zip(outputs)
+        .map(|(samples, output)| codestream::ComponentPlaneMut {
+            samples,
+            stride_bytes: usize::try_from(output.width).unwrap_or(usize::MAX),
+        })
+        .collect::<Vec<_>>();
+    let mut workspace = codestream::Part1ComponentDecodeWorkspace::new();
+    let timings =
+        codestream::execute_prepared_part1_component_decode_into_with_workspace_and_options(
+            &plan.prepared,
+            &mut planes,
+            &mut workspace,
+            codestream::PreparedPart1ExecutionOptions {
+                instrumentation: codestream::DecodeInstrumentation::WorkCounters,
+                ..codestream::PreparedPart1ExecutionOptions::default()
+            },
+        )
+        .map_err(map_codestream_error)?;
+    let [luma_info, cb_info, cr_info] = outputs else {
+        return Err(J2kError::InternalInvariant {
+            message: "rendered partial plan did not retain three source components".into(),
+        });
+    };
+    let [luma, cb, cr] = native.as_slice() else {
+        unreachable!("source plane count follows prepared outputs")
+    };
+    let width = usize::try_from(plan.requested_region.width).map_err(|_| sample_size_overflow())?;
+    let height =
+        usize::try_from(plan.requested_region.height).map_err(|_| sample_size_overflow())?;
+    let pixels = width.checked_mul(height).ok_or_else(sample_size_overflow)?;
+    let luma_width = usize::try_from(luma_info.width).map_err(|_| sample_size_overflow())?;
+    let cb_width = usize::try_from(cb_info.width).map_err(|_| sample_size_overflow())?;
+    if cb_info.x_origin != cr_info.x_origin
+        || cb_info.y_origin != cr_info.y_origin
+        || cb_info.width != cr_info.width
+        || cb_info.height != cr_info.height
+        || cb_info.horizontal_separation != cr_info.horizontal_separation
+        || cb_info.vertical_separation != cr_info.vertical_separation
+        || cb_info.bits_per_sample != cr_info.bits_per_sample
+        || cb_info.signed != cr_info.signed
+    {
+        return Err(J2kError::InternalInvariant {
+            message: "rendered partial chroma plans disagree".into(),
+        });
+    }
+    let luma_x_offset = usize::try_from(plan.requested_region.x - luma_info.x_origin)
+        .map_err(|_| sample_size_overflow())?;
+    let luma_y_offset = usize::try_from(plan.requested_region.y - luma_info.y_origin)
+        .map_err(|_| sample_size_overflow())?;
+    let mut red = Vec::with_capacity(pixels);
+    let mut green = Vec::with_capacity(pixels);
+    let mut blue = Vec::with_capacity(pixels);
+    for y in 0..height {
+        let absolute_y = usize::try_from(plan.requested_region.y)
+            .map_err(|_| sample_size_overflow())?
+            .checked_add(y)
+            .ok_or_else(sample_size_overflow)?;
+        for x in 0..width {
+            let absolute_x = usize::try_from(plan.requested_region.x)
+                .map_err(|_| sample_size_overflow())?
+                .checked_add(x)
+                .ok_or_else(sample_size_overflow)?;
+            let luma_offset = (luma_y_offset + y)
+                .checked_mul(luma_width)
+                .and_then(|offset| offset.checked_add(luma_x_offset + x))
+                .ok_or_else(sample_size_overflow)?;
+            let chroma_x = u32::try_from(absolute_x / 2)
+                .map_err(|_| sample_size_overflow())?
+                .checked_sub(cb_info.x_origin)
+                .ok_or_else(sample_size_overflow)?;
+            let chroma_y = u32::try_from(absolute_y / 2)
+                .map_err(|_| sample_size_overflow())?
+                .checked_sub(cb_info.y_origin)
+                .ok_or_else(sample_size_overflow)?;
+            let chroma_offset = usize::try_from(chroma_y)
+                .map_err(|_| sample_size_overflow())?
+                .checked_mul(cb_width)
+                .and_then(|offset| offset.checked_add(usize::try_from(chroma_x).ok()?))
+                .ok_or_else(sample_size_overflow)?;
+            let y = f64::from(*luma.get(luma_offset).ok_or_else(sample_size_overflow)?);
+            let cb = f64::from(*cb.get(chroma_offset).ok_or_else(sample_size_overflow)?) - 128.0;
+            let cr = f64::from(*cr.get(chroma_offset).ok_or_else(sample_size_overflow)?) - 128.0;
+            red.push(round_and_clip_u8(y + 1.402 * cr));
+            green.push(round_and_clip_u8(y - 0.344_13 * cb - 0.714_14 * cr));
+            blue.push(round_and_clip_u8(y + 1.772 * cb));
+        }
+    }
+    let decoded = codestream::DecodedImage {
+        width: plan.requested_region.width,
+        height: plan.requested_region.height,
+        bits_per_sample: 8,
+        signed: false,
+        components: [red, green, blue]
+            .into_iter()
+            .map(|samples| codestream::DecodedComponent { samples })
+            .collect(),
+    };
+    let options = DecodeOptions {
+        mode: DecodeMode::Rendered,
+        target_layout: layout,
+        ..DecodeOptions::default()
+    };
+    let image = decoded_baseline_to_image_with_component_info(
+        decoded,
+        &options,
+        Some(bounded_sycc_output_components(plan.requested_region)),
+    )?;
+    Ok((image, timings))
+}
+
+fn decode_bounded_jp2_sycc_420_with_policy(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+    metadata_policy: BoundedSyccMetadataPolicy,
+) -> Result<Image> {
+    let plan = prepare_bounded_jp2_sycc_partial(input, options, metadata_policy)?;
+    execute_bounded_sycc_partial(&plan, options.target_layout).map(|(image, _)| image)
+}
+
+/// Decode a non-empty full-resolution image-relative rectangle from the
+/// bounded direct JP2 sYCC 4:2:0 profile into owned rendered RGB buffers.
+pub fn decode_rendered_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Image> {
+    decode_bounded_jp2_sycc_420_with_policy(
+        input,
+        options,
+        BoundedSyccMetadataPolicy::DirectPartial,
+    )
+}
+
+/// Resolve the exact rendered RGB output description for a bounded partial
+/// JP2 sYCC request without allocating output samples.
+pub fn decode_rendered_partial_info(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+) -> Result<ImageInfo> {
+    let plan =
+        prepare_bounded_jp2_sycc_partial(input, options, BoundedSyccMetadataPolicy::DirectPartial)?;
+    bounded_sycc_output_info(plan.requested_region, options.target_layout)
+}
+
+/// Decode a bounded partial JP2 sYCC request transactionally into caller-owned
+/// RGB storage. The target is not modified unless reconstruction and
+/// projection both succeed.
+pub fn decode_rendered_partial_into(
+    input: &[u8],
+    target: &mut ImageViewMut<'_>,
+    options: &PartialDecodeOptions,
+) -> Result<()> {
+    validate_image_view_mut(target)?;
+    let mut owned_options = options.clone();
+    owned_options.target_layout = match target {
+        ImageViewMut::Planar { .. } => ComponentLayout::Planar,
+        ImageViewMut::Interleaved { .. } => ComponentLayout::Interleaved,
+    };
+    let expected = decode_rendered_partial_info(input, &owned_options)?;
+    validate_decode_target(&expected, target)?;
+    let decoded = decode_rendered_partial(input, &owned_options)?;
+    copy_image_into_target(&decoded, target)
 }
 
 fn is_p0_10_decode_request(options: &DecodeOptions) -> bool {
