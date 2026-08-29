@@ -81,9 +81,14 @@ resampling, resolution handling or multiple-codestream composition. The known
 unimplemented presentation metadata is reported by support classification
 without making an otherwise well-formed container invalid. Component-mode
 decode may still expose admitted raw codestream planes and applies no
-presentation transform. Rendered requests fail closed before output allocation
-or mutation for palette, component mapping, channel definition, sYCC, ICC,
-vendor, reserved or unrecognised colour metadata.
+presentation transform. Component output metadata is inferred from the raw
+selection: all one- and three-component outputs are labelled grayscale and RGB
+respectively, while other counts and explicit subsets remain unknown. JP2
+colour metadata does not alter that inference. Rendered requests fail closed
+before output allocation or mutation for palette, component mapping, channel
+definition, sYCC, ICC, vendor, reserved or unrecognised colour metadata.
+Partial decode requests are native component selections; their Part 1
+full-decode compatibility fallback therefore also uses component mode.
 
 The authority is ISO/IEC 15444-1:2024, Annex A, A.5.1, PDF pages 41–44, and
 Annex I, I.2.2, I.5.3–I.5.4, PDF pages 160–171 and 181. The reviewed retrieval
