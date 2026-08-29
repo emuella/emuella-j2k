@@ -218,6 +218,28 @@ are defined by Annex C, C.2.1 and Table C.1, PDF page 31. The reviewed
 transcription was retrieval revision
 `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
 
+### Direct high-precision greyscale
+
+The direct high-precision JP2 greyscale projection is qualified in Layer 1 by
+one project-authored in-memory 7 × 3 fixture parameterised over 9, 12 and 16
+bits. Its odd plane includes `0`, `1`, the values immediately below, at and
+above the unsigned midpoint, and the two greatest values at each precision.
+The test compares logical values and little-endian bytes between native
+component and rendered output, checks declared precision, unsigned storage,
+greyscale presentation, unused high bits and rendered component provenance,
+and exercises owned decode, shape discovery, planar and one-channel
+interleaved layouts, and caller-owned decode.
+
+The companion fail-closed matrix covers JP2/SIZ precision and sign mismatch,
+missing or contradictory varying-precision metadata, signed greyscale,
+precision above 16 bits, wrong or mixed component shapes, unequal sampling,
+CRG, MCT, non-zero origins, multiple tiles, decomposition, palette, component
+mapping, channel definition, ICC, unrecognised or additional colour
+specifications and multiple codestreams. Raw J2K and JPH rendered requests also
+remain rejected. Caller-owned sentinels prove that every negative case fails
+before mutation. No protected corpus or external codec participates in these
+tests.
+
 ### Rendered Annex G comparison
 
 The rendered-pixel Layer 2 journey consumes only the catalogue-owned
