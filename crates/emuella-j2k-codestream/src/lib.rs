@@ -6275,7 +6275,6 @@ fn decode_tier1_code_block_fast(
     coefficients: &mut [i32],
     scratch: &mut tier1::CodeBlockDecodeScratch,
 ) -> tier1::Result<tier1::CodeBlockDecodeOutcome> {
-    validate_default_mq_segment_stuffing(segment, decode_spec.style)?;
     let uses_segment_boundaries = decode_spec.style.bits()
         & (tier1::CodeBlockStyle::SELECTIVE_ARITHMETIC_BYPASS
             | tier1::CodeBlockStyle::TERMINATE_EACH_PASS)
@@ -6307,7 +6306,6 @@ fn decode_tier1_code_block_with_optional_profile(
     scratch: &mut tier1::CodeBlockDecodeScratch,
     timings: &mut Option<&mut DecodeStageTimings>,
 ) -> tier1::Result<tier1::CodeBlockDecodeOutcome> {
-    validate_default_mq_segment_stuffing(segment, decode_spec.style)?;
     let uses_segment_boundaries = decode_spec.style.bits()
         & (tier1::CodeBlockStyle::SELECTIVE_ARITHMETIC_BYPASS
             | tier1::CodeBlockStyle::TERMINATE_EACH_PASS)
@@ -6370,22 +6368,6 @@ fn decode_tier1_code_block_with_optional_profile(
     }?;
     stage_timings.add_tier1_code_block_timings(&code_block_timings);
     tier1::checked_decode_outcome(decoded, coding_segments, decode_spec)
-}
-
-fn validate_default_mq_segment_stuffing(
-    segment: &[u8],
-    style: tier1::CodeBlockStyle,
-) -> tier1::Result<()> {
-    if style.bits() == 0
-        && segment
-            .windows(2)
-            .any(|pair| pair[0] == 0xff && pair[1] > 0x8f)
-    {
-        return Err(tier1::Tier1Error::MalformedBitstream {
-            reason: "marker prefix found inside MQ-coded code-block segment",
-        });
-    }
-    Ok(())
 }
 
 #[cfg(feature = "std")]
@@ -9369,6 +9351,7 @@ fn encode_htj2k_grayscale_u8_decomp_test_fixture(
         decomposition_levels,
         &qcd_exponents,
         true,
+        0,
         1,
     )?;
     write_tile_part(&mut codestream, 0, &packet, true)?;
@@ -9647,6 +9630,7 @@ pub fn encode_grayscale_u8_two_decomp_quality_layer_test_fixture(
         2,
         &qcd_exponents,
         false,
+        tier1::CodeBlockStyle::TERMINATE_EACH_PASS,
         2,
     )?;
     let two_layer_payload_offset = two_layer_codestream
@@ -9668,6 +9652,7 @@ pub fn encode_grayscale_u8_two_decomp_quality_layer_test_fixture(
         2,
         &qcd_exponents,
         false,
+        tier1::CodeBlockStyle::TERMINATE_EACH_PASS,
         1,
     )?;
     write_tile_part(&mut one_layer_oracle, 0, &oracle_packet.bytes, true)?;
@@ -9730,6 +9715,10 @@ fn genuine_quality_layer_fixture_matches_its_independent_oracle() {
     .unwrap();
     let parsed = parse(&fixture.two_layer_codestream).unwrap();
     assert_eq!(parsed.coding_style.unwrap().layers, 2);
+    assert_eq!(
+        parsed.coding_style.unwrap().code_block_style,
+        tier1::CodeBlockStyle::TERMINATE_EACH_PASS
+    );
     assert_eq!(parsed.tiles.len(), 1);
     assert!(
         is_supported_part1_native_quality_layer_component_profile(&parsed),
@@ -12078,10 +12067,11 @@ fn encode_decomp_subband(
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct QualityLayerBlockSplit {
     first_coding_passes: u16,
     first_byte_len: usize,
+    segment_lengths: Vec<usize>,
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -12186,22 +12176,21 @@ fn encode_quality_layer_decomp_subband(
                 .ok_or(CodestreamError::SizeOverflow)?;
 
             let segment_offset = segments.len();
-            let mut pass_boundaries = Vec::new();
-            let encoded =
-                tier1::encode_baseline_code_block_with_strided_scratch_and_pass_boundaries(
-                    source,
-                    image_width_usize,
-                    tier1::CodeBlockEncodeSpec {
-                        dimensions,
-                        subband: spec.kind.tier1_subband(),
-                        available_bitplanes,
-                        code_block_style: 0,
-                    },
-                    segments,
-                    &mut pass_boundaries,
-                    tier1_encode_scratch,
-                )
-                .map_err(map_tier1_error)?;
+            let mut segment_lengths = Vec::new();
+            let encoded = tier1::encode_baseline_code_block_segments_with_strided_scratch(
+                source,
+                image_width_usize,
+                tier1::CodeBlockEncodeSpec {
+                    dimensions,
+                    subband: spec.kind.tier1_subband(),
+                    available_bitplanes,
+                    code_block_style: tier1::CodeBlockStyle::TERMINATE_EACH_PASS,
+                },
+                segments,
+                &mut segment_lengths,
+                tier1_encode_scratch,
+            )
+            .map_err(map_tier1_error)?;
             if !encoded.included {
                 return Err(invalid(
                     None,
@@ -12209,23 +12198,27 @@ fn encode_quality_layer_decomp_subband(
                     "quality-layer fixture requires a non-zero contribution in every code-block",
                 ));
             }
-            let desired_passes = encoded.pass_count.div_ceil(2);
-            let boundary = pass_boundaries
+            let first_coding_passes = encoded.pass_count.div_ceil(2);
+            if first_coding_passes >= encoded.pass_count
+                || segment_lengths.len() != usize::from(encoded.pass_count)
+            {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Sod),
+                    "quality-layer fixture requires at least two independently terminated Tier-1 passes",
+                ));
+            }
+            let first_byte_len = segment_lengths[..usize::from(first_coding_passes)]
                 .iter()
-                .filter(|boundary| {
-                    boundary.coding_passes < encoded.pass_count
-                        && boundary.stable_byte_len > 0
-                        && boundary.stable_byte_len < encoded.byte_len
-                })
-                .min_by_key(|boundary| boundary.coding_passes.abs_diff(desired_passes))
-                .copied()
-                .ok_or_else(|| {
-                    invalid(
-                        None,
-                        Some(Marker::Sod),
-                        "quality-layer fixture could not expose a stable non-empty Tier-1 pass prefix",
-                    )
-                })?;
+                .try_fold(0_usize, |total, length| total.checked_add(*length))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if first_byte_len == 0 || first_byte_len >= encoded.byte_len {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Sod),
+                    "quality-layer fixture TERMALL prefix must leave non-empty contributions in both layers",
+                ));
+            }
             code_blocks.push(EncodedCodeBlock {
                 x: block_x,
                 y: block_y,
@@ -12241,8 +12234,9 @@ fn encode_quality_layer_decomp_subband(
                 segment_len: encoded.byte_len,
             });
             splits.push(QualityLayerBlockSplit {
-                first_coding_passes: boundary.coding_passes,
-                first_byte_len: boundary.stable_byte_len,
+                first_coding_passes,
+                first_byte_len,
+                segment_lengths,
             });
         }
     }
@@ -13364,6 +13358,7 @@ fn write_native_part1_main_header(
         decomposition_levels,
         qcd_exponents,
         false,
+        0,
         1,
     )
 }
@@ -13387,6 +13382,7 @@ fn write_native_part1_main_header_with_siz(
         decomposition_levels,
         qcd_exponents,
         false,
+        0,
         1,
     )
 }
@@ -13411,6 +13407,7 @@ fn write_native_ht_main_header(
         0,
         &[bits_per_sample],
         true,
+        0,
         1,
     )
 }
@@ -13428,6 +13425,7 @@ fn write_native_main_header(
     decomposition_levels: u8,
     qcd_exponents: &[u8],
     ht_block_coding: bool,
+    code_block_style: u8,
     layers: u16,
 ) -> Result<()> {
     let siz = SizMarker {
@@ -13458,6 +13456,7 @@ fn write_native_main_header(
         decomposition_levels,
         qcd_exponents,
         ht_block_coding,
+        code_block_style,
         layers,
     )
 }
@@ -13472,6 +13471,7 @@ fn write_native_main_header_with_siz(
     decomposition_levels: u8,
     qcd_exponents: &[u8],
     ht_block_coding: bool,
+    code_block_style: u8,
     layers: u16,
 ) -> Result<()> {
     let expected_subbands = 1usize
@@ -13540,7 +13540,11 @@ fn write_native_main_header_with_siz(
         decomposition_levels,
         4,
         4,
-        if ht_block_coding { 0x40 } else { 0 },
+        if ht_block_coding {
+            0x40
+        } else {
+            code_block_style
+        },
         1,
     ]);
     output.extend_from_slice(&[0xff, 0x5c]);
@@ -13865,10 +13869,10 @@ fn write_quality_layer_packets(
                             state
                                 .missing
                                 .encode(&mut writer, block.x, block.y, u32::MAX)?;
-                            write_quality_layer_block_length(
+                            write_quality_layer_termall_lengths(
                                 &mut writer,
                                 split.first_coding_passes,
-                                split.first_byte_len,
+                                &split.segment_lengths[..usize::from(split.first_coding_passes)],
                                 state
                                     .l_block
                                     .get_mut(block_index)
@@ -13886,10 +13890,11 @@ fn write_quality_layer_packets(
                             let contributes = remaining_passes != 0 && remaining_len != 0;
                             writer.write_bit(u32::from(contributes))?;
                             if contributes {
-                                write_quality_layer_block_length(
+                                write_quality_layer_termall_lengths(
                                     &mut writer,
                                     remaining_passes,
-                                    remaining_len,
+                                    &split.segment_lengths
+                                        [usize::from(split.first_coding_passes)..],
                                     state
                                         .l_block
                                         .get_mut(block_index)
@@ -13946,20 +13951,26 @@ fn write_quality_layer_packets(
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-fn write_quality_layer_block_length(
+fn write_quality_layer_termall_lengths(
     writer: &mut PacketBitWriter,
     coding_passes: u16,
-    byte_len: usize,
+    segment_lengths: &[usize],
     l_block: &mut u8,
 ) -> Result<()> {
-    if coding_passes == 0 || byte_len == 0 {
+    if coding_passes == 0
+        || segment_lengths.len() != usize::from(coding_passes)
+        || segment_lengths.contains(&0)
+    {
         return Err(CodestreamError::SizeOverflow);
     }
     write_coding_pass_count(writer, coding_passes)?;
-    let pass_bits = u8::try_from(u32::from(coding_passes).ilog2())
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    while u128::try_from(byte_len).map_err(|_| CodestreamError::SizeOverflow)?
-        >= (1_u128 << u32::from(*l_block + pass_bits))
+    let max_len = segment_lengths
+        .iter()
+        .copied()
+        .max()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    while u128::try_from(max_len).map_err(|_| CodestreamError::SizeOverflow)?
+        >= (1_u128 << u32::from(*l_block))
     {
         writer.write_bit(1)?;
         *l_block = l_block
@@ -13967,12 +13978,13 @@ fn write_quality_layer_block_length(
             .ok_or(CodestreamError::SizeOverflow)?;
     }
     writer.write_bit(0)?;
-    writer.write_bits(
-        u32::try_from(byte_len).map_err(|_| CodestreamError::SizeOverflow)?,
-        l_block
-            .checked_add(pass_bits)
-            .ok_or(CodestreamError::SizeOverflow)?,
-    )
+    for byte_len in segment_lengths {
+        writer.write_bits(
+            u32::try_from(*byte_len).map_err(|_| CodestreamError::SizeOverflow)?,
+            *l_block,
+        )?;
+    }
+    Ok(())
 }
 
 fn write_component_packet_header(
@@ -15711,7 +15723,7 @@ pub fn is_supported_part1_native_quality_layer_component_profile(codestream: &Co
         && style.decomposition_levels == 2
         && style.code_block_width_exponent == 6
         && style.code_block_height_exponent == 6
-        && style.code_block_style == 0
+        && style.code_block_style == tier1::CodeBlockStyle::TERMINATE_EACH_PASS
         && style.transform == WaveletTransform::Reversible53
         && !style.sop_markers
         && !style.eph_markers

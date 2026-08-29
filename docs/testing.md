@@ -439,11 +439,13 @@ project-authored multi-tile encoder fixture.
 The public component APIs admit leading-quality-layer selection for one narrow
 raw Part 1 profile: an origin-aligned single tile with one unsigned 8-bit,
 unit-sampled grayscale component, reversible 5/3 coding with exactly two
-decompositions, default precinct and code-block style, LRCP progression,
-exactly two declared layers and one complete tile part. Output is the complete
-image in one planar component. `None`, `Some(2)` and limits above two produce
-the complete decode; `Some(1)` reconstructs only the first contribution and
-`Some(0)` is invalid.
+decompositions, default precincts, coding-pass termination, LRCP progression,
+exactly two declared layers and one complete tile part. Coding-pass termination
+provides a standards-valid independently decodable boundary for the layer-one
+pass prefix; an unterminated style-zero MQ prefix is not treated as a byte
+boundary. Output is the complete image in one planar component. `None`,
+`Some(2)` and limits above two produce the complete decode; `Some(1)`
+reconstructs only the first contribution and `Some(0)` is invalid.
 
 This two-layer gate is additive to the existing one-layer component profiles.
 Their previously admitted spatial, reduced, subsampled, caller-owned and
@@ -451,13 +453,16 @@ positioned-source routes continue to treat every positive layer limit as the
 complete one-layer output.
 
 The feature-gated project-authored fixture retains the production Tier-1
-coding-pass boundaries. It places a non-empty stable pass prefix in layer one
-and the remaining passes in layer two, while carrying inclusion, missing-MSB
-tag-tree and Lblock state through genuine layer-major packet headers. A
-separate one-layer codestream is written from exactly the prefix pass set and
-serves as an independently parsed pixel oracle. Tests require the limited
-two-layer decode to equal that oracle exactly and to differ deliberately from
-the complete two-layer image.
+terminated-segment boundaries. It places a non-empty set of complete pass
+segments in layer one and the remaining segments in layer two, while carrying
+inclusion, missing-MSB tag-tree and Lblock state through genuine layer-major
+packet headers. A separate one-layer codestream is written from exactly the
+prefix pass set and serves as an independently parsed pixel oracle. A Tier-1
+property matrix separately re-encodes each proposed pass prefix and requires
+its bytes and decoded coefficients to match the same leading segments of the
+complete emitted codeword. Tests require the limited two-layer decode to equal
+that oracle exactly and to differ deliberately from the complete two-layer
+image.
 
 Prepared slice and positioned-source tests visit the same packet-header count
 for limited and complete requests, while proving non-zero excluded layer-two
