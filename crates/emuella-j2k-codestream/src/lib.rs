@@ -8624,6 +8624,209 @@ pub fn encode_planar_u8_subsampled_no_decomp_test_fixture(
     Ok(codestream)
 }
 
+/// Build a deterministic raw Part 1 fixture with one reversible 5/3
+/// decomposition whose component planes use their declared native sampling
+/// grids.
+///
+/// This is test support rather than a general encoder surface.
+#[doc(hidden)]
+pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
+    reference_width: u32,
+    reference_height: u32,
+    component_planes: &[SubsampledU8TestComponent<'_>],
+) -> Result<Vec<u8>> {
+    if component_planes.is_empty() || component_planes.len() > usize::from(u8::MAX) {
+        return Err(invalid(
+            None,
+            Some(Marker::Siz),
+            "subsampled planar test fixture requires one to 255 components",
+        ));
+    }
+
+    let mut components = Vec::with_capacity(component_planes.len());
+    for component in component_planes {
+        if component.horizontal_separation == 0 || component.vertical_separation == 0 {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let width = reference_width.div_ceil(u32::from(component.horizontal_separation));
+        let height = reference_height.div_ceil(u32::from(component.vertical_separation));
+        let sample_count = checked_component_sample_count(width, height)?;
+        if component.samples.len() != sample_count {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let mut coefficients = component
+            .samples
+            .iter()
+            .map(|sample| i32::from(*sample) - 128)
+            .collect::<Vec<_>>();
+        forward_reversible_5_3_levels(
+            width,
+            height,
+            &mut coefficients,
+            1,
+            "subsampled test fixture forward transform failed",
+        )?;
+        components.push((width, height, coefficients));
+    }
+
+    let mut qcd_exponents = alloc::vec![1_u8; 4];
+    for (width, height, coefficients) in &components {
+        for spec in decomp_subband_specs(*width, *height, 1)? {
+            let exponent = subband_available_bitplanes(
+                *width,
+                coefficients,
+                spec.x,
+                spec.y,
+                spec.width,
+                spec.height,
+            )?;
+            let output = qcd_exponents
+                .get_mut(usize::from(spec.index))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            *output = (*output).max(exponent);
+        }
+    }
+
+    let mut segments = Vec::new();
+    let mut component_subbands = Vec::with_capacity(components.len());
+    let mut tier1_encode_scratch = tier1::CodeBlockEncodeScratch::new();
+    for (width, height, coefficients) in &components {
+        let mut subbands = Vec::with_capacity(4);
+        for spec in decomp_subband_specs(*width, *height, 1)? {
+            let available_bitplanes = *qcd_exponents
+                .get(usize::from(spec.index))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            subbands.push(encode_decomp_subband(
+                *width,
+                coefficients,
+                spec,
+                available_bitplanes,
+                &mut segments,
+                &mut tier1_encode_scratch,
+            )?);
+        }
+        component_subbands.push(subbands);
+    }
+
+    let mut packet = Vec::with_capacity(native_decomp_packet_capacity_hint(
+        &component_subbands,
+        &segments,
+    )?);
+    write_native_decomp_packets(&mut packet, 1, &component_subbands, &segments)?;
+
+    let mut codestream = Vec::with_capacity(native_single_tile_codestream_capacity_hint(
+        packet.len(),
+        component_planes.len(),
+        qcd_exponents.len(),
+    )?);
+    write_native_part1_main_header(
+        &mut codestream,
+        reference_width,
+        reference_height,
+        reference_width,
+        reference_height,
+        8,
+        u16::try_from(component_planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        false,
+        1,
+        &qcd_exponents,
+    )?;
+    let siz = find_marker(&codestream, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    for (index, component) in component_planes.iter().enumerate() {
+        let entry = siz
+            .checked_add(40)
+            .and_then(|offset| offset.checked_add(index.checked_mul(3)?))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        *codestream
+            .get_mut(entry + 1)
+            .ok_or(CodestreamError::SizeOverflow)? = component.horizontal_separation;
+        *codestream
+            .get_mut(entry + 2)
+            .ok_or(CodestreamError::SizeOverflow)? = component.vertical_separation;
+    }
+    write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
+}
+
+#[cfg(test)]
+#[test]
+fn subsampled_reduced_window_matches_forced_full_synthesis_oracle() {
+    let sampling = [(1_u8, 1_u8), (2, 1), (2, 2)];
+    let planes = sampling
+        .iter()
+        .enumerate()
+        .map(|(component, (horizontal, vertical))| {
+            let width = 257_u32.div_ceil(u32::from(*horizontal));
+            let height = 131_u32.div_ceil(u32::from(*vertical));
+            (0..width * height)
+                .map(|sample| ((sample * (17 + component as u32 * 8) + 31) % 251) as u8)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let components = planes
+        .iter()
+        .zip(sampling)
+        .map(
+            |(samples, (horizontal_separation, vertical_separation))| SubsampledU8TestComponent {
+                horizontal_separation,
+                vertical_separation,
+                samples,
+            },
+        )
+        .collect::<Vec<_>>();
+    let fixture =
+        encode_planar_u8_subsampled_one_decomp_test_fixture(257, 131, &components).unwrap();
+    let component_indices = [0_u16, 1, 2];
+    let request = Part1ComponentDecodeRequest {
+        component_indices: &component_indices,
+        region: TileRegionRequest {
+            x: 64,
+            y: 32,
+            width: 128,
+            height: 64,
+        },
+        discard_levels: 1,
+        max_layers: Some(1),
+    };
+
+    let execute = |prepared: &PreparedPart1ComponentDecode<'_>| {
+        let mut buffers = prepared
+            .component_outputs()
+            .iter()
+            .map(|output| vec![0_u8; usize::try_from(output.width * output.height).unwrap()])
+            .collect::<Vec<_>>();
+        let mut output_planes = buffers
+            .iter_mut()
+            .zip(prepared.component_outputs())
+            .map(|(samples, output)| ComponentPlaneMut {
+                samples,
+                stride_bytes: usize::try_from(output.width).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let timings = execute_prepared_part1_component_decode_into_with_workspace_and_options(
+            prepared,
+            &mut output_planes,
+            &mut Part1ComponentDecodeWorkspace::new(),
+            PreparedPart1ExecutionOptions {
+                instrumentation: DecodeInstrumentation::WorkCounters,
+                parallelism: DecodeExecutionParallelism::Serial,
+                ..PreparedPart1ExecutionOptions::default()
+            },
+        )
+        .unwrap();
+        (buffers, timings)
+    };
+
+    let bounded = prepare_part1_component_decode(&fixture, request).unwrap();
+    let (bounded_buffers, bounded_work) = execute(&bounded);
+    let mut oracle = prepare_part1_component_decode(&fixture, request).unwrap();
+    oracle.force_full_synthesis_oracle();
+    let (oracle_buffers, oracle_work) = execute(&oracle);
+    assert_eq!(bounded_buffers, oracle_buffers);
+    assert!(bounded_work.executed_code_blocks < oracle_work.executed_code_blocks);
+    assert_eq!(bounded_work.full_output_allocation_bytes, 0);
+}
+
 #[cfg(test)]
 #[test]
 fn reserved_parameterless_markers_are_skipped_in_main_and_tile_headers() {
