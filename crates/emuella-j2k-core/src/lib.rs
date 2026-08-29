@@ -4602,9 +4602,15 @@ fn support_from_codestream(
 ) -> SupportStatus {
     #[cfg(feature = "std")]
     if codestream.kind == codestream::CodestreamKind::Htj2k
-        && bytes.is_some_and(|bytes| codestream::is_htj2k_lossless_profile(bytes, codestream))
+        && let Some(bytes) = bytes
     {
-        return SupportStatus::Supported;
+        return match codestream::htj2k_lossless_profile_unsupported_construct(bytes, codestream) {
+            None => SupportStatus::Supported,
+            Some((construct, detail)) => SupportStatus::Unsupported {
+                feature: unsupported_feature_from_construct(construct),
+                detail,
+            },
+        };
     }
 
     if codestream.kind == codestream::CodestreamKind::J2k
@@ -6171,6 +6177,62 @@ mod effective_coding_style_tests {
                 feature: UnsupportedFeature::MarkerSegment,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn inspect_reports_the_complete_htj2k_lossless_admission_diagnostic() {
+        let samples = (0..64)
+            .map(|sample| u8::try_from((sample * 19 + 5) % 251).unwrap())
+            .collect::<Vec<_>>();
+        let fixture = || {
+            codestream::encode_htj2k_grayscale_u8_no_decomp(codestream::GrayscaleU8Encode {
+                width: 8,
+                height: 8,
+                samples: &samples,
+                stride_bytes: 8,
+            })
+            .unwrap()
+        };
+
+        assert_eq!(
+            inspect(&fixture(), &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Supported
+        );
+
+        let mut invalid_qcd = fixture();
+        let qcd = invalid_qcd
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x5c])
+            .unwrap();
+        invalid_qcd[qcd + 4] = 0xe0;
+        invalid_qcd[qcd + 5] = 0xf8;
+        assert!(matches!(
+            inspect(&invalid_qcd, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::MarkerSegment,
+                ref detail,
+            } if detail.contains("reversible scalar QCD")
+        ));
+
+        let mut unsupported_final_set = fixture();
+        let cod = unsupported_final_set
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x52])
+            .unwrap();
+        unsupported_final_set[cod + 12] = 0;
+        assert!(matches!(
+            inspect(&unsupported_final_set, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::EntropyCoder,
+                ref detail,
+            } if detail.contains("HT final coding set")
         ));
     }
 

@@ -42639,13 +42639,340 @@ fn map_ht_cleanup_encode_error(_error: ht::HtCleanupEncodeError) -> CodestreamEr
     )
 }
 
-fn ht_unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedConstruct, String)> {
-    let reason = match ht_decode_candidate(codestream)? {
-        Ok(_candidate) => ht::HtUnsupportedReason::BlockDecodeNotImplemented,
-        Err(classification) => classification.reason,
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Htj2kLosslessProfileDiagnostic {
+    construct: UnsupportedConstruct,
+    detail: &'static str,
+}
 
-    Some((ht_construct_from_reason(reason), reason.message().into()))
+impl Htj2kLosslessProfileDiagnostic {
+    const fn new(construct: UnsupportedConstruct, detail: &'static str) -> Self {
+        Self { construct, detail }
+    }
+
+    fn from_marker_reason(reason: ht::HtUnsupportedReason) -> Self {
+        Self::new(ht_construct_from_reason(reason), reason.message())
+    }
+}
+
+fn classify_htj2k_lossless_profile_markers(
+    codestream: &Codestream,
+) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
+    if codestream.kind != CodestreamKind::Htj2k {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::EntropyCoder,
+            "the native HTJ2K lossless profile requires an HTJ2K codestream",
+        ));
+    }
+
+    match ht_decode_candidate(codestream) {
+        Some(Ok(_candidate)) => {}
+        Some(Err(classification)) => {
+            return Err(Htj2kLosslessProfileDiagnostic::from_marker_reason(
+                classification.reason,
+            ));
+        }
+        None => {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MarkerSegment,
+                "HTJ2K decode requires complete marker and tile-part state",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "std")]
+fn classify_htj2k_lossless_profile(
+    input: &[u8],
+    codestream: &Codestream,
+) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
+    classify_htj2k_lossless_profile_markers(codestream)?;
+    let coding_style = uniform_effective_coding_style(codestream).map_err(|_| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "HTJ2K lossless profile classification requires one effective coding style",
+        )
+    })?;
+
+    if coding_style.decomposition_levels > 1 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::WaveletTransform,
+            "native HTJ2K lossless decode accepts at most one reversible 5/3 decomposition level",
+        ));
+    }
+    if coding_style.decomposition_levels == 1
+        && (codestream.siz.image_origin_x != 0
+            || codestream.siz.image_origin_y != 0
+            || codestream.siz.tile_origin_x != 0
+            || codestream.siz.tile_origin_y != 0)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::WaveletTransform,
+            "native HTJ2K DWT1 decode requires zero image and tile origins",
+        ));
+    }
+    if coding_style.multiple_component_transform
+        && ht_reversible_mct_component_format(codestream).is_none()
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::Transform,
+            "native HTJ2K reversible MCT requires three matching, non-subsampled signed or unsigned 8- to 16-bit components",
+        ));
+    }
+    if coding_style.code_block_style & !0x40 != 0 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K lossless decode accepts the HT code-block style without additional style flags",
+        ));
+    }
+
+    match ht_reversible_code_block_transfer(input, codestream) {
+        Ok(Some(_transfer)) => {}
+        Ok(None) | Err(_) => {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MarkerSegment,
+                "native HTJ2K lossless decode requires one valid reversible scalar QCD declaration",
+            ));
+        }
+    }
+
+    let tile_rects = tile_rects(codestream).map_err(|_| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MultipleTiles,
+            "native HTJ2K lossless decode requires a valid, non-empty tile topology",
+        )
+    })?;
+    if tile_rects.is_empty() {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MultipleTiles,
+            "native HTJ2K lossless decode requires a valid, non-empty tile topology",
+        ));
+    }
+    if tile_rects.len() > 1 {
+        if coding_style.decomposition_levels != 0 {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MultipleTiles,
+                "native multi-tile HTJ2K lossless decode requires zero decomposition levels",
+            ));
+        }
+        if validate_one_tile_part_per_tile(codestream).is_err() {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MultipleTiles,
+                "native multi-tile HTJ2K lossless decode requires exactly one tile-part for every tile",
+            ));
+        }
+    }
+
+    for tile_rect in tile_rects {
+        let Some(tile_part) = codestream
+            .tiles
+            .iter()
+            .find(|tile| tile.tile_index == tile_rect.tile_index)
+        else {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MultipleTiles,
+                "native HTJ2K lossless decode requires retained payload state for every tile",
+            ));
+        };
+        let payload = tile_payload(input, tile_part).map_err(|_| {
+            Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MultipleTiles,
+                "native HTJ2K lossless decode requires retained payload state for every tile",
+            )
+        })?;
+        let contributions = parse_default_precinct_lrcp_packets(
+            input, codestream, tile_rect, payload,
+        )
+        .map_err(|_| {
+            Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::PacketDecode,
+                "native HTJ2K lossless packet parsing failed for the admitted marker profile",
+            )
+        })?;
+        if !ht_contributions_have_supported_final_sets(&contributions) {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::HtBlockDecode,
+                "native HTJ2K lossless decode requires an HT final coding set of one through three passes for every contribution",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(test, feature = "std"))]
+mod htj2k_lossless_profile_classifier_tests {
+    use super::*;
+
+    fn fixture() -> Vec<u8> {
+        let samples = (0..64)
+            .map(|sample| u8::try_from((sample * 17 + 3) % 251).unwrap())
+            .collect::<Vec<_>>();
+        encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+            width: 8,
+            height: 8,
+            samples: &samples,
+            stride_bytes: 8,
+        })
+        .unwrap()
+    }
+
+    fn set_decomposition_levels(codestream: &mut Vec<u8>, levels: u8) {
+        let cod = find_marker(codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 9] = levels;
+
+        let qcd = find_marker(codestream, 0, Marker::Qcd).unwrap();
+        let old_length = usize::from(read_u16(codestream, qcd + 2).unwrap());
+        let exponent = codestream[qcd + 5];
+        let added = usize::from(levels) * 3;
+        codestream.splice(
+            qcd + 2 + old_length..qcd + 2 + old_length,
+            vec![exponent; added],
+        );
+        codestream[qcd + 2..qcd + 4]
+            .copy_from_slice(&u16::try_from(old_length + added).unwrap().to_be_bytes());
+    }
+
+    fn diagnostic(codestream: &[u8]) -> Option<(UnsupportedConstruct, String)> {
+        let parsed = parse(codestream).unwrap();
+        htj2k_lossless_profile_unsupported_construct(codestream, &parsed)
+    }
+
+    fn diagnostic_for(
+        codestream: &[u8],
+        parsed: &Codestream,
+    ) -> Option<(UnsupportedConstruct, String)> {
+        htj2k_lossless_profile_unsupported_construct(codestream, parsed)
+    }
+
+    #[test]
+    fn complete_classifier_preserves_positive_and_negative_admission_parity() {
+        let admitted = fixture();
+        let parsed = parse(&admitted).unwrap();
+        assert!(is_htj2k_lossless_profile(&admitted, &parsed));
+        assert_eq!(diagnostic(&admitted), None);
+
+        let mut too_many_decompositions = fixture();
+        set_decomposition_levels(&mut too_many_decompositions, 2);
+
+        let mut invalid_mct_format = fixture();
+        let cod = find_marker(&invalid_mct_format, 0, Marker::Cod).unwrap();
+        invalid_mct_format[cod + 8] = 1;
+
+        let mut extra_ht_style = fixture();
+        let cod = find_marker(&extra_ht_style, 0, Marker::Cod).unwrap();
+        extra_ht_style[cod + 12] |= 0x08;
+
+        let mut invalid_qcd = fixture();
+        let qcd = find_marker(&invalid_qcd, 0, Marker::Qcd).unwrap();
+        invalid_qcd[qcd + 4] = 0xe0;
+        invalid_qcd[qcd + 5] = 0xf8;
+
+        let mut invalid_packet = fixture();
+        let sod = find_marker(&invalid_packet, 0, Marker::Sod).unwrap();
+        invalid_packet[sod + 2] = 0xff;
+
+        let mut classic_final_set = fixture();
+        let cod = find_marker(&classic_final_set, 0, Marker::Cod).unwrap();
+        classic_final_set[cod + 12] = 0;
+
+        for rejected in [
+            too_many_decompositions,
+            invalid_mct_format,
+            extra_ht_style,
+            invalid_qcd,
+            invalid_packet,
+            classic_final_set,
+        ] {
+            let parsed = parse(&rejected).unwrap();
+            assert!(!is_htj2k_lossless_profile(&rejected, &parsed));
+            assert!(diagnostic(&rejected).is_some());
+        }
+
+        let incomplete_tile_topology = fixture();
+        let mut parsed = parse(&incomplete_tile_topology).unwrap();
+        parsed.siz.tile_width = 4;
+        assert!(!is_htj2k_lossless_profile(
+            &incomplete_tile_topology,
+            &parsed
+        ));
+        assert!(matches!(
+            diagnostic_for(&incomplete_tile_topology, &parsed),
+            Some((UnsupportedConstruct::MultipleTiles, detail))
+                if detail.contains("tile-part for every tile")
+        ));
+    }
+
+    #[test]
+    fn later_gate_diagnostics_are_distinct_and_preserve_precedence() {
+        let mut dwt1_origin_and_later_failures = fixture();
+        set_decomposition_levels(&mut dwt1_origin_and_later_failures, 1);
+        let siz = find_marker(&dwt1_origin_and_later_failures, 0, Marker::Siz).unwrap();
+        dwt1_origin_and_later_failures[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
+        let cod = find_marker(&dwt1_origin_and_later_failures, 0, Marker::Cod).unwrap();
+        dwt1_origin_and_later_failures[cod + 12] |= 0x08;
+        let qcd = find_marker(&dwt1_origin_and_later_failures, 0, Marker::Qcd).unwrap();
+        dwt1_origin_and_later_failures[qcd + 4] = 0xe0;
+        assert!(matches!(
+            diagnostic(&dwt1_origin_and_later_failures),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail == "native HTJ2K DWT1 decode requires zero image and tile origins"
+        ));
+
+        let mut style_before_qcd = fixture();
+        let cod = find_marker(&style_before_qcd, 0, Marker::Cod).unwrap();
+        style_before_qcd[cod + 12] |= 0x08;
+        let qcd = find_marker(&style_before_qcd, 0, Marker::Qcd).unwrap();
+        style_before_qcd[qcd + 4] = 0xe0;
+        assert!(matches!(
+            diagnostic(&style_before_qcd),
+            Some((UnsupportedConstruct::HtBlockDecode, detail))
+                if detail.contains("without additional style flags")
+        ));
+
+        let mut qcd_before_topology = fixture();
+        let qcd = find_marker(&qcd_before_topology, 0, Marker::Qcd).unwrap();
+        qcd_before_topology[qcd + 4] = 0xe0;
+        qcd_before_topology[qcd + 5] = 0xf8;
+        let mut parsed = parse(&qcd_before_topology).unwrap();
+        parsed.siz.tile_width = 4;
+        assert!(matches!(
+            diagnostic_for(&qcd_before_topology, &parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("reversible scalar QCD")
+        ));
+
+        let mut packet_failure = fixture();
+        let sod = find_marker(&packet_failure, 0, Marker::Sod).unwrap();
+        packet_failure[sod + 2] = 0xff;
+        assert!(matches!(
+            diagnostic(&packet_failure),
+            Some((UnsupportedConstruct::PacketDecode, detail))
+                if detail.contains("packet parsing failed")
+        ));
+
+        let mut unsupported_final_set = fixture();
+        let cod = find_marker(&unsupported_final_set, 0, Marker::Cod).unwrap();
+        unsupported_final_set[cod + 12] = 0;
+        assert!(matches!(
+            diagnostic(&unsupported_final_set),
+            Some((UnsupportedConstruct::HtBlockDecode, detail))
+                if detail.contains("HT final coding set")
+        ));
+    }
+}
+
+fn ht_unsupported_construct(codestream: &Codestream) -> Option<(UnsupportedConstruct, String)> {
+    let diagnostic = classify_htj2k_lossless_profile_markers(codestream)
+        .err()
+        .unwrap_or_else(|| {
+            Htj2kLosslessProfileDiagnostic::from_marker_reason(
+                ht::HtUnsupportedReason::BlockDecodeNotImplemented,
+            )
+        });
+    Some((diagnostic.construct, diagnostic.detail.into()))
 }
 
 fn ht_decode_candidate(
@@ -44758,57 +45085,22 @@ pub fn decode_htj2k_lossless_owned(input: &[u8]) -> Result<Option<DecodedImage>>
 /// profile accepted by [`decode_htj2k_lossless_owned`].
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_profile(input: &[u8], codestream: &Codestream) -> bool {
-    if codestream.kind != CodestreamKind::Htj2k {
-        return false;
-    }
-    let Some(Ok(_candidate)) = ht_decode_candidate(codestream) else {
-        return false;
-    };
-    let Ok(coding_style) = uniform_effective_coding_style(codestream) else {
-        return false;
-    };
-    if coding_style.decomposition_levels > 1
-        || (coding_style.decomposition_levels == 1
-            && (codestream.siz.image_origin_x != 0
-                || codestream.siz.image_origin_y != 0
-                || codestream.siz.tile_origin_x != 0
-                || codestream.siz.tile_origin_y != 0))
-        || (coding_style.multiple_component_transform
-            && ht_reversible_mct_component_format(codestream).is_none())
-        || coding_style.code_block_style & !0x40 != 0
-    {
-        return false;
-    }
-    let Ok(Some(_transfer)) = ht_reversible_code_block_transfer(input, codestream) else {
-        return false;
-    };
-    let Ok(tile_rects) = tile_rects(codestream) else {
-        return false;
-    };
-    if tile_rects.is_empty() || (tile_rects.len() > 1 && coding_style.decomposition_levels != 0) {
-        return false;
-    }
-    if tile_rects.len() > 1 && validate_one_tile_part_per_tile(codestream).is_err() {
-        return false;
-    }
-    tile_rects.into_iter().all(|tile_rect| {
-        let Some(tile_part) = codestream
-            .tiles
-            .iter()
-            .find(|tile| tile.tile_index == tile_rect.tile_index)
-        else {
-            return false;
-        };
-        let Ok(payload) = tile_payload(input, tile_part) else {
-            return false;
-        };
-        let Ok(contributions) =
-            parse_default_precinct_lrcp_packets(input, codestream, tile_rect, payload)
-        else {
-            return false;
-        };
-        ht_contributions_have_supported_final_sets(&contributions)
-    })
+    classify_htj2k_lossless_profile(input, codestream).is_ok()
+}
+
+/// Return the first native lossless-profile gate that rejects an HTJ2K
+/// codestream, or `None` when the complete current admission predicate passes.
+///
+/// Diagnostics follow decoder gate order and are derived from parsed structure
+/// and packet grammar rather than fixture identity or exact payload matching.
+#[cfg(feature = "std")]
+pub fn htj2k_lossless_profile_unsupported_construct(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Option<(UnsupportedConstruct, String)> {
+    classify_htj2k_lossless_profile(input, codestream)
+        .err()
+        .map(|diagnostic| (diagnostic.construct, diagnostic.detail.into()))
 }
 
 #[cfg(feature = "std")]
