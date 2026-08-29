@@ -25,6 +25,14 @@ ALLOWED_FORMATS = set(FORMAT_ORDER)
 ALLOWED_EXPECTATIONS = {"accept", "reject"}
 
 
+def canonical_codec_path(checkout: Path = ROOT) -> Path:
+    target = os.environ.get("CARGO_TARGET_DIR")
+    target_root = Path(target) if target else checkout / "target"
+    if not target_root.is_absolute():
+        target_root = checkout / target_root
+    return (target_root / "debug/emuella-j2k").resolve()
+
+
 class RunnerError(Exception):
     """A preflight, integrity, contract, or invocation failure."""
 
@@ -114,7 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codec",
         type=Path,
-        default=ROOT / "target/debug/emuella-j2k",
+        default=canonical_codec_path(),
         help="emuella-j2k executable built from this checkout",
     )
     parser.add_argument(
@@ -459,13 +467,7 @@ def inspect_codec_identity(codec: Path, unbound: bool) -> CodecIdentity:
         raise RunnerError(
             f"runner checkout mismatch: expected {checkout}, found {top_level}"
         )
-    canonical_codec = (checkout / "target/debug/emuella-j2k").resolve()
-    try:
-        canonical_codec.relative_to(checkout)
-    except ValueError as error:
-        raise RunnerError(
-            "canonical codec executable resolves outside this checkout"
-        ) from error
+    canonical_codec = canonical_codec_path(checkout)
     if codec != canonical_codec:
         raise RunnerError(
             f"bound codec must use this checkout's canonical executable: {canonical_codec}; "

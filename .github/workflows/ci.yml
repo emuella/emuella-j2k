@@ -24,6 +24,7 @@ jobs:
       - run: python3 scripts/test-package-legal-policy.py
       - run: python3 scripts/test-layer2-conformance-inspection.py
       - run: python3 scripts/test-layer2-decoded-pixel-canary.py
+      - run: python3 scripts/test-layer2-derived-set.py
       - run: python3 scripts/audit-public-tree.py
       - run: python3 scripts/generate-binary-dependency-notices.py --check
       - name: Check dependency policy and licences

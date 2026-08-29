@@ -318,6 +318,8 @@ def main() -> int:
         errors.append("hosted CI does not test canonical package legal files")
     if "python3 scripts/test-layer2-decoded-pixel-canary.py" not in ci_workflow:
         errors.append("hosted CI does not test the decoded-pixel Layer 2 runner")
+    if "python3 scripts/test-layer2-derived-set.py" not in ci_workflow:
+        errors.append("hosted CI does not test the derived-set Layer 2 runner")
     if "uses: EmbarkStudios/cargo-deny-action@v2" not in ci_workflow:
         errors.append("hosted CI does not enforce cargo-deny policy")
     if "python3 scripts/generate-binary-dependency-notices.py --check" not in (
@@ -379,6 +381,8 @@ def main() -> int:
         errors.append("local checks do not test canonical package legal files")
     if "python3 scripts/test-layer2-decoded-pixel-canary.py" not in local_check:
         errors.append("local checks do not test the decoded-pixel Layer 2 runner")
+    if "python3 scripts/test-layer2-derived-set.py" not in local_check:
+        errors.append("local checks do not test the derived-set Layer 2 runner")
     if (
         "--manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml"
         not in local_check
