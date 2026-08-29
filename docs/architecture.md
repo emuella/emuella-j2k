@@ -47,7 +47,8 @@ semantics. JPH and HTJ2K admission are unchanged.
 
 Public native component output remains unchanged. Unequal-grid rendered decode
 continues to fail closed except for the bounded full-frame sYCC projection
-below. Existing resolution reductions continue to describe native component
+below. Direct high-precision greyscale rendering has a separate unit-grid
+boundary. Existing resolution reductions continue to describe native component
 reconstruction; no rendered-reduction interpretation is selected by
 common-grid or JP2 default-image planning.
 
@@ -58,6 +59,39 @@ I.5.3.1.1. The reviewed retrieval revision was
 `34e5d1639b9f121807e620c001893ca9d2c8f977`. The description and deterministic
 tests are project-authored and do not reproduce standards prose, equations or
 tables.
+
+## Direct high-precision JP2 greyscale projection
+
+The core admits one direct unsigned 9–16-bit JP2 greyscale rendered profile.
+The first and only contiguous codestream has one unit-sampled component, zero
+image and tile origins, one tile, reversible 5/3 coding, no decomposition and
+no multiple-component transform or CRG. The JP2 header has exactly one colour
+specification, whose first method is enumerated greyscale; image-header and SIZ
+precision and signedness agree. Palette, component mapping, channel definition,
+ICC interpretation and additional colour specifications are absent.
+
+Rendered output reuses the native reconstructed plane unchanged. Each code
+value occupies one little-endian `u16` word; `SampleFormat.bits_per_sample`
+retains the declared precision, `signed` is false, the colour model is
+greyscale, and rendered component descriptors do not claim a source component.
+There is no second level shift, scaling, clipping, rounding or narrowing at the
+container boundary. Shape discovery, owned planar and interleaved decode, and
+caller-owned decode all select the same contract before output mutation.
+
+Signed greyscale, precision above 16 bits, RGB, sYCC or mixed-precision
+high-depth images, unequal or registered grids, multiple tiles, non-zero
+origins, decomposition, indirect mapping, alpha and ICC remain unsupported.
+Raw J2K does not acquire JP2 colour semantics, and JPH remains outside this
+Part 1 profile. Native component decode is unchanged.
+
+The precision, component and container boundary follows ISO/IEC 15444-1:2024,
+Annex A, A.5.1 and Tables A.9 and A.11, Annex B, B.1–B.2, Annex G,
+G.1–G.1.2, and Annex I, I.3.5 and I.5.3.1–I.5.3.3, I.5.3.5–I.5.3.6. The
+reviewed retrieval revision was
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`, source SHA-256
+`3b15e13add906b67e6528f13dc69dde999abc9c0d089afa7eccea7075806f5a1`). The
+description and synthetic fixtures are project-authored.
 
 ## Bounded full-frame sYCC projection
 
@@ -121,10 +155,11 @@ decode may still expose admitted raw codestream planes and applies no
 presentation transform. Component output metadata is inferred from the raw
 selection: all one- and three-component outputs are labelled grayscale and RGB
 respectively, while other counts and explicit subsets remain unknown. JP2
-colour metadata does not alter that inference. Except for the bounded sYCC
-profile above, rendered requests fail closed before output allocation or
-mutation for palette, component mapping, channel definition, sYCC, ICC,
-vendor, reserved or unrecognised colour metadata.
+colour metadata does not alter that inference. Except for the bounded direct
+greyscale and sYCC profiles above, rendered requests fail closed before output
+allocation or mutation for high-depth or signed samples, palette, component
+mapping, channel definition, sYCC, ICC, vendor, reserved or unrecognised colour
+metadata.
 Partial decode requests are native component selections; their Part 1
 full-decode compatibility fallback therefore also uses component mode.
 
