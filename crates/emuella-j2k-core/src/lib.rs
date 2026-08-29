@@ -1564,6 +1564,11 @@ fn reject_unsupported_part1_rendered_sampling(
     }
     if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, metadata)? {
         let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+        // Establish the full-resolution default-canvas geometry at
+        // the rendered boundary. Pixel projection remains deliberately held.
+        let _canvas_plan = parsed
+            .rendered_canvas_plan()
+            .map_err(map_codestream_error)?;
         if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {
             return Err(unsupported(
                 UnsupportedFeature::ComponentLayout,
@@ -8790,6 +8795,51 @@ mod effective_coding_style_tests {
             assert!(decode_into(&fixture, &mut target, &options).is_err());
         }
         assert!(samples.iter().all(|sample| *sample == 0x6d));
+    }
+
+    #[test]
+    fn rendered_canvas_planning_preserves_native_output_and_rejects_projection_atomically() {
+        let (fixture, expected) = subsampled_fixture(9, 5);
+        let native = decode_partial(&fixture, &PartialDecodeOptions::default()).unwrap();
+        assert_eq!(planar_bytes(&native), expected.as_slice());
+
+        let rendered = DecodeOptions::default();
+        assert!(matches!(
+            decode(&fixture, &rendered),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ComponentLayout,
+                ..
+            })
+        ));
+
+        let info = ImageInfo::new(
+            9,
+            5,
+            3,
+            SampleFormat::U8,
+            ColorModel::Rgb,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut buffers = [vec![0x6d; 45], vec![0x6d; 45], vec![0x6d; 45]];
+        {
+            let mut planes = buffers
+                .iter_mut()
+                .map(|samples| PlaneMut::new(samples, 9, 5, 9, SampleFormat::U8).unwrap())
+                .collect::<Vec<_>>();
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&fixture, &mut target, &rendered),
+                Err(J2kError::Unsupported {
+                    feature: UnsupportedFeature::ComponentLayout,
+                    ..
+                })
+            ));
+        }
+        assert!(buffers.iter().flatten().all(|sample| *sample == 0x6d));
     }
 
     #[test]

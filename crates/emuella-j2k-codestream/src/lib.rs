@@ -29,7 +29,7 @@ pub mod geometry;
 mod openjph_transfer;
 pub mod source;
 
-use geometry::{ReferenceGridRect, TileReferenceRect};
+use geometry::{ReferenceGridRect, RenderedCanvasPlan, TileReferenceRect};
 
 #[cfg(feature = "std")]
 use openjph_transfer::{
@@ -282,6 +282,14 @@ impl Codestream {
         self.siz.reference_grid_height - self.siz.image_origin_y
     }
 
+    /// Build the checked full-resolution default rendered-canvas geometry.
+    ///
+    /// This selects canvas bounds and component-grid mappings only. It does
+    /// not select CRG handling, interpolation, sample conversion, or storage.
+    pub fn rendered_canvas_plan(&self) -> Result<RenderedCanvasPlan> {
+        self.siz.rendered_canvas_plan()
+    }
+
     /// Return the effective main-header coding style for one component.
     ///
     /// ISO/IEC 15444-1:2024, Annex A, A.6.1 and A.6.2, PDF pages 46–51,
@@ -352,6 +360,11 @@ impl SizMarker {
             region.width,
             region.height,
         )
+    }
+
+    /// Build the checked default rendered canvas from SIZ geometry.
+    pub fn rendered_canvas_plan(&self) -> Result<RenderedCanvasPlan> {
+        RenderedCanvasPlan::new(self.image_reference_rect()?, &self.components)
     }
 
     pub fn component_count(&self) -> u16 {

@@ -1,10 +1,14 @@
-//! Checked JPEG 2000 Part 1 native geometry.
+//! Checked JPEG 2000 Part 1 native and rendered-canvas geometry.
 //!
 //! The public decode API keeps image-relative requests for compatibility. This
 //! module gives the codestream implementation distinct absolute domains before
-//! those requests reach component or reduced-resolution arithmetic.
+//! those requests reach component or reduced-resolution arithmetic. Rendered
+//! canvas planning selects geometry only; it does not select registration,
+//! interpolation, sample conversion, or storage policy.
 
-use crate::{CodestreamError, Result};
+use alloc::vec::Vec;
+
+use crate::{CodestreamError, ComponentParameters, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HalfOpenRect {
@@ -134,6 +138,16 @@ impl ReferenceGridRect {
             .map(ComponentGridRect)
     }
 
+    fn to_rendered_grid(
+        self,
+        horizontal_spacing: u8,
+        vertical_spacing: u8,
+    ) -> Result<RenderedRect> {
+        self.0
+            .ceil_div(u32::from(horizontal_spacing), u32::from(vertical_spacing))
+            .map(RenderedRect)
+    }
+
     pub fn x0(self) -> u32 {
         self.0.x0
     }
@@ -157,6 +171,132 @@ impl ReferenceGridRect {
     pub fn height(self) -> u32 {
         self.0.height()
     }
+}
+
+/// Non-empty absolute half-open rectangle on the selected rendered canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderedRect(HalfOpenRect);
+
+impl RenderedRect {
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        self.0.intersection(other.0).map(Self)
+    }
+
+    pub fn x0(self) -> u32 {
+        self.0.x0
+    }
+
+    pub fn y0(self) -> u32 {
+        self.0.y0
+    }
+
+    pub fn x1(self) -> u32 {
+        self.0.x1
+    }
+
+    pub fn y1(self) -> u32 {
+        self.0.y1
+    }
+
+    pub fn width(self) -> u32 {
+        self.0.width()
+    }
+
+    pub fn height(self) -> u32 {
+        self.0.height()
+    }
+}
+
+/// Checked full-resolution default rendered-canvas geometry.
+///
+/// The axis spacing is the greatest common divisor of the corresponding SIZ
+/// component separations. Component mappings retain their absolute native
+/// bounds for a later, separately selected projection policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedCanvasPlan {
+    reference_bounds: ReferenceGridRect,
+    bounds: RenderedRect,
+    horizontal_spacing: u8,
+    vertical_spacing: u8,
+    component_bounds: Vec<ComponentGridRect>,
+}
+
+impl RenderedCanvasPlan {
+    pub fn new(
+        reference_bounds: ReferenceGridRect,
+        components: &[ComponentParameters],
+    ) -> Result<Self> {
+        if components.is_empty() {
+            return Err(CodestreamError::SizeOverflow);
+        }
+
+        let mut horizontal_spacing = 0;
+        let mut vertical_spacing = 0;
+        let mut component_bounds = Vec::with_capacity(components.len());
+        for component in components {
+            if component.horizontal_separation == 0 || component.vertical_separation == 0 {
+                return Err(CodestreamError::SizeOverflow);
+            }
+            horizontal_spacing =
+                greatest_common_divisor(horizontal_spacing, component.horizontal_separation);
+            vertical_spacing =
+                greatest_common_divisor(vertical_spacing, component.vertical_separation);
+            component_bounds.push(reference_bounds.to_component_grid(
+                component.horizontal_separation,
+                component.vertical_separation,
+            )?);
+        }
+
+        let bounds = reference_bounds.to_rendered_grid(horizontal_spacing, vertical_spacing)?;
+        Ok(Self {
+            reference_bounds,
+            bounds,
+            horizontal_spacing,
+            vertical_spacing,
+            component_bounds,
+        })
+    }
+
+    pub fn bounds(&self) -> RenderedRect {
+        self.bounds
+    }
+
+    pub fn horizontal_spacing(&self) -> u8 {
+        self.horizontal_spacing
+    }
+
+    pub fn vertical_spacing(&self) -> u8 {
+        self.vertical_spacing
+    }
+
+    pub fn width(&self) -> u32 {
+        self.bounds.width()
+    }
+
+    pub fn height(&self) -> u32 {
+        self.bounds.height()
+    }
+
+    pub fn component_bounds(&self, component_index: u16) -> Option<ComponentGridRect> {
+        self.component_bounds
+            .get(usize::from(component_index))
+            .copied()
+    }
+
+    /// Map one non-empty absolute reference-grid partition to this canvas.
+    pub fn map_reference_rect(&self, reference: ReferenceGridRect) -> Result<RenderedRect> {
+        if self.reference_bounds.intersection(reference) != Some(reference) {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        reference.to_rendered_grid(self.horizontal_spacing, self.vertical_spacing)
+    }
+}
+
+fn greatest_common_divisor(mut left: u8, mut right: u8) -> u8 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
 }
 
 /// A clipped nominal tile in absolute reference-grid coordinates.
@@ -300,6 +440,15 @@ impl ReducedComponentRect {
 mod tests {
     use super::*;
 
+    fn component(horizontal_separation: u8, vertical_separation: u8) -> ComponentParameters {
+        ComponentParameters {
+            bits_per_sample: 8,
+            signed: false,
+            horizontal_separation,
+            vertical_separation,
+        }
+    }
+
     #[test]
     fn maps_non_zero_origins_unequal_sampling_odd_edges_and_reduction() {
         let image = ReferenceGridRect::new(3, 5, 20, 18).unwrap();
@@ -374,5 +523,139 @@ mod tests {
         assert_eq!((left.y0(), left.y1()), (full.y0(), full.y1()));
         assert_eq!((right.y0(), right.y1()), (full.y0(), full.y1()));
         assert_eq!(left.x1(), right.x0());
+    }
+
+    #[test]
+    fn rendered_canvas_uses_axis_specific_gcd_and_absolute_odd_bounds() {
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        let plan = RenderedCanvasPlan::new(
+            image,
+            &[component(4, 6), component(6, 9), component(10, 12)],
+        )
+        .unwrap();
+        assert_eq!((plan.horizontal_spacing(), plan.vertical_spacing()), (2, 3));
+        assert_eq!(
+            (
+                plan.bounds().x0(),
+                plan.bounds().y0(),
+                plan.bounds().x1(),
+                plan.bounds().y1(),
+                plan.width(),
+                plan.height(),
+            ),
+            (2, 2, 14, 9, 12, 7)
+        );
+
+        let unit_horizontal =
+            RenderedCanvasPlan::new(image, &[component(2, 4), component(3, 6), component(5, 8)])
+                .unwrap();
+        assert_eq!(
+            (
+                unit_horizontal.horizontal_spacing(),
+                unit_horizontal.vertical_spacing()
+            ),
+            (1, 2)
+        );
+        assert_eq!(
+            (unit_horizontal.bounds().x0(), unit_horizontal.bounds().x1()),
+            (3, 28)
+        );
+
+        let unit_vertical =
+            RenderedCanvasPlan::new(image, &[component(4, 2), component(6, 3), component(10, 5)])
+                .unwrap();
+        assert_eq!(
+            (
+                unit_vertical.horizontal_spacing(),
+                unit_vertical.vertical_spacing()
+            ),
+            (2, 1)
+        );
+        assert_eq!(
+            (unit_vertical.bounds().y0(), unit_vertical.bounds().y1()),
+            (5, 26)
+        );
+    }
+
+    #[test]
+    fn rendered_canvas_retains_each_unequal_native_component_mapping() {
+        let plan = RenderedCanvasPlan::new(
+            ReferenceGridRect::new(3, 5, 28, 26).unwrap(),
+            &[component(4, 6), component(6, 9), component(10, 12)],
+        )
+        .unwrap();
+        let mappings = (0..3)
+            .map(|index| {
+                let bounds = plan.component_bounds(index).unwrap();
+                (
+                    bounds.x0(),
+                    bounds.y0(),
+                    bounds.x1(),
+                    bounds.y1(),
+                    bounds.width(),
+                    bounds.height(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            mappings,
+            [(1, 1, 7, 5, 6, 4), (1, 1, 5, 3, 4, 2), (1, 1, 3, 3, 2, 2)]
+        );
+        assert_eq!(plan.component_bounds(3), None);
+    }
+
+    #[test]
+    fn rendered_clipped_partitions_map_to_exact_stitch_geometry() {
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        let plan = RenderedCanvasPlan::new(
+            image,
+            &[component(4, 6), component(6, 9), component(10, 12)],
+        )
+        .unwrap();
+        let left = plan
+            .map_reference_rect(ReferenceGridRect::new(3, 5, 15, 26).unwrap())
+            .unwrap();
+        let right = plan
+            .map_reference_rect(ReferenceGridRect::new(15, 5, 28, 26).unwrap())
+            .unwrap();
+        assert_eq!(left.x1(), right.x0());
+        assert_eq!(left.width() + right.width(), plan.width());
+        assert_eq!((left.y0(), left.y1()), (right.y0(), right.y1()));
+
+        let clipped = TileReferenceRect::clipped_to_image(image, 1, 2, 10, 9, 0, 0, 0)
+            .unwrap()
+            .unwrap();
+        let rendered_tile = plan.map_reference_rect(clipped.bounds()).unwrap();
+        assert_eq!(
+            (
+                rendered_tile.x0(),
+                rendered_tile.y0(),
+                rendered_tile.x1(),
+                rendered_tile.y1(),
+            ),
+            (2, 2, 6, 4)
+        );
+        assert_eq!(
+            plan.bounds().intersection(rendered_tile),
+            Some(rendered_tile)
+        );
+    }
+
+    #[test]
+    fn rendered_canvas_rejects_malformed_empty_and_overflowing_geometry() {
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        assert!(RenderedCanvasPlan::new(image, &[]).is_err());
+        assert!(RenderedCanvasPlan::new(image, &[component(0, 1)]).is_err());
+        assert!(RenderedCanvasPlan::new(image, &[component(1, 0)]).is_err());
+
+        let collapsed = ReferenceGridRect::new(1, 1, 2, 2).unwrap();
+        assert!(RenderedCanvasPlan::new(collapsed, &[component(2, 2)]).is_err());
+
+        let plan = RenderedCanvasPlan::new(image, &[component(2, 3)]).unwrap();
+        assert!(
+            plan.map_reference_rect(ReferenceGridRect::new(2, 5, 4, 8).unwrap())
+                .is_err()
+        );
+        assert!(ReferenceGridRect::from_origin_and_size(u32::MAX, 0, 2, 1).is_err());
     }
 }
