@@ -436,7 +436,10 @@ precinct profile. Marker admission does not widen its reversible-transform,
 tile, component, decomposition, progression or precinct-topology boundaries.
 Project-authored HT fixtures cover zero and three decompositions, malformed and
 unsignalled markers, sequence and duplication errors, and PLT packet-boundary
-crossings.
+crossings. The bounded profile requires coding style to come from the main
+header: any tile-header COD is rejected before packed-header or SOP/EPH
+validation, including an otherwise identical override with unchanged marker
+flags.
 
 ## Bounded tile-header Maxshift
 

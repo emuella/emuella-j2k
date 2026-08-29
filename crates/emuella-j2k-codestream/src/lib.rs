@@ -42818,6 +42818,18 @@ fn htj2k_multilevel_quantization_override(codestream: &Codestream) -> Option<Mar
     })
 }
 
+fn htj2k_tile_header_cod(codestream: &Codestream) -> Option<&MarkerSegment> {
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)?
+        .offset;
+    codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Cod && segment.offset > first_tile_offset)
+}
+
 fn classify_htj2k_lossless_profile_markers(
     codestream: &Codestream,
 ) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
@@ -42825,6 +42837,12 @@ fn classify_htj2k_lossless_profile_markers(
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::EntropyCoder,
             "the native HTJ2K lossless profile requires an HTJ2K codestream",
+        ));
+    }
+    if htj2k_tile_header_cod(codestream).is_some() {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K lossless decode does not accept tile-header COD overrides",
         ));
     }
 
@@ -43269,6 +43287,101 @@ mod htj2k_lossless_profile_classifier_tests {
         codestream
     }
 
+    fn with_tile_cod_scod(codestream: Vec<u8>, scod: u8) -> Vec<u8> {
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&codestream, cod + 2).unwrap());
+        let mut segment = codestream[cod..cod + 2 + lcod].to_vec();
+        segment[4] = scod;
+        insert_tile_header_segment(codestream, &segment)
+    }
+
+    fn relocate_single_packet_header(
+        mut codestream: Vec<u8>,
+        kind: PacketHeaderSourceKind,
+    ) -> Vec<u8> {
+        let parsed = parse(&codestream).unwrap();
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let tile_part = parsed.tiles[0];
+        let payload_offset = tile_part.payload_offset.unwrap();
+        let payload_len = tile_part.payload_len.unwrap();
+        let payload = &codestream[payload_offset..payload_offset + payload_len];
+        let contributions =
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile, payload).unwrap();
+        let body_start = contributions
+            .iter()
+            .map(|contribution| contribution.payload_offset)
+            .min()
+            .unwrap();
+        let header_start = usize::from(payload.starts_with(&Marker::Sop.code().to_be_bytes())) * 6;
+        assert!(header_start < body_start);
+        let headers = payload[header_start..body_start].to_vec();
+        let mut bodies = payload[..header_start].to_vec();
+        bodies.extend_from_slice(&payload[body_start..]);
+
+        let mut data = vec![0];
+        if kind == PacketHeaderSourceKind::Ppm {
+            data.extend_from_slice(&u32::try_from(headers.len()).unwrap().to_be_bytes());
+        }
+        data.extend_from_slice(&headers);
+        let marker = match kind {
+            PacketHeaderSourceKind::Ppm => Marker::Ppm,
+            PacketHeaderSourceKind::Ppt => Marker::Ppt,
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        };
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&data);
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        let tile_header_delta = if kind == PacketHeaderSourceKind::Ppt {
+            segment.len()
+        } else {
+            0
+        };
+        let new_psot = usize::try_from(psot)
+            .unwrap()
+            .checked_sub(headers.len())
+            .and_then(|length| length.checked_add(tile_header_delta))
+            .and_then(|length| u32::try_from(length).ok())
+            .unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(&new_psot.to_be_bytes());
+        codestream.splice(payload_offset..payload_offset + payload_len, bodies);
+        let insertion = if kind == PacketHeaderSourceKind::Ppm {
+            sot
+        } else {
+            find_marker(&codestream, sot, Marker::Sod).unwrap()
+        };
+        codestream.splice(insertion..insertion, segment);
+        parse(&codestream).unwrap();
+        codestream
+    }
+
+    fn assert_tile_cod_rejected(codestream: &[u8]) {
+        let parsed = parse(codestream).unwrap();
+        assert_eq!(
+            diagnostic_for(codestream, &parsed),
+            Some((
+                UnsupportedConstruct::MarkerSegment,
+                "native HTJ2K lossless decode does not accept tile-header COD overrides".into(),
+            ))
+        );
+        assert!(!is_htj2k_lossless_profile(codestream, &parsed));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(codestream),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::MarkerSegment,
+                message: "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
+                ..
+            })
+        ));
+        assert_eq!(
+            htj2k_lossless_no_decomp_workload_profile(codestream).unwrap(),
+            None
+        );
+    }
+
     fn ht_marker_fixture(levels: u8, sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
         let (codestream, samples) = if levels == 0 {
             let codestream = fixture();
@@ -43382,6 +43495,45 @@ mod htj2k_lossless_profile_classifier_tests {
                 assert_eq!(decoded.components[0].samples, samples);
             }
         }
+    }
+
+    #[test]
+    fn ht_rejects_tile_cod_before_main_sop_true_tile_false_packet_validation() {
+        let (inline, _) = ht_marker_fixture(0, true, false);
+        let cod = find_marker(&inline, 0, Marker::Cod).unwrap();
+        let tile_scod = inline[cod + 4] & !0x02;
+        for codestream in [
+            inline.clone(),
+            relocate_single_packet_header(inline.clone(), PacketHeaderSourceKind::Ppm),
+            relocate_single_packet_header(inline, PacketHeaderSourceKind::Ppt),
+        ] {
+            let codestream = with_tile_cod_scod(codestream, tile_scod);
+            assert_tile_cod_rejected(&codestream);
+        }
+    }
+
+    #[test]
+    fn ht_rejects_tile_cod_before_main_eph_false_tile_true_packet_validation() {
+        let inline = fixture();
+        let cod = find_marker(&inline, 0, Marker::Cod).unwrap();
+        let tile_scod = inline[cod + 4] | 0x04;
+        for codestream in [
+            inline.clone(),
+            relocate_single_packet_header(inline.clone(), PacketHeaderSourceKind::Ppm),
+            relocate_single_packet_header(inline, PacketHeaderSourceKind::Ppt),
+        ] {
+            let codestream = with_tile_cod_scod(codestream, tile_scod);
+            assert_tile_cod_rejected(&codestream);
+        }
+    }
+
+    #[test]
+    fn ht_rejects_tile_cod_even_when_marker_flags_are_unchanged() {
+        let codestream = fixture();
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        let scod = codestream[cod + 4];
+        let codestream = with_tile_cod_scod(codestream, scod);
+        assert_tile_cod_rejected(&codestream);
     }
 
     #[test]
@@ -44072,6 +44224,9 @@ pub fn htj2k_lossless_no_decomp_workload_profile(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    if htj2k_tile_header_cod(&codestream).is_some() {
+        return Ok(None);
+    }
     let Ok(coding_style) = uniform_effective_coding_style(&codestream) else {
         return Ok(None);
     };
@@ -44286,6 +44441,8 @@ fn byte_stuffing_profile(bytes: &[u8]) -> (usize, usize) {
 /// one tile-part per tile. Inline SOP and EPH are admitted only through the
 /// shared strict packet walker; they do not widen the tile, precinct,
 /// progression or transform profile.
+/// Tile-header COD overrides remain outside this bounded profile and are
+/// rejected before packet-header location or SOP/EPH validation.
 #[cfg(feature = "std")]
 pub fn decode_htj2k_lossless_owned_with_workspace(
     input: &[u8],
@@ -44294,6 +44451,14 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     let codestream = parse(input)?;
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
+    }
+    if let Some(segment) = htj2k_tile_header_cod(&codestream) {
+        return Err(unsupported(
+            Some(segment.offset),
+            Some(Marker::Cod),
+            UnsupportedConstruct::MarkerSegment,
+            "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
+        ));
     }
 
     let candidate = match ht_decode_candidate(&codestream) {
