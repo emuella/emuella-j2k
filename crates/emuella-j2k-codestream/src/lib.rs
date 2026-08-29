@@ -42753,13 +42753,13 @@ fn classify_htj2k_lossless_profile(
     if tile_rects.len() > 1 {
         if coding_style.decomposition_levels != 0 {
             return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::MultipleTiles,
+                UnsupportedConstruct::WaveletTransform,
                 "native multi-tile HTJ2K lossless decode requires zero decomposition levels",
             ));
         }
         if validate_one_tile_part_per_tile(codestream).is_err() {
             return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::MultipleTiles,
+                UnsupportedConstruct::MarkerSegment,
                 "native multi-tile HTJ2K lossless decode requires exactly one tile-part for every tile",
             ));
         }
@@ -42772,13 +42772,13 @@ fn classify_htj2k_lossless_profile(
             .find(|tile| tile.tile_index == tile_rect.tile_index)
         else {
             return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::MultipleTiles,
+                UnsupportedConstruct::MarkerSegment,
                 "native HTJ2K lossless decode requires retained payload state for every tile",
             ));
         };
         let payload = tile_payload(input, tile_part).map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::MultipleTiles,
+                UnsupportedConstruct::MarkerSegment,
                 "native HTJ2K lossless decode requires retained payload state for every tile",
             )
         })?;
@@ -42835,6 +42835,25 @@ mod htj2k_lossless_profile_classifier_tests {
             .copy_from_slice(&u16::try_from(old_length + added).unwrap().to_be_bytes());
     }
 
+    fn multitile_fixture(levels: u8, declared_tile_parts: u8) -> Vec<u8> {
+        let mut codestream = fixture();
+        if levels != 0 {
+            set_decomposition_levels(&mut codestream, levels);
+        }
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 22..siz + 26].copy_from_slice(&4_u32.to_be_bytes());
+
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        codestream[sot + 11] = declared_tile_parts;
+        let tile_part_length = usize::try_from(read_u32(&codestream, sot + 6).unwrap()).unwrap();
+        let tile_part_end = sot + tile_part_length;
+        let mut second_tile = codestream[sot..tile_part_end].to_vec();
+        second_tile[4..6].copy_from_slice(&1_u16.to_be_bytes());
+        second_tile[11] = declared_tile_parts;
+        codestream.splice(tile_part_end..tile_part_end, second_tile);
+        codestream
+    }
+
     fn diagnostic(codestream: &[u8]) -> Option<(UnsupportedConstruct, String)> {
         let parsed = parse(codestream).unwrap();
         htj2k_lossless_profile_unsupported_construct(codestream, &parsed)
@@ -42878,6 +42897,9 @@ mod htj2k_lossless_profile_classifier_tests {
         let cod = find_marker(&classic_final_set, 0, Marker::Cod).unwrap();
         classic_final_set[cod + 12] = 0;
 
+        let multitile_decomposition = multitile_fixture(1, 1);
+        let unspecified_tile_part_count = multitile_fixture(0, 0);
+
         for rejected in [
             too_many_decompositions,
             invalid_mct_format,
@@ -42885,6 +42907,8 @@ mod htj2k_lossless_profile_classifier_tests {
             invalid_qcd,
             invalid_packet,
             classic_final_set,
+            multitile_decomposition,
+            unspecified_tile_part_count,
         ] {
             let parsed = parse(&rejected).unwrap();
             assert!(!is_htj2k_lossless_profile(&rejected, &parsed));
@@ -42900,7 +42924,7 @@ mod htj2k_lossless_profile_classifier_tests {
         ));
         assert!(matches!(
             diagnostic_for(&incomplete_tile_topology, &parsed),
-            Some((UnsupportedConstruct::MultipleTiles, detail))
+            Some((UnsupportedConstruct::MarkerSegment, detail))
                 if detail.contains("tile-part for every tile")
         ));
     }
@@ -42942,6 +42966,29 @@ mod htj2k_lossless_profile_classifier_tests {
             diagnostic_for(&qcd_before_topology, &parsed),
             Some((UnsupportedConstruct::MarkerSegment, detail))
                 if detail.contains("reversible scalar QCD")
+        ));
+
+        let multitile_decomposition = multitile_fixture(1, 1);
+        assert!(matches!(
+            diagnostic(&multitile_decomposition),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail.contains("multi-tile HTJ2K lossless decode requires zero decomposition")
+        ));
+
+        let unspecified_tile_part_count = multitile_fixture(0, 0);
+        assert!(matches!(
+            diagnostic(&unspecified_tile_part_count),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("exactly one tile-part for every tile")
+        ));
+
+        let retained_payload_failure = multitile_fixture(0, 1);
+        let mut parsed = parse(&retained_payload_failure).unwrap();
+        parsed.tiles[0].payload_offset = Some(usize::MAX);
+        assert!(matches!(
+            diagnostic_for(&retained_payload_failure, &parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("retained payload state")
         ));
 
         let mut packet_failure = fixture();
