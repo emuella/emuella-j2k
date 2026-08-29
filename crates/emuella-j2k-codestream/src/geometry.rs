@@ -1,10 +1,14 @@
-//! Checked JPEG 2000 Part 1 native geometry.
+//! Checked JPEG 2000 Part 1 native and common-grid geometry.
 //!
 //! The public decode API keeps image-relative requests for compatibility. This
 //! module gives the codestream implementation distinct absolute domains before
-//! those requests reach component or reduced-resolution arithmetic.
+//! those requests reach component or reduced-resolution arithmetic. Common-grid
+//! planning is neutral SIZ arithmetic; container presentation policy remains
+//! outside this crate.
 
-use crate::{CodestreamError, Result};
+use alloc::vec::Vec;
+
+use crate::{CodestreamError, ComponentParameters, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HalfOpenRect {
@@ -134,6 +138,12 @@ impl ReferenceGridRect {
             .map(ComponentGridRect)
     }
 
+    fn to_common_grid(self, spacing: u8) -> Result<CommonGridRect> {
+        self.0
+            .ceil_div(u32::from(spacing), u32::from(spacing))
+            .map(CommonGridRect)
+    }
+
     pub fn x0(self) -> u32 {
         self.0.x0
     }
@@ -157,6 +167,124 @@ impl ReferenceGridRect {
     pub fn height(self) -> u32 {
         self.0.height()
     }
+}
+
+/// Non-empty absolute half-open rectangle on a checked common SIZ grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommonGridRect(HalfOpenRect);
+
+impl CommonGridRect {
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        self.0.intersection(other.0).map(Self)
+    }
+
+    pub fn x0(self) -> u32 {
+        self.0.x0
+    }
+
+    pub fn y0(self) -> u32 {
+        self.0.y0
+    }
+
+    pub fn x1(self) -> u32 {
+        self.0.x1
+    }
+
+    pub fn y1(self) -> u32 {
+        self.0.y1
+    }
+
+    pub fn width(self) -> u32 {
+        self.0.width()
+    }
+
+    pub fn height(self) -> u32 {
+        self.0.height()
+    }
+}
+
+/// Checked full-resolution common-grid geometry derived from SIZ.
+///
+/// One scalar spacing is the greatest common divisor of the combined set of
+/// horizontal and vertical component separations. The plan is semantically
+/// neutral: a container or presentation layer decides whether and how to use
+/// this geometry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommonGridPlan {
+    reference_bounds: ReferenceGridRect,
+    bounds: CommonGridRect,
+    spacing: u8,
+    component_bounds: Vec<ComponentGridRect>,
+}
+
+impl CommonGridPlan {
+    pub fn new(
+        reference_bounds: ReferenceGridRect,
+        components: &[ComponentParameters],
+    ) -> Result<Self> {
+        if components.is_empty() {
+            return Err(CodestreamError::SizeOverflow);
+        }
+
+        let mut spacing = 0;
+        let mut component_bounds = Vec::with_capacity(components.len());
+        for component in components {
+            if component.horizontal_separation == 0 || component.vertical_separation == 0 {
+                return Err(CodestreamError::SizeOverflow);
+            }
+            spacing = greatest_common_divisor(spacing, component.horizontal_separation);
+            spacing = greatest_common_divisor(spacing, component.vertical_separation);
+            component_bounds.push(reference_bounds.to_component_grid(
+                component.horizontal_separation,
+                component.vertical_separation,
+            )?);
+        }
+
+        let bounds = reference_bounds.to_common_grid(spacing)?;
+        Ok(Self {
+            reference_bounds,
+            bounds,
+            spacing,
+            component_bounds,
+        })
+    }
+
+    pub fn bounds(&self) -> CommonGridRect {
+        self.bounds
+    }
+
+    pub fn spacing(&self) -> u8 {
+        self.spacing
+    }
+
+    pub fn width(&self) -> u32 {
+        self.bounds.width()
+    }
+
+    pub fn height(&self) -> u32 {
+        self.bounds.height()
+    }
+
+    pub fn component_bounds(&self, component_index: u16) -> Option<ComponentGridRect> {
+        self.component_bounds
+            .get(usize::from(component_index))
+            .copied()
+    }
+
+    /// Map one non-empty absolute reference-grid partition to this common grid.
+    pub fn map_reference_rect(&self, reference: ReferenceGridRect) -> Result<CommonGridRect> {
+        if self.reference_bounds.intersection(reference) != Some(reference) {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        reference.to_common_grid(self.spacing)
+    }
+}
+
+fn greatest_common_divisor(mut left: u8, mut right: u8) -> u8 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
 }
 
 /// A clipped nominal tile in absolute reference-grid coordinates.
@@ -300,6 +428,15 @@ impl ReducedComponentRect {
 mod tests {
     use super::*;
 
+    fn component(horizontal_separation: u8, vertical_separation: u8) -> ComponentParameters {
+        ComponentParameters {
+            bits_per_sample: 8,
+            signed: false,
+            horizontal_separation,
+            vertical_separation,
+        }
+    }
+
     #[test]
     fn maps_non_zero_origins_unequal_sampling_odd_edges_and_reduction() {
         let image = ReferenceGridRect::new(3, 5, 20, 18).unwrap();
@@ -374,5 +511,178 @@ mod tests {
         assert_eq!((left.y0(), left.y1()), (full.y0(), full.y1()));
         assert_eq!((right.y0(), right.y1()), (full.y0(), full.y1()));
         assert_eq!(left.x1(), right.x0());
+    }
+
+    #[test]
+    fn common_grid_uses_one_combined_gcd_and_absolute_odd_bounds() {
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        let plan = CommonGridPlan::new(
+            image,
+            &[component(4, 6), component(6, 9), component(10, 12)],
+        )
+        .unwrap();
+        assert_eq!(plan.spacing(), 1);
+        assert_eq!(
+            (
+                plan.bounds().x0(),
+                plan.bounds().y0(),
+                plan.bounds().x1(),
+                plan.bounds().y1(),
+                plan.width(),
+                plan.height(),
+            ),
+            (3, 5, 28, 26, 25, 21)
+        );
+
+        let even = CommonGridPlan::new(
+            image,
+            &[component(4, 6), component(8, 10), component(12, 14)],
+        )
+        .unwrap();
+        assert_eq!(even.spacing(), 2);
+        assert_eq!(
+            (
+                even.bounds().x0(),
+                even.bounds().y0(),
+                even.bounds().x1(),
+                even.bounds().y1(),
+                even.width(),
+                even.height(),
+            ),
+            (2, 3, 14, 13, 12, 10)
+        );
+    }
+
+    #[test]
+    fn common_grid_retains_each_unequal_native_component_mapping() {
+        let plan = CommonGridPlan::new(
+            ReferenceGridRect::new(3, 5, 28, 26).unwrap(),
+            &[component(4, 6), component(6, 9), component(10, 12)],
+        )
+        .unwrap();
+        let mappings = (0..3)
+            .map(|index| {
+                let bounds = plan.component_bounds(index).unwrap();
+                (
+                    bounds.x0(),
+                    bounds.y0(),
+                    bounds.x1(),
+                    bounds.y1(),
+                    bounds.width(),
+                    bounds.height(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            mappings,
+            [(1, 1, 7, 5, 6, 4), (1, 1, 5, 3, 4, 2), (1, 1, 3, 3, 2, 2)]
+        );
+        assert_eq!(plan.component_bounds(3), None);
+    }
+
+    #[test]
+    fn common_grid_clipped_partitions_map_to_exact_stitch_geometry() {
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        let plan = CommonGridPlan::new(
+            image,
+            &[component(4, 6), component(8, 10), component(12, 14)],
+        )
+        .unwrap();
+        let left = plan
+            .map_reference_rect(ReferenceGridRect::new(3, 5, 15, 26).unwrap())
+            .unwrap();
+        let right = plan
+            .map_reference_rect(ReferenceGridRect::new(15, 5, 28, 26).unwrap())
+            .unwrap();
+        assert_eq!(left.x1(), right.x0());
+        assert_eq!(left.width() + right.width(), plan.width());
+        assert_eq!((left.y0(), left.y1()), (right.y0(), right.y1()));
+
+        let clipped = TileReferenceRect::clipped_to_image(image, 1, 2, 10, 9, 0, 0, 0)
+            .unwrap()
+            .unwrap();
+        let common_tile = plan.map_reference_rect(clipped.bounds()).unwrap();
+        assert_eq!(
+            (
+                common_tile.x0(),
+                common_tile.y0(),
+                common_tile.x1(),
+                common_tile.y1(),
+            ),
+            (2, 3, 6, 6)
+        );
+        assert_eq!(plan.bounds().intersection(common_tile), Some(common_tile));
+    }
+
+    #[test]
+    fn common_grid_rejects_malformed_empty_and_overflowing_geometry() {
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        assert!(CommonGridPlan::new(image, &[]).is_err());
+        assert!(CommonGridPlan::new(image, &[component(0, 1)]).is_err());
+        assert!(CommonGridPlan::new(image, &[component(1, 0)]).is_err());
+
+        let collapsed = ReferenceGridRect::new(1, 1, 2, 2).unwrap();
+        assert!(CommonGridPlan::new(collapsed, &[component(2, 2)]).is_err());
+
+        let plan = CommonGridPlan::new(image, &[component(2, 4)]).unwrap();
+        assert!(
+            plan.map_reference_rect(ReferenceGridRect::new(2, 5, 4, 8).unwrap())
+                .is_err()
+        );
+        assert!(ReferenceGridRect::from_origin_and_size(u32::MAX, 0, 2, 1).is_err());
+    }
+
+    #[test]
+    fn bounded_sampling_matrix_matches_an_independent_combined_set_oracle() {
+        fn oracle(values: &[u8]) -> u8 {
+            (1..=*values.iter().min().unwrap())
+                .rev()
+                .find(|candidate| values.iter().all(|value| value % candidate == 0))
+                .unwrap()
+        }
+
+        let image = ReferenceGridRect::new(3, 5, 28, 26).unwrap();
+        let mut asymmetric_axis_cases = 0_u32;
+        for first_horizontal in 1..=12 {
+            for first_vertical in 1..=12 {
+                for second_horizontal in 1..=12 {
+                    for second_vertical in 1..=12 {
+                        let components = [
+                            component(first_horizontal, first_vertical),
+                            component(second_horizontal, second_vertical),
+                        ];
+                        let plan = CommonGridPlan::new(image, &components).unwrap();
+                        let expected = oracle(&[
+                            first_horizontal,
+                            first_vertical,
+                            second_horizontal,
+                            second_vertical,
+                        ]);
+                        assert_eq!(plan.spacing(), expected);
+                        assert_eq!(
+                            (
+                                plan.bounds().x0(),
+                                plan.bounds().y0(),
+                                plan.bounds().x1(),
+                                plan.bounds().y1(),
+                            ),
+                            (
+                                3_u32.div_ceil(u32::from(expected)),
+                                5_u32.div_ceil(u32::from(expected)),
+                                28_u32.div_ceil(u32::from(expected)),
+                                26_u32.div_ceil(u32::from(expected)),
+                            )
+                        );
+
+                        let horizontal_gcd = oracle(&[first_horizontal, second_horizontal]);
+                        let vertical_gcd = oracle(&[first_vertical, second_vertical]);
+                        if horizontal_gcd != vertical_gcd {
+                            asymmetric_axis_cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(asymmetric_axis_cases > 2_104);
     }
 }
