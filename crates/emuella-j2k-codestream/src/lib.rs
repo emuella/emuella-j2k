@@ -23,9 +23,13 @@ pub use emuella_j2k_ht as ht;
 pub use emuella_j2k_tier1 as tier1;
 pub use emuella_j2k_transform as transform;
 
+#[doc(hidden)]
+pub mod geometry;
 #[cfg(feature = "std")]
 mod openjph_transfer;
 pub mod source;
+
+use geometry::{ReferenceGridRect, TileReferenceRect};
 
 #[cfg(feature = "std")]
 use openjph_transfer::{
@@ -325,6 +329,31 @@ pub struct SizMarker {
 }
 
 impl SizMarker {
+    /// Checked absolute half-open image area on the Part 1 reference grid.
+    pub fn image_reference_rect(&self) -> Result<ReferenceGridRect> {
+        ReferenceGridRect::new(
+            self.image_origin_x,
+            self.image_origin_y,
+            self.reference_grid_width,
+            self.reference_grid_height,
+        )
+    }
+
+    /// Translate a full-resolution image-relative request to the absolute
+    /// Part 1 reference grid.
+    pub fn absolute_reference_region(
+        &self,
+        region: TileRegionRequest,
+    ) -> Result<ReferenceGridRect> {
+        ReferenceGridRect::from_image_relative(
+            self.image_reference_rect()?,
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+        )
+    }
+
     pub fn component_count(&self) -> u16 {
         self.components.len() as u16
     }
@@ -20834,6 +20863,7 @@ fn plan_synthesis_window(
 }
 
 fn planned_tile_synthesis_window(
+    siz: &SizMarker,
     planned: &PlannedTileRegion,
     coding_style: CodingStyleMarker,
     discard_levels: u8,
@@ -20842,33 +20872,32 @@ fn planned_tile_synthesis_window(
         .decomposition_levels
         .checked_sub(discard_levels)
         .ok_or(CodestreamError::SizeOverflow)?;
-    let (width, height) = resolution_dimensions(
-        planned.tile.width,
-        planned.tile.height,
-        coding_style.decomposition_levels,
-        retained_resolution,
+    let reduced_tile = reduced_part1_region(
+        siz,
+        TileRegionRequest {
+            x: planned.tile.x,
+            y: planned.tile.y,
+            width: planned.tile.width,
+            height: planned.tile.height,
+        },
+        discard_levels,
     )?;
-    let reduced_intersection = reduced_tile_region(planned.intersection, discard_levels)?;
-    let scale = 1_u32
-        .checked_shl(u32::from(discard_levels))
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let tile_x = planned.tile.x / scale;
-    let tile_y = planned.tile.y / scale;
+    let reduced_intersection = reduced_part1_region(siz, planned.intersection, discard_levels)?;
     let output_region = AxisAlignedRegion {
         x: reduced_intersection
             .x
-            .checked_sub(tile_x)
+            .checked_sub(reduced_tile.x)
             .ok_or(CodestreamError::SizeOverflow)?,
         y: reduced_intersection
             .y
-            .checked_sub(tile_y)
+            .checked_sub(reduced_tile.y)
             .ok_or(CodestreamError::SizeOverflow)?,
         width: reduced_intersection.width,
         height: reduced_intersection.height,
     };
     plan_synthesis_window(
-        width,
-        height,
+        reduced_tile.width,
+        reduced_tile.height,
         retained_resolution,
         output_region,
         coding_style.transform,
@@ -21002,7 +21031,7 @@ where
             ));
         }
     }
-    let output_region = reduced_tile_region(region, request.discard_levels)?;
+    let output_region = reduced_part1_region(&codestream.siz, region, request.discard_levels)?;
     let component_sample_bytes = component_indices
         .iter()
         .map(|component_index| {
@@ -21021,8 +21050,12 @@ where
 
     let mut prepared_tiles = Vec::with_capacity(plan.tiles.len());
     for planned in plan.tiles {
-        let synthesis_window =
-            planned_tile_synthesis_window(&planned, coding_style, request.discard_levels)?;
+        let synthesis_window = planned_tile_synthesis_window(
+            &codestream.siz,
+            &planned,
+            coding_style,
+            request.discard_levels,
+        )?;
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
         let payload = payload_for_tile(&codestream, planned.tile)?;
@@ -21459,8 +21492,11 @@ fn copy_decoded_prepared_part1_tile(
         .zip(&prepared.component_sample_bytes)
     {
         if tile.synthesis_window.use_windowed_synthesis {
-            let intersection =
-                reduced_tile_region(tile.planned.intersection, prepared.discard_levels)?;
+            let intersection = reduced_part1_region(
+                &prepared.codestream.siz,
+                tile.planned.intersection,
+                prepared.discard_levels,
+            )?;
             let destination_x = intersection
                 .x
                 .checked_sub(prepared.output_region.x)
@@ -21521,27 +21557,31 @@ fn copy_decoded_prepared_part1_tile(
                 tile_samples,
             )?;
         } else {
-            let (tile_width, tile_height) = resolution_dimensions(
-                tile.planned.tile.width,
-                tile.planned.tile.height,
+            let reduced_tile = reduced_part1_region(
+                &prepared.codestream.siz,
+                TileRegionRequest {
+                    x: tile.planned.tile.x,
+                    y: tile.planned.tile.y,
+                    width: tile.planned.tile.width,
+                    height: tile.planned.tile.height,
+                },
                 prepared.discard_levels,
-                0,
             )?;
-            let reduced_intersection =
-                reduced_tile_region(tile.planned.intersection, prepared.discard_levels)?;
-            let scale = 1_u32
-                .checked_shl(u32::from(prepared.discard_levels))
-                .ok_or(CodestreamError::SizeOverflow)?;
+            let reduced_intersection = reduced_part1_region(
+                &prepared.codestream.siz,
+                tile.planned.intersection,
+                prepared.discard_levels,
+            )?;
             copy_tile_intersection_to_region(
                 output.samples,
                 output.stride_bytes,
                 *bytes_per_sample,
                 prepared.output_region,
                 TileRect {
-                    x: tile.planned.tile.x / scale,
-                    y: tile.planned.tile.y / scale,
-                    width: tile_width,
-                    height: tile_height,
+                    x: reduced_tile.x,
+                    y: reduced_tile.y,
+                    width: reduced_tile.width,
+                    height: reduced_tile.height,
                     ..tile.planned.tile
                 },
                 reduced_intersection,
@@ -24579,27 +24619,20 @@ pub fn decode_part1_component_request_into_with_workspace(
     execute_prepared_part1_component_decode_into_with_workspace(&prepared, output_planes, workspace)
 }
 
-fn reduced_tile_region(region: TileRegionRequest, discard_levels: u8) -> Result<TileRegionRequest> {
-    let scale = 1_u32
-        .checked_shl(u32::from(discard_levels))
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let end_x = region
-        .x
-        .checked_add(region.width)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let end_y = region
-        .y
-        .checked_add(region.height)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let x = region.x / scale;
-    let y = region.y / scale;
-    let end_x = ceil_div(end_x, scale)?;
-    let end_y = ceil_div(end_y, scale)?;
+fn reduced_part1_region(
+    siz: &SizMarker,
+    region: TileRegionRequest,
+    discard_levels: u8,
+) -> Result<TileRegionRequest> {
+    let reduced = siz
+        .absolute_reference_region(region)?
+        .to_component_grid(1, 1)?
+        .reduce(discard_levels)?;
     Ok(TileRegionRequest {
-        x,
-        y,
-        width: end_x.checked_sub(x).ok_or(CodestreamError::SizeOverflow)?,
-        height: end_y.checked_sub(y).ok_or(CodestreamError::SizeOverflow)?,
+        x: reduced.x0(),
+        y: reduced.y0(),
+        width: reduced.width(),
+        height: reduced.height(),
     })
 }
 
@@ -26143,49 +26176,32 @@ pub fn plan_tile_region_decode(
     codestream: &Codestream,
     request: TileRegionRequest,
 ) -> Result<TileRegionWorkPlan> {
-    if request.width == 0 || request.height == 0 {
-        return Err(invalid(
-            None,
-            None,
-            "tile-region request dimensions must be greater than zero",
-        ));
-    }
-
-    let image_end_x = codestream.image_width();
-    let image_end_y = codestream.image_height();
-    let request_end_x = request
-        .x
-        .checked_add(request.width)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let request_end_y = request
-        .y
-        .checked_add(request.height)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    if request_end_x > image_end_x || request_end_y > image_end_y {
-        return Err(invalid(
-            None,
-            None,
-            "tile-region request must fit inside image bounds",
-        ));
-    }
+    let absolute_request = codestream
+        .siz
+        .absolute_reference_region(request)
+        .map_err(|error| match error {
+            CodestreamError::SizeOverflow => invalid(
+                None,
+                None,
+                "tile-region request must be non-empty and fit inside image bounds",
+            ),
+            error => error,
+        })?;
+    let image = codestream.siz.image_reference_rect()?;
 
     let mut tiles = Vec::new();
     for tile in tile_rects(codestream)? {
-        let tile_end_x = tile
-            .x
-            .checked_add(tile.width)
-            .ok_or(CodestreamError::SizeOverflow)?;
-        let tile_end_y = tile
-            .y
-            .checked_add(tile.height)
-            .ok_or(CodestreamError::SizeOverflow)?;
-        let intersect_x0 = request.x.max(tile.x);
-        let intersect_y0 = request.y.max(tile.y);
-        let intersect_x1 = request_end_x.min(tile_end_x);
-        let intersect_y1 = request_end_y.min(tile_end_y);
-        if intersect_x0 >= intersect_x1 || intersect_y0 >= intersect_y1 {
+        let absolute_tile = codestream
+            .siz
+            .absolute_reference_region(TileRegionRequest {
+                x: tile.x,
+                y: tile.y,
+                width: tile.width,
+                height: tile.height,
+            })?;
+        let Some(absolute_intersection) = absolute_request.intersection(absolute_tile) else {
             continue;
-        }
+        };
 
         let tile_parts = codestream
             .tiles
@@ -26229,10 +26245,16 @@ pub fn plan_tile_region_decode(
         tiles.push(PlannedTileRegion {
             tile,
             intersection: TileRegionRequest {
-                x: intersect_x0,
-                y: intersect_y0,
-                width: intersect_x1 - intersect_x0,
-                height: intersect_y1 - intersect_y0,
+                x: absolute_intersection
+                    .x0()
+                    .checked_sub(image.x0())
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                y: absolute_intersection
+                    .y0()
+                    .checked_sub(image.y0())
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                width: absolute_intersection.width(),
+                height: absolute_intersection.height(),
             },
             tile_parts,
         });
@@ -41742,6 +41764,7 @@ fn tile_rects(codestream: &Codestream) -> Result<Vec<TileRect>> {
 fn tile_rects_for_siz(siz: &SizMarker) -> Result<Vec<TileRect>> {
     let tile_count_x = siz.tile_count_x()?;
     let tile_count_y = siz.tile_count_y()?;
+    let image = siz.image_reference_rect()?;
     let mut tiles = Vec::new();
     for tile_y in 0..tile_count_y {
         for tile_x in 0..tile_count_x {
@@ -41751,47 +41774,34 @@ fn tile_rects_for_siz(siz: &SizMarker) -> Result<Vec<TileRect>> {
                 .ok_or(CodestreamError::SizeOverflow)?;
             let tile_index =
                 u16::try_from(tile_index_u32).map_err(|_| CodestreamError::SizeOverflow)?;
-            let grid_x0 = siz
-                .tile_origin_x
-                .checked_add(
-                    tile_x
-                        .checked_mul(siz.tile_width)
-                        .ok_or(CodestreamError::SizeOverflow)?,
-                )
-                .ok_or(CodestreamError::SizeOverflow)?;
-            let grid_y0 = siz
-                .tile_origin_y
-                .checked_add(
-                    tile_y
-                        .checked_mul(siz.tile_height)
-                        .ok_or(CodestreamError::SizeOverflow)?,
-                )
-                .ok_or(CodestreamError::SizeOverflow)?;
-            let grid_x1 = grid_x0
-                .checked_add(siz.tile_width)
-                .ok_or(CodestreamError::SizeOverflow)?
-                .min(siz.reference_grid_width);
-            let grid_y1 = grid_y0
-                .checked_add(siz.tile_height)
-                .ok_or(CodestreamError::SizeOverflow)?
-                .min(siz.reference_grid_height);
-            let image_x0 = grid_x0.max(siz.image_origin_x);
-            let image_y0 = grid_y0.max(siz.image_origin_y);
-            if image_x0 >= grid_x1 || image_y0 >= grid_y1 {
+            let Some(tile) = TileReferenceRect::clipped_to_image(
+                image,
+                siz.tile_origin_x,
+                siz.tile_origin_y,
+                siz.tile_width,
+                siz.tile_height,
+                tile_x,
+                tile_y,
+                tile_index,
+            )?
+            else {
                 continue;
-            }
+            };
+            let bounds = tile.bounds();
             tiles.push(TileRect {
                 tile_index,
                 tile_x,
                 tile_y,
-                x: image_x0
+                x: bounds
+                    .x0()
                     .checked_sub(siz.image_origin_x)
                     .ok_or(CodestreamError::SizeOverflow)?,
-                y: image_y0
+                y: bounds
+                    .y0()
                     .checked_sub(siz.image_origin_y)
                     .ok_or(CodestreamError::SizeOverflow)?,
-                width: grid_x1 - image_x0,
-                height: grid_y1 - image_y0,
+                width: bounds.width(),
+                height: bounds.height(),
             });
         }
     }
@@ -41803,43 +41813,34 @@ fn component_tile_rect(
     tile: TileRect,
     component: &ComponentParameters,
 ) -> Result<TileRect> {
-    let separation_x = u32::from(component.horizontal_separation);
-    let separation_y = u32::from(component.vertical_separation);
-    let image_component_x0 = ceil_div(codestream.siz.image_origin_x, separation_x)?;
-    let image_component_y0 = ceil_div(codestream.siz.image_origin_y, separation_y)?;
-    let reference_x0 = codestream
+    let image = codestream.siz.image_reference_rect()?;
+    let image_component = image.to_component_grid(
+        component.horizontal_separation,
+        component.vertical_separation,
+    )?;
+    let tile_component = codestream
         .siz
-        .image_origin_x
-        .checked_add(tile.x)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let reference_y0 = codestream
-        .siz
-        .image_origin_y
-        .checked_add(tile.y)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let reference_x1 = reference_x0
-        .checked_add(tile.width)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let reference_y1 = reference_y0
-        .checked_add(tile.height)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let component_x0 = ceil_div(reference_x0, separation_x)?;
-    let component_y0 = ceil_div(reference_y0, separation_y)?;
-    let component_x1 = ceil_div(reference_x1, separation_x)?;
-    let component_y1 = ceil_div(reference_y1, separation_y)?;
+        .absolute_reference_region(TileRegionRequest {
+            x: tile.x,
+            y: tile.y,
+            width: tile.width,
+            height: tile.height,
+        })?
+        .to_component_grid(
+            component.horizontal_separation,
+            component.vertical_separation,
+        )?;
     Ok(TileRect {
-        x: component_x0
-            .checked_sub(image_component_x0)
+        x: tile_component
+            .x0()
+            .checked_sub(image_component.x0())
             .ok_or(CodestreamError::SizeOverflow)?,
-        y: component_y0
-            .checked_sub(image_component_y0)
+        y: tile_component
+            .y0()
+            .checked_sub(image_component.y0())
             .ok_or(CodestreamError::SizeOverflow)?,
-        width: component_x1
-            .checked_sub(component_x0)
-            .ok_or(CodestreamError::SizeOverflow)?,
-        height: component_y1
-            .checked_sub(component_y0)
-            .ok_or(CodestreamError::SizeOverflow)?,
+        width: tile_component.width(),
+        height: tile_component.height(),
         ..tile
     })
 }
