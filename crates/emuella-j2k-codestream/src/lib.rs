@@ -14322,6 +14322,60 @@ mod reduced_irreversible_mct_component_profile_tests {
             ]
         );
     }
+
+    #[test]
+    fn validated_p0_04_geometry_rejects_precinct_state_overflow_before_payload() {
+        const OVERSIZED_DIMENSION: u32 = 131_200;
+        const PRECINCTS_PER_AXIS: u64 = 1_025;
+        const PRECINCT_COUNT: u64 = 1_050_625;
+
+        let mut codestream = fixture();
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        for offset in [siz + 6, siz + 10, siz + 22, siz + 26] {
+            codestream[offset..offset + 4].copy_from_slice(&OVERSIZED_DIMENSION.to_be_bytes());
+        }
+        let parsed = parse(&codestream).expect("oversized project-authored P0.04 shape parses");
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let style = parsed.coding_style.expect("COD marker is present");
+        let topology = Part1PrecinctTopology::new(&parsed.siz, tile, 0, style).unwrap();
+        let highest_resolution = topology.resolutions.last().unwrap();
+
+        assert_eq!((tile.x, tile.y), (0, 0));
+        assert_eq!((tile.width, tile.height), (131_200, 131_200));
+        assert_eq!(
+            (
+                u64::from(highest_resolution.precinct_cols),
+                u64::from(highest_resolution.precinct_rows),
+                u64::from(highest_resolution.precinct_count),
+            ),
+            (PRECINCTS_PER_AXIS, PRECINCTS_PER_AXIS, PRECINCT_COUNT,)
+        );
+        assert_eq!(PRECINCT_COUNT, PRECINCTS_PER_AXIS * PRECINCTS_PER_AXIS);
+        assert!(u64::from(highest_resolution.precinct_count) > MAX_PACKET_PRECINCTS_PER_RESOLUTION);
+        assert!(
+            is_supported_part1_reduced_irreversible_mct_component_profile(&codestream, &parsed, 3,)
+        );
+
+        let empty_payload = ContiguousPacketSource { bytes: &[] };
+        assert!(matches!(
+            parse_default_precinct_packets_from_source(
+                &codestream,
+                &parsed,
+                tile,
+                &empty_payload,
+                None,
+                Some(3),
+                Some(&[0]),
+                PacketOrganisationConfig::PROFILE0_P004,
+                None,
+            ),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -28712,6 +28766,43 @@ mod packed_packet_header_tests {
         codestream
     }
 
+    fn with_matching_packed_packet_length(
+        mut codestream: Vec<u8>,
+        kind: PacketHeaderSourceKind,
+        force_continuation: bool,
+    ) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&codestream, sod + 2, Marker::Eoc).unwrap();
+        let body_len = eoc - (sod + 2);
+        let mut encoded = encode_test_packet_length(body_len);
+        if force_continuation && encoded.len() == 1 {
+            encoded.insert(0, 0x80);
+        }
+        match kind {
+            PacketHeaderSourceKind::Ppm => {
+                let mut data = vec![0, u8::try_from(encoded.len()).unwrap()];
+                data.extend_from_slice(&encoded);
+                codestream.splice(sot..sot, marker_segment(Marker::Plm, &data));
+            }
+            PacketHeaderSourceKind::Ppt => {
+                let mut data = vec![0];
+                data.extend_from_slice(&encoded);
+                let segment = marker_segment(Marker::Plt, &data);
+                let psot = read_u32(&codestream, sot + 6).unwrap();
+                codestream[sot + 6..sot + 10].copy_from_slice(
+                    &psot
+                        .checked_add(u32::try_from(segment.len()).unwrap())
+                        .unwrap()
+                        .to_be_bytes(),
+                );
+                codestream.splice(sod..sod, segment);
+            }
+            PacketHeaderSourceKind::Inline => unreachable!(),
+        }
+        codestream
+    }
+
     fn adjacent_sop_packed_fixture(
         kind: PacketHeaderSourceKind,
         first_packet_has_sop: bool,
@@ -28900,9 +28991,38 @@ mod packed_packet_header_tests {
     }
 
     fn contributions(codestream: &[u8]) -> Vec<(usize, u16, u8, Vec<u8>)> {
-        let parsed = parse(codestream).unwrap();
-        let tile = tile_rects_for_siz(&parsed.siz).unwrap()[0];
-        let payload = tile_payload_spans_for_rect(codestream, &parsed, tile).unwrap();
+        slice_contributions_result(codestream).unwrap()
+    }
+
+    fn observable_contributions(
+        payload: &dyn PacketByteSource,
+        contributions: Vec<PacketCodeBlockContribution>,
+    ) -> Result<Vec<(usize, u16, u8, Vec<u8>)>> {
+        contributions
+            .into_iter()
+            .map(|contribution| {
+                let mut bytes = Vec::new();
+                payload.append_range(
+                    contribution.payload_offset,
+                    contribution.codeword_len,
+                    &mut bytes,
+                )?;
+                Ok((
+                    contribution.codeword_len,
+                    contribution.coding_passes,
+                    contribution.missing_most_significant_bitplanes,
+                    bytes,
+                ))
+            })
+            .collect()
+    }
+
+    fn slice_contributions_result(codestream: &[u8]) -> Result<Vec<(usize, u16, u8, Vec<u8>)>> {
+        let parsed = parse(codestream)?;
+        let tile = *tile_rects_for_siz(&parsed.siz)?
+            .first()
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let payload = tile_payload_spans_for_rect(codestream, &parsed, tile)?;
         let contributions = parse_default_precinct_packets_from_source(
             codestream,
             &parsed,
@@ -28913,28 +29033,62 @@ mod packed_packet_header_tests {
             None,
             PacketOrganisationConfig::DEFAULT,
             None,
-        )
-        .unwrap()
+        )?
         .contributions;
-        contributions
-            .into_iter()
-            .map(|contribution| {
-                let mut bytes = Vec::new();
-                payload
-                    .append_range(
-                        contribution.payload_offset,
-                        contribution.codeword_len,
-                        &mut bytes,
-                    )
-                    .unwrap();
-                (
-                    contribution.codeword_len,
-                    contribution.coding_passes,
-                    contribution.missing_most_significant_bitplanes,
-                    bytes,
-                )
-            })
-            .collect()
+        observable_contributions(&payload, contributions)
+    }
+
+    fn positioned_contributions_result(
+        codestream: &[u8],
+    ) -> Result<Vec<(usize, u16, u8, Vec<u8>)>> {
+        let source = source::SliceSource::new(codestream);
+        let mut scan = scan_part1_source_headers(
+            &source,
+            TileRegionRequest {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+        )?;
+        let tile = *tile_rects_for_siz(&scan.codestream.siz)?
+            .first()
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let mut spans = scan
+            .payload_spans
+            .remove(&tile.tile_index)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let mut logical_offset = 0_usize;
+        for span in &mut spans {
+            span.logical_offset = logical_offset;
+            logical_offset = logical_offset
+                .checked_add(span.len)
+                .ok_or(CodestreamError::SizeOverflow)?;
+        }
+        let source_payload = SourceTilePartPayload {
+            source: &source,
+            spans,
+            len: logical_offset,
+        };
+        let buffered = BufferedSourcePacketPayload::new(&source_payload);
+        let parsed = parse_default_precinct_packets_from_source(
+            &scan.marker_bytes,
+            &scan.codestream,
+            tile,
+            &buffered,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            Some(&scan.work.tile_part_order),
+        );
+        if let Some(error) = buffered.take_error() {
+            return Err(source_error_in_phase(
+                error,
+                "generated packed-source matrix",
+            ));
+        }
+        observable_contributions(&buffered, parsed?.contributions)
     }
 
     #[test]
@@ -29328,6 +29482,206 @@ mod packed_packet_header_tests {
         let duplicate_input = [0_u8, 11, 0, 22];
         assert!(
             indexed_marker_fragments(&duplicate_input, &[&first, &second], Marker::Ppt).is_err()
+        );
+    }
+
+    #[test]
+    fn generated_packed_source_matrix_is_position_independent_and_fails_closed() {
+        let mut valid_cases = Vec::new();
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            for (sop, eph) in [(false, false), (true, false), (false, true), (true, true)] {
+                valid_cases.push((
+                    format!("{kind:?}-sop-{sop}-eph-{eph}"),
+                    packed_fixture(kind, sop, eph),
+                ));
+            }
+            valid_cases.push((
+                format!("{kind:?}-packet-length-continuation"),
+                with_matching_packed_packet_length(packed_fixture(kind, true, true), kind, true),
+            ));
+            for first_packet_has_sop in [false, true] {
+                valid_cases.push((
+                    format!("{kind:?}-zero-body-adjacent-sop-{first_packet_has_sop}"),
+                    adjacent_sop_packed_fixture(kind, first_packet_has_sop),
+                ));
+            }
+        }
+        valid_cases.extend([
+            (
+                String::from("ppm-empty-part-with-plm"),
+                ppm_zero_body_in_final_empty_part(true),
+            ),
+            (
+                String::from("ppm-empty-part-without-plm"),
+                ppm_zero_body_in_final_empty_part(false),
+            ),
+            (
+                String::from("ppt-empty-part-with-plt"),
+                ppt_plt_zero_body_in_final_empty_part(true),
+            ),
+            (
+                String::from("ppt-empty-part-without-plt"),
+                ppt_plt_zero_body_in_final_empty_part(false),
+            ),
+        ]);
+
+        for (name, codestream) in &valid_cases {
+            let slice = slice_contributions_result(codestream)
+                .unwrap_or_else(|error| panic!("slice case {name} failed: {error:?}"));
+            let positioned = positioned_contributions_result(codestream)
+                .unwrap_or_else(|error| panic!("positioned case {name} failed: {error:?}"));
+            assert_eq!(
+                positioned, slice,
+                "observable contribution mismatch for {name}"
+            );
+        }
+
+        let mut invalid_cases = Vec::new();
+
+        let mut bad_zppm = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let ppm = find_marker(&bad_zppm, 0, Marker::Ppm).unwrap();
+        bad_zppm[ppm + 4] = 1;
+        invalid_cases.push(("Zppm starts at one", bad_zppm));
+
+        let mut bad_zppt = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let ppt = find_marker(&bad_zppt, 0, Marker::Ppt).unwrap();
+        bad_zppt[ppt + 4] = 1;
+        invalid_cases.push(("Zppt starts at one", bad_zppt));
+
+        let mut bad_nppm = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let ppm = find_marker(&bad_nppm, 0, Marker::Ppm).unwrap();
+        bad_nppm[ppm + 5..ppm + 9].copy_from_slice(&u32::MAX.to_be_bytes());
+        invalid_cases.push(("Nppm exceeds its fragment", bad_nppm));
+
+        let mut duplicate_ppm_fragment = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let sot = find_marker(&duplicate_ppm_fragment, 0, Marker::Sot).unwrap();
+        duplicate_ppm_fragment.splice(sot..sot, marker_segment(Marker::Ppm, &[0, 0, 0, 0, 0]));
+        invalid_cases.push(("duplicate PPM fragment index", duplicate_ppm_fragment));
+
+        let mut duplicate_ppt_fragment = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let sot = find_marker(&duplicate_ppt_fragment, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&duplicate_ppt_fragment, sot, Marker::Sod).unwrap();
+        let duplicate = marker_segment(Marker::Ppt, &[0, 0]);
+        let psot = read_u32(&duplicate_ppt_fragment, sot + 6).unwrap();
+        duplicate_ppt_fragment[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(duplicate.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        duplicate_ppt_fragment.splice(sod..sod, duplicate);
+        invalid_cases.push(("duplicate PPT fragment index", duplicate_ppt_fragment));
+
+        let mut bad_plm_continuation = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let sot = find_marker(&bad_plm_continuation, 0, Marker::Sot).unwrap();
+        bad_plm_continuation.splice(sot..sot, marker_segment(Marker::Plm, &[0, 1, 0x80]));
+        invalid_cases.push(("unterminated PLM continuation", bad_plm_continuation));
+
+        let mut bad_plt_continuation = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let sot = find_marker(&bad_plt_continuation, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&bad_plt_continuation, sot, Marker::Sod).unwrap();
+        let bad_plt = marker_segment(Marker::Plt, &[0, 0x80]);
+        let psot = read_u32(&bad_plt_continuation, sot + 6).unwrap();
+        bad_plt_continuation[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(bad_plt.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        bad_plt_continuation.splice(sod..sod, bad_plt);
+        invalid_cases.push(("unterminated PLT continuation", bad_plt_continuation));
+
+        let mut bad_psot = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let sot = find_marker(&bad_psot, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&bad_psot, sot + 6).unwrap();
+        bad_psot[sot + 6..sot + 10].copy_from_slice(&psot.checked_add(1).unwrap().to_be_bytes());
+        invalid_cases.push(("Psot extends into EOC", bad_psot));
+
+        let mut truncated_body = packed_fixture(PacketHeaderSourceKind::Ppt, false, false);
+        let sot = find_marker(&truncated_body, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&truncated_body, sot, Marker::Sod).unwrap();
+        let eoc = find_marker(&truncated_body, sod + 2, Marker::Eoc).unwrap();
+        truncated_body.remove(eoc - 1);
+        let psot = read_u32(&truncated_body, sot + 6).unwrap();
+        truncated_body[sot + 6..sot + 10]
+            .copy_from_slice(&psot.checked_sub(1).unwrap().to_be_bytes());
+        invalid_cases.push(("packet body truncated", truncated_body));
+
+        let mut bad_sop_length = packed_fixture(PacketHeaderSourceKind::Ppm, true, false);
+        let sod = find_marker(&bad_sop_length, 0, Marker::Sod).unwrap();
+        bad_sop_length[sod + 4..sod + 6].copy_from_slice(&3_u16.to_be_bytes());
+        invalid_cases.push(("invalid SOP length", bad_sop_length));
+
+        let mut bad_sop_sequence = packed_fixture(PacketHeaderSourceKind::Ppt, true, false);
+        let sod = find_marker(&bad_sop_sequence, 0, Marker::Sod).unwrap();
+        bad_sop_sequence[sod + 6..sod + 8].copy_from_slice(&1_u16.to_be_bytes());
+        invalid_cases.push(("invalid SOP sequence", bad_sop_sequence));
+
+        let mut misplaced_eph = packed_fixture(PacketHeaderSourceKind::Ppt, false, true);
+        let ppt = find_marker(&misplaced_eph, 0, Marker::Ppt).unwrap();
+        let lppt = usize::from(read_u16(&misplaced_eph, ppt + 2).unwrap());
+        misplaced_eph.drain(ppt + 2 + lppt - 2..ppt + 2 + lppt);
+        let sot = find_marker(&misplaced_eph, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&misplaced_eph, sot, Marker::Sod).unwrap();
+        misplaced_eph.splice(sod + 2..sod + 2, Marker::Eph.code().to_be_bytes());
+        invalid_cases.push(("EPH moved from header to body", misplaced_eph));
+
+        let mut mixed_sources = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
+        let sot = find_marker(&mixed_sources, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&mixed_sources, sot, Marker::Sod).unwrap();
+        let ppt = marker_segment(Marker::Ppt, &[0, 0]);
+        let psot = read_u32(&mixed_sources, sot + 6).unwrap();
+        mixed_sources[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(ppt.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        mixed_sources.splice(sod..sod, ppt);
+        invalid_cases.push(("mixed PPM and PPT sources", mixed_sources));
+
+        for (name, codestream) in &invalid_cases {
+            assert!(
+                slice_contributions_result(codestream).is_err(),
+                "slice mutation unexpectedly succeeded: {name}"
+            );
+            assert!(
+                positioned_contributions_result(codestream).is_err(),
+                "positioned mutation unexpectedly succeeded: {name}"
+            );
+        }
+
+        for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
+            let codestream = packed_fixture(kind, true, true);
+            let packed = find_marker(
+                &codestream,
+                0,
+                match kind {
+                    PacketHeaderSourceKind::Ppm => Marker::Ppm,
+                    PacketHeaderSourceKind::Ppt => Marker::Ppt,
+                    PacketHeaderSourceKind::Inline => unreachable!(),
+                },
+            )
+            .unwrap();
+            let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+            let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+            for cut in [0, 1, 2, packed + 4, sot + 11, sod + 1, codestream.len() - 1] {
+                let truncated = &codestream[..cut];
+                assert!(
+                    slice_contributions_result(truncated).is_err(),
+                    "slice truncation unexpectedly succeeded for {kind:?} at {cut}"
+                );
+                assert!(
+                    positioned_contributions_result(truncated).is_err(),
+                    "positioned truncation unexpectedly succeeded for {kind:?} at {cut}"
+                );
+            }
+        }
+
+        assert!(checked_packet_organisation_len(usize::MAX, 1, Marker::Ppm).is_err());
+        assert!(
+            checked_packet_organisation_len(MAX_PACKET_ORGANISATION_MARKER_BYTES, 1, Marker::Ppt)
+                .is_err()
         );
     }
 }
