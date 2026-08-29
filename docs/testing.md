@@ -410,10 +410,21 @@ cropped output directly into caller rows. Synthetic 3-by-3-tile regressions
 cover one-, two- and four-tile regions, clipped edge and corner tiles,
 partition-and-stitch equivalence, positioned sources, caller padding,
 selective-work counters and both bounded-window and full-tile synthesis copy
-paths. Origins, reduction, signed or higher-precision samples, subsampling,
-MCT, irreversible 9/7, extra layers, progression changes, coding or
-quantisation overrides, ROI, packet relocation, inline markers, fragmented
-tile parts and interleaved output remain fail closed at this boundary.
+paths. The same profile admits non-zero image and tile origins only when both
+origin pairs and both nominal tile extents are multiples of four. This keeps
+every clipped tile-component start on the current two-level local synthesis
+phase. Public requests remain image-relative while component descriptors
+retain their absolute native origins.
+
+The project-authored non-zero-origin fixture encoder writes coherent SIZ
+geometry and derives clipped packet and absolute code-block topology before
+encoding. Its odd 131-by-99 image uses distinct image and tile origins, clipped
+first and final tiles, and exercises the same slice and positioned-source
+routes. Unaligned origins or extents, tile origins beyond the image origin,
+reduction, signed or higher-precision samples, subsampling, MCT, irreversible
+9/7, extra layers, progression changes, coding or quantisation overrides, ROI,
+packet relocation, inline markers, fragmented tile parts and interleaved
+output remain fail closed at this boundary.
 
 The checked image, tile and component geometry follows ISO/IEC 15444-1:2024,
 Annex A, A.5.1 and Annex B, B.1–B.5, PDF pages 41–44 and 79–85. Coding-style

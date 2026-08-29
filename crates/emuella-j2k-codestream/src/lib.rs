@@ -4982,6 +4982,22 @@ pub struct TileSize {
     pub height: u32,
 }
 
+/// SIZ geometry for project-authored non-zero-origin test codestreams.
+///
+/// This boundary exists only for deterministic cross-crate fixtures. It is not
+/// part of the supported application encode surface.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeMultitileTestGeometry {
+    pub image_origin_x: u32,
+    pub image_origin_y: u32,
+    pub tile_origin_x: u32,
+    pub tile_origin_y: u32,
+    pub tile_width: u32,
+    pub tile_height: u32,
+}
+
 /// Borrowed interleaved RGB sample plane accepted by the native RGB Part 1
 /// encode slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7501,6 +7517,25 @@ fn scan_part1_source_headers(
         message: "codestream main header must contain SIZ marker",
     })?;
     validate_siz(&siz)?;
+    let strict_native_origin = siz.image_origin_x != 0
+        || siz.image_origin_y != 0
+        || siz.tile_origin_x != 0
+        || siz.tile_origin_y != 0;
+    if strict_native_origin
+        && (markers.len() != 3
+            || markers.iter().map(|segment| segment.marker).ne([
+                Marker::Siz,
+                Marker::Cod,
+                Marker::Qcd,
+            ]))
+    {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "non-zero-origin source decode requires exactly one ordered main-header SOC, SIZ, COD and QCD sequence",
+        ));
+    }
     let declared =
         parse_declared_tile_part_lengths(&marker_bytes, &siz, &markers, marker_bytes.len())?;
     let tile_rects = tile_rects_for_siz(&siz)?;
@@ -7578,6 +7613,7 @@ fn scan_part1_source_headers(
             .unwrap_or(false);
         let retained_payload_len;
         if selected {
+            let selected_marker_start = markers.len();
             let (selected_tile, span) = scan_selected_source_tile_part_header(
                 source,
                 next_source_offset,
@@ -7585,12 +7621,41 @@ fn scan_part1_source_headers(
                 &mut marker_bytes,
                 &mut markers,
             )?;
+            if strict_native_origin
+                && markers[selected_marker_start..]
+                    .iter()
+                    .map(|segment| segment.marker)
+                    .ne([Marker::Sot, Marker::Sod])
+            {
+                return Err(unsupported(
+                    usize::try_from(next_source_offset).ok(),
+                    Some(Marker::Sot),
+                    UnsupportedConstruct::MarkerSegment,
+                    "non-zero-origin source decode requires an exact SOT/SOD header for every selected tile-part",
+                ));
+            }
             retained_payload_len = Some(span.len);
             selected_tile_states.push(selected_tile);
             payload_spans.entry(tile.tile_index).or_default().push(span);
         } else {
             retained_payload_len = None;
-            let unread = u64::from(psot).saturating_sub(sot_bytes.len() as u64);
+            if strict_native_origin
+                && source_marker(
+                    source,
+                    next_source_offset
+                        .checked_add(12)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                )? != Marker::Sod
+            {
+                return Err(unsupported(
+                    usize::try_from(next_source_offset).ok(),
+                    Some(Marker::Sot),
+                    UnsupportedConstruct::MarkerSegment,
+                    "non-zero-origin source decode requires an exact SOT/SOD header for every unselected tile-part",
+                ));
+            }
+            let inspected_header_bytes = if strict_native_origin { 14 } else { 12 };
+            let unread = u64::from(psot).saturating_sub(inspected_header_bytes);
             source.record_bytes_not_read(unread, 0);
             if declared.is_some() {
                 work.tile_parts_skipped_via_tlm = work.tile_parts_skipped_via_tlm.saturating_add(1);
@@ -7621,6 +7686,19 @@ fn scan_part1_source_headers(
         declared_index += 1;
     }
     validate_indexed_tile_part_sequence(&siz, &all_tiles)?;
+    if strict_native_origin
+        && next_source_offset
+            .checked_add(2)
+            .ok_or(CodestreamError::SizeOverflow)?
+            != source.len()?
+    {
+        return Err(unsupported(
+            usize::try_from(next_source_offset).ok(),
+            Some(Marker::Eoc),
+            UnsupportedConstruct::MarkerSegment,
+            "non-zero-origin source decode requires EOC to terminate the raw codestream bytes",
+        ));
+    }
 
     let eoc_offset = marker_bytes.len();
     marker_bytes.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
@@ -9414,6 +9492,33 @@ pub fn encode_grayscale_u8_two_decomp_multitile(
     )
 }
 
+/// Encode a checked project-authored grayscale fixture with explicit SIZ
+/// origins and nominal tile extents.
+///
+/// The sample plane remains image-relative. Tile packet topology is derived
+/// from the supplied SIZ geometry before any transform or packet encoding.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_grayscale_u8_two_decomp_multitile_test_fixture(
+    input: GrayscaleU8Encode<'_>,
+    geometry: NativeMultitileTestGeometry,
+) -> Result<Vec<u8>> {
+    validate_grayscale_u8_encode(input)?;
+    let siz = native_test_fixture_siz(input.width, input.height, geometry)?;
+    let tile_rects = tile_rects_for_siz(&siz)?;
+    validate_native_multitile_dwt2_tile_rects(&siz, &tile_rects)?;
+    let transformed_tiles = prepare_grayscale_u8_dwt2_tiles(input, &tile_rects)?;
+
+    encode_native_two_decomp_multitile_transformed_with_siz(
+        &siz,
+        &transformed_tiles,
+        8,
+        1,
+        false,
+        "native grayscale u8 multi-tile DWT2 test fixture",
+    )
+}
+
 /// Encode an unsigned 16-bit RGB Part 1 codestream using the narrow
 /// repo-owned multi-tile two-decomposition reversible 5/3 slice and forward
 /// reversible color transform.
@@ -11073,6 +11178,44 @@ fn encode_native_two_decomp_multitile_transformed(
     multiple_component_transform: bool,
     profile_label: &'static str,
 ) -> Result<Vec<u8>> {
+    let siz = SizMarker {
+        capabilities: 0,
+        reference_grid_width: width,
+        reference_grid_height: height,
+        image_origin_x: 0,
+        image_origin_y: 0,
+        tile_width: tile_size.width,
+        tile_height: tile_size.height,
+        tile_origin_x: 0,
+        tile_origin_y: 0,
+        components: (0..component_count)
+            .map(|_| ComponentParameters {
+                bits_per_sample,
+                signed: false,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+            })
+            .collect(),
+    };
+    encode_native_two_decomp_multitile_transformed_with_siz(
+        &siz,
+        tiles,
+        bits_per_sample,
+        component_count,
+        multiple_component_transform,
+        profile_label,
+    )
+}
+
+fn encode_native_two_decomp_multitile_transformed_with_siz(
+    siz: &SizMarker,
+    tiles: &[NativeDecompTile],
+    bits_per_sample: u8,
+    component_count: usize,
+    multiple_component_transform: bool,
+    profile_label: &'static str,
+) -> Result<Vec<u8>> {
+    validate_siz(siz)?;
     if tiles.is_empty() {
         return Err(CodestreamError::SizeOverflow);
     }
@@ -11097,6 +11240,16 @@ fn encode_native_two_decomp_multitile_transformed(
             "native u16 multi-tile DWT2 encode MCT flag must match the component profile",
         ));
     }
+    if siz.components.len() != component_count
+        || siz.components.iter().any(|component| {
+            component.bits_per_sample != bits_per_sample
+                || component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(invalid(None, Some(Marker::Siz), profile_label));
+    }
     for tile in tiles {
         if tile.component_planes.len() != component_count {
             return Err(invalid(None, Some(Marker::Siz), profile_label));
@@ -11114,7 +11267,7 @@ fn encode_native_two_decomp_multitile_transformed(
 
     let mut qcd_exponents = [0_u8; 7];
     for tile in tiles {
-        let subband_specs = decomp_subband_specs_two(tile.tile_rect.width, tile.tile_rect.height)?;
+        let subband_specs = decomp_subband_specs_two_for_tile(siz, tile.tile_rect)?;
         for (current, spec) in qcd_exponents.iter_mut().zip(&subband_specs) {
             for plane in &tile.component_planes {
                 let tile_value = subband_available_bitplanes(
@@ -11131,18 +11284,15 @@ fn encode_native_two_decomp_multitile_transformed(
     }
 
     let tile_packets =
-        encode_native_two_decomp_multitile_packets(tiles, component_count, &qcd_exponents)?;
+        encode_native_two_decomp_multitile_packets(siz, tiles, component_count, &qcd_exponents)?;
     let mut codestream = Vec::with_capacity(native_multitile_codestream_capacity_hint(
         &tile_packets,
         component_count,
         qcd_exponents.len(),
     )?);
-    write_native_part1_main_header(
+    write_native_part1_main_header_with_siz(
         &mut codestream,
-        width,
-        height,
-        tile_size.width,
-        tile_size.height,
+        siz,
         bits_per_sample,
         u16::try_from(component_count).map_err(|_| CodestreamError::SizeOverflow)?,
         multiple_component_transform,
@@ -11189,12 +11339,14 @@ fn should_parallel_encode_tile_counts(tile_count: usize, tile_component_samples:
 
 #[cfg(feature = "parallel")]
 fn encode_native_two_decomp_multitile_packets(
+    siz: &SizMarker,
     tiles: &[NativeDecompTile],
     component_count: usize,
     qcd_exponents: &[u8],
 ) -> Result<Vec<EncodedTilePacket>> {
     if !should_parallel_encode_tiles(tiles, component_count) {
         return encode_native_two_decomp_multitile_packets_sequential(
+            siz,
             tiles,
             component_count,
             qcd_exponents,
@@ -11205,20 +11357,27 @@ fn encode_native_two_decomp_multitile_packets(
 
     tiles
         .par_iter()
-        .map(|tile| encode_native_two_decomp_tile_packet(tile, component_count, qcd_exponents))
+        .map(|tile| encode_native_two_decomp_tile_packet(siz, tile, component_count, qcd_exponents))
         .collect()
 }
 
 #[cfg(not(feature = "parallel"))]
 fn encode_native_two_decomp_multitile_packets(
+    siz: &SizMarker,
     tiles: &[NativeDecompTile],
     component_count: usize,
     qcd_exponents: &[u8],
 ) -> Result<Vec<EncodedTilePacket>> {
-    encode_native_two_decomp_multitile_packets_sequential(tiles, component_count, qcd_exponents)
+    encode_native_two_decomp_multitile_packets_sequential(
+        siz,
+        tiles,
+        component_count,
+        qcd_exponents,
+    )
 }
 
 fn encode_native_two_decomp_multitile_packets_sequential(
+    siz: &SizMarker,
     tiles: &[NativeDecompTile],
     component_count: usize,
     qcd_exponents: &[u8],
@@ -11226,6 +11385,7 @@ fn encode_native_two_decomp_multitile_packets_sequential(
     let mut tile_packets = Vec::with_capacity(tiles.len());
     for tile in tiles {
         tile_packets.push(encode_native_two_decomp_tile_packet(
+            siz,
             tile,
             component_count,
             qcd_exponents,
@@ -11235,12 +11395,13 @@ fn encode_native_two_decomp_multitile_packets_sequential(
 }
 
 fn encode_native_two_decomp_tile_packet(
+    siz: &SizMarker,
     tile: &NativeDecompTile,
     component_count: usize,
     qcd_exponents: &[u8],
 ) -> Result<EncodedTilePacket> {
     let mut segments = Vec::new();
-    let subband_specs = decomp_subband_specs_two(tile.tile_rect.width, tile.tile_rect.height)?;
+    let subband_specs = decomp_subband_specs_two_for_tile(siz, tile.tile_rect)?;
     let mut component_subbands = Vec::with_capacity(component_count);
 
     #[cfg(feature = "parallel")]
@@ -11338,6 +11499,8 @@ struct DecompSubbandSpec {
     kind: PacketSubbandKind,
     x: u32,
     y: u32,
+    grid_x0: u64,
+    grid_y0: u64,
     width: u32,
     height: u32,
 }
@@ -11378,6 +11541,8 @@ fn decomp_subband_specs(
         kind: PacketSubbandKind::LowLow,
         x: 0,
         y: 0,
+        grid_x0: 0,
+        grid_y0: 0,
         width: ll_width,
         height: ll_height,
     });
@@ -11393,35 +11558,60 @@ fn decomp_subband_specs(
     Ok(specs)
 }
 
-fn decomp_subband_specs_two(width: u32, height: u32) -> Result<[DecompSubbandSpec; 7]> {
-    let (ll_width, ll_height) = resolution_dimensions(width, height, 2, 0)?;
-    if ll_width == 0 || ll_height == 0 {
-        return Err(unsupported(
-            None,
-            Some(Marker::Siz),
-            UnsupportedConstruct::PacketDecode,
-            "native decomposition encode requires a non-empty lowest-resolution LL subband",
-        ));
-    }
-    let level_one = decomp_resolution_subband_specs(width, height, 2, 1)?;
-    let level_two = decomp_resolution_subband_specs(width, height, 2, 2)?;
-    Ok([
-        DecompSubbandSpec {
-            index: 0,
-            resolution: 0,
-            kind: PacketSubbandKind::LowLow,
-            x: 0,
-            y: 0,
-            width: ll_width,
-            height: ll_height,
+fn decomp_subband_specs_two_for_tile(
+    siz: &SizMarker,
+    tile: TileRect,
+) -> Result<[DecompSubbandSpec; 7]> {
+    let topology = Part1PrecinctTopology::new(
+        siz,
+        tile,
+        0,
+        CodingStyleMarker {
+            entropy_coder: EntropyCoder::ClassicTier1,
+            sop_markers: false,
+            eph_markers: false,
+            progression_order: ProgressionOrder::Lrcp,
+            layers: 1,
+            multiple_component_transform: false,
+            decomposition_levels: 2,
+            code_block_width_exponent: 6,
+            code_block_height_exponent: 6,
+            code_block_style: 0,
+            transform: WaveletTransform::Reversible53,
+            precincts_declared: false,
+            precinct_width_exponent: None,
+            precinct_height_exponent: None,
+            precinct_exponents: [0xff; 33],
         },
-        level_one[0],
-        level_one[1],
-        level_one[2],
-        level_two[0],
-        level_two[1],
-        level_two[2],
-    ])
+    )?;
+    let mut specs = Vec::with_capacity(7);
+    for resolution in 0..=2 {
+        for subband in topology.subbands(resolution)? {
+            specs.push(DecompSubbandSpec {
+                index: match (resolution, subband.kind) {
+                    (0, PacketSubbandKind::LowLow) => 0,
+                    (1, PacketSubbandKind::HighLow) => 1,
+                    (1, PacketSubbandKind::LowHigh) => 2,
+                    (1, PacketSubbandKind::HighHigh) => 3,
+                    (2, PacketSubbandKind::HighLow) => 4,
+                    (2, PacketSubbandKind::LowHigh) => 5,
+                    (2, PacketSubbandKind::HighHigh) => 6,
+                    _ => return Err(CodestreamError::SizeOverflow),
+                },
+                resolution,
+                kind: subband.kind,
+                x: subband.layout_x,
+                y: subband.layout_y,
+                grid_x0: subband.bounds.x0,
+                grid_y0: subband.bounds.y0,
+                width: u32::try_from(subband.bounds.width())
+                    .map_err(|_| CodestreamError::SizeOverflow)?,
+                height: u32::try_from(subband.bounds.height())
+                    .map_err(|_| CodestreamError::SizeOverflow)?,
+            });
+        }
+    }
+    specs.try_into().map_err(|_| CodestreamError::SizeOverflow)
 }
 
 fn decomp_resolution_subband_specs(
@@ -11464,6 +11654,8 @@ fn decomp_resolution_subband_specs(
             kind: PacketSubbandKind::HighLow,
             x: low_width,
             y: 0,
+            grid_x0: 0,
+            grid_y0: 0,
             width: high_width,
             height: low_height,
         },
@@ -11475,6 +11667,8 @@ fn decomp_resolution_subband_specs(
             kind: PacketSubbandKind::LowHigh,
             x: 0,
             y: low_height,
+            grid_x0: 0,
+            grid_y0: 0,
             width: low_width,
             height: high_height,
         },
@@ -11486,6 +11680,8 @@ fn decomp_resolution_subband_specs(
             kind: PacketSubbandKind::HighHigh,
             x: low_width,
             y: low_height,
+            grid_x0: 0,
+            grid_y0: 0,
             width: high_width,
             height: high_height,
         },
@@ -11500,10 +11696,28 @@ fn encode_decomp_subband(
     segments: &mut Vec<u8>,
     tier1_encode_scratch: &mut tier1::CodeBlockEncodeScratch,
 ) -> Result<NativeDecompSubband> {
-    let code_block_cols =
-        u16::try_from(ceil_div(spec.width, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
-    let code_block_rows =
-        u16::try_from(ceil_div(spec.height, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
+    let grid_x1 = spec
+        .grid_x0
+        .checked_add(u64::from(spec.width))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let grid_y1 = spec
+        .grid_y0
+        .checked_add(u64::from(spec.height))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let first_code_block_x = spec.grid_x0 / 64;
+    let first_code_block_y = spec.grid_y0 / 64;
+    let code_block_cols = u16::try_from(
+        ceil_div_u64(grid_x1, 64)?
+            .checked_sub(first_code_block_x)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )
+    .map_err(|_| CodestreamError::SizeOverflow)?;
+    let code_block_rows = u16::try_from(
+        ceil_div_u64(grid_y1, 64)?
+            .checked_sub(first_code_block_y)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )
+    .map_err(|_| CodestreamError::SizeOverflow)?;
     let mut code_blocks = Vec::with_capacity(
         usize::from(code_block_cols)
             .checked_mul(usize::from(code_block_rows))
@@ -11516,20 +11730,50 @@ fn encode_decomp_subband(
 
     for block_y in 0..code_block_rows {
         for block_x in 0..code_block_cols {
-            let local_x0 = u32::from(block_x)
-                .checked_mul(64)
+            let code_block_x0 = first_code_block_x
+                .checked_add(u64::from(block_x))
+                .and_then(|value| value.checked_mul(64))
                 .ok_or(CodestreamError::SizeOverflow)?;
-            let local_y0 = u32::from(block_y)
-                .checked_mul(64)
+            let code_block_y0 = first_code_block_y
+                .checked_add(u64::from(block_y))
+                .and_then(|value| value.checked_mul(64))
                 .ok_or(CodestreamError::SizeOverflow)?;
-            let width = u16::try_from((spec.width - local_x0).min(64))
-                .map_err(|_| CodestreamError::SizeOverflow)?;
-            let height = u16::try_from((spec.height - local_y0).min(64))
-                .map_err(|_| CodestreamError::SizeOverflow)?;
+            let clipped_x0 = code_block_x0.max(spec.grid_x0);
+            let clipped_y0 = code_block_y0.max(spec.grid_y0);
+            let clipped_x1 = code_block_x0
+                .checked_add(64)
+                .ok_or(CodestreamError::SizeOverflow)?
+                .min(grid_x1);
+            let clipped_y1 = code_block_y0
+                .checked_add(64)
+                .ok_or(CodestreamError::SizeOverflow)?
+                .min(grid_y1);
+            let width = u16::try_from(
+                clipped_x1
+                    .checked_sub(clipped_x0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            let height = u16::try_from(
+                clipped_y1
+                    .checked_sub(clipped_y0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
             let dimensions =
                 tier1::CodeBlockDimensions::new(width, height).map_err(map_tier1_error)?;
-            let local_x0 = usize::try_from(local_x0).map_err(|_| CodestreamError::SizeOverflow)?;
-            let local_y0 = usize::try_from(local_y0).map_err(|_| CodestreamError::SizeOverflow)?;
+            let local_x0 = usize::try_from(
+                clipped_x0
+                    .checked_sub(spec.grid_x0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            let local_y0 = usize::try_from(
+                clipped_y0
+                    .checked_sub(spec.grid_y0)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
             let source_x = subband_x
                 .checked_add(local_x0)
                 .ok_or(CodestreamError::SizeOverflow)?;
@@ -11985,10 +12229,34 @@ fn validate_native_multitile_dwt2_tile_size(
             "native multi-tile encode tile dimensions must be greater than zero",
         ));
     }
-    let tile_count_x = ceil_div(width, tile_size.width)?;
-    let tile_count_y = ceil_div(height, tile_size.height)?;
-    let tile_count = tile_count_x
-        .checked_mul(tile_count_y)
+    let siz = SizMarker {
+        capabilities: 0,
+        reference_grid_width: width,
+        reference_grid_height: height,
+        image_origin_x: 0,
+        image_origin_y: 0,
+        tile_width: tile_size.width,
+        tile_height: tile_size.height,
+        tile_origin_x: 0,
+        tile_origin_y: 0,
+        components: alloc::vec![ComponentParameters {
+            bits_per_sample: 8,
+            signed: false,
+            horizontal_separation: 1,
+            vertical_separation: 1,
+        }],
+    };
+    let tile_rects = native_encode_tile_rects(width, height, tile_size)?;
+    validate_native_multitile_dwt2_tile_rects(&siz, &tile_rects)
+}
+
+fn validate_native_multitile_dwt2_tile_rects(
+    siz: &SizMarker,
+    tile_rects: &[TileRect],
+) -> Result<()> {
+    let tile_count = siz
+        .tile_count_x()?
+        .checked_mul(siz.tile_count_y()?)
         .ok_or(CodestreamError::SizeOverflow)?;
     if tile_count <= 1 {
         return Err(unsupported(
@@ -12001,11 +12269,71 @@ fn validate_native_multitile_dwt2_tile_size(
     if tile_count > u32::from(u16::MAX) + 1 {
         return Err(CodestreamError::SizeOverflow);
     }
+    if usize::try_from(tile_count).map_err(|_| CodestreamError::SizeOverflow)? != tile_rects.len()
+        || tile_rects
+            .iter()
+            .enumerate()
+            .any(|(position, tile)| usize::from(tile.tile_index) != position)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::MultipleTiles,
+            "native multi-tile encode requires every SIZ tile to intersect the image",
+        ));
+    }
 
-    for tile_rect in native_encode_tile_rects(width, height, tile_size)? {
+    for tile_rect in tile_rects {
         decomp_subband_specs(tile_rect.width, tile_rect.height, 2)?;
     }
     Ok(())
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn native_test_fixture_siz(
+    width: u32,
+    height: u32,
+    geometry: NativeMultitileTestGeometry,
+) -> Result<SizMarker> {
+    if !geometry.image_origin_x.is_multiple_of(4)
+        || !geometry.image_origin_y.is_multiple_of(4)
+        || !geometry.tile_origin_x.is_multiple_of(4)
+        || !geometry.tile_origin_y.is_multiple_of(4)
+        || !geometry.tile_width.is_multiple_of(4)
+        || !geometry.tile_height.is_multiple_of(4)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::Transform,
+            "non-zero-origin native test fixtures require image origins, tile origins and nominal tile extents aligned to the two-level synthesis phase",
+        ));
+    }
+    let siz = SizMarker {
+        capabilities: 0,
+        reference_grid_width: geometry
+            .image_origin_x
+            .checked_add(width)
+            .ok_or(CodestreamError::SizeOverflow)?,
+        reference_grid_height: geometry
+            .image_origin_y
+            .checked_add(height)
+            .ok_or(CodestreamError::SizeOverflow)?,
+        image_origin_x: geometry.image_origin_x,
+        image_origin_y: geometry.image_origin_y,
+        tile_width: geometry.tile_width,
+        tile_height: geometry.tile_height,
+        tile_origin_x: geometry.tile_origin_x,
+        tile_origin_y: geometry.tile_origin_y,
+        components: alloc::vec![ComponentParameters {
+            bits_per_sample: 8,
+            signed: false,
+            horizontal_separation: 1,
+            vertical_separation: 1,
+        }],
+    };
+    validate_siz(&siz)?;
+    Ok(siz)
 }
 
 fn native_encode_tile_rects(width: u32, height: u32, tile_size: TileSize) -> Result<Vec<TileRect>> {
@@ -12608,6 +12936,28 @@ fn write_native_part1_main_header(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn write_native_part1_main_header_with_siz(
+    output: &mut Vec<u8>,
+    siz: &SizMarker,
+    bits_per_sample: u8,
+    components: u16,
+    multiple_component_transform: bool,
+    decomposition_levels: u8,
+    qcd_exponents: &[u8],
+) -> Result<()> {
+    write_native_main_header_with_siz(
+        output,
+        siz,
+        bits_per_sample,
+        components,
+        multiple_component_transform,
+        decomposition_levels,
+        qcd_exponents,
+        false,
+    )
+}
+
 fn write_native_ht_main_header(
     output: &mut Vec<u8>,
     width: u32,
@@ -12645,6 +12995,48 @@ fn write_native_main_header(
     qcd_exponents: &[u8],
     ht_block_coding: bool,
 ) -> Result<()> {
+    let siz = SizMarker {
+        capabilities: if ht_block_coding { 0x4000 } else { 0 },
+        reference_grid_width: width,
+        reference_grid_height: height,
+        image_origin_x: 0,
+        image_origin_y: 0,
+        tile_width,
+        tile_height,
+        tile_origin_x: 0,
+        tile_origin_y: 0,
+        components: (0..components)
+            .map(|_| ComponentParameters {
+                bits_per_sample,
+                signed: false,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+            })
+            .collect(),
+    };
+    write_native_main_header_with_siz(
+        output,
+        &siz,
+        bits_per_sample,
+        components,
+        multiple_component_transform,
+        decomposition_levels,
+        qcd_exponents,
+        ht_block_coding,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_native_main_header_with_siz(
+    output: &mut Vec<u8>,
+    siz: &SizMarker,
+    bits_per_sample: u8,
+    components: u16,
+    multiple_component_transform: bool,
+    decomposition_levels: u8,
+    qcd_exponents: &[u8],
+    ht_block_coding: bool,
+) -> Result<()> {
     let expected_subbands = 1usize
         .checked_add(
             usize::from(decomposition_levels)
@@ -12665,15 +13057,15 @@ fn write_native_main_header(
     output.extend_from_slice(&[0xff, 0x4f]);
     output.extend_from_slice(&[0xff, 0x51]);
     output.extend_from_slice(&siz_len.to_be_bytes());
-    output.extend_from_slice(&if ht_block_coding { 0x4000_u16 } else { 0 }.to_be_bytes());
-    output.extend_from_slice(&width.to_be_bytes());
-    output.extend_from_slice(&height.to_be_bytes());
-    output.extend_from_slice(&0_u32.to_be_bytes());
-    output.extend_from_slice(&0_u32.to_be_bytes());
-    output.extend_from_slice(&tile_width.to_be_bytes());
-    output.extend_from_slice(&tile_height.to_be_bytes());
-    output.extend_from_slice(&0_u32.to_be_bytes());
-    output.extend_from_slice(&0_u32.to_be_bytes());
+    output.extend_from_slice(&siz.capabilities.to_be_bytes());
+    output.extend_from_slice(&siz.reference_grid_width.to_be_bytes());
+    output.extend_from_slice(&siz.reference_grid_height.to_be_bytes());
+    output.extend_from_slice(&siz.image_origin_x.to_be_bytes());
+    output.extend_from_slice(&siz.image_origin_y.to_be_bytes());
+    output.extend_from_slice(&siz.tile_width.to_be_bytes());
+    output.extend_from_slice(&siz.tile_height.to_be_bytes());
+    output.extend_from_slice(&siz.tile_origin_x.to_be_bytes());
+    output.extend_from_slice(&siz.tile_origin_y.to_be_bytes());
     output.extend_from_slice(&components.to_be_bytes());
     let sample_marker = bits_per_sample
         .checked_sub(1)
@@ -13872,10 +14264,27 @@ mod bounded_poc_tests {
         };
         let tile_rects = native_encode_tile_rects(input.width, input.height, tile_size).unwrap();
         let mut tiles = prepare_grayscale_u8_dwt2_tiles(input, &tile_rects).unwrap();
+        let packet_siz = SizMarker {
+            capabilities: 0,
+            reference_grid_width: input.width,
+            reference_grid_height: input.height,
+            image_origin_x: 0,
+            image_origin_y: 0,
+            tile_width: tile_size.width,
+            tile_height: tile_size.height,
+            tile_origin_x: 0,
+            tile_origin_y: 0,
+            components: alloc::vec![ComponentParameters {
+                bits_per_sample: 8,
+                signed: false,
+                horizontal_separation: 1,
+                vertical_separation: 1,
+            }],
+        };
         let mut base_exponents = [0_u8; 7];
         for tile in &tiles {
             let subband_specs =
-                decomp_subband_specs_two(tile.tile_rect.width, tile.tile_rect.height).unwrap();
+                decomp_subband_specs_two_for_tile(&packet_siz, tile.tile_rect).unwrap();
             for (current, spec) in base_exponents.iter_mut().zip(&subband_specs) {
                 *current = (*current).max(
                     subband_available_bitplanes(
@@ -13914,7 +14323,9 @@ mod bounded_poc_tests {
                     *exponent = exponent.checked_add(7).unwrap();
                 }
             }
-            let packet = encode_native_two_decomp_tile_packet(tile, 1, &tile_exponents).unwrap();
+            let packet =
+                encode_native_two_decomp_tile_packet(&packet_siz, tile, 1, &tile_exponents)
+                    .unwrap();
             write_tile_part(&mut codestream, packet.tile_index, &packet.packet, false).unwrap();
         }
         codestream.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
@@ -16911,41 +17322,7 @@ fn validate_supported_part1_native_multitile_partial_profile(
     input: &[u8],
     codestream: &Codestream,
 ) -> Result<CodingStyleMarker> {
-    let coding_style =
-        validate_supported_native_grayscale_u8_two_decomp_multitile_profile(codestream)?;
-    if codestream.siz.image_origin_x != 0
-        || codestream.siz.image_origin_y != 0
-        || codestream.siz.tile_origin_x != 0
-        || codestream.siz.tile_origin_y != 0
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Siz),
-            UnsupportedConstruct::MultipleTiles,
-            "native multi-tile partial decode requires zero image and tile origins",
-        ));
-    }
-    if coding_style.progression_order != ProgressionOrder::Lrcp
-        || coding_style.layers != 1
-        || coding_style.code_block_width_exponent != 6
-        || coding_style.code_block_height_exponent != 6
-        || coding_style.code_block_style != 0
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::PacketDecode,
-            "native multi-tile partial decode requires one-layer LRCP coding with the encoder-compatible default code-block style",
-        ));
-    }
-    if !codestream.component_coding_styles.is_empty() {
-        return Err(unsupported(
-            None,
-            Some(Marker::Coc),
-            UnsupportedConstruct::MarkerSegment,
-            "native multi-tile partial decode rejects component coding-style overrides",
-        ));
-    }
+    let coding_style = validate_supported_part1_native_multitile_partial_semantics(codestream)?;
     let tile_count = codestream
         .siz
         .tile_count_x()?
@@ -17037,6 +17414,75 @@ fn validate_supported_part1_native_multitile_partial_profile(
             Some(Marker::Eoc),
             UnsupportedConstruct::MarkerSegment,
             "native multi-tile partial decode requires EOC to terminate the raw codestream bytes",
+        ));
+    }
+    Ok(coding_style)
+}
+
+fn validate_supported_part1_native_multitile_partial_semantics(
+    codestream: &Codestream,
+) -> Result<CodingStyleMarker> {
+    let coding_style =
+        validate_supported_native_grayscale_u8_two_decomp_multitile_profile(codestream)?;
+    let siz = &codestream.siz;
+    let has_nonzero_origin = siz.image_origin_x != 0
+        || siz.image_origin_y != 0
+        || siz.tile_origin_x != 0
+        || siz.tile_origin_y != 0;
+    if has_nonzero_origin
+        && (!siz.image_origin_x.is_multiple_of(4)
+            || !siz.image_origin_y.is_multiple_of(4)
+            || !siz.tile_origin_x.is_multiple_of(4)
+            || !siz.tile_origin_y.is_multiple_of(4)
+            || !siz.tile_width.is_multiple_of(4)
+            || !siz.tile_height.is_multiple_of(4))
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::Transform,
+            "non-zero-origin native multi-tile partial decode requires image origins, tile origins and nominal tile extents aligned to the two-level synthesis phase",
+        ));
+    }
+    if has_nonzero_origin {
+        for tile in tile_rects(codestream)? {
+            let absolute_x = siz
+                .image_origin_x
+                .checked_add(tile.x)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let absolute_y = siz
+                .image_origin_y
+                .checked_add(tile.y)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if !absolute_x.is_multiple_of(4) || !absolute_y.is_multiple_of(4) {
+                return Err(unsupported(
+                    None,
+                    Some(Marker::Siz),
+                    UnsupportedConstruct::Transform,
+                    "non-zero-origin native multi-tile partial decode requires every clipped tile-component start aligned to the two-level synthesis phase",
+                ));
+            }
+        }
+    }
+    if coding_style.progression_order != ProgressionOrder::Lrcp
+        || coding_style.layers != 1
+        || coding_style.code_block_width_exponent != 6
+        || coding_style.code_block_height_exponent != 6
+        || coding_style.code_block_style != 0
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "native multi-tile partial decode requires one-layer LRCP coding with the encoder-compatible default code-block style",
+        ));
+    }
+    if !codestream.component_coding_styles.is_empty() {
+        return Err(unsupported(
+            None,
+            Some(Marker::Coc),
+            UnsupportedConstruct::MarkerSegment,
+            "native multi-tile partial decode rejects component coding-style overrides",
         ));
     }
     Ok(coding_style)
@@ -17564,6 +18010,17 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
         ));
     }
     let coding_style = uniform_effective_coding_style(codestream)?;
+    if codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+    {
+        return if enforce_total_sample_guard {
+            validate_supported_part1_native_multitile_partial_profile(input, codestream)
+        } else {
+            validate_supported_part1_native_multitile_partial_semantics(codestream)
+        };
+    }
     match coding_style.transform {
         WaveletTransform::Irreversible97 => {
             validate_supported_native_irreversible_component_selective_profile(input, codestream)
