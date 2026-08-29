@@ -218,6 +218,51 @@ are defined by Annex C, C.2.1 and Table C.1, PDF page 31. The reviewed
 transcription was retrieval revision
 `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
 
+### Rendered Annex G comparison
+
+The rendered-pixel Layer 2 journey consumes only the catalogue-owned
+`rendered_pixel_comparison` plan and its exact locked inventory:
+
+```sh
+cargo build -p emuella-j2k-cli
+python3 scripts/run-layer2-rendered-pixel.py \
+  --testdata /path/to/emuella-testdata
+```
+
+The runner applies the same exact catalogue lock, clean tracked checkout,
+complete inventory, archive, materialised-tree, canonical executable and
+private execution-snapshot checks as the inspection journey. It resolves and
+verifies both inventory paths before invoking the dedicated
+`compare-rendered-tiff-rgb` worker with a finite per-case timeout. Bound mode
+does not accept an arbitrary executable. Missing data follows the locked
+suite's failure policy; neither runner nor worker acquires, copies or falls
+back to other inputs or decoders.
+
+The worker reads bounded JP2 and TIFF files into process memory and calls only
+the ordinary full-frame rendered decode API with best-effort fallback disabled.
+It requires the decoded result to be exactly three interleaved unsigned 8-bit
+sRGB channels at the declared positive dimensions. The reference parser is a
+narrow classic-TIFF reader: `II` and `MM` byte orders are admitted; there is
+exactly one IFD; RGB, uncompressed, chunky, three-sample, 8/8/8 data is stored
+in one or more whole-row strips; and logical strip order may differ from
+physical file order. Required pixel tags are `ImageWidth`, `ImageLength`,
+`BitsPerSample`, `Compression`, `PhotometricInterpretation`, `StripOffsets`,
+`SamplesPerPixel`, `RowsPerStrip`, `StripByteCounts` and
+`PlanarConfiguration`. The inert baseline tags `NewSubfileType`, `FillOrder`,
+`Orientation`, `XResolution`, `YResolution` and `ResolutionUnit` are accepted
+only in their narrow non-transforming forms. All other tags, compression,
+palette colour, planar samples, alpha, non-8-bit samples, additional IFDs,
+duplicate metadata, inconsistent counts, overlapping ranges, trailing sample
+bytes and unreferenced trailing file data fail closed.
+
+Every logical RGB byte is compared in memory and the inclusive peak-error
+limit decides the result. Worker output is exactly
+`components,width,height,samples,peak,limit,passed`; the outer report adds only
+the locked pack and case identities and final pass/fail counts. Paths, input or
+reference hashes, pixel values and derived images are never reported or
+persisted. Ordinary Rust and Python tests use only project-authored synthetic
+JP2/TIFF bytes and do not open a materialised corpus.
+
 ### Component coding-style overrides
 
 The main-header COC parser and its project-authored synthetic fixtures follow
