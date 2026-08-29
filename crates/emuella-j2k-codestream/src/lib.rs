@@ -8699,6 +8699,71 @@ pub fn encode_htj2k_grayscale_u8_no_decomp(input: GrayscaleU8Encode<'_>) -> Resu
     })
 }
 
+#[cfg(test)]
+fn encode_htj2k_grayscale_u8_decomp_test_fixture(
+    input: GrayscaleU8Encode<'_>,
+    decomposition_levels: u8,
+) -> Result<Vec<u8>> {
+    validate_grayscale_u8_encode(input)?;
+    if !(2..=3).contains(&decomposition_levels) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+
+    let mut coefficients = level_shift_grayscale_plane(input)?;
+    forward_reversible_5_3_levels(
+        input.width,
+        input.height,
+        &mut coefficients,
+        decomposition_levels,
+        "forward reversible 5/3 transform failed for project-authored HTJ2K fixture",
+    )?;
+    let subband_specs = decomp_subband_specs(input.width, input.height, decomposition_levels)?;
+    let qcd_exponents = subband_specs
+        .iter()
+        .map(|spec| {
+            subband_available_bitplanes(
+                input.width,
+                &coefficients,
+                spec.x,
+                spec.y,
+                spec.width,
+                spec.height,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut segments = Vec::new();
+    let mut subbands = Vec::with_capacity(subband_specs.len());
+    for (spec, available_bitplanes) in subband_specs.iter().zip(&qcd_exponents) {
+        subbands.push(encode_ht_decomp_subband_test_fixture(
+            input.width,
+            &coefficients,
+            *spec,
+            *available_bitplanes,
+            &mut segments,
+        )?);
+    }
+
+    let mut packet = Vec::new();
+    write_native_decomp_packets(&mut packet, decomposition_levels, &[subbands], &segments)?;
+    let mut codestream = Vec::new();
+    write_native_main_header(
+        &mut codestream,
+        input.width,
+        input.height,
+        input.width,
+        input.height,
+        8,
+        1,
+        false,
+        decomposition_levels,
+        &qcd_exponents,
+        true,
+    )?;
+    write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
+}
+
 /// Encode a single-tile unsigned 8-bit grayscale Part 1 codestream using the
 /// repo-owned one-decomposition reversible 5/3 slice.
 pub fn encode_grayscale_u8_one_decomp(input: GrayscaleU8Encode<'_>) -> Result<Vec<u8>> {
@@ -10089,38 +10154,27 @@ fn forward_reversible_5_3_levels_with_scratch(
     message: &'static str,
     scratch: &mut Vec<i32>,
 ) -> Result<()> {
-    if !matches!(decomposition_levels, 1 | 2) {
+    if !(1..=3).contains(&decomposition_levels) {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::Transform,
-            "native decomposition encode supports exactly one or two transform levels",
+            "native decomposition transform helper supports one through three levels",
         ));
     }
-    let config = reversible_5_3_region_config(
-        width,
-        width,
-        height,
-        transform::ComponentSampleRange::signed(32),
-    )?;
-    scratch.resize(config.scratch_len(), 0);
-    transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
-        .map_err(|_| {
-            unsupported(
-                None,
-                Some(Marker::Cod),
-                UnsupportedConstruct::Transform,
-                message,
-            )
-        })?;
-    if decomposition_levels == 2 {
-        let (ll_width, ll_height) = resolution_dimensions(width, height, 1, 0)?;
+    for completed_levels in 0..decomposition_levels {
+        let (active_width, active_height) = if completed_levels == 0 {
+            (width, height)
+        } else {
+            resolution_dimensions(width, height, completed_levels, 0)?
+        };
         let config = reversible_5_3_region_config(
             width,
-            ll_width,
-            ll_height,
+            active_width,
+            active_height,
             transform::ComponentSampleRange::signed(32),
         )?;
+        scratch.resize(config.scratch_len(), 0);
         transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
             .map_err(|_| {
                 unsupported(
@@ -10816,12 +10870,12 @@ fn decomp_subband_specs(
     height: u32,
     decomposition_levels: u8,
 ) -> Result<Vec<DecompSubbandSpec>> {
-    if !matches!(decomposition_levels, 1 | 2) {
+    if !(1..=3).contains(&decomposition_levels) {
         return Err(unsupported(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::PacketDecode,
-            "native decomposition encode supports exactly one or two levels",
+            "native decomposition subband helper supports one through three levels",
         ));
     }
     let expected = 1usize
@@ -11040,6 +11094,101 @@ fn encode_decomp_subband(
                 coding_passes: encoded.pass_count,
                 segment_offset,
                 segment_len: encoded.byte_len,
+            });
+        }
+    }
+
+    Ok(NativeDecompSubband {
+        index: spec.index,
+        resolution: spec.resolution,
+        kind: spec.kind,
+        x: spec.x,
+        y: spec.y,
+        width: spec.width,
+        height: spec.height,
+        code_block_cols,
+        code_block_rows,
+        available_bitplanes,
+        code_blocks,
+    })
+}
+
+#[cfg(test)]
+fn encode_ht_decomp_subband_test_fixture(
+    image_width: u32,
+    plane: &[i32],
+    spec: DecompSubbandSpec,
+    available_bitplanes: u8,
+    segments: &mut Vec<u8>,
+) -> Result<NativeDecompSubband> {
+    let code_block_cols =
+        u16::try_from(ceil_div(spec.width, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
+    let code_block_rows =
+        u16::try_from(ceil_div(spec.height, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
+    let mut code_blocks = Vec::with_capacity(
+        usize::from(code_block_cols)
+            .checked_mul(usize::from(code_block_rows))
+            .ok_or(CodestreamError::SizeOverflow)?,
+    );
+    let image_width_usize =
+        usize::try_from(image_width).map_err(|_| CodestreamError::SizeOverflow)?;
+    let subband_x = usize::try_from(spec.x).map_err(|_| CodestreamError::SizeOverflow)?;
+    let subband_y = usize::try_from(spec.y).map_err(|_| CodestreamError::SizeOverflow)?;
+
+    for block_y in 0..code_block_rows {
+        for block_x in 0..code_block_cols {
+            let local_x = u32::from(block_x)
+                .checked_mul(64)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let local_y = u32::from(block_y)
+                .checked_mul(64)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let width = u16::try_from((spec.width - local_x).min(64))
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            let height = u16::try_from((spec.height - local_y).min(64))
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            let source_offset = subband_y
+                .checked_add(usize::try_from(local_y).map_err(|_| CodestreamError::SizeOverflow)?)
+                .and_then(|y| y.checked_mul(image_width_usize))
+                .and_then(|offset| {
+                    offset.checked_add(subband_x.checked_add(usize::try_from(local_x).ok()?)?)
+                })
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let source = plane
+                .get(source_offset..)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let encoded = ht::encode_ht_cleanup_block(
+                source,
+                width,
+                height,
+                image_width_usize,
+                available_bitplanes,
+            )
+            .map_err(map_ht_cleanup_encode_error)?;
+            let segment_offset = segments.len();
+            let (included, missing_bitplanes, coding_passes, segment_len) =
+                if let Some(encoded) = encoded {
+                    let segment_len = encoded.segment.len();
+                    segments.extend_from_slice(&encoded.segment);
+                    (
+                        true,
+                        encoded.missing_most_significant_bitplanes,
+                        encoded.coding_passes,
+                        segment_len,
+                    )
+                } else {
+                    (false, 0, 0, 0)
+                };
+            code_blocks.push(EncodedCodeBlock {
+                x: block_x,
+                y: block_y,
+                width,
+                height,
+                included,
+                missing_bitplanes,
+                coding_passes,
+                segment_offset,
+                segment_len,
             });
         }
     }
@@ -42696,13 +42845,30 @@ fn classify_htj2k_lossless_profile(
         )
     })?;
 
-    if coding_style.decomposition_levels > 1 {
+    if coding_style.decomposition_levels > 3 {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::WaveletTransform,
-            "native HTJ2K lossless decode accepts at most one reversible 5/3 decomposition level",
+            "native HTJ2K lossless decode accepts at most three reversible 5/3 decomposition levels",
         ));
     }
-    if coding_style.decomposition_levels == 1
+    if coding_style.decomposition_levels >= 2 {
+        let component = codestream.siz.components.first();
+        if codestream.siz.component_count() != 1
+            || component.is_none_or(|component| {
+                component.bits_per_sample != 8
+                    || component.signed
+                    || component.horizontal_separation != 1
+                    || component.vertical_separation != 1
+            })
+            || coding_style.multiple_component_transform
+        {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::WaveletTransform,
+                "native HTJ2K multi-level lossless decode requires one unsigned 8-bit, unit-sampled component without MCT",
+            ));
+        }
+    }
+    if coding_style.decomposition_levels != 0
         && (codestream.siz.image_origin_x != 0
             || codestream.siz.image_origin_y != 0
             || codestream.siz.tile_origin_x != 0
@@ -42710,7 +42876,7 @@ fn classify_htj2k_lossless_profile(
     {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::WaveletTransform,
-            "native HTJ2K DWT1 decode requires zero image and tile origins",
+            "native HTJ2K decomposed lossless decode requires zero image and tile origins",
         ));
     }
     if coding_style.multiple_component_transform
@@ -42874,7 +43040,7 @@ mod htj2k_lossless_profile_classifier_tests {
         assert_eq!(diagnostic(&admitted), None);
 
         let mut too_many_decompositions = fixture();
-        set_decomposition_levels(&mut too_many_decompositions, 2);
+        set_decomposition_levels(&mut too_many_decompositions, 4);
 
         let mut invalid_mct_format = fixture();
         let cod = find_marker(&invalid_mct_format, 0, Marker::Cod).unwrap();
@@ -42942,7 +43108,7 @@ mod htj2k_lossless_profile_classifier_tests {
         assert!(matches!(
             diagnostic(&dwt1_origin_and_later_failures),
             Some((UnsupportedConstruct::WaveletTransform, detail))
-                if detail == "native HTJ2K DWT1 decode requires zero image and tile origins"
+                if detail == "native HTJ2K decomposed lossless decode requires zero image and tile origins"
         ));
 
         let mut style_before_qcd = fixture();
@@ -43008,6 +43174,104 @@ mod htj2k_lossless_profile_classifier_tests {
             Some((UnsupportedConstruct::HtBlockDecode, detail))
                 if detail.contains("HT final coding set")
         ));
+    }
+
+    fn multilevel_fixture(levels: u8) -> (Vec<u8>, Vec<u8>) {
+        let width = 67_u32;
+        let height = 65_u32;
+        let samples = (0..width * height)
+            .map(|index| ((index * 37 + index / width * 19 + 11) % 251) as u8)
+            .collect::<Vec<_>>();
+        let codestream = encode_htj2k_grayscale_u8_decomp_test_fixture(
+            GrayscaleU8Encode {
+                width,
+                height,
+                samples: &samples,
+                stride_bytes: width as usize,
+            },
+            levels,
+        )
+        .unwrap();
+        (codestream, samples)
+    }
+
+    #[test]
+    fn admits_and_decodes_project_authored_two_and_three_level_fixtures() {
+        for levels in [2, 3] {
+            let (codestream, samples) = multilevel_fixture(levels);
+            let parsed = parse(&codestream).unwrap();
+            assert_eq!(parsed.coding_style.unwrap().decomposition_levels, levels);
+            assert!(is_htj2k_lossless_profile(&codestream, &parsed));
+
+            let decoded = decode_htj2k_lossless_owned(&codestream).unwrap().unwrap();
+            assert_eq!((decoded.width, decoded.height), (67, 65));
+            assert_eq!(decoded.bits_per_sample, 8);
+            assert!(!decoded.signed);
+            assert_eq!(decoded.components.len(), 1);
+            assert_eq!(decoded.components[0].samples, samples);
+        }
+    }
+
+    #[test]
+    fn multilevel_profile_fails_closed_outside_the_calibrated_shape() {
+        let (fixture, _) = multilevel_fixture(3);
+
+        let mut four_levels = fixture.clone();
+        let cod = find_marker(&four_levels, 0, Marker::Cod).unwrap();
+        four_levels[cod + 9] = 4;
+        let qcd = find_marker(&four_levels, 0, Marker::Qcd).unwrap();
+        let qcd_len = usize::from(read_u16(&four_levels, qcd + 2).unwrap());
+        let exponent = four_levels[qcd + 5];
+        four_levels.splice(qcd + 2 + qcd_len..qcd + 2 + qcd_len, [exponent; 3]);
+        four_levels[qcd + 2..qcd + 4]
+            .copy_from_slice(&u16::try_from(qcd_len + 3).unwrap().to_be_bytes());
+        assert!(matches!(
+            diagnostic(&four_levels),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail.contains("at most three")
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&four_levels),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::WaveletTransform,
+                ..
+            })
+        ));
+
+        let mut mct = fixture.clone();
+        let cod = find_marker(&mct, 0, Marker::Cod).unwrap();
+        mct[cod + 8] = 1;
+        assert!(matches!(
+            diagnostic(&mct),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail.contains("without MCT")
+        ));
+
+        let mut malformed_packet = fixture;
+        let sod = find_marker(&malformed_packet, 0, Marker::Sod).unwrap();
+        malformed_packet[sod + 2] = 0xff;
+        assert!(matches!(
+            diagnostic(&malformed_packet),
+            Some((UnsupportedConstruct::PacketDecode, _))
+        ));
+    }
+
+    #[test]
+    fn final_ht_coding_set_predicate_accepts_three_passes_but_rejects_four() {
+        let (fixture, _) = multilevel_fixture(2);
+        let parsed = parse(&fixture).unwrap();
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let payload = tile_payload(&fixture, &parsed.tiles[0]).unwrap();
+        let mut contributions =
+            parse_default_precinct_lrcp_packets(&fixture, &parsed, tile, payload).unwrap();
+        assert!(!contributions.is_empty());
+        for contribution in &mut contributions {
+            contribution.expanded_ht_coding_sets = None;
+            contribution.coding_passes = 3;
+        }
+        assert!(ht_contributions_have_supported_final_sets(&contributions));
+        contributions[0].coding_passes = 4;
+        assert!(!ht_contributions_have_supported_final_sets(&contributions));
     }
 }
 
@@ -43134,7 +43398,7 @@ fn ht_reversible_code_block_transfer(
         return Ok(None);
     };
     if coding_style.transform != WaveletTransform::Reversible53
-        || coding_style.decomposition_levels > 1
+        || coding_style.decomposition_levels > 3
     {
         return Ok(None);
     }
@@ -43656,7 +43920,9 @@ fn byte_stuffing_profile(bytes: &[u8]) -> (usize, usize) {
 /// component and resolution, any positive quality-layer count and COD
 /// progression order, reversible 5/3 with zero or one decomposition level,
 /// grayscale/RGB components with matching signedness and 8- to 16-bit
-/// precision, and one or
+/// precision for the zero- and one-level profiles. The two- and three-level
+/// profile is restricted to one unsigned 8-bit, unit-sampled component with
+/// zero origins and no MCT. All profiles use one or
 /// more HT sets of Cleanup plus optional SigProp/MagRef passes per included
 /// code-block. The final independently decodable set supplies the requested
 /// full-quality block. Three-component streams with three matching signed or
@@ -43694,15 +43960,34 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
         }
     };
     let coding_style = uniform_effective_coding_style(&codestream)?;
-    if coding_style.decomposition_levels > 1 {
+    if coding_style.decomposition_levels > 3 {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::WaveletTransform,
-            "benchmark-oriented HTJ2K decode accepts at most one reversible 5/3 decomposition level",
+            "benchmark-oriented HTJ2K decode accepts at most three reversible 5/3 decomposition levels",
         ));
     }
-    if coding_style.decomposition_levels == 1
+    if coding_style.decomposition_levels >= 2 {
+        let component = codestream.siz.components.first();
+        if codestream.siz.component_count() != 1
+            || component.is_none_or(|component| {
+                component.bits_per_sample != 8
+                    || component.signed
+                    || component.horizontal_separation != 1
+                    || component.vertical_separation != 1
+            })
+            || coding_style.multiple_component_transform
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::WaveletTransform,
+                "benchmark-oriented HTJ2K multi-level lossless decode requires one unsigned 8-bit, unit-sampled component without MCT",
+            ));
+        }
+    }
+    if coding_style.decomposition_levels != 0
         && (codestream.siz.image_origin_x != 0
             || codestream.siz.image_origin_y != 0
             || codestream.siz.tile_origin_x != 0
@@ -43712,7 +43997,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::WaveletTransform,
-            "benchmark-oriented HTJ2K DWT1 decode currently requires zero image and tile origins",
+            "benchmark-oriented HTJ2K decomposed decode currently requires zero image and tile origins",
         ));
     }
     if coding_style.multiple_component_transform
@@ -43772,7 +44057,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     let plane_len = stride
         .checked_mul(height)
         .ok_or(CodestreamError::SizeOverflow)?;
-    if coding_style.decomposition_levels == 1 {
+    if coding_style.decomposition_levels != 0 {
         let components = decode_htj2k_lossless_decomp_components(
             candidate,
             payload,
