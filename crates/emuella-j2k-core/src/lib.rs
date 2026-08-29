@@ -32,6 +32,696 @@ pub struct ProjectSummary {
     pub summary: &'static str,
 }
 
+#[cfg(test)]
+mod jp2_header_validation_tests {
+    use super::*;
+
+    fn codestream(components: usize) -> Vec<u8> {
+        let samples = (0..15)
+            .map(|index| u8::try_from(index * 13 + 7).unwrap())
+            .collect::<Vec<_>>();
+        let planes = (0..components)
+            .map(|_| samples.as_slice())
+            .collect::<Vec<_>>();
+        codestream::encode_planar_u8_no_decomp_test_fixture(5, 3, &planes).unwrap()
+    }
+
+    fn wrap_jp2(
+        codestream: &[u8],
+        width: u32,
+        height: u32,
+        components: u16,
+        bpc: u8,
+        bpcc: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let mut output = Vec::new();
+        container::write_signature_box(&mut output).unwrap();
+        container::write_file_type_box(&mut output, container::ContainerKind::Jp2, 0, &[]).unwrap();
+        let mut children = Vec::new();
+        container::write_image_header_box(
+            &mut children,
+            container::ImageHeaderBox {
+                width,
+                height,
+                components,
+                bits_per_component: bpc,
+                compression_type: 7,
+                unknown_color_space: false,
+                intellectual_property: false,
+            },
+        )
+        .unwrap();
+        if let Some(entries) = bpcc {
+            container::write_box(&mut children, container::boxes::BITS_PER_COMPONENT, entries)
+                .unwrap();
+        }
+        container::write_color_specification_box(
+            &mut children,
+            container::ColorSpecificationBox {
+                method: container::ColorSpecificationMethod::Enumerated,
+                precedence: 0,
+                approximation: 0,
+                enumerated_color_space: Some(if components == 1 {
+                    container::EnumeratedColorSpace::Greyscale
+                } else {
+                    container::EnumeratedColorSpace::SRgb
+                }),
+            },
+        )
+        .unwrap();
+        container::write_jp2_header_box(&mut output, &children).unwrap();
+        container::write_contiguous_codestream_box(&mut output, codestream).unwrap();
+        output
+    }
+
+    fn marker_offset(input: &[u8], marker: [u8; 2]) -> usize {
+        input.windows(2).position(|bytes| bytes == marker).unwrap()
+    }
+
+    fn box_offset(input: &[u8], box_type: container::FourCc) -> usize {
+        input
+            .windows(4)
+            .position(|bytes| bytes == box_type.as_bytes())
+            .unwrap()
+            - 4
+    }
+
+    fn append_jp2_header_child(input: &mut Vec<u8>, child: Vec<u8>) {
+        let jp2c = box_offset(input, container::boxes::CONTIGUOUS_CODESTREAM);
+        let jp2h = box_offset(input, container::boxes::JP2_HEADER);
+        let old_len = u32::from_be_bytes(input[jp2h..jp2h + 4].try_into().unwrap());
+        input[jp2h..jp2h + 4]
+            .copy_from_slice(&(old_len + u32::try_from(child.len()).unwrap()).to_be_bytes());
+        input.splice(jp2c..jp2c, child);
+    }
+
+    fn set_first_colour(input: &mut [u8], method: u8, enumerated: Option<u32>) {
+        let colr = box_offset(input, container::boxes::COLOR_SPECIFICATION);
+        input[colr + 8] = method;
+        if let Some(value) = enumerated {
+            input[colr + 11..colr + 15].copy_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    fn colour_box(method: container::ColorSpecificationMethod, space: Option<u32>) -> Vec<u8> {
+        let mut output = Vec::new();
+        container::write_color_specification_box(
+            &mut output,
+            container::ColorSpecificationBox {
+                method,
+                precedence: 0,
+                approximation: 0,
+                enumerated_color_space: space.map(container::EnumeratedColorSpace::Unknown),
+            },
+        )
+        .unwrap();
+        output
+    }
+
+    fn presentation_box(box_type: container::FourCc, contents: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        container::write_box(&mut output, box_type, contents).unwrap();
+        output
+    }
+
+    fn unsupported_presentation_inputs(raw: &[u8], components: u16) -> Vec<Vec<u8>> {
+        let mut inputs = Vec::new();
+        for box_type in [
+            container::boxes::PALETTE,
+            container::boxes::COMPONENT_MAPPING,
+            container::boxes::CHANNEL_DEFINITION,
+        ] {
+            let mut input = wrap_jp2(raw, 5, 3, components, 7, None);
+            append_jp2_header_child(&mut input, presentation_box(box_type, &[0, 0, 0, 0]));
+            inputs.push(input);
+        }
+        for (method, enumerated) in [
+            (1, Some(18)),
+            (2, None),
+            (3, None),
+            (4, None),
+            (0, None),
+            (1, Some(99)),
+        ] {
+            let mut input = wrap_jp2(raw, 5, 3, components, 7, None);
+            set_first_colour(&mut input, method, enumerated);
+            inputs.push(input);
+        }
+        inputs
+    }
+
+    fn planar_full_into(input: &[u8], info: &ImageInfo, options: &DecodeOptions) -> Vec<Vec<u8>> {
+        let plane_len = usize::try_from(info.width * info.height).unwrap();
+        let mut buffers = (0..info.components)
+            .map(|_| vec![0_u8; plane_len])
+            .collect::<Vec<_>>();
+        let mut planes = buffers
+            .iter_mut()
+            .map(|samples| {
+                PlaneMut::new(
+                    samples,
+                    info.width,
+                    info.height,
+                    usize::try_from(info.width).unwrap(),
+                    info.sample_format,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut target = ImageViewMut::Planar {
+            info,
+            planes: &mut planes,
+        };
+        decode_into(input, &mut target, options).unwrap();
+        buffers
+    }
+
+    fn planar_partial_into(
+        input: &[u8],
+        info: &ImageInfo,
+        options: &PartialDecodeOptions,
+    ) -> Vec<Vec<u8>> {
+        let plane_len = usize::try_from(info.width * info.height).unwrap();
+        let mut buffers = (0..info.components)
+            .map(|_| vec![0_u8; plane_len])
+            .collect::<Vec<_>>();
+        let mut planes = buffers
+            .iter_mut()
+            .map(|samples| {
+                PlaneMut::new(
+                    samples,
+                    info.width,
+                    info.height,
+                    usize::try_from(info.width).unwrap(),
+                    info.sample_format,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut target = ImageViewMut::Planar {
+            info,
+            planes: &mut planes,
+        };
+        decode_partial_into(input, &mut target, options).unwrap();
+        buffers
+    }
+
+    fn execute_prepared(prepared: &PreparedPart1Decode<'_>) -> Vec<Vec<u8>> {
+        let info = prepared.info();
+        let plane_len = usize::try_from(info.width * info.height).unwrap();
+        let mut buffers = (0..info.components)
+            .map(|_| vec![0_u8; plane_len])
+            .collect::<Vec<_>>();
+        let mut planes = buffers
+            .iter_mut()
+            .map(|samples| {
+                PlaneMut::new(
+                    samples,
+                    info.width,
+                    info.height,
+                    usize::try_from(info.width).unwrap(),
+                    info.sample_format,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut target = ImageViewMut::Planar {
+            info,
+            planes: &mut planes,
+        };
+        execute_prepared_part1_decode_into_with_workspace(
+            prepared,
+            &mut target,
+            &mut Part1DecodeWorkspace::new(),
+            codestream::PreparedPart1ExecutionOptions::default(),
+        )
+        .unwrap();
+        buffers
+    }
+
+    #[test]
+    fn validates_uniform_and_varying_jp2_header_precision_against_siz() {
+        let uniform = codestream(1);
+        let uniform_jp2 = wrap_jp2(&uniform, 5, 3, 1, 7, None);
+        let metadata = inspect(&uniform_jp2, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jp2);
+        assert_eq!(metadata.image.unwrap().sample_format, SampleFormat::U8);
+
+        let mut first_codestream_wins = uniform_jp2.clone();
+        let different =
+            codestream::encode_planar_u8_no_decomp_test_fixture(1, 1, &[&[0x2a_u8][..]]).unwrap();
+        container::write_contiguous_codestream_box(&mut first_codestream_wins, &different).unwrap();
+        assert_eq!(
+            inspect(&first_codestream_wins, &InspectOptions::default())
+                .unwrap()
+                .image
+                .unwrap()
+                .width,
+            5
+        );
+
+        let mut varying = codestream(2);
+        let siz = marker_offset(&varying, [0xff, 0x51]);
+        varying[siz + 43] = 0x89;
+        let varying_jp2 = wrap_jp2(&varying, 5, 3, 2, 255, Some(&[7, 0x89]));
+        let metadata = inspect(&varying_jp2, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jp2);
+        assert_eq!(
+            metadata.codestream.unwrap().kind,
+            codestream::CodestreamKind::J2k
+        );
+    }
+
+    #[test]
+    fn rejects_ihdr_geometry_and_component_mismatches_at_exact_fields() {
+        let raw = codestream(1);
+        for (width, height, components, field_offset, message_fragment) in [
+            (5, 4, 1, 0_u64, "height"),
+            (6, 3, 1, 4, "width"),
+            (5, 3, 2, 8, "component count"),
+        ] {
+            let input = wrap_jp2(&raw, width, height, components, 7, None);
+            let expected =
+                (box_offset(&input, container::boxes::IMAGE_HEADER) + 8) as u64 + field_offset;
+            assert!(matches!(
+                inspect(&input, &InspectOptions::default()),
+                Err(J2kError::InvalidInput { offset: Some(offset), message })
+                    if offset == expected && message.contains(message_fragment)
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_uniform_and_varying_siz_sample_mismatches_at_exact_fields() {
+        let mut uniform = codestream(2);
+        let siz = marker_offset(&uniform, [0xff, 0x51]);
+        uniform[siz + 43] = 8;
+        let uniform_jp2 = wrap_jp2(&uniform, 5, 3, 2, 7, None);
+        let expected = (box_offset(&uniform_jp2, container::boxes::IMAGE_HEADER) + 18) as u64;
+        assert!(matches!(
+            inspect(&uniform_jp2, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { offset: Some(offset), .. }) if offset == expected
+        ));
+
+        let mut varying = codestream(2);
+        let siz = marker_offset(&varying, [0xff, 0x51]);
+        varying[siz + 43] = 0x89;
+        let varying_jp2 = wrap_jp2(&varying, 5, 3, 2, 255, Some(&[7, 9]));
+        let expected = (box_offset(&varying_jp2, container::boxes::BITS_PER_COMPONENT) + 9) as u64;
+        assert!(matches!(
+            inspect(&varying_jp2, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { offset: Some(offset), message })
+                if offset == expected && message.contains("entry 1")
+        ));
+    }
+
+    #[test]
+    fn invalid_jp2_metadata_does_not_mutate_caller_output() {
+        let raw = codestream(1);
+        let input = wrap_jp2(&raw, 6, 3, 1, 7, None);
+        let info = ImageInfo::new(
+            5,
+            3,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut samples = vec![0x6d; 15];
+        {
+            let plane = PlaneMut::new(&mut samples, 5, 3, 5, SampleFormat::U8).unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&input, &mut target, &DecodeOptions::default()),
+                Err(J2kError::InvalidInput { .. })
+            ));
+        }
+        assert!(samples.iter().all(|sample| *sample == 0x6d));
+    }
+
+    #[test]
+    fn raw_j2k_and_jph_paths_do_not_acquire_jp2_header_validation() {
+        let raw = codestream(1);
+        assert_eq!(
+            inspect(&raw, &InspectOptions::default()).unwrap().format,
+            InputFormat::J2kCodestream
+        );
+
+        let mut jph = Vec::new();
+        container::write_signature_box(&mut jph).unwrap();
+        container::write_file_type_box(&mut jph, container::ContainerKind::Jph, 0, &[]).unwrap();
+        container::write_contiguous_codestream_box(&mut jph, &raw).unwrap();
+        let metadata = inspect(&jph, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jph);
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn inspect_classifies_unsupported_jp2_presentation_without_parse_failure() {
+        let raw = codestream(1);
+        let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_jp2_header_child(
+            &mut palette,
+            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+        );
+
+        let mut icc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut icc, 2, None);
+        let mut reserved = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut reserved, 4, None);
+        let mut sycc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut sycc, 1, Some(18));
+
+        for (input, expected_feature, fragment) in [
+            (&palette, UnsupportedFeature::ContainerBox, "pclr"),
+            (&icc, UnsupportedFeature::ColorModel, "ICC"),
+            (&reserved, UnsupportedFeature::ColorModel, "reserved"),
+            (&sycc, UnsupportedFeature::ColorModel, "sYCC"),
+        ] {
+            let metadata = inspect(input, &InspectOptions::default()).unwrap();
+            assert!(matches!(
+                metadata.support,
+                SupportStatus::Unsupported {
+                    feature,
+                    ref detail,
+                } if feature == expected_feature && detail.contains(fragment)
+            ));
+            let metadata = inspect(
+                input,
+                &InspectOptions {
+                    classify_support: false,
+                    ..InspectOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                metadata.support,
+                SupportStatus::Unknown {
+                    detail: "support classification was not requested".into()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn first_jp2_colour_specification_controls_presentation_support() {
+        let raw = codestream(1);
+        let mut supported_then_reserved = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_jp2_header_child(
+            &mut supported_then_reserved,
+            colour_box(container::ColorSpecificationMethod::Vendor(4), None),
+        );
+        assert_eq!(
+            inspect(&supported_then_reserved, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Supported
+        );
+
+        let mut reserved_then_supported = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut reserved_then_supported, 4, None);
+        append_jp2_header_child(
+            &mut reserved_then_supported,
+            colour_box(container::ColorSpecificationMethod::Enumerated, Some(17)),
+        );
+        assert!(matches!(
+            inspect(&reserved_then_supported, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::ColorModel,
+                ref detail,
+            } if detail.contains("reserved")
+        ));
+    }
+
+    #[test]
+    fn component_decode_ignores_unsupported_jp2_presentation_metadata() {
+        let raw = codestream(1);
+        let reference = decode(
+            &raw,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                target_layout: ComponentLayout::Planar,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+        let mut inputs = Vec::new();
+
+        let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_jp2_header_child(
+            &mut palette,
+            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+        );
+        inputs.push(palette);
+        for method in [2, 4] {
+            let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
+            set_first_colour(&mut input, method, None);
+            inputs.push(input);
+        }
+        let mut sycc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        set_first_colour(&mut sycc, 1, Some(18));
+        inputs.push(sycc);
+
+        for input in inputs {
+            let decoded = decode(
+                &input,
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    target_layout: ComponentLayout::Planar,
+                    ..DecodeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(decoded, reference);
+            assert_eq!(
+                decode_partial(&input, &PartialDecodeOptions::default()).unwrap(),
+                reference
+            );
+        }
+    }
+
+    #[test]
+    fn component_metadata_is_inferred_only_from_raw_output_components() {
+        let raw = codestream(3);
+        for (selection, expected_model) in [
+            (ComponentSelection::All, ColorModel::Rgb),
+            (ComponentSelection::Indices(vec![1]), ColorModel::Unknown),
+        ] {
+            let full_options = DecodeOptions {
+                mode: DecodeMode::Components,
+                requested_components: selection.clone(),
+                target_layout: ComponentLayout::Planar,
+                ..DecodeOptions::default()
+            };
+            let partial_options = PartialDecodeOptions {
+                components: selection.clone(),
+                ..PartialDecodeOptions::default()
+            };
+            let reference = decode(&raw, &full_options).unwrap();
+            let reference_shape = decode_shape(&raw, &full_options).unwrap();
+            let shape_info = reference_shape.image_info().unwrap();
+            assert_eq!(reference.info.color_model, expected_model);
+            assert_eq!(reference_shape.color_model, expected_model);
+            assert_eq!(shape_info, reference.info);
+            let reference_owned_into = planar_full_into(&raw, &reference.info, &full_options);
+            let reference_shape_into = planar_full_into(&raw, &shape_info, &full_options);
+
+            let reference_partial_info = decode_partial_info(&raw, &partial_options).unwrap();
+            let reference_component_info =
+                decode_partial_component_info(&raw, &partial_options).unwrap();
+            let reference_prepared = prepare_part1_decode(&raw, &partial_options).unwrap();
+            let reference_prepared_bytes = execute_prepared(&reference_prepared);
+            let reference_partial_into =
+                planar_partial_into(&raw, &reference_partial_info, &partial_options);
+            assert_eq!(reference_partial_info.color_model, expected_model);
+            assert_eq!(reference_prepared.info().color_model, expected_model);
+            let reference_partial = decode_partial(&raw, &partial_options);
+            assert_eq!(
+                reference_partial.as_ref().unwrap().info.color_model,
+                expected_model
+            );
+
+            for (index, input) in unsupported_presentation_inputs(&raw, 3)
+                .into_iter()
+                .enumerate()
+            {
+                assert!(matches!(
+                    inspect(&input, &InspectOptions::default()).unwrap().support,
+                    SupportStatus::Unsupported { feature, .. }
+                        if feature == if index < 3 {
+                            UnsupportedFeature::ContainerBox
+                        } else {
+                            UnsupportedFeature::ColorModel
+                        }
+                ));
+
+                let decoded = decode(&input, &full_options).unwrap();
+                let shape = decode_shape(&input, &full_options).unwrap();
+                assert_eq!(decoded, reference);
+                assert_eq!(shape, reference_shape);
+                assert_eq!(shape.image_info().unwrap(), reference.info);
+                assert_eq!(
+                    planar_full_into(&input, &shape_info, &full_options),
+                    reference_shape_into
+                );
+                assert_eq!(
+                    planar_full_into(&input, &reference.info, &full_options),
+                    reference_owned_into
+                );
+
+                assert_eq!(decode_partial(&input, &partial_options), reference_partial);
+                assert_eq!(
+                    decode_partial_info(&input, &partial_options).unwrap(),
+                    reference_partial_info
+                );
+                assert_eq!(
+                    decode_partial_component_info(&input, &partial_options).unwrap(),
+                    reference_component_info
+                );
+                let prepared = prepare_part1_decode(&input, &partial_options).unwrap();
+                assert_eq!(prepared.info(), reference_prepared.info());
+                assert_eq!(
+                    prepared.component_info(),
+                    reference_prepared.component_info()
+                );
+                assert_eq!(execute_prepared(&prepared), reference_prepared_bytes);
+                assert_eq!(
+                    planar_partial_into(&input, &reference_partial_info, &partial_options),
+                    reference_partial_into
+                );
+            }
+        }
+
+        let one_raw = codestream(1);
+        let one_input = unsupported_presentation_inputs(&one_raw, 1)
+            .into_iter()
+            .next()
+            .unwrap();
+        let one_options = DecodeOptions {
+            mode: DecodeMode::Components,
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        assert_eq!(
+            decode(&one_input, &one_options).unwrap().info.color_model,
+            ColorModel::Grayscale
+        );
+        assert_eq!(
+            decode_shape(&one_input, &one_options).unwrap().color_model,
+            ColorModel::Grayscale
+        );
+        let selected_one = DecodeOptions {
+            requested_components: ComponentSelection::Indices(vec![0]),
+            ..one_options
+        };
+        assert_eq!(
+            decode(&one_input, &selected_one).unwrap().info.color_model,
+            ColorModel::Unknown
+        );
+        assert_eq!(
+            decode_shape(&one_input, &selected_one).unwrap().color_model,
+            ColorModel::Unknown
+        );
+    }
+
+    #[test]
+    fn rendered_routes_reject_unsupported_jp2_presentation_before_mutation() {
+        let raw = codestream(1);
+        let mut inputs = Vec::new();
+        for box_type in [
+            container::boxes::PALETTE,
+            container::boxes::COMPONENT_MAPPING,
+            container::boxes::CHANNEL_DEFINITION,
+        ] {
+            let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
+            append_jp2_header_child(&mut input, presentation_box(box_type, &[0, 0, 0, 0]));
+            inputs.push((input, UnsupportedFeature::ContainerBox));
+        }
+        for (method, enumerated) in [(1, Some(18)), (2, None), (4, None), (1, Some(99))] {
+            let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
+            set_first_colour(&mut input, method, enumerated);
+            inputs.push((input, UnsupportedFeature::ColorModel));
+        }
+
+        for (input, expected_feature) in inputs {
+            for result in [
+                decode(&input, &DecodeOptions::default()).map(|_| ()),
+                decode_shape(&input, &DecodeOptions::default()).map(|_| ()),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(J2kError::Unsupported { feature, .. }) if feature == expected_feature
+                ));
+            }
+
+            let info = ImageInfo::new(
+                5,
+                3,
+                1,
+                SampleFormat::U8,
+                ColorModel::Grayscale,
+                ComponentLayout::Planar,
+            )
+            .unwrap();
+            let mut samples = vec![0x6d; 15];
+            {
+                let plane = PlaneMut::new(&mut samples, 5, 3, 5, SampleFormat::U8).unwrap();
+                let mut planes = [plane];
+                let mut target = ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                };
+                assert!(matches!(
+                    decode_into(&input, &mut target, &DecodeOptions::default()),
+                    Err(J2kError::Unsupported { feature, .. }) if feature == expected_feature
+                ));
+            }
+            assert!(samples.iter().all(|sample| *sample == 0x6d));
+        }
+    }
+
+    #[test]
+    fn direct_enumerated_srgb_and_greyscale_preserve_admitted_decode() {
+        for components in [1, 3] {
+            let raw = codestream(components);
+            let jp2 = wrap_jp2(&raw, 5, 3, u16::try_from(components).unwrap(), 7, None);
+            assert_eq!(
+                inspect(&jp2, &InspectOptions::default()).unwrap().support,
+                SupportStatus::Supported
+            );
+            for options in [
+                DecodeOptions::default(),
+                DecodeOptions {
+                    mode: DecodeMode::Components,
+                    target_layout: ComponentLayout::Planar,
+                    ..DecodeOptions::default()
+                },
+            ] {
+                assert_eq!(
+                    decode(&jp2, &options),
+                    decode(&raw, &options),
+                    "JP2 direct colour metadata must not change the admitted raw-codestream result"
+                );
+            }
+            assert_eq!(
+                decode_partial(&jp2, &PartialDecodeOptions::default()),
+                decode_partial(&raw, &PartialDecodeOptions::default()),
+                "direct JP2 colour metadata must not change native partial component decode"
+            );
+        }
+    }
+}
+
 pub fn bootstrap_summary() -> ProjectSummary {
     ProjectSummary {
         name: PROJECT_NAME,
@@ -1179,7 +1869,7 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
     #[cfg(feature = "std")]
     if let Some(image) = decode_algorithmic_htj2k(input, &metadata, options)? {
@@ -1230,7 +1920,7 @@ pub fn decode_htj2k_with_workspace(
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
     validate_max_quality_layer_profile(input, &metadata, options)?;
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     decode_algorithmic_htj2k_with_workspace(input, &metadata, options, workspace)
 }
 
@@ -1266,7 +1956,7 @@ pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     decode_htj2k_cleanup_vlc_output_probe_from_metadata(input, &metadata, workspace)
 }
 
@@ -1296,7 +1986,7 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
-    reject_unsupported_rendered_projection(&metadata, options)?;
+    reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
 
     if let Some(shape) = p0_13_high_component_progression_decode_shape(input, &metadata, options)? {
@@ -1316,10 +2006,6 @@ fn decode_owned_baseline(
     metadata: &Metadata,
     options: &DecodeOptions,
 ) -> Result<Option<Image>> {
-    if !matches!(metadata.support, SupportStatus::Supported) {
-        return Ok(None);
-    }
-
     let codestream_bytes = primary_part1_codestream_bytes(input, metadata)?;
     let Some(codestream_bytes) = codestream_bytes else {
         return Ok(None);
@@ -1537,13 +2223,25 @@ fn primary_htj2k_codestream_bytes<'a>(
 }
 
 fn reject_unsupported_rendered_projection(
+    input: &[u8],
     metadata: &Metadata,
     options: &DecodeOptions,
 ) -> Result<()> {
-    if options.mode == DecodeMode::Rendered
-        && metadata.image.as_ref().is_some_and(|image| {
-            image.sample_format.bits_per_sample > 8 || image.sample_format.signed
-        })
+    if options.mode != DecodeMode::Rendered {
+        return Ok(());
+    }
+
+    if metadata.format == InputFormat::Jp2 {
+        let container = container::parse(input).map_err(map_container_error)?;
+        if let Some((feature, detail)) = unsupported_jp2_presentation(&container)? {
+            return Err(unsupported(feature, detail));
+        }
+    }
+
+    if metadata
+        .image
+        .as_ref()
+        .is_some_and(|image| image.sample_format.bits_per_sample > 8 || image.sample_format.signed)
     {
         return Err(unsupported(
             UnsupportedFeature::ColorModel,
@@ -1678,9 +2376,7 @@ fn decode_shape_from_metadata(metadata: &Metadata, options: &DecodeOptions) -> R
     })?;
     let colour_channels = match options.mode {
         DecodeMode::Rendered => colour_channel_count(image.color_model, image.components)?,
-        DecodeMode::Components => {
-            colour_channel_count(image.color_model, image.components).unwrap_or(image.components)
-        }
+        DecodeMode::Components => image.components,
     };
     let output_components = match (&options.mode, &options.requested_components) {
         (DecodeMode::Rendered, _) => colour_channels,
@@ -1702,7 +2398,7 @@ fn decode_shape_from_metadata(metadata: &Metadata, options: &DecodeOptions) -> R
         color_model: match options.mode {
             DecodeMode::Rendered => image.color_model,
             DecodeMode::Components => {
-                component_decode_color_model(image.color_model, image.components)
+                component_decode_color_model(&options.requested_components, output_components)
             }
         },
         mode: options.mode,
@@ -1722,10 +2418,13 @@ fn colour_channel_count(color_model: ColorModel, components: u16) -> Result<u16>
     }
 }
 
-fn component_decode_color_model(color_model: ColorModel, components: u16) -> ColorModel {
-    match (color_model, components) {
-        (ColorModel::Grayscale, 1) => ColorModel::Grayscale,
-        (ColorModel::Rgb, 3) => ColorModel::Rgb,
+fn component_decode_color_model(
+    selection: &ComponentSelection,
+    output_components: u16,
+) -> ColorModel {
+    match (selection, output_components) {
+        (ComponentSelection::All, 1) => ColorModel::Grayscale,
+        (ComponentSelection::All, 3) => ColorModel::Rgb,
         _ => ColorModel::Unknown,
     }
 }
@@ -1749,14 +2448,17 @@ fn decoded_baseline_to_image_with_component_info(
         ));
     }
     let component_count = u16::try_from(component_len).map_err(|_| sample_size_overflow())?;
-    let color_model = match (options.mode, &options.requested_components, component_len) {
-        (DecodeMode::Components, ComponentSelection::Indices(_), _) => ColorModel::Unknown,
-        (_, _, 1) => ColorModel::Grayscale,
-        (_, _, 3) => ColorModel::Rgb,
-        (DecodeMode::Components, _, _) => ColorModel::Unknown,
-        (DecodeMode::Rendered, _, _) => {
-            unreachable!("rendered component count was checked above")
+    let color_model = match options.mode {
+        DecodeMode::Components => {
+            component_decode_color_model(&options.requested_components, component_count)
         }
+        DecodeMode::Rendered => match component_len {
+            1 => ColorModel::Grayscale,
+            3 => ColorModel::Rgb,
+            _ => {
+                unreachable!("rendered component count was checked above")
+            }
+        },
     };
 
     let info = ImageInfo::new(
@@ -2354,6 +3056,15 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     if let Some(image) = decode_owned_multitile_partial_region(input, &metadata, options)? {
         return Ok(image);
     }
+    if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, &metadata)? {
+        let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+        if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {
+            return Err(unsupported(
+                UnsupportedFeature::PartialDecodeMode,
+                "native subsampled component requests must use an admitted direct partial route",
+            ));
+        }
+    }
     let selective_component_profile = options.tile.is_none()
         && options.resolution == ResolutionLevel::Full
         && primary_part1_codestream_bytes(input, &metadata)?
@@ -2365,13 +3076,24 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
     let region = partial_output_region(&metadata, options)?;
     let component_indices = partial_component_indices(&metadata, &options.components)?;
+    let mode = match metadata.format {
+        InputFormat::Jp2 | InputFormat::J2kCodestream => DecodeMode::Components,
+        _ => DecodeMode::Rendered,
+    };
     let mut decode_options = DecodeOptions {
+        mode,
         target_layout: ComponentLayout::Planar,
         ..DecodeOptions::default()
     };
     decode_options.requested_components = ComponentSelection::All;
     let decoded = decode(input, &decode_options)?;
-    apply_partial_selection(decoded, region, &component_indices, options.target_layout)
+    apply_partial_selection(
+        decoded,
+        region,
+        &component_indices,
+        &options.components,
+        options.target_layout,
+    )
 }
 
 fn is_p0_08_output_request(options: &PartialDecodeOptions) -> bool {
@@ -2918,18 +3640,9 @@ fn decode_owned_selective_part1_partial(
         options.max_quality_layers,
     )
     .map_err(map_codestream_error)?;
-    let requested_components = if !native_subsampled
-        && metadata.image.as_ref().is_some_and(|image| {
-            component_indices.len() == usize::from(image.components)
-                && component_indices.iter().copied().eq(0..image.components)
-        }) {
-        ComponentSelection::All
-    } else {
-        ComponentSelection::Indices(component_indices)
-    };
     let decode_options = DecodeOptions {
         mode: DecodeMode::Components,
-        requested_components,
+        requested_components: options.components.clone(),
         target_layout: options.target_layout,
         ..DecodeOptions::default()
     };
@@ -3514,17 +4227,12 @@ pub fn prepare_part1_decode_from_source<'a>(
         first_output.signed,
         (first_output.bits_per_sample > 8).then_some(SampleEndian::Little),
     )?;
-    let color_model = if components == 1 {
-        ColorModel::Grayscale
-    } else {
-        ColorModel::Unknown
-    };
     let info = ImageInfo::new(
         width,
         height,
         components,
         sample_format,
-        color_model,
+        ColorModel::Unknown,
         ComponentLayout::Planar,
     )?;
     let component_info = codestream
@@ -5123,10 +5831,18 @@ fn metadata_from_container(
         Some(bytes) => Some(codestream::parse(bytes).map_err(map_codestream_error)?),
         None => None,
     };
+    if container.kind == container::ContainerKind::Jp2
+        && let Some(codestream) = &parsed_codestream
+    {
+        validate_jp2_header_against_siz(&container, codestream)?;
+    }
+    let unsupported_presentation = unsupported_jp2_presentation(&container)?;
     let support = if !options.classify_support {
         SupportStatus::Unknown {
             detail: "support classification was not requested".into(),
         }
+    } else if let Some((feature, detail)) = unsupported_presentation {
+        SupportStatus::Unsupported { feature, detail }
     } else {
         match (&container.kind, &parsed_codestream) {
             (container::ContainerKind::Jph, Some(codestream))
@@ -5180,6 +5896,168 @@ fn metadata_from_container(
         }),
         support,
         records,
+    })
+}
+
+fn unsupported_jp2_presentation(
+    container: &container::Container,
+) -> Result<Option<(UnsupportedFeature, String)>> {
+    if container.kind != container::ContainerKind::Jp2 {
+        return Ok(None);
+    }
+    let Some(header) = container
+        .boxes
+        .iter()
+        .find(|record| record.box_type == container::boxes::JP2_HEADER)
+    else {
+        return Ok(None);
+    };
+    let header_end = header
+        .data_offset
+        .checked_add(header.data_len)
+        .ok_or_else(|| J2kError::InvalidInput {
+            offset: None,
+            message: "container size overflowed parser limits".into(),
+        })?;
+    if let Some(record) = container.boxes.iter().find(|record| {
+        record.header_offset >= header.data_offset
+            && record.header_offset < header_end
+            && matches!(
+                record.box_type,
+                container::boxes::PALETTE
+                    | container::boxes::COMPONENT_MAPPING
+                    | container::boxes::CHANNEL_DEFINITION
+            )
+    }) {
+        return Ok(Some((
+            UnsupportedFeature::ContainerBox,
+            alloc::format!(
+                "JP2 `{}` presentation is not implemented; palette, component mapping, and channel definition remain fail-closed",
+                record.box_type
+            ),
+        )));
+    }
+    if let Some(colour) = container.color_specification {
+        let detail = match (colour.method, colour.enumerated_color_space) {
+            (
+                container::ColorSpecificationMethod::Enumerated,
+                Some(
+                    container::EnumeratedColorSpace::SRgb
+                    | container::EnumeratedColorSpace::Greyscale,
+                ),
+            ) => None,
+            (
+                container::ColorSpecificationMethod::Enumerated,
+                Some(container::EnumeratedColorSpace::SYcc),
+            ) => {
+                Some("JP2 sYCC rendered output requires a colour transform that is not implemented")
+            }
+            _ => Some(
+                "JP2 ICC, vendor, reserved, and unrecognised colour metadata is not implemented for rendered output",
+            ),
+        };
+        if let Some(detail) = detail {
+            return Ok(Some((UnsupportedFeature::ColorModel, detail.into())));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_jp2_header_against_siz(
+    container: &container::Container,
+    codestream: &codestream::Codestream,
+) -> Result<()> {
+    let image_header = container
+        .image_header
+        .ok_or_else(|| J2kError::InvalidInput {
+            offset: None,
+            message: "JP2 header box is missing its image header".into(),
+        })?;
+    let image_record =
+        jp2_child_record(container, container::boxes::IMAGE_HEADER).ok_or_else(|| {
+            J2kError::InvalidInput {
+                offset: None,
+                message: "JP2 image header location is unavailable".into(),
+            }
+        })?;
+    let mismatch = |field_offset: usize, message: &'static str| J2kError::InvalidInput {
+        offset: Some((image_record.data_offset + field_offset) as u64),
+        message: message.into(),
+    };
+
+    if image_header.height != codestream.image_height() {
+        return Err(mismatch(
+            0,
+            "JP2 image header height does not match the first codestream SIZ marker",
+        ));
+    }
+    if image_header.width != codestream.image_width() {
+        return Err(mismatch(
+            4,
+            "JP2 image header width does not match the first codestream SIZ marker",
+        ));
+    }
+    if image_header.components != codestream.siz.component_count() {
+        return Err(mismatch(
+            8,
+            "JP2 image header component count does not match the first codestream SIZ marker",
+        ));
+    }
+
+    if image_header.bits_per_component == 255 {
+        let bits = container
+            .bits_per_component
+            .as_ref()
+            .ok_or_else(|| mismatch(10, "JP2 varying precision is missing component entries"))?;
+        let bits_record = jp2_child_record(container, container::boxes::BITS_PER_COMPONENT)
+            .ok_or_else(|| mismatch(10, "JP2 bits-per-component location is unavailable"))?;
+        for (index, (header_component, siz_component)) in bits
+            .components
+            .iter()
+            .zip(&codestream.siz.components)
+            .enumerate()
+        {
+            if header_component.bits_per_sample != siz_component.bits_per_sample
+                || header_component.signed != siz_component.signed
+            {
+                return Err(J2kError::InvalidInput {
+                    offset: Some((bits_record.data_offset + index) as u64),
+                    message: alloc::format!(
+                        "JP2 bits-per-component entry {index} does not match the first codestream SIZ marker"
+                    ),
+                });
+            }
+        }
+    } else {
+        let header_format = image_header
+            .sample_format()
+            .ok_or_else(|| mismatch(10, "JP2 image header precision is invalid"))?;
+        if codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != header_format.bits_per_sample
+                || component.signed != header_format.signed
+        }) {
+            return Err(mismatch(
+                10,
+                "JP2 image header precision and signedness do not match every first-codestream SIZ component",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn jp2_child_record(
+    parsed: &container::Container,
+    box_type: container::FourCc,
+) -> Option<&container::BoxRecord> {
+    let header = parsed
+        .boxes
+        .iter()
+        .find(|record| record.box_type == container::boxes::JP2_HEADER)?;
+    let header_end = header.data_offset.checked_add(header.data_len)?;
+    parsed.boxes.iter().find(|record| {
+        record.box_type == box_type
+            && record.header_offset >= header.data_offset
+            && record.header_offset < header_end
     })
 }
 
@@ -5735,6 +6613,7 @@ fn apply_partial_selection(
     decoded: Image,
     region: Region,
     component_indices: &[u16],
+    selection: &ComponentSelection,
     target_layout: ComponentLayout,
 ) -> Result<Image> {
     let source_component_info = decoded.component_info;
@@ -5766,7 +6645,10 @@ fn apply_partial_selection(
             )
         })?,
         decoded.info.sample_format,
-        partial_color_model(&decoded.info, component_indices),
+        component_decode_color_model(
+            selection,
+            u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
+        ),
         target_layout,
     )?;
     let component_info = component_indices
@@ -5944,19 +6826,6 @@ fn interleave_planes(
     Ok(output)
 }
 
-fn partial_color_model(info: &ImageInfo, component_indices: &[u16]) -> ColorModel {
-    if component_indices.len() == usize::from(info.components)
-        && component_indices.iter().copied().eq(0..info.components)
-    {
-        return info.color_model;
-    }
-
-    match component_indices {
-        [0] if info.components == 1 => ColorModel::Grayscale,
-        _ => ColorModel::Unknown,
-    }
-}
-
 fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> Result<ImageInfo> {
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
@@ -6018,7 +6887,10 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
                 output_region.height,
                 u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
                 sample_format,
-                ColorModel::Unknown,
+                component_decode_color_model(
+                    &options.components,
+                    u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
+                ),
                 ComponentLayout::Planar,
             );
         }
@@ -6059,7 +6931,10 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
             )
         })?,
         image.sample_format,
-        partial_color_model(image, &component_indices),
+        component_decode_color_model(
+            &options.components,
+            u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
+        ),
         options.target_layout,
     )
 }
@@ -6252,7 +7127,10 @@ fn selective_part1_discard_target_info(
         reduced_region.height,
         u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
         image.sample_format,
-        partial_color_model(image, &component_indices),
+        component_decode_color_model(
+            &options.components,
+            u16::try_from(component_indices.len()).map_err(|_| sample_size_overflow())?,
+        ),
         options.target_layout,
     )
     .map(Some)

@@ -59,3 +59,37 @@ I.5.3.1.1. The reviewed retrieval revision was
 `34e5d1639b9f121807e620c001893ca9d2c8f977`. The description and deterministic
 tests are project-authored and do not reproduce standards prose, equations or
 tables.
+
+## Baseline JP2 header admission
+
+JP2 parsing admits one structural header before the first contiguous
+codestream. The image header is first and singular, colour specification boxes
+form one non-empty contiguous sequence, and bits-per-component metadata is
+present exactly when component precision or signedness varies. Legal field
+ranges and component cardinality are checked at the container boundary.
+
+The core then compares image width, height, component count, precision and
+signedness with SIZ in the first contiguous codestream. A mismatch is invalid
+metadata, not a request to prefer one source, and is rejected before decode can
+write caller-owned output. Unknown boxes retain the existing byte-preserving
+behaviour unless they interrupt a required sequence.
+
+This admission establishes container and codestream consistency only. It does
+not produce presentation pixels or select palette application, component
+mapping, channel or alpha interpretation, ICC transforms, colour conversion,
+resampling, resolution handling or multiple-codestream composition. The known
+unimplemented presentation metadata is reported by support classification
+without making an otherwise well-formed container invalid. Component-mode
+decode may still expose admitted raw codestream planes and applies no
+presentation transform. Component output metadata is inferred from the raw
+selection: all one- and three-component outputs are labelled grayscale and RGB
+respectively, while other counts and explicit subsets remain unknown. JP2
+colour metadata does not alter that inference. Rendered requests fail closed
+before output allocation or mutation for palette, component mapping, channel
+definition, sYCC, ICC, vendor, reserved or unrecognised colour metadata.
+Partial decode requests are native component selections; their Part 1
+full-decode compatibility fallback therefore also uses component mode.
+
+The authority is ISO/IEC 15444-1:2024, Annex A, A.5.1, PDF pages 41–44, and
+Annex I, I.2.2, I.5.3–I.5.4, PDF pages 160–171 and 181. The reviewed retrieval
+revision was `34e5d1639b9f121807e620c001893ca9d2c8f977`.
