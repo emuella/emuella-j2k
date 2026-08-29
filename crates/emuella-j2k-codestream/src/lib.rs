@@ -29621,9 +29621,12 @@ mod packed_packet_header_tests {
         let ppt = find_marker(&misplaced_eph, 0, Marker::Ppt).unwrap();
         let lppt = usize::from(read_u16(&misplaced_eph, ppt + 2).unwrap());
         misplaced_eph.drain(ppt + 2 + lppt - 2..ppt + 2 + lppt);
+        misplaced_eph[ppt + 2..ppt + 4]
+            .copy_from_slice(&u16::try_from(lppt - 2).unwrap().to_be_bytes());
         let sot = find_marker(&misplaced_eph, 0, Marker::Sot).unwrap();
         let sod = find_marker(&misplaced_eph, sot, Marker::Sod).unwrap();
         misplaced_eph.splice(sod + 2..sod + 2, Marker::Eph.code().to_be_bytes());
+        assert!(parse(&misplaced_eph).is_ok());
         invalid_cases.push(("EPH moved from header to body", misplaced_eph));
 
         let mut mixed_sources = packed_fixture(PacketHeaderSourceKind::Ppm, false, false);
