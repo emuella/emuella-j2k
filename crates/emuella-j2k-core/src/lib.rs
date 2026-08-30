@@ -743,6 +743,134 @@ mod htj2k_encode_tests {
 mod htj2k_native_component_grid_tests {
     use super::*;
 
+    #[test]
+    fn native_mct_multitile_routes_preserve_component_zero_and_atomicity() {
+        let bytes = codestream::encode_htj2k_native_mct_grid_test_fixture((31, 23), (0, 0), (4, 3))
+            .unwrap();
+        let options = options();
+        let expected = (0..35 * 41)
+            .map(|i| ((i % 251 + 2 * ((i * 3 + 17) % 251) + (i * 7 + 29) % 251) / 4) as u8)
+            .collect::<Vec<_>>();
+        let metadata = inspect(&bytes, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.support, SupportStatus::Supported);
+        let shape = decode_shape(&bytes, &options).unwrap();
+        let owned = decode(&bytes, &options).unwrap();
+        assert_eq!(shape.image_info().unwrap(), owned.info);
+        assert_eq!((shape.width, shape.height), (140, 123));
+        assert_eq!(owned.component_info.len(), 1);
+        let component = &owned.component_info[0];
+        assert_eq!((component.width, component.height), (35, 41));
+        assert_eq!((component.x_origin, component.y_origin), (8, 8));
+        assert_eq!(
+            (
+                component.horizontal_separation,
+                component.vertical_separation
+            ),
+            (4, 3)
+        );
+        assert_eq!(component.source_component, Some(0));
+        assert!(matches!(&owned.data, ImageData::Planes(planes) if planes == &[expected.clone()]));
+        let mut workspace = Htj2kDecodeWorkspace::new();
+        for _ in 0..2 {
+            assert_eq!(
+                decode_htj2k_with_workspace(&bytes, &options, &mut workspace)
+                    .unwrap()
+                    .unwrap(),
+                owned
+            );
+        }
+        let mut caller = vec![0x93; 42 * 41];
+        let mut planes = [PlaneMut::new(&mut caller, 35, 41, 42, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &owned.info,
+            planes: &mut planes,
+        };
+        decode_into(&bytes, &mut target, &options).unwrap();
+        for (actual, expected) in caller.chunks_exact(42).zip(expected.chunks_exact(35)) {
+            assert_eq!(&actual[..35], expected);
+            assert!(actual[35..].iter().all(|byte| *byte == 0x93));
+        }
+        for rejected in [
+            DecodeOptions {
+                requested_components: ComponentSelection::All,
+                ..options.clone()
+            },
+            DecodeOptions {
+                requested_components: ComponentSelection::Indices(vec![1]),
+                ..options.clone()
+            },
+            DecodeOptions {
+                mode: DecodeMode::Rendered,
+                ..options.clone()
+            },
+            DecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..options.clone()
+            },
+            DecodeOptions {
+                max_quality_layers: Some(1),
+                ..options.clone()
+            },
+        ] {
+            assert!(decode_shape(&bytes, &rejected).is_err());
+            assert!(decode(&bytes, &rejected).is_err());
+        }
+        assert!(decode_partial(&bytes, &PartialDecodeOptions::default()).is_err());
+        let parsed = codestream::parse(&bytes).unwrap();
+        let tile = parsed.tiles.last().unwrap();
+        let end = tile.payload_offset.unwrap() + tile.payload_len.unwrap();
+        let mut corrupt = bytes.clone();
+        // Last tile, first layer, component zero: a late entropy failure must
+        // not publish any previously reconstructed tile to caller storage.
+        let start = tile.payload_offset.unwrap();
+        let contributions = codestream::parse_default_precinct_lrcp_packets(
+            &bytes,
+            &parsed,
+            codestream::TileRect {
+                tile_index: 3,
+                tile_x: 1,
+                tile_y: 1,
+                x: 97,
+                y: 73,
+                width: 43,
+                height: 50,
+            },
+            &bytes[start..end],
+        )
+        .unwrap();
+        let block = contributions
+            .iter()
+            .rev()
+            .find(|block| block.component_index == 0)
+            .unwrap();
+        let block_end = start + block.payload_offset + block.codeword_len;
+        corrupt[block_end - 2..block_end].fill(0);
+        assert!(
+            codestream::prepare_htj2k_native_component_grid_decode(&corrupt)
+                .unwrap()
+                .is_some()
+        );
+        let mut jph = Vec::new();
+        write_jph_encode_output(metadata.image.as_ref().unwrap(), &bytes, &mut jph).unwrap();
+        assert!(matches!(
+            inspect(&jph, &InspectOptions::default()).unwrap().support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::InputFormat,
+                ..
+            }
+        ));
+        for rejected_input in [&corrupt[..], &bytes[..end - 1], &jph[..]] {
+            let mut caller = vec![0x93; 35 * 41];
+            let mut planes = [PlaneMut::new(&mut caller, 35, 41, 35, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &owned.info,
+                planes: &mut planes,
+            };
+            assert!(decode_into(rejected_input, &mut target, &options).is_err());
+            assert!(caller.iter().all(|sample| *sample == 0x93));
+        }
+    }
+
     fn fixture() -> (Vec<u8>, Vec<u8>) {
         let samples = (0..35 * 41)
             .map(|i| ((i * 31 + i / 35 * 13) % 251) as u8)
@@ -5889,7 +6017,8 @@ fn validate_htj2k_native_component_grid_request(
                 "native HTJ2K component-grid decode is limited to a raw codestream",
             ));
         }
-        let component_zero = matches!(&options.requested_components, ComponentSelection::All)
+        let component_zero = (!prepared.requires_component_zero_selection()
+            && matches!(&options.requested_components, ComponentSelection::All))
             || matches!(
                 &options.requested_components,
                 ComponentSelection::Indices(indices) if indices.as_slice() == [0]

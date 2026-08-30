@@ -9633,6 +9633,126 @@ pub fn encode_htj2k_grayscale_u8_native_component_grid_test_fixture(
     Ok(codestream)
 }
 
+/// Build project-authored three-level MCT tiles on a sampled native grid.
+/// The native image is 35 by 41 samples with clipped 32-sample tile edges.
+/// This is test infrastructure, not an application encoder profile.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_native_mct_grid_test_fixture(
+    origin: (u32, u32),
+    tile_origin: (u32, u32),
+    sampling: (u8, u8),
+) -> Result<Vec<u8>> {
+    let (sx, sy) = (u32::from(sampling.0), u32::from(sampling.1));
+    if sx == 0
+        || sy == 0
+        || origin.0 > 4096
+        || origin.1 > 4096
+        || tile_origin.0 > origin.0
+        || tile_origin.1 > origin.1
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let siz = SizMarker {
+        capabilities: 0x4000,
+        reference_grid_width: origin.0 + 35 * sx,
+        reference_grid_height: origin.1 + 41 * sy,
+        image_origin_x: origin.0,
+        image_origin_y: origin.1,
+        tile_width: 32 * sx,
+        tile_height: 32 * sy,
+        tile_origin_x: tile_origin.0,
+        tile_origin_y: tile_origin.1,
+        components: alloc::vec![ComponentParameters { bits_per_sample: 8, signed: false,
+            horizontal_separation: sampling.0, vertical_separation: sampling.1 }; 3],
+    };
+    let mut output = Vec::new();
+    // One shared bitplane envelope keeps tile quantisation homogeneous.
+    write_native_main_header_with_siz(&mut output, &siz, 8, 3, true, 3, &[16; 10], true, 0, 2)?;
+    for component in 0..3 {
+        output[43 + component * 3] = sampling.0;
+        output[44 + component * 3] = sampling.1;
+    }
+    let cols = siz.tile_count_x()?;
+    let rows = siz.tile_count_y()?;
+    for ty in 0..rows {
+        for tx in 0..cols {
+            let x0 = (tile_origin.0 + tx * siz.tile_width)
+                .max(origin.0)
+                .div_ceil(sx);
+            let y0 = (tile_origin.1 + ty * siz.tile_height)
+                .max(origin.1)
+                .div_ceil(sy);
+            let x1 = (tile_origin.0 + (tx + 1) * siz.tile_width)
+                .min(siz.reference_grid_width)
+                .div_ceil(sx);
+            let y1 = (tile_origin.1 + (ty + 1) * siz.tile_height)
+                .min(siz.reference_grid_height)
+                .div_ceil(sy);
+            if !x0.is_multiple_of(8) || !y0.is_multiple_of(8) || x1 <= x0 || y1 <= y0 {
+                return Err(CodestreamError::SizeOverflow);
+            }
+            let width = x1 - x0;
+            let height = y1 - y0;
+            let mut rgb = Vec::new();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let i = (y - origin.1.div_ceil(sy)) * 35 + x - origin.0.div_ceil(sx);
+                    rgb.extend_from_slice(&[
+                        (i % 251) as u8,
+                        ((i * 3 + 17) % 251) as u8,
+                        ((i * 7 + 29) % 251) as u8,
+                    ]);
+                }
+            }
+            let [mut y, mut db, mut dr] = forward_rct_rgb_components(RgbU8Encode {
+                width,
+                height,
+                samples: &rgb,
+                stride_bytes: width as usize * 3,
+            })?
+            .map(|component| component.coefficients);
+            forward_reversible_5_3_rgb_components(
+                width,
+                height,
+                &mut y,
+                &mut db,
+                &mut dr,
+                3,
+                "project-authored sampled tile transform failed",
+            )?;
+            let specs = decomp_subband_specs(width, height, 3)?;
+            let mut segments = Vec::new();
+            let mut component_subbands = Vec::new();
+            for plane in [&y, &db, &dr] {
+                let mut subbands = Vec::new();
+                for spec in &specs {
+                    subbands.push(encode_ht_decomp_subband(
+                        width,
+                        plane,
+                        *spec,
+                        16,
+                        &mut segments,
+                    )?);
+                }
+                component_subbands.push(subbands);
+            }
+            let mut packets = Vec::new();
+            write_native_decomp_packets(&mut packets, 3, &component_subbands, &segments)?;
+            // The second layer has empty packets, exercising persistent state.
+            packets.extend_from_slice(&[0; 12]);
+            let index = u16::try_from(ty * cols + tx).map_err(|_| CodestreamError::SizeOverflow)?;
+            write_tile_part(
+                &mut output,
+                index,
+                &packets,
+                ty + 1 == rows && tx + 1 == cols,
+            )?;
+        }
+    }
+    Ok(output)
+}
+
 /// Build a deterministic two-layer HT fixture in which the second layer adds
 /// a second Cleanup set for the same code-block.
 ///
@@ -31381,24 +31501,25 @@ fn recheck_validator_granted_two_volume_single_precinct_schedule(
     Ok(())
 }
 
-fn ht_single_native_component_precinct_grid(
+fn ht_native_components_single_precinct_grid(
     codestream: &Codestream,
     tile_rect: TileRect,
     coding_style: CodingStyleMarker,
 ) -> bool {
     codestream.kind == CodestreamKind::Htj2k
-        && codestream.siz.components.len() == 1
+        && matches!(codestream.siz.components.len(), 1 | 3)
         && codestream.siz.components.iter().any(|component| {
             component.horizontal_separation != 1 || component.vertical_separation != 1
         })
-        && Part1PrecinctTopology::new(&codestream.siz, tile_rect, 0, coding_style).is_ok_and(
-            |topology| {
-                topology
-                    .resolutions
-                    .iter()
-                    .all(|resolution| resolution.precinct_count == 1)
-            },
-        )
+        && (0..codestream.siz.component_count()).all(|component| {
+            Part1PrecinctTopology::new(&codestream.siz, tile_rect, component, coding_style)
+                .is_ok_and(|topology| {
+                    topology
+                        .resolutions
+                        .iter()
+                        .all(|resolution| resolution.precinct_count == 1)
+                })
+        })
 }
 
 fn packet_precinct_grid_supported(
@@ -31435,8 +31556,8 @@ fn packet_precinct_grid_supported(
     coding_style_has_supported_precinct_grid(coding_style, tile_rect)
         // Structural packet walking uses the absolute native precinct grid.
         // Native decode admission remains a separate, narrower mechanism gate.
-        || (component_styles.len() == 1
-            && ht_single_native_component_precinct_grid(codestream, tile_rect, coding_style))
+        || (component_styles.iter().all(|style| *style == coding_style)
+            && ht_native_components_single_precinct_grid(codestream, tile_rect, coding_style))
         || (packet_organisation.explicit_precinct_permission
             == ExplicitPrecinctPermission::ValidatedProfile0P004
             && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
@@ -47022,10 +47143,10 @@ fn classify_htj2k_native_component_grid_markers(
     if !sampled {
         return Ok(false);
     }
-    if codestream.siz.component_count() != 1 {
+    if !matches!(codestream.siz.component_count(), 1 | 3) {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::ComponentSampling,
-            "native HTJ2K component-grid decode admits exactly one non-unit component",
+            "native HTJ2K component-grid decode admits one component or three matching MCT components",
         ));
     }
     let coding_style = uniform_effective_coding_style(codestream).map_err(|_| {
@@ -47042,14 +47163,15 @@ fn classify_htj2k_native_component_grid_markers(
             "native HTJ2K component-grid decode requires three reversible decomposition levels",
         ));
     }
-    if coding_style.multiple_component_transform {
+    if coding_style.multiple_component_transform != (codestream.siz.component_count() == 3) {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::Transform,
-            "native HTJ2K component-grid decode does not apply a multiple-component transform",
+            "native HTJ2K component-grid decode requires MCT exactly for its three-component route",
         ));
     }
-    if codestream.siz.tile_count_x().ok() != Some(1)
-        || codestream.siz.tile_count_y().ok() != Some(1)
+    if codestream.siz.component_count() == 1
+        && (codestream.siz.tile_count_x().ok() != Some(1)
+            || codestream.siz.tile_count_y().ok() != Some(1))
     {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::MultipleTiles,
@@ -47074,10 +47196,17 @@ fn classify_htj2k_native_component_grid_markers(
             "native HTJ2K component-grid decode requires one component",
         )
     })?;
-    if component.bits_per_sample != 8 || component.signed {
+    if component.bits_per_sample != 8
+        || component.signed
+        || codestream
+            .siz
+            .components
+            .iter()
+            .any(|other| other != component)
+    {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::SamplePrecision,
-            "native HTJ2K component-grid decode requires unsigned 8-bit samples",
+            "native HTJ2K component-grid decode requires matching unsigned 8-bit component grids",
         ));
     }
     // The existing synthesis kernel has low-pass-first phase at every level.
@@ -47136,17 +47265,27 @@ fn classify_htj2k_native_component_grid_markers(
             "native HTJ2K component-grid decode requires one valid tile",
         )
     })?;
-    let component_tile = component_tile_rect(codestream, tiles[0], component).map_err(|_| {
-        Htj2kLosslessProfileDiagnostic::new(
-            UnsupportedConstruct::ComponentSampling,
-            "native HTJ2K component-grid bounds are invalid",
-        )
-    })?;
-    if component_tile.width == 0 || component_tile.height == 0 {
-        return Err(Htj2kLosslessProfileDiagnostic::new(
-            UnsupportedConstruct::ComponentSampling,
-            "native HTJ2K component-grid bounds are empty",
-        ));
+    for tile in tiles {
+        let component_tile = component_tile_rect(codestream, tile, component).map_err(|_| {
+            Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::ComponentSampling,
+                "native HTJ2K component-grid bounds are invalid",
+            )
+        })?;
+        if component_tile.width == 0 || component_tile.height == 0 {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::ComponentSampling,
+                "native HTJ2K component-grid bounds are empty",
+            ));
+        }
+        if !(component_x0 + component_tile.x).is_multiple_of(8)
+            || !(component_y0 + component_tile.y).is_multiple_of(8)
+        {
+            return Err(Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::WaveletTransform,
+                "native HTJ2K component-grid decode requires every tile-component origin aligned to eight samples",
+            ));
+        }
     }
     Ok(true)
 }
@@ -48102,8 +48241,9 @@ fn ht_decode_candidate_with_permissions(
         marker_state.precincts_declared =
             !uniform_effective_coding_style(codestream).is_ok_and(|style| {
                 tile_rects(codestream).is_ok_and(|tiles| {
-                    tiles.len() == 1
-                        && ht_single_native_component_precinct_grid(codestream, tiles[0], style)
+                    tiles.iter().all(|tile| {
+                        ht_native_components_single_precinct_grid(codestream, *tile, style)
+                    })
                 })
             });
     }
@@ -48981,11 +49121,17 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
 /// Packet admission and checked native geometry are retained together.
 #[cfg(feature = "std")]
 pub struct PreparedHtj2kNativeComponentGridDecode<'a> {
-    input: &'a [u8],
     codestream: Codestream,
     candidate: HtCodestreamDecodeCandidate,
     coding_style: CodingStyleMarker,
     transfer: HtReversibleCodeBlockTransfer,
+    component_rect: TileRect,
+    tiles: Vec<PreparedHtj2kNativeGridTile<'a>>,
+}
+
+#[cfg(feature = "std")]
+struct PreparedHtj2kNativeGridTile<'a> {
+    payload: &'a [u8],
     component_rect: TileRect,
     contributions: Vec<PacketCodeBlockContribution>,
 }
@@ -49001,12 +49147,18 @@ impl PreparedHtj2kNativeComponentGridDecode<'_> {
     pub fn output_height(&self) -> u32 {
         self.component_rect.height
     }
+
+    /// Whether callers must explicitly select transformed component zero.
+    pub fn requires_component_zero_selection(&self) -> bool {
+        self.codestream.siz.component_count() == 3
+    }
 }
 
-/// Prepare the bounded single-tile, unsigned 8-bit, subsampled HTONLY route.
-/// It admits three reversible levels, component origins aligned to eight,
+/// Prepare bounded unsigned 8-bit, subsampled HTONLY component-zero output.
+/// It admits one single-tile component or three matching MCT components across
+/// at most 64 tiles, three reversible levels, tile-component origins aligned to eight,
 /// one through six LRCP layers, one effective precinct per resolution and
-/// inline SOP/EPH. Output remains native: no resampling or MCT is performed.
+/// inline SOP/EPH. Output remains native, before inverse MCT; no resampling is performed.
 /// Non-HT and unit-sampled inputs return `None`; other shapes fail closed.
 #[cfg(feature = "std")]
 pub fn prepare_htj2k_native_component_grid_decode(
@@ -49034,6 +49186,19 @@ pub fn prepare_htj2k_native_component_grid_decode(
             "native HTJ2K component-grid decode is guarded to at most 16 Mi samples",
         ));
     }
+    if codestream
+        .siz
+        .tile_count_x()?
+        .checked_mul(codestream.siz.tile_count_y()?)
+        .is_none_or(|tiles| tiles > 64)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::MultipleTiles,
+            "native HTJ2K component-grid decode is guarded to at most 64 tiles",
+        ));
+    }
     validate_part15_packet_signalling(input, &codestream)?;
     if !classify_htj2k_native_component_grid_markers(&codestream)
         .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?
@@ -49046,8 +49211,10 @@ pub fn prepare_htj2k_native_component_grid_decode(
     validate_htonly_permission_effective_packet_mechanisms(input, &codestream)?;
     let coding_style = uniform_effective_coding_style(&codestream)?;
     let quantization = parse_component_quantization(input, &codestream, 10)?;
-    if quantization.len() != 1
-        || quantization[0].style != transform::QuantizationStyle::NoQuantization
+    if quantization.len() != usize::from(codestream.siz.component_count())
+        || quantization
+            .iter()
+            .any(|quantization| quantization.style != transform::QuantizationStyle::NoQuantization)
     {
         return Err(unsupported(
             None,
@@ -49056,22 +49223,24 @@ pub fn prepare_htj2k_native_component_grid_decode(
             "native HTJ2K component-grid decode requires effective reversible quantisation",
         ));
     }
-    let quantization = &quantization[0];
-    for step in &quantization.steps {
-        if step
-            .exponent
-            .checked_add(quantization.guard_bits)
-            .and_then(|value| value.checked_sub(1))
-            .is_none_or(|value| value > 31)
-        {
-            return Err(unsupported(
-                None,
-                Some(Marker::Qcc),
-                UnsupportedConstruct::SamplePrecision,
-                "native HTJ2K component-grid quantisation exceeds the coefficient transfer bound",
-            ));
+    for component_quantization in &quantization {
+        for step in &component_quantization.steps {
+            if step
+                .exponent
+                .checked_add(component_quantization.guard_bits)
+                .and_then(|value| value.checked_sub(1))
+                .is_none_or(|value| value > 31)
+            {
+                return Err(unsupported(
+                    None,
+                    Some(Marker::Qcc),
+                    UnsupportedConstruct::SamplePrecision,
+                    "native HTJ2K component-grid quantisation exceeds the coefficient transfer bound",
+                ));
+            }
         }
     }
+    let quantization = &quantization[0];
     let exponent = quantization.steps[0].exponent;
     let k_max = exponent + quantization.guard_bits - 1;
     let transfer = HtReversibleCodeBlockTransfer {
@@ -49090,34 +49259,58 @@ pub fn prepare_htj2k_native_component_grid_decode(
                 classification.reason.message(),
             )
         })?;
-    let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
-    let topology = Part1PrecinctTopology::new(&codestream.siz, tile_rect, 0, coding_style)?;
-    if topology
-        .resolutions
-        .iter()
-        .any(|resolution| resolution.precinct_count != 1)
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::PacketDecode,
-            "native HTJ2K component-grid decode requires one effective precinct per resolution",
-        ));
+    validate_one_tile_part_per_tile(&codestream)?;
+    let mut tiles = Vec::new();
+    for tile_rect in tile_rects(&codestream)? {
+        if !ht_native_components_single_precinct_grid(&codestream, tile_rect, coding_style) {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::PacketDecode,
+                "native HTJ2K component-grid decode requires one effective precinct per resolution",
+            ));
+        }
+        let tile_part = codestream
+            .tiles
+            .iter()
+            .find(|part| part.tile_index == tile_rect.tile_index)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let payload = tile_payload(input, tile_part)?;
+        let contributions =
+            parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+        classify_htonly_native_packet_mechanisms(&contributions).map_err(|diagnostic| {
+            unsupported(None, None, diagnostic.construct, diagnostic.detail)
+        })?;
+        tiles.push(PreparedHtj2kNativeGridTile {
+            payload,
+            component_rect: component_tile_rect(
+                &codestream,
+                tile_rect,
+                &codestream.siz.components[0],
+            )?,
+            contributions,
+        });
     }
-    let component_rect =
-        component_tile_rect(&codestream, tile_rect, &codestream.siz.components[0])?;
-    let contributions =
-        parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
-    classify_htonly_native_packet_mechanisms(&contributions)
-        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    let native = codestream.siz.image_reference_rect()?.to_component_grid(
+        codestream.siz.components[0].horizontal_separation,
+        codestream.siz.components[0].vertical_separation,
+    )?;
+    let component_rect = TileRect {
+        tile_index: 0,
+        tile_x: 0,
+        tile_y: 0,
+        x: 0,
+        y: 0,
+        width: native.width(),
+        height: native.height(),
+    };
     Ok(Some(PreparedHtj2kNativeComponentGridDecode {
-        input,
         codestream,
         candidate,
         coding_style,
         transfer,
         component_rect,
-        contributions,
+        tiles,
     }))
 }
 
@@ -49129,30 +49322,166 @@ pub fn decode_prepared_htj2k_native_component_grid_owned_with_workspace(
     prepared: &PreparedHtj2kNativeComponentGridDecode<'_>,
     workspace: &mut HtCodestreamDecodeWorkspace,
 ) -> Result<DecodedImage> {
-    let (_, payload) = single_part1_profile_tile(prepared.input, &prepared.codestream)?;
-    let (_, _, components) = decode_htj2k_lossless_decomp_components(
-        prepared.candidate,
-        payload,
-        &prepared.contributions,
-        prepared.transfer,
-        &prepared.codestream,
-        prepared.coding_style,
-        prepared.component_rect,
-        None,
-        workspace,
-    )?;
+    let plane_len =
+        checked_component_sample_count(prepared.output_width(), prepared.output_height())?;
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(plane_len).map_err(|_| {
+        unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::PacketDecode,
+            "native HTJ2K assembled plane allocation could not be reserved",
+        )
+    })?;
+    samples.resize(plane_len, 0);
+    for tile in &prepared.tiles {
+        let (_, _, components) = decode_htj2k_lossless_decomp_components(
+            prepared.candidate,
+            tile.payload,
+            &tile.contributions,
+            prepared.transfer,
+            &prepared.codestream,
+            prepared.coding_style,
+            tile.component_rect,
+            Some(Htj2kReducedComponentDecodeRequest {
+                component_index: 0,
+                discard_levels: 0,
+            }),
+            workspace,
+        )?;
+        stitch_tile_sample_plane(
+            &mut samples,
+            usize::try_from(prepared.output_width()).map_err(|_| CodestreamError::SizeOverflow)?,
+            1,
+            tile.component_rect,
+            &components[0].samples,
+        )?;
+    }
     Ok(DecodedImage {
         width: prepared.codestream.image_width(),
         height: prepared.codestream.image_height(),
         bits_per_sample: 8,
         signed: false,
-        components,
+        components: alloc::vec![DecodedComponent { samples }],
     })
 }
 
 #[cfg(test)]
 mod htj2k_native_component_grid_tests {
     use super::*;
+
+    #[test]
+    fn native_mct_grid_stitches_clipped_tiles_before_inverse_colour_transform() {
+        let expected = (0..35 * 41)
+            .map(|i| ((i % 251 + 2 * ((i * 3 + 17) % 251) + (i * 7 + 29) % 251) / 4) as u8)
+            .collect::<Vec<_>>();
+        for (origin, tile_origin, sampling) in [
+            ((0, 0), (0, 0), (4, 4)),
+            ((31, 23), (0, 0), (4, 3)),
+            ((63, 47), (32, 24), (4, 3)),
+        ] {
+            let bytes =
+                encode_htj2k_native_mct_grid_test_fixture(origin, tile_origin, sampling).unwrap();
+            let parsed = parse(&bytes).unwrap();
+            assert!(is_htj2k_native_component_grid_profile(&bytes, &parsed));
+            let prepared = prepare_htj2k_native_component_grid_decode(&bytes)
+                .unwrap()
+                .unwrap();
+            assert!(prepared.requires_component_zero_selection());
+            assert_eq!(
+                (prepared.output_width(), prepared.output_height()),
+                (35, 41)
+            );
+            assert_eq!(prepared.tiles.len(), 4);
+            for _ in 0..2 {
+                let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+                    &prepared,
+                    &mut HtCodestreamDecodeWorkspace::new(),
+                )
+                .unwrap();
+                assert_eq!(decoded.components.len(), 1);
+                assert_eq!(decoded.components[0].samples, expected, "origin {origin:?}");
+            }
+            let cod = parsed
+                .markers
+                .iter()
+                .find(|marker| marker.marker == Marker::Cod)
+                .unwrap();
+            let qcd = parsed
+                .markers
+                .iter()
+                .find(|marker| marker.marker == Marker::Qcd)
+                .unwrap();
+            let mut explicit = bytes.clone();
+            // Keep the transfer bound while exercising zero guard bits.
+            explicit[qcd.data_offset] = 0;
+            for exponent in &mut explicit[qcd.data_offset + 1..qcd.data_offset + qcd.data_len] {
+                *exponent += 8;
+            }
+            explicit[cod.offset + 2..cod.offset + 4].copy_from_slice(&16_u16.to_be_bytes());
+            explicit[cod.data_offset] |= 1;
+            explicit.splice(
+                cod.data_offset + cod.data_len..cod.data_offset + cod.data_len,
+                [0x66; 4],
+            );
+            let plan = prepare_htj2k_native_component_grid_decode(&explicit)
+                .unwrap()
+                .unwrap();
+            let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+                &plan,
+                &mut HtCodestreamDecodeWorkspace::new(),
+            )
+            .unwrap();
+            assert_eq!(decoded.components[0].samples, expected);
+            explicit[cod.data_offset + cod.data_len..cod.data_offset + cod.data_len + 4].fill(0x44);
+            assert!(prepare_htj2k_native_component_grid_decode(&explicit).is_err());
+        }
+    }
+
+    #[test]
+    fn native_mct_grid_rejects_neighbouring_mechanisms_and_unbounded_geometry() {
+        let bytes = encode_htj2k_native_mct_grid_test_fixture((0, 0), (0, 0), (4, 4)).unwrap();
+        let siz = find_marker(&bytes, 0, Marker::Siz).unwrap();
+        let cod = find_marker(&bytes, 0, Marker::Cod).unwrap();
+        for (offset, value) in [
+            (cod + 8, 0),
+            (cod + 9, 2),
+            (cod + 5, 1),
+            (cod + 7, 7),
+            (siz + 44, 2),
+            (siz + 43, 0x87),
+        ] {
+            let mut rejected = bytes.clone();
+            rejected[offset] = value;
+            assert!(prepare_htj2k_native_component_grid_decode(&rejected).is_err());
+            if let Ok(parsed) = parse(&rejected) {
+                assert!(!is_htj2k_native_component_grid_profile(&rejected, &parsed));
+            }
+        }
+        for (offset, value) in [(22, 124_u32), (6, 1_000_000), (22, 4)] {
+            let mut rejected = bytes.clone();
+            rejected[siz + offset..siz + offset + 4].copy_from_slice(&value.to_be_bytes());
+            assert!(prepare_htj2k_native_component_grid_decode(&rejected).is_err());
+        }
+        let parsed = parse(&bytes).unwrap();
+        let first = parsed.tiles[0].payload_offset.unwrap() - 14;
+        let second = parsed.tiles[1].payload_offset.unwrap() - 14;
+        let mut duplicate = bytes.clone();
+        duplicate[second + 4..second + 6].copy_from_slice(&0_u16.to_be_bytes());
+        assert!(prepare_htj2k_native_component_grid_decode(&duplicate).is_err());
+        let mut tile_override = bytes.clone();
+        let marker = parsed
+            .markers
+            .iter()
+            .find(|marker| marker.marker == Marker::Cod)
+            .unwrap();
+        let override_bytes = bytes[marker.offset..marker.data_offset + marker.data_len].to_vec();
+        let psot = read_u32(&bytes, first + 6).unwrap();
+        tile_override[first + 6..first + 10]
+            .copy_from_slice(&(psot + override_bytes.len() as u32).to_be_bytes());
+        tile_override.splice(first + 12..first + 12, override_bytes);
+        assert!(prepare_htj2k_native_component_grid_decode(&tile_override).is_err());
+    }
 
     fn fixture(origin: (u32, u32), sampling: (u8, u8)) -> (Vec<u8>, Vec<u8>) {
         let width = 35_u32;
@@ -51870,8 +52199,8 @@ pub fn is_htj2k_lossless_profile(input: &[u8], codestream: &Codestream) -> bool 
     classify_htj2k_lossless_profile(input, codestream).is_ok()
 }
 
-/// Return whether the codestream fits the bounded single-component native
-/// grid route, including structural and effective packet admission.
+/// Return whether the codestream fits either bounded native component-grid
+/// route, including structural and effective packet admission.
 #[cfg(feature = "std")]
 pub fn is_htj2k_native_component_grid_profile(input: &[u8], codestream: &Codestream) -> bool {
     codestream.kind == CodestreamKind::Htj2k

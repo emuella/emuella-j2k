@@ -195,10 +195,24 @@ replace the raw irreversible defaults with reversible component state and vary
 guard bits while preserving the coefficient-transfer bound.
 Six-layer fixtures cover all 24 packets with SOP/EPH and reject a late EPH
 contradiction. Adjacent progression, layer, MCT, precision, decomposition,
-block-style and multi-tile shapes remain outside the native-grid profile.
+block-style and multi-tile shapes remain outside the single-component profile.
 Explicit precinct tests distinguish one absolute native precinct from the
 larger reference grid and reject actual multi-precinct grids. Valid JPH wrappers
 remain unsupported by inspection, shape and decode, without publishing samples.
+
+The matching three-component MCT grid branch has separate project-authored
+fixtures with two LRCP layers and four tiles. Non-zero image/tile origins,
+asymmetric sampling and clipped right/bottom edges reconstruct exact native
+component-zero samples before inverse RCT. Packet validation covers all three
+components while entropy reconstruction selects only zero. Tests reject
+non-matching grids and formats, non-aligned tile phases, wrong MCT/progression/
+decomposition/layer state, duplicate parts, tile-header overrides, excessive
+sample and tile counts, excluded presentation and selection requests, and JPH.
+Owned, shape, retained-workspace and padded caller-planar results agree;
+truncation and a last-tile entropy error leave caller storage untouched.
+The locked DS0 P0.10 representative comparison qualifies 4,096 native samples
+at peak error 3 and MSE 0.459716796875 within 10 and 2.84. This is bounded
+component-output evidence, not full RGB support or a general conformance claim.
 Public inspection,
 shape, owned, caller-retained HT workspace and caller-planar routes agree on
 the admitted request; padding is preserved. Wrong phase, empty or oversized
