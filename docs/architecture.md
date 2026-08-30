@@ -145,6 +145,38 @@ B.2.5 (pages 25–26), retrieval
 `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. All implementation and synthetic
 fixtures are project-authored; no protected payload or pixels are embedded.
 
+### Heterogeneous reversible reduced component
+
+The reduction-five HT-owned plan resolves each component's effective main
+coding and quantisation before packet topology. It admits three unit-sampled
+8–16-bit components with independently signed or unsigned formats, one
+zero-origin tile/part, no MCT, reversible 5/3, six levels for component zero
+and six through eight for the others. The packet boundary is CPRL with one
+through thirty layers, 32/64-sample code-block axes, explicit square 128/256
+precincts and optional inline SOP/EPH. Only main COD/COC/QCD/QCC are functional
+overrides; ROI, POC, packet relocation and tile-header state fail closed.
+
+An independently rechecked HT permission grants heterogeneous multi-precinct
+packet traversal, without granting any classic Profile-0 permission. Every
+component's quantiser must resolve to no quantisation with positive exponents
+and a magnitude transfer bounded to 31 bits. When all components override QCD,
+the unused default is validated against COD's own decomposition count.
+The full reference plane is bounded to 16 Mi samples before packet preparation;
+existing packet/precinct-state limits and fallible retained-plane allocation
+remain in force. Admission retains at most first/latest HT sets while scanning
+all packets, then rejects effective multiplicity. Only component zero through
+resolution one reaches entropy and reversible synthesis. The block candidate
+describes this selected plane after heterogeneous packet admission, not a
+fictionally homogeneous source image. Public metadata and owned/caller output
+share the prepared plan and preserve the selected native signedness/precision.
+
+This separation follows ISO/IEC 15444-1:2024 A.6.1/A.6.2, A.6.4/A.6.5 and
+B.12.1.5 (physical pages 46, 49–54 and 98), retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. Part 4:2024 B.2.3/B.2.5
+(pages 25–26), retrieval `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`,
+separates native reconstruction from Class-0 signed arithmetic scaling.
+Project-authored fixtures and implementation contain no protected payloads.
+
 ### Full native grids
 
 The full native component-grid route has its own prepared admission plan. It

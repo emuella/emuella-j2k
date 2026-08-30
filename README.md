@@ -97,6 +97,20 @@ Only planar component-zero output without a region, tile or layer limit is
 admitted. JPH, rendered output, other reductions, COC, tile-header overrides,
 ROI, packed/inline packet markers and HTMIX remain outside this branch.
 
+A heterogeneous reversible reduction-five route selects raw component zero
+from one zero-origin tile/part with three unit-sampled components. Each may
+have its own signedness, 8–16-bit precision, effective main COD/COC coding and
+QCD/QCC no-quantisation exponents. Component zero has six decomposition levels;
+the others have six through eight. CPRL uses one through thirty layers,
+32/64-sample block axes and explicit 128×128 or 256×256 precincts. Inline
+SOP/EPH is supported. All packets and quantisers are validated; only component
+zero through resolution one is reconstructed, retaining its native precision
+and signedness. The 16 Mi-sample reference-plane bound applies before packet
+preparation. Only planar component-zero output without region, tile or layer
+limits is admitted; MCT, sampling, tile overrides, ROI, HTMIX, JPH and rendered
+output remain outside this route. This qualifies the locked P0.08 HTONLY point,
+not P0.05's scalar-derived/mixed-transform sampled PCRL shape.
+
 JPH inspection enforces the bounded Annex D signature, `jph ` file type and
 `jph ` compatibility membership,
 inherited `jp2h` structure including optional-box dependencies, complete HTJ2K

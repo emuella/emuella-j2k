@@ -280,6 +280,22 @@ classifier separation, JPH, neighbouring requests/styles, and oversized SIZ
 rejection without caller mutation. The five-level numerical and atomicity
 regressions remain unchanged.
 
+The heterogeneous reversible HT reduction-five tests generate three distinct
+effective coding and sample-format states (signed 12-bit, unsigned 8-bit and
+signed 16-bit), six/seven/eight levels, 64/32/64 blocks and distinct QCC guard
+bits. Independent CPRL lattice enumeration writes thirty-layer SOP/EPH packets
+with delayed contributions and non-zero unselected/discarded subbands. Odd
+65×97, 513×257 and 4129×65 grids cover clipping and retained/discarded
+multi-precinct topology. An independently assembled one-level coefficient
+oracle verifies exact signed output. QCD/QCC precedence, malformed unselected
+quantisation, oversized SIZ and counted linear marker traversal are checked.
+Public tests cover metadata/descriptor/executor agreement, signed padded caller
+rows, late packet and entropy failure atomicity, full-image separation, JPH and
+neighbouring requests. Locked P0.08 compares native signed 12-bit component zero
+at reduction five after the existing arithmetic scale to its signed 8-bit
+reference; no protected samples enter ordinary tests. P0.05/P0.06, ROI,
+tile-header heterogeneity and HTMIX still need their own admission evidence.
+
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
 and the capability claim in `testdata.lock.toml`:
 
