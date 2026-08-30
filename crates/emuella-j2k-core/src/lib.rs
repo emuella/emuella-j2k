@@ -38,18 +38,25 @@ mod htj2k_encode_tests {
 
     const WIDTH: u32 = 257;
     const HEIGHT: u32 = 193;
+    const JPH_WIDTH: u32 = 53;
+    const JPH_HEIGHT: u32 = 47;
 
-    fn sample_planes(components: u16, sample_format: SampleFormat) -> Vec<Vec<u8>> {
+    fn sample_planes(
+        width: u32,
+        height: u32,
+        components: u16,
+        sample_format: SampleFormat,
+    ) -> Vec<Vec<u8>> {
         let bytes_per_sample = usize::from(sample_format.bits_per_sample).div_ceil(8);
         (0..components)
             .map(|component| {
                 let mut samples =
-                    Vec::with_capacity(usize::try_from(WIDTH * HEIGHT).unwrap() * bytes_per_sample);
+                    Vec::with_capacity(usize::try_from(width * height).unwrap() * bytes_per_sample);
                 let modulus = 1_u32 << sample_format.bits_per_sample;
-                for y in 0..HEIGHT {
-                    for x in 0..WIDTH {
+                for y in 0..height {
+                    for x in 0..width {
                         let mut value = x
-                            .wrapping_add(y.wrapping_mul(WIDTH))
+                            .wrapping_add(y.wrapping_mul(width))
                             .wrapping_add(u32::from(component).wrapping_mul(0x9e37_79b9));
                         value ^= value << 13;
                         value ^= value >> 17;
@@ -67,14 +74,19 @@ mod htj2k_encode_tests {
             .collect()
     }
 
-    fn padded_planes(compact: &[Vec<u8>], bytes_per_sample: usize) -> Vec<Vec<u8>> {
-        let row_bytes = usize::try_from(WIDTH).unwrap() * bytes_per_sample;
+    fn padded_planes(
+        width: u32,
+        height: u32,
+        compact: &[Vec<u8>],
+        bytes_per_sample: usize,
+    ) -> Vec<Vec<u8>> {
+        let row_bytes = usize::try_from(width).unwrap() * bytes_per_sample;
         let stride = row_bytes + 5;
         compact
             .iter()
             .map(|plane| {
-                let mut padded = vec![0xa5; stride * usize::try_from(HEIGHT).unwrap()];
-                for row in 0..usize::try_from(HEIGHT).unwrap() {
+                let mut padded = vec![0xa5; stride * usize::try_from(height).unwrap()];
+                for row in 0..usize::try_from(height).unwrap() {
                     padded[row * stride..row * stride + row_bytes]
                         .copy_from_slice(&plane[row * row_bytes..(row + 1) * row_bytes]);
                 }
@@ -83,15 +95,20 @@ mod htj2k_encode_tests {
             .collect()
     }
 
-    fn interleave(compact: &[Vec<u8>], bytes_per_sample: usize) -> (Vec<u8>, usize) {
+    fn interleave(
+        width: u32,
+        height: u32,
+        compact: &[Vec<u8>],
+        bytes_per_sample: usize,
+    ) -> (Vec<u8>, usize) {
         let pixel_bytes = compact.len() * bytes_per_sample;
-        let row_bytes = usize::try_from(WIDTH).unwrap() * pixel_bytes;
+        let row_bytes = usize::try_from(width).unwrap() * pixel_bytes;
         let stride = row_bytes + 7;
-        let mut interleaved = vec![0x5a; stride * usize::try_from(HEIGHT).unwrap()];
-        for y in 0..usize::try_from(HEIGHT).unwrap() {
-            for x in 0..usize::try_from(WIDTH).unwrap() {
+        let mut interleaved = vec![0x5a; stride * usize::try_from(height).unwrap()];
+        for y in 0..usize::try_from(height).unwrap() {
+            for x in 0..usize::try_from(width).unwrap() {
                 for (component, plane) in compact.iter().enumerate() {
-                    let source = (y * usize::try_from(WIDTH).unwrap() + x) * bytes_per_sample;
+                    let source = (y * usize::try_from(width).unwrap() + x) * bytes_per_sample;
                     let destination = y * stride + x * pixel_bytes + component * bytes_per_sample;
                     interleaved[destination..destination + bytes_per_sample]
                         .copy_from_slice(&plane[source..source + bytes_per_sample]);
@@ -113,7 +130,7 @@ mod htj2k_encode_tests {
         };
         let info =
             ImageInfo::new(WIDTH, HEIGHT, components, sample_format, colour, layout).unwrap();
-        let compact = sample_planes(components, sample_format);
+        let compact = sample_planes(WIDTH, HEIGHT, components, sample_format);
         let bytes_per_sample = usize::from(sample_format.bits_per_sample).div_ceil(8);
         let options = Htj2kEncodeOptions {
             decomposition_levels: 1,
@@ -121,7 +138,7 @@ mod htj2k_encode_tests {
 
         let (first, second) = match layout {
             ComponentLayout::Planar => {
-                let buffers = padded_planes(&compact, bytes_per_sample);
+                let buffers = padded_planes(WIDTH, HEIGHT, &compact, bytes_per_sample);
                 let stride = usize::try_from(WIDTH).unwrap() * bytes_per_sample + 5;
                 let planes = buffers
                     .iter()
@@ -139,7 +156,7 @@ mod htj2k_encode_tests {
                 )
             }
             ComponentLayout::Interleaved => {
-                let (samples, stride_bytes) = interleave(&compact, bytes_per_sample);
+                let (samples, stride_bytes) = interleave(WIDTH, HEIGHT, &compact, bytes_per_sample);
                 let image = ImageView::Interleaved {
                     info: &info,
                     samples: &samples,
@@ -177,6 +194,156 @@ mod htj2k_encode_tests {
             panic!("ordinary HTJ2K component decode returned interleaved samples");
         };
         assert_eq!(decoded_planes, compact);
+    }
+
+    fn assert_jph_image_case(
+        image: ImageView<'_>,
+        compact: &[Vec<u8>],
+        options: &Htj2kEncodeOptions,
+    ) {
+        let info = image_info(image);
+        let raw = encode_htj2k(image, options).unwrap();
+        let first = encode_htj2k_jph(image, options).unwrap();
+        let second = encode_htj2k_jph(image, options).unwrap();
+        assert_eq!(first, second);
+
+        let decode_options = DecodeOptions {
+            mode: DecodeMode::Components,
+            ..DecodeOptions::default()
+        };
+        let raw_decoded = decode(&raw, &decode_options).unwrap_or_else(|error| {
+            panic!(
+                "raw {}-component {:?} {:?} decomposition {} decode failed: {error:?}",
+                info.components, info.sample_format, info.layout, options.decomposition_levels
+            )
+        });
+        assert_eq!(raw_decoded.data, ImageData::Planes(compact.to_vec()));
+
+        let parsed_container = container::parse(&first).unwrap();
+        assert_eq!(parsed_container.kind, container::ContainerKind::Jph);
+        assert_eq!(parsed_container.codestreams.len(), 1);
+        assert_eq!(
+            parsed_container.primary_codestream(&first).unwrap(),
+            Some(raw.as_slice())
+        );
+        assert_eq!(
+            parsed_container.image_header,
+            Some(container::ImageHeaderBox {
+                width: info.width,
+                height: info.height,
+                components: info.components,
+                bits_per_component: info.sample_format.bits_per_sample - 1,
+                compression_type: 7,
+                unknown_color_space: false,
+                intellectual_property: false,
+            })
+        );
+        assert_eq!(
+            parsed_container.color_specification,
+            Some(container::ColorSpecificationBox {
+                method: container::ColorSpecificationMethod::Enumerated,
+                precedence: 0,
+                approximation: 0,
+                enumerated_color_space: Some(if info.components == 1 {
+                    container::EnumeratedColorSpace::Greyscale
+                } else {
+                    container::EnumeratedColorSpace::SRgb
+                }),
+            })
+        );
+
+        let parsed_codestream = codestream::parse(&raw).unwrap();
+        assert_eq!(parsed_codestream.kind, codestream::CodestreamKind::Htj2k);
+        let style = parsed_codestream.uniform_effective_coding_style().unwrap();
+        assert_eq!(style.decomposition_levels, options.decomposition_levels);
+        assert_eq!(style.entropy_coder, codestream::EntropyCoder::HtBlockCoding);
+        assert_eq!(style.transform, codestream::WaveletTransform::Reversible53);
+        assert!(!style.multiple_component_transform);
+
+        let metadata = inspect(&first, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jph);
+        assert_eq!(metadata.support, SupportStatus::Supported);
+        assert_eq!(
+            metadata.codestream.as_ref().map(|value| value.kind),
+            Some(codestream::CodestreamKind::Htj2k)
+        );
+        assert_eq!(
+            metadata.container,
+            Some(ContainerInfo {
+                brand: Some("jph ".into()),
+                compatible_brands: vec!["jph ".into()],
+                codestream_count: 1,
+            })
+        );
+
+        let decoded = decode(&first, &decode_options).unwrap_or_else(|error| {
+            panic!(
+                "JPH {}-component {:?} {:?} decomposition {} decode failed: {error:?}",
+                info.components, info.sample_format, info.layout, options.decomposition_levels
+            )
+        });
+        assert_eq!(decoded.data, ImageData::Planes(compact.to_vec()));
+    }
+
+    fn assert_jph_case(
+        components: u16,
+        sample_format: SampleFormat,
+        layout: ComponentLayout,
+        decomposition_levels: u8,
+    ) {
+        let colour = if components == 1 {
+            ColorModel::Grayscale
+        } else {
+            ColorModel::Rgb
+        };
+        let info = ImageInfo::new(
+            JPH_WIDTH,
+            JPH_HEIGHT,
+            components,
+            sample_format,
+            colour,
+            layout,
+        )
+        .unwrap();
+        let compact = sample_planes(JPH_WIDTH, JPH_HEIGHT, components, sample_format);
+        let bytes_per_sample = usize::from(sample_format.bits_per_sample).div_ceil(8);
+        let options = Htj2kEncodeOptions {
+            decomposition_levels,
+        };
+
+        match layout {
+            ComponentLayout::Planar => {
+                let buffers = padded_planes(JPH_WIDTH, JPH_HEIGHT, &compact, bytes_per_sample);
+                let stride = usize::try_from(JPH_WIDTH).unwrap() * bytes_per_sample + 5;
+                let planes = buffers
+                    .iter()
+                    .map(|samples| {
+                        Plane::new(samples, JPH_WIDTH, JPH_HEIGHT, stride, sample_format).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                assert_jph_image_case(
+                    ImageView::Planar {
+                        info: &info,
+                        planes: &planes,
+                    },
+                    &compact,
+                    &options,
+                );
+            }
+            ComponentLayout::Interleaved => {
+                let (samples, stride_bytes) =
+                    interleave(JPH_WIDTH, JPH_HEIGHT, &compact, bytes_per_sample);
+                assert_jph_image_case(
+                    ImageView::Interleaved {
+                        info: &info,
+                        samples: &samples,
+                        stride_bytes,
+                    },
+                    &compact,
+                    &options,
+                );
+            }
+        }
     }
 
     fn assert_grayscale_u16_one_decomp_round_trip(width: u32, height: u32, samples: &[u16]) {
@@ -222,6 +389,19 @@ mod htj2k_encode_tests {
             for sample_format in [SampleFormat::U8, SampleFormat::U16_LE] {
                 for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
                     assert_one_decomp_case(components, sample_format, layout);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jph_ht_matrix_is_repeatable_structural_payload_identical_and_lossless() {
+        for decomposition_levels in [0, 1] {
+            for components in [1, 3] {
+                for sample_format in [SampleFormat::U8, SampleFormat::U16_LE] {
+                    for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
+                        assert_jph_case(components, sample_format, layout, decomposition_levels);
+                    }
                 }
             }
         }
@@ -462,6 +642,18 @@ mod htj2k_encode_tests {
                     ..
                 })
             ));
+            assert!(matches!(
+                encode_htj2k_jph(
+                    image,
+                    &Htj2kEncodeOptions {
+                        decomposition_levels,
+                    },
+                ),
+                Err(J2kError::Unsupported {
+                    feature: UnsupportedFeature::WaveletTransform,
+                    ..
+                })
+            ));
         }
 
         let two_component_info = ImageInfo::new(
@@ -475,6 +667,22 @@ mod htj2k_encode_tests {
         .unwrap();
         assert!(matches!(
             encode_htj2k(
+                ImageView::Interleaved {
+                    info: &two_component_info,
+                    samples: &[0_u8; 8 * 8 * 2],
+                    stride_bytes: 16,
+                },
+                &Htj2kEncodeOptions {
+                    decomposition_levels: 1,
+                },
+            ),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ComponentLayout,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode_htj2k_jph(
                 ImageView::Interleaved {
                     info: &two_component_info,
                     samples: &[0_u8; 8 * 8 * 2],
@@ -3497,7 +3705,10 @@ impl Default for EncodeOptions {
     }
 }
 
-/// Encode parameters for raw lossless HTJ2K output.
+/// Encode parameters for lossless HTJ2K output.
+///
+/// [`encode_htj2k`] writes a raw codestream and [`encode_htj2k_jph`] writes
+/// the same codestream bytes in a deterministic JPH container.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Htj2kEncodeOptions {
     /// Reversible 5/3 decomposition levels. The bounded algorithmic surface
@@ -7025,6 +7236,29 @@ pub fn encode_htj2k(image: ImageView<'_>, options: &Htj2kEncodeOptions) -> Resul
     }
 }
 
+/// Encode a lossless HTJ2K codestream in a deterministic JPH container.
+///
+/// This additive container route accepts the same bounded greyscale/RGB,
+/// planar/interleaved, unsigned `U8`/`U16_LE`, zero-or-one reversible 5/3
+/// decomposition matrix as [`encode_htj2k`]. It preserves the raw encoder's
+/// one-tile, one-layer, LRCP, no-MCT profile and places its exact output bytes
+/// in the container's single contiguous codestream box.
+pub fn encode_htj2k_jph(image: ImageView<'_>, options: &Htj2kEncodeOptions) -> Result<Vec<u8>> {
+    #[cfg(feature = "std")]
+    {
+        let info = image_info(image);
+        let codestream = encode_htj2k(image, options)?;
+        let mut output = Vec::new();
+        write_jph_encode_output(info, &codestream, &mut output)?;
+        Ok(output)
+    }
+
+    #[cfg(not(feature = "std"))]
+    {
+        encode_htj2k(image, options)
+    }
+}
+
 /// Encode into a caller-owned output buffer.
 pub fn encode_into(
     image: ImageView<'_>,
@@ -8450,9 +8684,29 @@ fn write_jp2_encode_output(
     options: &EncodeOptions,
     output: &mut Vec<u8>,
 ) -> Result<()> {
+    write_baseline_container_header(info, container::ContainerKind::Jp2, output)?;
+    write_jp2_metadata_records(output, &options.metadata)?;
+    container::write_contiguous_codestream_box(output, codestream).map_err(map_container_error)
+}
+
+#[cfg(feature = "std")]
+fn write_jph_encode_output(
+    info: &ImageInfo,
+    codestream: &[u8],
+    output: &mut Vec<u8>,
+) -> Result<()> {
+    write_baseline_container_header(info, container::ContainerKind::Jph, output)?;
+    container::write_contiguous_codestream_box(output, codestream).map_err(map_container_error)
+}
+
+#[cfg(feature = "std")]
+fn write_baseline_container_header(
+    info: &ImageInfo,
+    kind: container::ContainerKind,
+    output: &mut Vec<u8>,
+) -> Result<()> {
     container::write_signature_box(output).map_err(map_container_error)?;
-    container::write_file_type_box(output, container::ContainerKind::Jp2, 0, &[])
-        .map_err(map_container_error)?;
+    container::write_file_type_box(output, kind, 0, &[]).map_err(map_container_error)?;
 
     let mut header_children = Vec::new();
     container::write_image_header_box(
@@ -8482,9 +8736,7 @@ fn write_jp2_encode_output(
         },
     )
     .map_err(map_container_error)?;
-    container::write_jp2_header_box(output, &header_children).map_err(map_container_error)?;
-    write_jp2_metadata_records(output, &options.metadata)?;
-    container::write_contiguous_codestream_box(output, codestream).map_err(map_container_error)
+    container::write_jp2_header_box(output, &header_children).map_err(map_container_error)
 }
 
 #[cfg(feature = "std")]

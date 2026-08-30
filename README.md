@@ -33,6 +33,12 @@ cargo add emuella-j2k
 use emuella_j2k::{DecodeOptions, decode};
 ```
 
+Lossless HTJ2K callers can choose raw codestream bytes with `encode_htj2k` or
+a deterministic JPH container with `encode_htj2k_jph`. Both entry points use
+`Htj2kEncodeOptions` and the same bounded greyscale/RGB, `U8`/`U16_LE`,
+planar/interleaved, zero-or-one-decomposition profile; the JPH payload is the
+unchanged raw encoder output.
+
 The command-line adapter installs the `emuella-j2k` executable:
 
 ```sh
