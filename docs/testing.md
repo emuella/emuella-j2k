@@ -461,7 +461,7 @@ project-authored fixtures and do not open the protected pack.
 
 ### Decoded-pixel canary
 
-The decoded-pixel Layer 2 journey consumes a catalogue-owned
+The original Part 1 decoded-pixel Layer 2 journey consumes a catalogue-owned
 `decoded_pixel_comparison` scalar case or choice group. Scalar cases bind one
 codestream to one PGX component reference. A choice group binds one codestream
 to alternative output contracts and declares how many alternatives must pass.
@@ -498,9 +498,12 @@ outputs. One uses an upper-left 128 × 128 window at full resolution; the other
 uses a 128 × 128 output after one resolution reduction. Both are signed 4-bit
 comparisons with inclusive limits 0/0, and each group requires at least one
 alternative to pass. Alternative outputs are choices rather than cumulative
-requirements. P0.15 currently qualifies through its one-level-reduced
-alternative; its unsupported full-resolution multi-tile form continues to
-fail closed.
+requirements. The original Part 1 P0.03 and P0.15 canaries qualify through
+their one-level-reduced alternatives. This is separate from their derived
+HTONLY DS0 counterparts: both HTONLY points qualify through full-resolution
+native ROI windows, as documented in the HTJ2K DS0 section above. Neither
+result transfers admission to the other coding mode or promises both choice
+alternatives, general full-image decode or rendered output.
 
 Scalar cases admit zero through three discarded resolution levels; choice-group
 alternatives remain bounded to zero or one. P0.14 exercises the two-level
