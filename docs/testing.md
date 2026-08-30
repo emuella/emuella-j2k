@@ -196,6 +196,9 @@ guard bits while preserving the coefficient-transfer bound.
 Six-layer fixtures cover all 24 packets with SOP/EPH and reject a late EPH
 contradiction. Adjacent progression, layer, MCT, precision, decomposition,
 block-style and multi-tile shapes remain outside the native-grid profile.
+Explicit precinct tests distinguish one absolute native precinct from the
+larger reference grid and reject actual multi-precinct grids. Valid JPH wrappers
+remain unsupported by inspection, shape and decode, without publishing samples.
 Public inspection,
 shape, owned, caller-retained HT workspace and caller-planar routes agree on
 the admitted request; padding is preserved. Wrong phase, empty or oversized

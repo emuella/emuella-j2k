@@ -827,6 +827,40 @@ mod htj2k_native_component_grid_tests {
     }
 
     #[test]
+    fn native_grid_jph_inspection_and_decode_reject_without_publishing() {
+        let (bytes, _) = fixture();
+        let options = options();
+        let info = inspect(&bytes, &InspectOptions::default())
+            .unwrap()
+            .image
+            .unwrap();
+        let mut jph = Vec::new();
+        write_jph_encode_output(&info, &bytes, &mut jph).unwrap();
+        let metadata = inspect(&jph, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jph);
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::InputFormat,
+                ..
+            }
+        ));
+        assert!(decode_shape(&jph, &options).is_err());
+        assert!(decode(&jph, &options).is_err());
+        assert!(
+            decode_htj2k_with_workspace(&jph, &options, &mut Htj2kDecodeWorkspace::new()).is_err()
+        );
+        let mut caller = vec![0x93; 35 * 41];
+        let mut planes = [PlaneMut::new(&mut caller, 35, 41, 35, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        assert!(decode_into(&jph, &mut target, &options).is_err());
+        assert!(caller.iter().all(|sample| *sample == 0x93));
+    }
+
+    #[test]
     fn native_grid_rejects_excluded_requests_and_late_failure_atomically() {
         let (bytes, _) = fixture();
         let options = options();
@@ -10079,7 +10113,7 @@ fn metadata_from_container(
                         .into(),
                 }
             }
-            (_, Some(codestream)) => support_from_codestream(codestream, primary_codestream),
+            (_, Some(codestream)) => support_from_codestream(codestream, primary_codestream, false),
             (_, None) => SupportStatus::Unknown {
                 detail: "container parsed without a contiguous codestream box".into(),
             },
@@ -10599,7 +10633,7 @@ fn metadata_from_codestream(
     };
     let image = image_info_from_codestream(&codestream);
     let support = if options.classify_support {
-        support_from_codestream(&codestream, Some(input))
+        support_from_codestream(&codestream, Some(input), true)
     } else {
         SupportStatus::Unknown {
             detail: "support classification was not requested".into(),
@@ -10640,13 +10674,22 @@ fn codestream_info_from_codestream(codestream: &codestream::Codestream) -> Codes
 fn support_from_codestream(
     codestream: &codestream::Codestream,
     bytes: Option<&[u8]>,
+    _raw_codestream: bool,
 ) -> SupportStatus {
     #[cfg(feature = "std")]
     if codestream.kind == codestream::CodestreamKind::Htj2k
         && let Some(bytes) = bytes
     {
         if codestream::is_htj2k_native_component_grid_profile(bytes, codestream) {
-            return SupportStatus::Supported;
+            return if _raw_codestream {
+                SupportStatus::Supported
+            } else {
+                SupportStatus::Unsupported {
+                    feature: UnsupportedFeature::InputFormat,
+                    detail: "native HTJ2K component-grid decode is limited to a raw codestream"
+                        .into(),
+                }
+            };
         }
         return match codestream::htj2k_lossless_profile_unsupported_construct(bytes, codestream) {
             None => SupportStatus::Supported,
@@ -16567,7 +16610,7 @@ mod effective_coding_style_tests {
         let mut parsed = codestream::parse(&retained_payload_failure).unwrap();
         parsed.tiles[0].payload_offset = Some(usize::MAX);
         assert!(matches!(
-            support_from_codestream(&parsed, Some(&retained_payload_failure)),
+            support_from_codestream(&parsed, Some(&retained_payload_failure), true),
             SupportStatus::Unsupported {
                 feature: UnsupportedFeature::MarkerSegment,
                 ref detail,

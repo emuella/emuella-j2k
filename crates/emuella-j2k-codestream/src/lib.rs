@@ -31381,6 +31381,26 @@ fn recheck_validator_granted_two_volume_single_precinct_schedule(
     Ok(())
 }
 
+fn ht_single_native_component_precinct_grid(
+    codestream: &Codestream,
+    tile_rect: TileRect,
+    coding_style: CodingStyleMarker,
+) -> bool {
+    codestream.kind == CodestreamKind::Htj2k
+        && codestream.siz.components.len() == 1
+        && codestream.siz.components.iter().any(|component| {
+            component.horizontal_separation != 1 || component.vertical_separation != 1
+        })
+        && Part1PrecinctTopology::new(&codestream.siz, tile_rect, 0, coding_style).is_ok_and(
+            |topology| {
+                topology
+                    .resolutions
+                    .iter()
+                    .all(|resolution| resolution.precinct_count == 1)
+            },
+        )
+}
+
 fn packet_precinct_grid_supported(
     codestream: &Codestream,
     tile_rect: TileRect,
@@ -31413,6 +31433,10 @@ fn packet_precinct_grid_supported(
         return bounded_heterogeneous_single_precincts;
     }
     coding_style_has_supported_precinct_grid(coding_style, tile_rect)
+        // Structural packet walking uses the absolute native precinct grid.
+        // Native decode admission remains a separate, narrower mechanism gate.
+        || (component_styles.len() == 1
+            && ht_single_native_component_precinct_grid(codestream, tile_rect, coding_style))
         || (packet_organisation.explicit_precinct_permission
             == ExplicitPrecinctPermission::ValidatedProfile0P004
             && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
@@ -48074,6 +48098,15 @@ fn ht_decode_candidate_with_permissions(
     caller_owns_component_grid: bool,
 ) -> Option<core::result::Result<HtCodestreamDecodeCandidate, ht::HtClassification>> {
     let mut marker_state = ht_marker_state(codestream)?;
+    if caller_owns_component_grid {
+        marker_state.precincts_declared =
+            !uniform_effective_coding_style(codestream).is_ok_and(|style| {
+                tile_rects(codestream).is_ok_and(|tiles| {
+                    tiles.len() == 1
+                        && ht_single_native_component_precinct_grid(codestream, tiles[0], style)
+                })
+            });
+    }
     if allow_irreversible_transform
         && codestream
             .uniform_effective_coding_style()
@@ -49203,6 +49236,37 @@ mod htj2k_native_component_grid_tests {
         empty[siz + 6..siz + 10].copy_from_slice(&2_u32.to_be_bytes());
         empty[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
         assert!(prepare_htj2k_native_component_grid_decode(&empty).is_err());
+    }
+
+    #[test]
+    fn native_component_grid_uses_native_not_reference_precinct_bounds() {
+        for origin in [(0, 0), (1023, 512)] {
+            let (bytes, samples) = fixture(origin, (2, 1));
+            for precinct in [0x66, 0x77] {
+                let mut explicit = bytes.clone();
+                let cod = find_marker(&explicit, 0, Marker::Cod).unwrap();
+                let length = usize::from(read_u16(&explicit, cod + 2).unwrap());
+                explicit[cod + 4] |= 1;
+                explicit[cod + 2..cod + 4]
+                    .copy_from_slice(&u16::try_from(length + 4).unwrap().to_be_bytes());
+                explicit.splice(cod + 2 + length..cod + 2 + length, [precinct; 4]);
+                let parsed = parse(&explicit).unwrap();
+                // The ordinary unit-grid marker planner remains unchanged.
+                assert!(ht_decode_candidate(&parsed).unwrap().is_err());
+                let plan = prepare_htj2k_native_component_grid_decode(&explicit)
+                    .unwrap()
+                    .unwrap();
+                let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+                    &plan,
+                    &mut HtCodestreamDecodeWorkspace::new(),
+                )
+                .unwrap();
+                assert_eq!(decoded.components[0].samples, samples);
+                // 32-sample precincts split the actual 35×41 native grid.
+                explicit[cod + 2 + length..cod + 2 + length + 4].fill(0x55);
+                assert!(prepare_htj2k_native_component_grid_decode(&explicit).is_err());
+            }
+        }
     }
 
     #[test]
