@@ -499,8 +499,16 @@ impl VlcWriter {
         if mel.remaining_bits == 0 {
             mel.remaining_bits = 8;
         }
-        let mel_current = mel.current << mel.remaining_bits;
-        let mel_mask = (0xff_u16 << mel.remaining_bits) as u8;
+        let (mel_current, mel_mask) = if mel.remaining_bits == 8 {
+            // No partial MEL byte remains to fuse. Avoid shifting a `u8` by
+            // its width after the empty state is normalised above.
+            (0, 0)
+        } else {
+            (
+                mel.current << mel.remaining_bits,
+                (0xff_u16 << mel.remaining_bits) as u8,
+            )
+        };
         let vlc_mask = if self.used_bits == 0 {
             0
         } else {
@@ -611,5 +619,24 @@ impl UvlcCode {
             extension,
             extension_len,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_ht_cleanup_block;
+
+    #[test]
+    fn byte_aligned_empty_mel_suffix_encodes_sparse_23_by_1_block() {
+        let mut coefficients = [0_i32; 23];
+        coefficients[0] = 1;
+
+        let encoded = encode_ht_cleanup_block(&coefficients, 23, 1, 23, 2)
+            .expect("sparse block is encodable")
+            .expect("sparse block is included");
+
+        assert_eq!(encoded.missing_most_significant_bitplanes, 1);
+        assert_eq!(encoded.coding_passes, 1);
+        assert!(encoded.segment.len() >= 2);
     }
 }

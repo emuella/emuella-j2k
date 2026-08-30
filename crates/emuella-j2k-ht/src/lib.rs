@@ -24043,7 +24043,12 @@ impl HtBlockLayout {
         let mut next_south_predictors = &mut next_south_predictor_storage;
         let width = usize::from(self.dimensions().width());
         let height = usize::from(self.dimensions().height());
-        let full_octets = width % 4 == 0 && height % 2 == 0;
+        // The prepared full-octet materialiser is limited to 16 explicit
+        // MagSgn bits per coefficient. Subband depths of 16 and 17 can require
+        // a 17- or 18-bit explicit value, so they remain on the project-authored
+        // per-quad scalar path below.
+        let full_octets =
+            width % 4 == 0 && height % 2 == 0 && missing_most_significant_bitplanes < 15;
         let mut summary = HtVlcBlockCleanupDecode {
             line_pair_count: 0,
             step_count: 0,
@@ -24292,7 +24297,7 @@ fn decode_vlc_cleanup_full_octet_line_pair<const INITIAL: bool>(
         };
         let first_mel_event =
             fast_cleanup::decode_zero_context_event(&mut prepared.mel, first_context)?;
-        let first_codeword = if INITIAL {
+        let first_codeword = if INITIAL || prepared.consumed_bits().vlc == 0 {
             prepared
                 .vlc
                 .decode_codeword(table, first_context, first_mel_event)?
@@ -24315,7 +24320,7 @@ fn decode_vlc_cleanup_full_octet_line_pair<const INITIAL: bool>(
         };
         let second_mel_event =
             fast_cleanup::decode_zero_context_event(&mut prepared.mel, second_context)?;
-        let second_codeword = if INITIAL {
+        let second_codeword = if INITIAL || prepared.consumed_bits().vlc == 0 {
             prepared
                 .vlc
                 .decode_codeword(table, second_context, second_mel_event)?
@@ -24339,6 +24344,13 @@ fn decode_vlc_cleanup_full_octet_line_pair<const INITIAL: bool>(
                 first_codeword,
                 second_codeword,
             )?
+        } else if prepared.consumed_bits().vlc == 0 {
+            prepared
+                .vlc
+                .decode_noninitial_uvlc_pair(HtVlcNonInitialUvlcMode::from_u_offsets(
+                    first_codeword.u_offset(),
+                    second_codeword.u_offset(),
+                ))?
         } else {
             prepared.vlc.decode_noninitial_uvlc_pair_steady(
                 HtVlcNonInitialUvlcMode::from_u_offsets(
@@ -24516,20 +24528,21 @@ fn decode_vlc_cleanup_quad_direct_scalar(
             let magnitude_sign_bits = u_value
                 .checked_sub(u16::from(magnitude_exponent_reduction))
                 .ok_or(HtLayoutError::SizeOverflow)?;
-            if magnitude_sign_bits > 16 {
+            // A 17-bit transformed magnitude can require 18 explicit bits
+            // after the interleaved sign representation is included.
+            if magnitude_sign_bits > 18 {
                 return Err(HtLayoutError::StreamBitReadUnavailable {
                     stream: HtCleanupStreamKind::CleanupForward,
                     requested_bits: usize::from(magnitude_sign_bits),
                     remaining_bits: magnitude_sign.remaining_bits(),
                 });
             }
-            let magnitude_sign_value = magnitude_sign.take(u32::from(magnitude_sign_bits))? as u16;
-            let explicit_mask = if magnitude_sign_bits == 16 {
-                u16::MAX
-            } else {
-                (1_u16 << magnitude_sign_bits) - 1
-            };
-            let mut magnitude_code = u32::from(magnitude_sign_value & explicit_mask);
+            let magnitude_sign_value = magnitude_sign.take(u32::from(magnitude_sign_bits))?;
+            let explicit_mask = 1_u32
+                .checked_shl(u32::from(magnitude_sign_bits))
+                .ok_or(HtLayoutError::SizeOverflow)?
+                - 1;
+            let mut magnitude_code = magnitude_sign_value & explicit_mask;
             magnitude_code |= u32::from(embedded_magnitude_bit) << u32::from(magnitude_sign_bits);
             magnitude_code |= 1;
 

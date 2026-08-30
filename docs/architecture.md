@@ -30,6 +30,61 @@ implementations. The test-support crate creates deterministic inputs through
 project-owned algorithms. External reference codecs and corpora are never
 runtime dependencies.
 
+## Bounded raw reversible HTJ2K encode
+
+`encode_htj2k` writes raw HTJ2K codestreams only. Its
+`Htj2kEncodeOptions::decomposition_levels` field admits zero or one: zero keeps
+the established cleanup-only byte path, while one applies one reversible 5/3
+level before the same repo-owned HT cleanup block boundary. Two or more levels
+fail explicitly. This surface does not write JPH boxes and makes no JPH
+container claim.
+
+The one-level matrix is one tile, one layer, LRCP, default precincts, 64 × 64
+code-blocks, HT-only cleanup coding, zero origins, no component subsampling and
+no multiple-component transform. It accepts greyscale or RGB, planar or
+interleaved input, and unsigned `U8` or 16-bit `U16_LE` storage. The RGB route
+transforms each native component independently, so component decode returns the
+original native red, green and blue samples without an inverse colour
+transform. The one-level `U16_LE` route admits the complete unsigned native
+range. A reversible 5/3 level can produce 17-bit transformed magnitudes: the
+two polarities of the 2 × 2 full-range checkerboard produce HH coefficients of
+−131070 and 131070 and signal a QCD exponent of 17.
+
+The project-authored direct scalar cleanup materialiser holds per-quad MagSgn
+values and masks in `u32`. A 17-bit transformed magnitude can use up to 18
+explicit bits once the interleaved sign representation is included. Potential
+16- or 17-bit subbands bypass the full-octet 16-bit MagSgn materialiser; lower
+depths retain the prepared full-octet and acceleration routes. This fallback is
+lossless but may be slower for high-dynamic-range blocks. The full-octet VLC
+caller also retains the general initial-nibble reader until a physical VLC
+nibble has been loaded, then resumes the existing steady reader. Empty high
+subbands in very small one-level images are represented without included code
+blocks. Byte-aligned cleanup termination treats an empty partial MEL byte
+explicitly rather than shifting an eight-bit value by eight.
+
+The marker and transform route follows ISO/IEC 15444-15:2019, clauses
+6.1–6.3 and normative Annex A, A.1 and A.4, PDF pages 10–11 and 35–38, and
+ISO/IEC 15444-1:2024, Annex A, A.6.1–A.6.2, Annex B, B.5 and B.8, and Annex F,
+F.2.2, PDF pages 46–51, 85–86, 88–89 and 132. The Part 15 retrieval revision is
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db` (reviewed bundle
+`e7d1936131227fae2d3f8315309de4dedc83eb3f`); the Part 1 retrieval revision is
+`34e5d1639b9f121807e620c001893ca9d2c8f977` (reviewed bundle
+`1a7a03799078b476bf38e91786b979059b4c533d`). Part 15:2019 refers to the 2019
+Part 1 edition, whereas the locally reviewed normative core is Part 1:2024.
+This bounded profile relies only on the established COD decomposition count,
+reversible-transform signalling, resolution/sub-band organisation and
+one-layer packet model; it does not rely on a post-2019 Part 1 feature or use
+the later edition to reinterpret Part 15.
+
+The decomposition orchestration, transform use, packet construction, scalar
+fallback, termination repair, tests and this description are project-authored
+from those standards routes. The closed OpenJPH-derived file set, pinned source
+revision, headers, attribution, tables and provenance inputs are unchanged.
+The independently designed termination repair is contained in the already
+allowlisted cleanup encoder file under the approved repository authority; no
+external implementation source, test, constant, table, payload or diagnostic
+informed it.
+
 ## Common-grid and JP2 default-image geometry
 
 The codestream crate provides semantically neutral SIZ common-grid arithmetic.

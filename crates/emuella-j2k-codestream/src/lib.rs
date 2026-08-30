@@ -257,6 +257,54 @@ mod reversible_quantization_tests {
     }
 }
 
+#[cfg(test)]
+mod ht_one_decomp_u16_transform_tests {
+    use super::*;
+
+    #[test]
+    fn full_range_checkerboards_produce_signed_17_bit_hh_coefficients() {
+        for (samples, expected_hh) in [
+            ([0_u16, u16::MAX, u16::MAX, 0], -131_070),
+            ([u16::MAX, 0, 0, u16::MAX], 131_070),
+        ] {
+            let mut coefficients = samples.map(|sample| i32::from(sample) - 32_768).to_vec();
+            forward_reversible_5_3_levels(
+                2,
+                2,
+                &mut coefficients,
+                1,
+                "2x2 checkerboard transform failed",
+            )
+            .unwrap();
+            assert_eq!(coefficients, [0, 0, 0, expected_hh]);
+
+            let specs = decomp_subband_specs(2, 2, 1).unwrap();
+            assert_eq!(
+                subband_available_bitplanes(2, &coefficients, specs[3].x, specs[3].y, 1, 1)
+                    .unwrap(),
+                17
+            );
+
+            let native = samples
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect::<Vec<_>>();
+            let encoded = encode_htj2k_grayscale_u16_le_one_decomp_with_precision(
+                GrayscaleU16LeEncode {
+                    width: 2,
+                    height: 2,
+                    samples: &native,
+                    stride_bytes: 4,
+                },
+                16,
+            )
+            .unwrap();
+            let qcd = find_marker(&encoded, 0, Marker::Qcd).unwrap();
+            assert_eq!(encoded[qcd + 8] >> 3, 17);
+        }
+    }
+}
+
 /// Marker-level codestream summary available before packet decode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Codestream {
@@ -9298,6 +9346,26 @@ pub fn encode_htj2k_grayscale_u8_no_decomp(input: GrayscaleU8Encode<'_>) -> Resu
     })
 }
 
+/// Encode a single-tile unsigned 8-bit grayscale cleanup-only HTJ2K
+/// codestream with one reversible 5/3 decomposition level.
+pub fn encode_htj2k_grayscale_u8_one_decomp(input: GrayscaleU8Encode<'_>) -> Result<Vec<u8>> {
+    validate_grayscale_u8_encode(input)?;
+    let mut coefficients = level_shift_grayscale_plane(input)?;
+    forward_reversible_5_3_levels(
+        input.width,
+        input.height,
+        &mut coefficients,
+        1,
+        "forward reversible 5/3 transform failed for native HTJ2K grayscale encode",
+    )?;
+    encode_native_ht_one_decomp_transformed(
+        input.width,
+        input.height,
+        8,
+        &[coefficients.as_slice()],
+    )
+}
+
 #[cfg(test)]
 fn encode_htj2k_grayscale_u8_decomp_test_fixture(
     input: GrayscaleU8Encode<'_>,
@@ -9334,7 +9402,7 @@ fn encode_htj2k_grayscale_u8_decomp_test_fixture(
     let mut segments = Vec::new();
     let mut subbands = Vec::with_capacity(subband_specs.len());
     for (spec, available_bitplanes) in subband_specs.iter().zip(&qcd_exponents) {
-        subbands.push(encode_ht_decomp_subband_test_fixture(
+        subbands.push(encode_ht_decomp_subband(
             input.width,
             &coefficients,
             *spec,
@@ -9444,6 +9512,38 @@ pub fn encode_htj2k_grayscale_u16_le_no_decomp_with_precision(
         components: &[component],
         multiple_component_transform: false,
     })
+}
+
+/// Encode unsigned 16-bit grayscale samples stored in little-endian `u16`
+/// words as cleanup-only HTJ2K with one reversible 5/3 decomposition.
+pub fn encode_htj2k_grayscale_u16_le_one_decomp_with_precision(
+    input: GrayscaleU16LeEncode<'_>,
+    bits_per_sample: u8,
+) -> Result<Vec<u8>> {
+    validate_grayscale_u16_le_encode(input)?;
+    if bits_per_sample != 16 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::SamplePrecision,
+            "native HTJ2K one-decomposition u16 encode requires 16-bit precision",
+        ));
+    }
+    let mut coefficients =
+        level_shift_grayscale_u16_le_plane_with_precision(input, bits_per_sample)?;
+    forward_reversible_5_3_levels(
+        input.width,
+        input.height,
+        &mut coefficients,
+        1,
+        "forward reversible 5/3 transform failed for native HTJ2K grayscale u16 encode",
+    )?;
+    encode_native_ht_one_decomp_transformed(
+        input.width,
+        input.height,
+        bits_per_sample,
+        &[coefficients.as_slice()],
+    )
 }
 
 /// Encode a single-tile unsigned 16-bit grayscale Part 1 codestream using the
@@ -10075,6 +10175,29 @@ pub fn encode_htj2k_rgb_u8_no_decomp(input: RgbU8Encode<'_>) -> Result<Vec<u8>> 
     })
 }
 
+/// Encode a single-tile unsigned 8-bit RGB cleanup-only HTJ2K codestream with
+/// one reversible 5/3 decomposition level and no multiple-component transform.
+pub fn encode_htj2k_rgb_u8_one_decomp(input: RgbU8Encode<'_>) -> Result<Vec<u8>> {
+    validate_rgb_u8_encode(input)?;
+    let [mut red, mut green, mut blue] =
+        level_shift_rgb_u8_components(input)?.map(|component| component.coefficients);
+    forward_reversible_5_3_rgb_components(
+        input.width,
+        input.height,
+        &mut red,
+        &mut green,
+        &mut blue,
+        1,
+        "forward reversible 5/3 transform failed for native HTJ2K RGB encode",
+    )?;
+    encode_native_ht_one_decomp_transformed(
+        input.width,
+        input.height,
+        8,
+        &[red.as_slice(), green.as_slice(), blue.as_slice()],
+    )
+}
+
 /// Encode a single-tile unsigned 8-bit RGB Part 1 codestream using the
 /// repo-owned one-decomposition reversible 5/3 slice and forward reversible
 /// color transform.
@@ -10163,6 +10286,42 @@ pub fn encode_htj2k_rgb_u16_le_no_decomp_with_precision(
         components: &components,
         multiple_component_transform: false,
     })
+}
+
+/// Encode unsigned 16-bit RGB samples stored in little-endian `u16` words as
+/// cleanup-only HTJ2K with one reversible 5/3 decomposition and no
+/// multiple-component transform.
+pub fn encode_htj2k_rgb_u16_le_one_decomp_with_precision(
+    input: RgbU16LeEncode<'_>,
+    bits_per_sample: u8,
+) -> Result<Vec<u8>> {
+    validate_rgb_u16_le_encode(input)?;
+    if bits_per_sample != 16 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::SamplePrecision,
+            "native HTJ2K one-decomposition u16 encode requires 16-bit precision",
+        ));
+    }
+    let [mut red, mut green, mut blue] =
+        level_shift_rgb_u16_le_components_with_precision(input, bits_per_sample)?
+            .map(|component| component.coefficients);
+    forward_reversible_5_3_rgb_components(
+        input.width,
+        input.height,
+        &mut red,
+        &mut green,
+        &mut blue,
+        1,
+        "forward reversible 5/3 transform failed for native HTJ2K RGB u16 encode",
+    )?;
+    encode_native_ht_one_decomp_transformed(
+        input.width,
+        input.height,
+        bits_per_sample,
+        &[red.as_slice(), green.as_slice(), blue.as_slice()],
+    )
 }
 
 /// Encode a single-tile unsigned 16-bit RGB Part 1 codestream using the
@@ -10526,6 +10685,79 @@ fn encode_native_ht_no_decomp(input: NativeNoDecompEncode<'_>) -> Result<Vec<u8>
         input.bits_per_sample,
         u16::try_from(input.components.len()).map_err(|_| CodestreamError::SizeOverflow)?,
         input.multiple_component_transform,
+    )?;
+    write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
+}
+
+fn encode_native_ht_one_decomp_transformed(
+    width: u32,
+    height: u32,
+    bits_per_sample: u8,
+    component_planes: &[&[i32]],
+) -> Result<Vec<u8>> {
+    if !matches!(component_planes.len(), 1 | 3) || !(8..=16).contains(&bits_per_sample) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentCount,
+            "native HTJ2K one-decomposition encode supports grayscale/RGB unsigned 8-bit or 16-bit samples",
+        ));
+    }
+    let expected_samples = checked_component_sample_count(width, height)?;
+    if component_planes
+        .iter()
+        .any(|plane| plane.len() != expected_samples)
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+
+    let subband_specs = decomp_subband_specs(width, height, 1)?;
+    let qcd_exponents = subband_specs
+        .iter()
+        .map(|spec| max_component_subband_available_bitplanes(width, component_planes, *spec))
+        .collect::<Result<Vec<_>>>()?;
+    let mut segments = Vec::new();
+    let mut component_subbands = Vec::with_capacity(component_planes.len());
+    for plane in component_planes {
+        let mut subbands = Vec::with_capacity(subband_specs.len());
+        for (spec, available_bitplanes) in subband_specs.iter().zip(&qcd_exponents) {
+            subbands.push(encode_ht_decomp_subband(
+                width,
+                plane,
+                *spec,
+                *available_bitplanes,
+                &mut segments,
+            )?);
+        }
+        component_subbands.push(subbands);
+    }
+
+    let mut packet = Vec::with_capacity(native_decomp_packet_capacity_hint(
+        &component_subbands,
+        &segments,
+    )?);
+    write_native_decomp_packets(&mut packet, 1, &component_subbands, &segments)?;
+
+    let mut codestream = Vec::with_capacity(native_single_tile_codestream_capacity_hint(
+        packet.len(),
+        component_planes.len(),
+        qcd_exponents.len(),
+    )?);
+    write_native_main_header(
+        &mut codestream,
+        width,
+        height,
+        width,
+        height,
+        bits_per_sample,
+        u16::try_from(component_planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        false,
+        1,
+        &qcd_exponents,
+        true,
+        0,
+        1,
     )?;
     write_tile_part(&mut codestream, 0, &packet, true)?;
     Ok(codestream)
@@ -12236,14 +12468,6 @@ fn decomp_resolution_subband_specs(
     let high_height = full_height
         .checked_sub(low_height)
         .ok_or(CodestreamError::SizeOverflow)?;
-    if high_width == 0 || high_height == 0 {
-        return Err(unsupported(
-            None,
-            Some(Marker::Siz),
-            UnsupportedConstruct::PacketDecode,
-            "native decomposition encode requires non-empty HL, LH, and HH subbands at every resolution",
-        ));
-    }
     let base_index = 1_u8
         .checked_add(
             resolution
@@ -12633,8 +12857,7 @@ fn encode_quality_layer_decomp_subband(
     ))
 }
 
-#[cfg(test)]
-fn encode_ht_decomp_subband_test_fixture(
+fn encode_ht_decomp_subband(
     image_width: u32,
     plane: &[i32],
     spec: DecompSubbandSpec,
@@ -12682,7 +12905,7 @@ fn encode_ht_decomp_subband_test_fixture(
                 width,
                 height,
                 image_width_usize,
-                available_bitplanes,
+                available_bitplanes.max(2),
             )
             .map_err(map_ht_cleanup_encode_error)?;
             let segment_offset = segments.len();
