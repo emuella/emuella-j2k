@@ -178,8 +178,10 @@ Negative synthetic cases keep the stages distinct. A SINGLEHT declaration over
 an actual second HT set is an invalid CAP contradiction before support
 admission, including when the sets span tile parts. With multiple sets
 permitted, the same actual mechanism is structurally valid but remains an
-unsupported native mechanism and cannot modify caller-owned output. Actual RGN
-use, heterogeneous tile-header coding, irreversible coding, HTMIX/HT-declared
+unsupported native mechanism and cannot modify caller-owned output. This
+includes a later zero-byte second Cleanup-set announcement after the first
+non-empty set; leading zero-byte placeholders remain excluded. Actual RGN use,
+heterogeneous tile-header coding, irreversible coding, HTMIX/HT-declared
 population modes and excessive cleanup magnitude bounds remain fail closed.
 These tests qualify only admission to the existing bounded lossless HT decode;
 they do not qualify other Part 15 mechanisms or claim general conformance.
