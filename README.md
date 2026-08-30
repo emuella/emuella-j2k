@@ -186,6 +186,23 @@ admission. All-component support inspection remains unsupported. Other
 selections, partial requests, layer limits, tile overrides, packet relocation,
 HTMIX and JPH/rendered output remain outside this route.
 
+A separate tile-progression native window route qualifies locked P0.07 HTONLY.
+It admits three independently signed or unsigned 8–16-bit unit-sampled
+components, zero origins, three reversible 5/3 levels, one through eight RLCP
+layers, 32/64-sample block axes, explicit 128×128/256×256 precincts and optional
+SOP/EPH. Tiles have 32/64/128-sample axes and the grid has at most 256 tiles.
+Tile zero has two parts with successive LRCP POC volumes: a prefix of the
+resolutions, then a complete volume whose already-seen packets are skipped.
+All other tiles have one part and inherit RLCP. Main QCD supplies bounded
+reversible quantisation; no component or tile coding/quantisation override,
+ROI, MCT, main POC or packet relocation is admitted. The input is bounded to
+64 MiB before packet work. Every tile/component packet is validated, using
+tile-local header scopes; only component zero of tile zero is reconstructed.
+Explicitly select a full-resolution planar component-zero region inside tile
+zero. Native precision and signedness are preserved without resampling.
+Full-image decode, other requests, HTMIX and JPH/rendered output remain outside
+this route. This bounded qualification is not general Part 15 conformance.
+
 The command-line adapter installs the `emuella-j2k` executable:
 
 ```sh

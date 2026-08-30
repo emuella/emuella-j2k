@@ -66,6 +66,21 @@ complete packet source but retains only the first and latest set once this
 unsupported multiplicity is known. Packet contradictions are
 still validity errors before unsupported-mechanism admission.
 
+The native full-resolution partial API also has an independent tile-progression
+window route. It admits only the bounded three-level, three-component,
+ROI-free reversible envelope documented in the README, with two tile-zero
+LRCP POC volumes and inherited RLCP elsewhere. Main coding and quantisation
+are uniform; this does not grant heterogeneous COD/COC/QCD/QCC or MCT.
+Resource preflight precedes packet work. One linear partition creates small
+tile-local header scopes, so the existing effective POC resolver and packet
+walker do not repeatedly scan the global marker list. All components and all
+tiles are packet-validated, with unsupported native mechanisms deferred until
+later tile validity is known. Only tile-zero/component-zero contributions are
+retained. Selected payload spans are joined in memory for the existing HT
+coefficient-transfer and three-level 5/3 seam, then cropped privately before
+publication. Metadata, descriptors and owned/caller decode share the prepared
+plan. No raw main-header inference replaces effective POC scope or availability.
+
 The native partial API has an HT-owned reduction-two transformed-component
 request with reversible and irreversible reconstruction branches.
 After the same structural and effective-mechanism stages, it admits a raw,

@@ -39,6 +39,8 @@ mod ht_reduced_roi;
 pub use ht_high_component::prepare_htj2k_high_component_decode;
 mod ht_roi;
 #[cfg(feature = "std")]
+mod ht_tile_window;
+#[cfg(feature = "std")]
 #[doc(hidden)]
 pub use ht_reduced_roi::encode_htj2k_reduced_roi_multiple_set_test_fixture;
 #[doc(hidden)]
@@ -49,6 +51,14 @@ pub use ht_roi::encode_htj2k_roi_window_test_fixture;
 pub use ht_roi::{
     PreparedHtj2kRoiWindowDecode, decode_prepared_htj2k_roi_window_owned,
     prepare_htj2k_roi_window_decode,
+};
+#[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
+#[doc(hidden)]
+pub use ht_tile_window::encode_htj2k_tile_window_test_fixture;
+#[cfg(feature = "std")]
+pub use ht_tile_window::{
+    PreparedHtj2kTileWindowDecode, decode_prepared_htj2k_tile_window_owned,
+    prepare_htj2k_tile_window_decode,
 };
 #[cfg(feature = "std")]
 mod openjph_transfer;
@@ -29562,6 +29572,7 @@ enum ExplicitPrecinctPermission {
     HtRoiWindow,
     HtReducedRoi,
     HtHighComponent,
+    HtTileWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29596,6 +29607,10 @@ struct PacketOrganisationConfig {
 
 impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    const HT_TILE_WINDOW: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtTileWindow,
+        ..Self::DEFAULT
+    };
     const HT_HIGH_COMPONENT: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtHighComponent,
         ..Self::DEFAULT
@@ -32494,10 +32509,12 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                 tile_maxshift
                     .filter(|maxshift| usize::from(maxshift.component_index) == component_index)
                     .map(|maxshift| maxshift.shift),
-                if packet_organisation.explicit_precinct_permission
-                    == ExplicitPrecinctPermission::HtHighComponent
-                {
-                    PacketBitplaneDomain::HtHighComponentHeaders
+                if matches!(
+                    packet_organisation.explicit_precinct_permission,
+                    ExplicitPrecinctPermission::HtHighComponent
+                        | ExplicitPrecinctPermission::HtTileWindow
+                ) {
+                    PacketBitplaneDomain::HtBoundedHeaders
                 } else {
                     PacketBitplaneDomain::ClassicCoefficientStore
                 },
@@ -40252,7 +40269,7 @@ mod qcc_marker_tests {
 #[derive(Clone, Copy)]
 enum PacketBitplaneDomain {
     ClassicCoefficientStore,
-    HtHighComponentHeaders,
+    HtBoundedHeaders,
 }
 
 fn default_precinct_subbands(
@@ -40305,7 +40322,7 @@ fn default_precinct_subbands(
                 subband_topology,
                 coding_style,
                 match bitplane_domain {
-                    PacketBitplaneDomain::HtHighComponentHeaders
+                    PacketBitplaneDomain::HtBoundedHeaders
                         if coding_style.entropy_coder == EntropyCoder::HtBlockCoding =>
                     {
                         // Header metadata is not an i32 coefficient store. The
@@ -54111,6 +54128,9 @@ pub fn htj2k_lossless_profile_unsupported_construct(
 /// diagnostics until packet decode is requested.
 #[cfg(feature = "std")]
 pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) -> Result<()> {
+    if ht_tile_window::envelope(codestream) {
+        return ht_tile_window::validate_signalling(input, codestream);
+    }
     let Some(part15) = codestream
         .capability
         .as_ref()
