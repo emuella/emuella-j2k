@@ -368,8 +368,12 @@ pub fn parse(input: &[u8]) -> Result<Container> {
         .ok_or_else(|| invalid(None, None, "container must contain a file type box"))?;
     let file_type = parse_file_type(input, file_type_record)?;
     let kind = container_kind(&file_type)?;
-    if kind == ContainerKind::Jp2 {
-        validate_jp2_top_level_structure(&top_level)?;
+    match kind {
+        ContainerKind::Jp2 => validate_jp2_top_level_structure(&top_level)?,
+        ContainerKind::Jph => {
+            validate_jph_file_type(&file_type, file_type_record)?;
+            validate_jph_top_level_structure(&top_level)?;
+        }
     }
 
     let mut image_header = None;
@@ -383,28 +387,19 @@ pub fn parse(input: &[u8]) -> Result<Container> {
         match record.box_type {
             boxes::JP2_HEADER => {
                 let children = parse_box_range(input, record.data_offset, record.end_offset()?)?;
-                if kind == ContainerKind::Jp2 {
-                    validate_jp2_header_structure(&children, record)?;
-                }
+                validate_jp2_header_structure(&children, record)?;
                 for child in &children {
                     match child.box_type {
                         boxes::IMAGE_HEADER => {
-                            image_header = Some(parse_image_header(
-                                input,
-                                child,
-                                kind == ContainerKind::Jp2,
-                            )?);
+                            image_header = Some(parse_image_header(input, child, true)?);
                         }
                         boxes::BITS_PER_COMPONENT => {
-                            bits_per_component = Some(parse_bits_per_component(
-                                input,
-                                child,
-                                kind == ContainerKind::Jp2,
-                            )?);
+                            bits_per_component =
+                                Some(parse_bits_per_component(input, child, true)?);
                         }
                         boxes::COLOR_SPECIFICATION => {
                             let parsed = parse_color_specification(input, child)?;
-                            if color_specification.is_none() || kind == ContainerKind::Jph {
+                            if color_specification.is_none() {
                                 color_specification = Some(parsed);
                             }
                         }
@@ -434,11 +429,7 @@ pub fn parse(input: &[u8]) -> Result<Container> {
         }
     }
 
-    if kind == ContainerKind::Jp2 {
-        validate_jp2_header_fields(image_header, bits_per_component.as_ref(), &boxes)?;
-    } else {
-        validate_header_consistency(image_header, bits_per_component.as_ref())?;
-    }
+    validate_jp2_header_fields(image_header, bits_per_component.as_ref(), &boxes)?;
 
     Ok(Container {
         kind,
@@ -480,6 +471,9 @@ pub fn write_signature_box(output: &mut Vec<u8>) -> Result<()> {
 }
 
 /// Append a JP2/JPH file type box.
+///
+/// An empty compatibility list selects the deterministic baseline membership:
+/// `jp2 ` for JP2, or `jph ` followed by inherited `jp2 ` for JPH.
 pub fn write_file_type_box(
     output: &mut Vec<u8>,
     kind: ContainerKind,
@@ -491,6 +485,9 @@ pub fn write_file_type_box(
     contents.extend_from_slice(&minor_version.to_be_bytes());
     if compatible_brands.is_empty() {
         contents.extend_from_slice(&kind.brand().as_bytes());
+        if kind == ContainerKind::Jph {
+            contents.extend_from_slice(&boxes::BRAND_JP2.as_bytes());
+        }
     } else {
         for brand in compatible_brands {
             contents.extend_from_slice(&brand.as_bytes());
@@ -852,15 +849,17 @@ fn preserve_unknown_metadata(input: &[u8], record: &BoxRecord) -> Result<Metadat
 }
 
 fn container_kind(file_type: &FileTypeBox) -> Result<ContainerKind> {
-    if file_type.brand == boxes::BRAND_JP2
-        || file_type.compatible_brands.contains(&boxes::BRAND_JP2)
-    {
+    if file_type.brand == boxes::BRAND_JP2 {
         return Ok(ContainerKind::Jp2);
     }
-    if file_type.brand == boxes::BRAND_JPH
-        || file_type.compatible_brands.contains(&boxes::BRAND_JPH)
-    {
+    if file_type.brand == boxes::BRAND_JPH {
         return Ok(ContainerKind::Jph);
+    }
+    if file_type.compatible_brands.contains(&boxes::BRAND_JPH) {
+        return Ok(ContainerKind::Jph);
+    }
+    if file_type.compatible_brands.contains(&boxes::BRAND_JP2) {
+        return Ok(ContainerKind::Jp2);
     }
     Err(ContainerError::Unsupported {
         offset: None,
@@ -869,32 +868,30 @@ fn container_kind(file_type: &FileTypeBox) -> Result<ContainerKind> {
     })
 }
 
-fn validate_header_consistency(
-    image_header: Option<ImageHeaderBox>,
-    bits_per_component: Option<&BitsPerComponentBox>,
-) -> Result<()> {
-    let Some(image_header) = image_header else {
-        return Ok(());
-    };
-
-    if image_header.compression_type != 7 {
-        return Err(ContainerError::Unsupported {
-            offset: None,
-            box_type: Some(boxes::IMAGE_HEADER),
-            message: "only JPEG 2000 compression type 7 is supported".to_string(),
-        });
-    }
-
-    if let Some(bits_per_component) = bits_per_component
-        && bits_per_component.components.len() != usize::from(image_header.components)
-    {
+fn validate_jph_file_type(file_type: &FileTypeBox, record: &BoxRecord) -> Result<()> {
+    if file_type.brand != boxes::BRAND_JPH {
         return Err(invalid(
-            None,
-            Some(boxes::BITS_PER_COMPONENT),
-            "bits-per-component entry count must match image header component count",
+            Some(record.data_offset),
+            Some(record.box_type),
+            "JPH file type brand must be `jph `",
         ));
     }
-
+    if file_type.minor_version != 0 {
+        return Err(invalid(
+            Some(record.data_offset + 4),
+            Some(record.box_type),
+            "JPH file type minor version must be zero",
+        ));
+    }
+    for (brand, name) in [(boxes::BRAND_JPH, "`jph `"), (boxes::BRAND_JP2, "`jp2 `")] {
+        if !file_type.compatible_brands.contains(&brand) {
+            return Err(invalid(
+                Some(record.header_offset),
+                Some(record.box_type),
+                alloc::format!("JPH compatible brands must include {name}"),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -952,6 +949,96 @@ fn validate_jp2_top_level_structure(top_level: &[BoxRecord]) -> Result<()> {
             Some(header.header_offset),
             Some(header.box_type),
             "JP2 header box must follow the file type box",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_jph_top_level_structure(top_level: &[BoxRecord]) -> Result<()> {
+    let signature_indices = top_level
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (record.box_type == boxes::SIGNATURE).then_some(index))
+        .collect::<Vec<_>>();
+    if let Some(&duplicate_index) = signature_indices.get(1) {
+        let duplicate = &top_level[duplicate_index];
+        return Err(invalid(
+            Some(duplicate.header_offset),
+            Some(duplicate.box_type),
+            "JPH must contain exactly one signature box",
+        ));
+    }
+
+    let file_type_indices = top_level
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (record.box_type == boxes::FILE_TYPE).then_some(index))
+        .collect::<Vec<_>>();
+    if let Some(&duplicate_index) = file_type_indices.get(1) {
+        let duplicate = &top_level[duplicate_index];
+        return Err(invalid(
+            Some(duplicate.header_offset),
+            Some(duplicate.box_type),
+            "JPH must contain exactly one file type box",
+        ));
+    }
+    let Some(&file_type_index) = file_type_indices.first() else {
+        return Err(invalid(
+            None,
+            None,
+            "container must contain a file type box",
+        ));
+    };
+    if file_type_index != 1 {
+        let file_type = &top_level[file_type_index];
+        return Err(invalid(
+            Some(file_type.header_offset),
+            Some(file_type.box_type),
+            "JPH file type box must immediately follow the signature box",
+        ));
+    }
+
+    let codestream_indices = top_level
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            (record.box_type == boxes::CONTIGUOUS_CODESTREAM).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let Some(&first_codestream_index) = codestream_indices.first() else {
+        return Err(invalid(
+            None,
+            Some(boxes::CONTIGUOUS_CODESTREAM),
+            "JPH must contain at least one contiguous codestream box",
+        ));
+    };
+
+    let header_indices = top_level
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (record.box_type == boxes::JP2_HEADER).then_some(index))
+        .collect::<Vec<_>>();
+    let Some(&header_index) = header_indices.first() else {
+        return Err(invalid(
+            Some(top_level[first_codestream_index].header_offset),
+            Some(boxes::CONTIGUOUS_CODESTREAM),
+            "JPH header box must precede the first contiguous codestream box",
+        ));
+    };
+    if let Some(&duplicate_index) = header_indices.get(1) {
+        let duplicate = &top_level[duplicate_index];
+        return Err(invalid(
+            Some(duplicate.header_offset),
+            Some(duplicate.box_type),
+            "JPH must contain exactly one JP2 header box",
+        ));
+    }
+    if header_index <= file_type_index || header_index > first_codestream_index {
+        let header = &top_level[header_index];
+        return Err(invalid(
+            Some(header.header_offset),
+            Some(header.box_type),
+            "JPH header box must follow the file type box and precede the first contiguous codestream box",
         ));
     }
     Ok(())
@@ -1188,6 +1275,16 @@ mod tests {
     fn valid_uniform_file() -> Vec<u8> {
         file(
             ContainerKind::Jp2,
+            &[
+                jp2_header(&[image_header(1, 7), colour()]),
+                codestream_box(),
+            ],
+        )
+    }
+
+    fn valid_jph_file() -> Vec<u8> {
+        file(
+            ContainerKind::Jph,
             &[
                 jp2_header(&[image_header(1, 7), colour()]),
                 codestream_box(),
@@ -1505,11 +1602,203 @@ mod tests {
     }
 
     #[test]
-    fn leaves_jph_header_cardinality_behaviour_unchanged() {
-        let input = file(ContainerKind::Jph, &[codestream_box()]);
+    fn admits_bounded_jph_structure_and_duplicate_compatible_brands() {
+        let input = valid_jph_file();
         let parsed = parse(&input).unwrap();
         assert_eq!(parsed.kind, ContainerKind::Jph);
-        assert!(parsed.image_header.is_none());
+        assert_eq!(parsed.file_type.brand, boxes::BRAND_JPH);
+        assert_eq!(parsed.file_type.minor_version, 0);
+        assert_eq!(
+            parsed.file_type.compatible_brands,
+            vec![boxes::BRAND_JPH, boxes::BRAND_JP2]
+        );
+        assert!(parsed.image_header.is_some());
         assert_eq!(parsed.codestreams.len(), 1);
+
+        let header = jp2_header(&[image_header(1, 7), colour()]);
+        let mut duplicates = Vec::new();
+        write_signature_box(&mut duplicates).unwrap();
+        write_file_type_box(
+            &mut duplicates,
+            ContainerKind::Jph,
+            0,
+            &[boxes::BRAND_JPH, boxes::BRAND_JP2, boxes::BRAND_JPH],
+        )
+        .unwrap();
+        duplicates.extend_from_slice(&header);
+        duplicates.extend_from_slice(&codestream_box());
+        assert_eq!(
+            parse(&duplicates).unwrap().file_type.compatible_brands,
+            vec![boxes::BRAND_JPH, boxes::BRAND_JP2, boxes::BRAND_JPH]
+        );
+    }
+
+    #[test]
+    fn rejects_jph_file_type_field_conflicts_at_the_file_type_box() {
+        let base = valid_jph_file();
+        let file_type = box_offset(&base, boxes::FILE_TYPE, 0);
+
+        let mut wrong_brand = base.clone();
+        wrong_brand[file_type + 8..file_type + 12].copy_from_slice(b"bad ");
+        assert!(matches!(
+            parse(&wrong_brand),
+            Err(ContainerError::InvalidBox {
+                offset: Some(offset),
+                box_type: Some(boxes::FILE_TYPE),
+                ..
+            }) if offset == file_type + 8
+        ));
+
+        let mut wrong_version = base.clone();
+        wrong_version[file_type + 12..file_type + 16].copy_from_slice(&1_u32.to_be_bytes());
+        assert!(matches!(
+            parse(&wrong_version),
+            Err(ContainerError::InvalidBox {
+                offset: Some(offset),
+                box_type: Some(boxes::FILE_TYPE),
+                ..
+            }) if offset == file_type + 12
+        ));
+
+        for compatible in [&[boxes::BRAND_JPH][..], &[boxes::BRAND_JP2][..]] {
+            let header = jp2_header(&[image_header(1, 7), colour()]);
+            let mut input = Vec::new();
+            write_signature_box(&mut input).unwrap();
+            write_file_type_box(&mut input, ContainerKind::Jph, 0, compatible).unwrap();
+            input.extend_from_slice(&header);
+            input.extend_from_slice(&codestream_box());
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::FILE_TYPE),
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_missing_misordered_and_duplicate_jph_top_level_boxes() {
+        let signature = boxed(boxes::SIGNATURE, &[0x0d, 0x0a, 0x87, 0x0a]);
+        let mut file_type = Vec::new();
+        write_file_type_box(&mut file_type, ContainerKind::Jph, 0, &[]).unwrap();
+        let header = jp2_header(&[image_header(1, 7), colour()]);
+        let codestream = codestream_box();
+        let free = boxed(FourCc::new(*b"free"), &[1]);
+
+        let cases = [
+            [file_type.clone(), header.clone(), codestream.clone()].concat(),
+            [
+                signature.clone(),
+                free.clone(),
+                file_type.clone(),
+                header.clone(),
+                codestream.clone(),
+            ]
+            .concat(),
+            [
+                signature.clone(),
+                file_type.clone(),
+                signature.clone(),
+                header.clone(),
+                codestream.clone(),
+            ]
+            .concat(),
+            [
+                signature.clone(),
+                file_type.clone(),
+                file_type.clone(),
+                header.clone(),
+                codestream.clone(),
+            ]
+            .concat(),
+            [signature.clone(), file_type.clone(), codestream.clone()].concat(),
+            [
+                signature.clone(),
+                file_type.clone(),
+                codestream.clone(),
+                header.clone(),
+            ]
+            .concat(),
+            [
+                signature.clone(),
+                file_type.clone(),
+                header.clone(),
+                codestream.clone(),
+                header.clone(),
+            ]
+            .concat(),
+            [signature, file_type, header].concat(),
+        ];
+        for input in cases {
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn jph_allows_multiple_codestreams_and_preserves_legal_unknown_boxes() {
+        let unknown = FourCc::new(*b"free");
+        let input = file(
+            ContainerKind::Jph,
+            &[
+                jp2_header(&[image_header(1, 7), boxed(unknown, &[1, 2]), colour()]),
+                boxed(unknown, &[3, 4]),
+                codestream_box(),
+                codestream_box(),
+            ],
+        );
+        let parsed = parse(&input).unwrap();
+        assert_eq!(parsed.codestreams.len(), 2);
+        assert!(parsed.metadata.iter().any(|record| record.data == [1, 2]));
+        assert!(parsed.metadata.iter().any(|record| record.data == [3, 4]));
+    }
+
+    #[test]
+    fn bounded_jph_boundary_mutation_matrix_fails_closed() {
+        let base = valid_jph_file();
+        for prefix_len in 0..base.len() {
+            assert!(parse(&base[..prefix_len]).is_err(), "prefix {prefix_len}");
+        }
+
+        for signature_byte in 8..12 {
+            let mut candidate = base.clone();
+            candidate[signature_byte] ^= 1;
+            assert!(matches!(
+                parse(&candidate),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::SIGNATURE),
+                    ..
+                })
+            ));
+        }
+
+        let file_type = box_offset(&base, boxes::FILE_TYPE, 0);
+        for field_byte in file_type + 8..file_type + 16 {
+            let mut candidate = base.clone();
+            candidate[field_byte] ^= 1;
+            assert!(parse(&candidate).is_err(), "file type byte {field_byte}");
+        }
+
+        let mut extended_overflow = Vec::new();
+        extended_overflow.extend_from_slice(&1_u32.to_be_bytes());
+        extended_overflow.extend_from_slice(&boxes::SIGNATURE.as_bytes());
+        extended_overflow.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(matches!(
+            parse(&extended_overflow),
+            Err(ContainerError::SizeOverflow | ContainerError::TruncatedInput { .. })
+        ));
+
+        let mut undersized = base;
+        undersized[..4].copy_from_slice(&7_u32.to_be_bytes());
+        assert!(matches!(
+            parse(&undersized),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::SIGNATURE),
+                ..
+            })
+        ));
     }
 }

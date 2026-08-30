@@ -39,6 +39,12 @@ a deterministic JPH container with `encode_htj2k_jph`. Both entry points use
 planar/interleaved, zero-or-one-decomposition profile; the JPH payload is the
 unchanged raw encoder output.
 
+JPH inspection enforces the bounded Annex D signature, `jph ` file type,
+inherited `jp2h`, complete HTJ2K `jp2c`, and first-codestream header-consistency
+boundary before decode admission. Unknown legal boxes are preserved, while
+optional presentation, alpha, multiple-codestream composition, HTMIX and codec
+profiles outside the documented subset remain unsupported.
+
 The command-line adapter installs the `emuella-j2k` executable:
 
 ```sh

@@ -120,6 +120,29 @@ structure, repeatability, exact native reconstruction and single ownership of
 the codestream bytes; external decoder interoperability remains a separate
 authorised black-box qualification.
 
+The JPH admission tests also cover the Annex D boundary independently of
+decoder success. Positive cases exercise the required signature, file type,
+header and one-or-more codestream ordering; exact `jph ` brand, zero minor
+version, `jph `/`jp2 ` compatibility membership including harmless duplicate
+membership; inherited uniform and varying `ihdr`/`bpcc` forms; legal unknown
+box preservation; multiple complete HTJ2K codestreams; and writer payload
+identity. Negative cases cover missing, misplaced and duplicate structural
+boxes; conflicting file-type fields; absent codestreams; non-HT and incomplete
+primary or later codestreams; trailing bytes after EOC; SIZ disagreement in
+dimensions, component count, precision or signedness; reserved header fields;
+short, truncated, undersized and overflowing box lengths; unsupported
+presentation versus structural-error precedence; and caller-buffer atomicity.
+A bounded deterministic mutation matrix rejects every strict prefix of a valid
+JPH file and one-bit changes across signature magic and protected file-type
+fields. Focused tests run through container parsing, inspection, shape
+discovery, owned decode, incremental inspection and caller-owned decode.
+
+These tests do not claim optional colour, palette, alpha or composition
+support, multiple-codestream presentation, HTMIX support, general encoder or
+decoder coverage, or external conformance. Structurally valid but unimplemented
+presentation and decode profiles remain explicit support-classification
+failures rather than container-invalidity results.
+
 The standards and provenance basis is the bounded route recorded under
 "Bounded reversible HTJ2K encode and JPH output" in `architecture.md`. All fixtures,
 patterns and assertions are project-authored. The ordinary suite neither
