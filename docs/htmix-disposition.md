@@ -42,9 +42,12 @@ MULTIHT permission combines those envelopes or widens JPH presentation.
 `parse` retains typed Part 15 capability and validates marker relationships,
 reserved method bits and declared restrictions. Its tile-part payload is opaque.
 `validate_part15_packet_signalling` proves only bounded packet contradictions;
-it deliberately does not apply homogeneous SINGLEHT reasoning to unresolved
-mixed code-block grammar. Successful structural inspection is not complete
-mixed-packet validity or pixel qualification.
+it currently skips every `Part15CodeBlockMode::Mixed` declaration, including
+neighbours whose effective method is homogeneous HT. SINGLEHT contradictions
+are therefore not established for those declarations even when homogeneous
+packet metadata can be inspected. This existing validation-coverage limit is
+unchanged; successful structural inspection is not complete mixed-packet
+validity or pixel qualification.
 
 The shared packet walker now rejects effective mixed-capable COD/COC before
 reading packet bytes. Previously, the public
