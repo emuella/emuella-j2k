@@ -1683,6 +1683,214 @@ mod htj2k_reduced_component_tests {
     }
 
     #[test]
+    fn reduced_roi_public_routes_and_failures_are_atomic() {
+        let input = codestream::encode_htj2k_reduced_roi_test_fixture(65, 97).unwrap();
+        let request = PartialDecodeOptions {
+            resolution: ResolutionLevel::Reduced { discard_levels: 3 },
+            ..options()
+        };
+        let info = decode_partial_info(&input, &request).unwrap();
+        let format = SampleFormat::with_byte_order(12, false, Some(SampleEndian::Little)).unwrap();
+        assert_eq!(
+            (info.width, info.height, info.components, info.sample_format),
+            (9, 13, 1, format)
+        );
+        let owned = decode_partial(&input, &request).unwrap();
+        assert_eq!(owned.info, info);
+        assert_eq!(
+            decode_partial_component_info(&input, &request).unwrap(),
+            owned.component_info
+        );
+        let ImageData::Planes(expected) = owned.data else {
+            panic!("expected planar output");
+        };
+        let mut caller = vec![0xa6; 24 * 13];
+        {
+            let mut planes = [PlaneMut::new(&mut caller, 9, 13, 24, format).unwrap()];
+            decode_partial_into(
+                &input,
+                &mut ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                },
+                &request,
+            )
+            .unwrap();
+        }
+        for (row, wanted) in expected[0].chunks_exact(18).enumerate() {
+            assert_eq!(&caller[row * 24..row * 24 + 18], wanted);
+            assert!(
+                caller[row * 24 + 18..(row + 1) * 24]
+                    .iter()
+                    .all(|&v| v == 0xa6)
+            );
+        }
+        let metadata = inspect(&input, &InspectOptions::default()).unwrap();
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported { .. }
+        ));
+        assert!(decode(&input, &DecodeOptions::default()).is_err());
+        let c = codestream::parse(&input).unwrap();
+        let at = |kind| c.markers.iter().find(|m| m.marker == kind).unwrap().offset;
+        let mut rejected = Vec::new();
+        for (offset, value) in [
+            (at(codestream::Marker::Qcc) + 5, 0x63),
+            (at(codestream::Marker::Rgn) + 4, 1),
+            (at(codestream::Marker::Cod) + 5, 3),
+        ] {
+            let mut b = input.clone();
+            b[offset] = value;
+            rejected.push(b);
+        }
+        let mut late = input.clone();
+        let end = late.len() - 3;
+        late[end] = 0xff;
+        rejected.push(late);
+        let mut huge = input.clone();
+        let siz = at(codestream::Marker::Siz);
+        for offset in [siz + 6, siz + 10, siz + 22, siz + 26] {
+            huge[offset..offset + 4].copy_from_slice(&32768_u32.to_be_bytes());
+        }
+        rejected.push(huge);
+        let mut jph = Vec::new();
+        write_jph_encode_output(metadata.image.as_ref().unwrap(), &input, &mut jph).unwrap();
+        rejected.push(jph);
+        for bytes in rejected {
+            assert!(decode_partial_info(&bytes, &request).is_err());
+            assert!(decode_partial_component_info(&bytes, &request).is_err());
+            assert!(decode_partial(&bytes, &request).is_err());
+            caller.fill(0xa6);
+            let mut planes = [PlaneMut::new(&mut caller, 9, 13, 24, format).unwrap()];
+            assert!(
+                decode_partial_into(
+                    &bytes,
+                    &mut ImageViewMut::Planar {
+                        info: &info,
+                        planes: &mut planes
+                    },
+                    &request
+                )
+                .is_err()
+            );
+            assert!(caller.iter().all(|&v| v == 0xa6));
+        }
+        let start = c.tiles[0].payload_offset.unwrap();
+        let first_end = (1..128)
+            .find(|&len| {
+                codestream::parse_no_decomp_lrcp_packet(&input[start..start + len]).is_ok()
+            })
+            .unwrap()
+            + start;
+        let mut entropy = input.clone();
+        entropy[first_end - 2] &= 0xf0;
+        entropy[first_end - 1] = 0;
+        assert_eq!(decode_partial_info(&entropy, &request).unwrap(), info);
+        assert!(decode_partial(&entropy, &request).is_err());
+        caller.fill(0xa6);
+        let mut planes = [PlaneMut::new(&mut caller, 9, 13, 24, format).unwrap()];
+        assert!(
+            decode_partial_into(
+                &entropy,
+                &mut ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes
+                },
+                &request
+            )
+            .is_err()
+        );
+        assert!(caller.iter().all(|&v| v == 0xa6));
+        for neighbour in [
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Full,
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 2 },
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::All,
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![1]),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(1),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                }),
+                ..request.clone()
+            },
+        ] {
+            assert!(decode_partial_info(&input, &neighbour).is_err());
+            assert!(decode_partial(&input, &neighbour).is_err());
+        }
+        let multiple = codestream::encode_htj2k_reduced_roi_multiple_set_test_fixture().unwrap();
+        let parsed = codestream::parse(&multiple).unwrap();
+        let cap = parsed
+            .markers
+            .iter()
+            .find(|m| m.marker == codestream::Marker::Cap)
+            .unwrap()
+            .offset;
+        for bound in [0x2a, 0x2b] {
+            let mut b = multiple.clone();
+            b[cap + 9] = bound;
+            assert!(matches!(
+                inspect(&b, &InspectOptions::default()),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            assert!(matches!(
+                decode_partial_info(&b, &request),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            assert!(matches!(
+                decode_partial_component_info(&b, &request),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            assert!(matches!(
+                decode_partial(&b, &request),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            caller.fill(0xa6);
+            let mut planes = [PlaneMut::new(&mut caller, 9, 13, 24, format).unwrap()];
+            assert!(
+                decode_partial_into(
+                    &b,
+                    &mut ImageViewMut::Planar {
+                        info: &info,
+                        planes: &mut planes
+                    },
+                    &request
+                )
+                .is_err()
+            );
+            assert!(caller.iter().all(|&v| v == 0xa6));
+        }
+    }
+
+    #[test]
     fn public_irreversible_mct_cross_envelope_fails_atomically() {
         let mut input = irreversible_fixture();
         let options = options();

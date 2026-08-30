@@ -307,8 +307,25 @@ visits, pre-topology size rejection, and invalid SINGLEHT versus unsupported
 MULTIHT. Public metadata, descriptors, owned and padded caller routes agree;
 neighbouring requests, JPH, ROI, tile overrides, malformed quantisers and
 selected entropy failures preserve caller storage. Locked P0.05 uses its
-unchanged component-zero reduction-three and error-bound contract. P0.06,
-other ROI shapes, tile-header heterogeneity and HTMIX still need separate admission evidence.
+unchanged component-zero reduction-three and error-bound contract. Other ROI
+shapes, tile-header heterogeneity and HTMIX need separate admission evidence.
+
+The heterogeneous reduced ROI branch separately qualifies P0.06. Synthetic
+RPCL fixtures enumerate actual reference-grid precinct origins for all four
+sampled components, with distinct quantiser guards, per-subband exponents and
+mantissas, and main/tile Maxshift precedence. Odd 65×97, 529×401 and 2057×65
+grids, one/three/four layers, 128/256 precincts, native 8/12/16-bit signed and
+unsigned output and effective shifts 1/3/9 are compared with an independently
+assembled coefficient-domain oracle through three 9/7 levels. Threshold
+neighbours, signs and alignment are checked directly; the synthetic 529×145
+grid counts exactly 144 packets with all unselected components present.
+Unselected quantisers and late packets, linear marker visits, pre-structural
+resource rejection, invalid SINGLEHT versus unsupported MULTIHT and public
+metadata/descriptor/owned/padded-caller parity are covered. Entropy failure and
+excluded requests/containers preserve caller sentinels. The locked P0.06
+comparison keeps its unsigned 12-bit native plane until the established
+Class-0 arithmetic scale to the 65×17 unsigned 8-bit reference; limits remain
+109/743. No protected sample enters the ordinary tests.
 
 HT ROI window tests construct coefficients and native packet schedules without
 external imagery. Signed/unsigned 1/4/8/12/16-bit outputs and shifts 1/3/7/15

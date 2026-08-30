@@ -25,7 +25,13 @@ pub use emuella_j2k_transform as transform;
 
 #[doc(hidden)]
 pub mod geometry;
+mod ht_reduced_roi;
 mod ht_roi;
+#[cfg(feature = "std")]
+#[doc(hidden)]
+pub use ht_reduced_roi::encode_htj2k_reduced_roi_multiple_set_test_fixture;
+#[doc(hidden)]
+pub use ht_reduced_roi::encode_htj2k_reduced_roi_test_fixture;
 #[doc(hidden)]
 pub use ht_roi::encode_htj2k_roi_window_test_fixture;
 #[cfg(feature = "std")]
@@ -5085,6 +5091,7 @@ pub struct Htj2kReducedComponentDecodeRequest {
 enum Htj2kReducedComponentReconstruction {
     Reversible(HtReversibleCodeBlockTransfer),
     Irreversible,
+    IrreversibleRoi(u8),
 }
 
 /// Prepared admission and packet plan for the bounded reversible or
@@ -29541,6 +29548,7 @@ enum ExplicitPrecinctPermission {
     HtHeterogeneousReversibleReduced,
     HtScalarDerivedReduced,
     HtRoiWindow,
+    HtReducedRoi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29575,6 +29583,10 @@ struct PacketOrganisationConfig {
 
 impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    const HT_REDUCED_ROI: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtReducedRoi,
+        ..Self::DEFAULT
+    };
     const HT_ROI_WINDOW: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtRoiWindow,
         ..Self::DEFAULT
@@ -31870,7 +31882,10 @@ fn packet_component_styles(
             && ht_heterogeneous_reversible_reduced_envelope(codestream))
         || (packet_organisation.explicit_precinct_permission
             == ExplicitPrecinctPermission::HtScalarDerivedReduced
-            && ht_scalar_derived_reduced_envelope(codestream));
+            && ht_scalar_derived_reduced_envelope(codestream))
+        || (packet_organisation.explicit_precinct_permission
+            == ExplicitPrecinctPermission::HtReducedRoi
+            && ht_reduced_roi::envelope(codestream));
     if !heterogeneous_styles_granted {
         let uniform = uniform_effective_coding_style(codestream)?;
         return Ok(alloc::vec![uniform; component_count]);
@@ -32093,6 +32108,10 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
+    if packet_organisation.explicit_precinct_permission == ExplicitPrecinctPermission::HtReducedRoi
+    {
+        return ht_reduced_roi::envelope(codestream);
+    }
     if packet_organisation.explicit_precinct_permission == ExplicitPrecinctPermission::HtRoiWindow {
         return ht_roi::envelope(codestream)
             && coding_style_has_single_precinct(coding_style, tile_rect.width, tile_rect.height);
@@ -32382,6 +32401,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                     packet_organisation.explicit_precinct_permission,
                     ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
                         | ExplicitPrecinctPermission::HtScalarDerivedReduced
+                        | ExplicitPrecinctPermission::HtReducedRoi
                 ) {
                     // With every component overridden, the unused QCD still
                     // describes the COD default, not selected component zero.
@@ -32396,6 +32416,10 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         selected_components,
     )?;
     let tile_maxshift = if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtReducedRoi
+    {
+        Some(ht_reduced_roi::resolve_maxshift(input, codestream)?)
+    } else if packet_organisation.explicit_precinct_permission
         == ExplicitPrecinctPermission::HtRoiWindow
     {
         Some(ht_roi::resolve_maxshift(input, codestream)?)
@@ -41101,6 +41125,7 @@ fn place_ht_irreversible_code_block_coefficients(
     contribution: &PacketCodeBlockContribution,
     aligned_coefficients: &[i32],
     scale: f32,
+    maxshift: Option<u8>,
 ) -> Result<()> {
     let width = usize::from(contribution.width);
     let height = usize::from(contribution.height);
@@ -41123,10 +41148,17 @@ fn place_ht_irreversible_code_block_coefficients(
             .ok_or(CodestreamError::SizeOverflow)?;
         let source = &aligned_coefficients[row * width..(row + 1) * width];
         for (destination, coefficient) in destination.iter_mut().zip(source) {
-            let doubled_half_step = ht_irreversible_doubled_half_step_coefficient(
-                *coefficient,
-                contribution.available_bitplanes,
-            )?;
+            let doubled_half_step = match maxshift {
+                Some(shift) => ht_reduced_roi::doubled_coefficient(
+                    *coefficient,
+                    contribution.available_bitplanes,
+                    shift,
+                )?,
+                None => ht_irreversible_doubled_half_step_coefficient(
+                    *coefficient,
+                    contribution.available_bitplanes,
+                )?,
+            };
             *destination = doubled_half_step * scale;
         }
     }
@@ -50941,6 +50973,9 @@ pub fn prepare_htj2k_reduced_component_decode(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    if ht_reduced_roi::envelope(&codestream) {
+        return ht_reduced_roi::prepare(input, codestream, request).map(Some);
+    }
     if request.component_index == 0 && request.discard_levels == 5 {
         return prepare_ht_heterogeneous_reversible_reduced_component(input, codestream, request)
             .map(Some);
@@ -51213,7 +51248,8 @@ pub fn decode_prepared_htj2k_reduced_component_owned_with_workspace(
                 workspace,
             )?
         }
-        Htj2kReducedComponentReconstruction::Irreversible => {
+        Htj2kReducedComponentReconstruction::Irreversible
+        | Htj2kReducedComponentReconstruction::IrreversibleRoi(_) => {
             decode_htj2k_reduced_irreversible_component(prepared, payload, workspace)?
         }
     };
@@ -51386,6 +51422,10 @@ fn decode_htj2k_reduced_irreversible_component(
             contribution,
             &workspace.coefficients[..coefficient_count],
             0.5 * delta,
+            match prepared.reconstruction {
+                Htj2kReducedComponentReconstruction::IrreversibleRoi(shift) => Some(shift),
+                _ => None,
+            },
         )?;
     }
 
@@ -54031,7 +54071,9 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
             None,
             None,
             None,
-            if ht_roi::envelope(codestream) {
+            if ht_reduced_roi::envelope(codestream) {
+                PacketOrganisationConfig::HT_REDUCED_ROI
+            } else if ht_roi::envelope(codestream) {
                 PacketOrganisationConfig::HT_ROI_WINDOW
             } else if ht_six_level_reduced_envelope(codestream) {
                 PacketOrganisationConfig::HT_SIX_LEVEL_REDUCED
