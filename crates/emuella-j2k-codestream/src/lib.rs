@@ -63,6 +63,10 @@ const fn parallel_decode_dispatch_available() -> bool {
 const MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES: u64 = 16 * 1024 * 1024;
 const MAX_NATIVE_PART1_COMPONENT_DECODE_SAMPLES: u64 = 64 * 1024 * 1024;
 const MAX_NATIVE_PART1_TOTAL_DECODE_SAMPLES: u64 = 256 * 1024 * 1024;
+#[cfg(feature = "std")]
+const MAX_HTJ2K_REDUCED_COMPONENT_SAMPLES: u64 = MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES;
+#[cfg(feature = "std")]
+const HTJ2K_REDUCED_COMPONENT_DECOMPOSITION_LEVELS: u8 = 5;
 const MAX_PACKET_PRECINCTS_PER_RESOLUTION: u64 = 1_048_576;
 const MAX_PACKET_CODE_BLOCKS_PER_SUBBAND: u64 = 1_048_576;
 const MAX_PACKETS_PER_TILE: usize = 4_194_304;
@@ -5054,6 +5058,53 @@ pub struct DecodedImage {
     pub bits_per_sample: u8,
     pub signed: bool,
     pub components: Vec<DecodedComponent>,
+}
+
+/// Bounded native HT request for one reversible transformed component at a
+/// reduced resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Htj2kReducedComponentDecodeRequest {
+    pub component_index: u16,
+    pub discard_levels: u8,
+}
+
+/// Prepared admission and packet plan for the bounded reversible reduced
+/// transformed-component HTJ2K decode profile.
+///
+/// Preparation validates the complete structural and effective packet
+/// mechanism contract before exposing output geometry. The plan borrows the
+/// exact codestream bytes and retains parsed packet contributions so execution
+/// does not admit or parse the request a second time.
+#[cfg(feature = "std")]
+pub struct PreparedHtj2kReducedComponentDecode<'a> {
+    input: &'a [u8],
+    codestream: Codestream,
+    candidate: HtCodestreamDecodeCandidate,
+    coding_style: CodingStyleMarker,
+    transfer: HtReversibleCodeBlockTransfer,
+    tile_rect: TileRect,
+    contributions: Vec<PacketCodeBlockContribution>,
+    request: Htj2kReducedComponentDecodeRequest,
+    output_width: u32,
+    output_height: u32,
+}
+
+#[cfg(feature = "std")]
+impl PreparedHtj2kReducedComponentDecode<'_> {
+    /// Width of the checked reduced component plane.
+    pub fn output_width(&self) -> u32 {
+        self.output_width
+    }
+
+    /// Height of the checked reduced component plane.
+    pub fn output_height(&self) -> u32 {
+        self.output_height
+    }
+
+    /// Selected transformed component index.
+    pub fn component_index(&self) -> u16 {
+        self.request.component_index
+    }
 }
 
 /// Borrowed grayscale sample plane accepted by the first native Part 1 encode
@@ -10603,6 +10654,132 @@ pub fn encode_htj2k_rgb_u8_one_decomp(input: RgbU8Encode<'_>) -> Result<Vec<u8>>
     )
 }
 
+/// Build a project-authored reversible-MCT HTJ2K fixture with a caller-chosen
+/// decomposition count. This is test support for bounded native decode paths,
+/// not an application encode profile.
+#[doc(hidden)]
+pub fn encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
+    input: RgbU8Encode<'_>,
+    decomposition_levels: u8,
+) -> Result<Vec<u8>> {
+    validate_rgb_u8_encode(input)?;
+    if !(1..=5).contains(&decomposition_levels) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let [mut y, mut db, mut dr] =
+        forward_rct_rgb_components(input)?.map(|component| component.coefficients);
+    forward_reversible_5_3_rgb_components(
+        input.width,
+        input.height,
+        &mut y,
+        &mut db,
+        &mut dr,
+        decomposition_levels,
+        "forward reversible 5/3 transform failed for project-authored HTJ2K fixture",
+    )?;
+    let component_planes = [y.as_slice(), db.as_slice(), dr.as_slice()];
+    let subband_specs = decomp_subband_specs(input.width, input.height, decomposition_levels)?;
+    let qcd_exponents = subband_specs
+        .iter()
+        .map(|spec| {
+            max_component_subband_available_bitplanes(input.width, &component_planes, *spec)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut segments = Vec::new();
+    let mut component_subbands = Vec::with_capacity(3);
+    for plane in component_planes {
+        let mut subbands = Vec::with_capacity(subband_specs.len());
+        for (spec, available_bitplanes) in subband_specs.iter().zip(&qcd_exponents) {
+            subbands.push(encode_ht_decomp_subband(
+                input.width,
+                plane,
+                *spec,
+                *available_bitplanes,
+                &mut segments,
+            )?);
+        }
+        component_subbands.push(subbands);
+    }
+    let mut packet = Vec::new();
+    write_native_decomp_packets(
+        &mut packet,
+        decomposition_levels,
+        &component_subbands,
+        &segments,
+    )?;
+    let mut codestream = Vec::new();
+    write_native_main_header(
+        &mut codestream,
+        input.width,
+        input.height,
+        input.width,
+        input.height,
+        8,
+        3,
+        true,
+        decomposition_levels,
+        &qcd_exponents,
+        true,
+        0,
+        1,
+    )?;
+    write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
+}
+
+/// Build a header-complete five-level reversible-MCT HTJ2K fixture whose
+/// declared SIZ geometry is paired with empty LRCP packets.
+///
+/// This project-authored fixture exercises bounded reduced-decode admission
+/// without allocating samples for the declared image. It is test support, not
+/// an application encode profile.
+#[doc(hidden)]
+pub fn encode_htj2k_reduced_component_empty_packet_test_fixture(
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let base_width = 49_u32;
+    let base_height = 49_u32;
+    let samples = alloc::vec![0_u8; base_width as usize * base_height as usize * 3];
+    let mut codestream = encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
+        RgbU8Encode {
+            width: base_width,
+            height: base_height,
+            samples: &samples,
+            stride_bytes: base_width as usize * 3,
+        },
+        5,
+    )?;
+    let parsed = parse(&codestream)?;
+    let tile = parsed
+        .tiles
+        .first()
+        .copied()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let payload_offset = tile.payload_offset.ok_or(CodestreamError::SizeOverflow)?;
+    let payload_len = tile.payload_len.ok_or(CodestreamError::SizeOverflow)?;
+    let empty_packets = alloc::vec![0_u8; 3 * 6];
+    codestream.splice(
+        payload_offset..payload_offset + payload_len,
+        empty_packets.iter().copied(),
+    );
+
+    let siz = find_marker(&codestream, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[siz + 6..siz + 10].copy_from_slice(&width.to_be_bytes());
+    codestream[siz + 10..siz + 14].copy_from_slice(&height.to_be_bytes());
+    codestream[siz + 22..siz + 26].copy_from_slice(&width.to_be_bytes());
+    codestream[siz + 26..siz + 30].copy_from_slice(&height.to_be_bytes());
+    let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part_len = 14_u32
+        .checked_add(u32::try_from(empty_packets.len()).map_err(|_| CodestreamError::SizeOverflow)?)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    codestream[sot + 6..sot + 10].copy_from_slice(&tile_part_len.to_be_bytes());
+    Ok(codestream)
+}
+
 /// Encode a single-tile unsigned 8-bit RGB Part 1 codestream using the
 /// repo-owned one-decomposition reversible 5/3 slice and forward reversible
 /// color transform.
@@ -11704,12 +11881,12 @@ fn forward_reversible_5_3_levels_with_scratch(
     message: &'static str,
     scratch: &mut Vec<i32>,
 ) -> Result<()> {
-    if !(1..=3).contains(&decomposition_levels) {
+    if !(1..=5).contains(&decomposition_levels) {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::Transform,
-            "native decomposition transform helper supports one through three levels",
+            "native decomposition transform helper supports one through five levels",
         ));
     }
     for completed_levels in 0..decomposition_levels {
@@ -12753,12 +12930,12 @@ fn decomp_subband_specs(
     height: u32,
     decomposition_levels: u8,
 ) -> Result<Vec<DecompSubbandSpec>> {
-    if !(1..=3).contains(&decomposition_levels) {
+    if !(1..=5).contains(&decomposition_levels) {
         return Err(unsupported(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::PacketDecode,
-            "native decomposition subband helper supports one through three levels",
+            "native decomposition subband helper supports one through five levels",
         ));
     }
     let expected = 1usize
@@ -39228,6 +39405,33 @@ fn resolution_dimensions(
     Ok((ceil_div(width, scale)?, ceil_div(height, scale)?))
 }
 
+#[cfg(feature = "std")]
+fn htj2k_reduced_component_output_geometry(
+    width: u32,
+    height: u32,
+    decomposition_levels: u8,
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<(u8, u32, u32, usize)> {
+    let retained_resolution = decomposition_levels
+        .checked_sub(request.discard_levels)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let (output_width, output_height) =
+        resolution_dimensions(width, height, decomposition_levels, retained_resolution)?;
+    let plane_samples = u64::from(output_width)
+        .checked_mul(u64::from(output_height))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if plane_samples == 0 || plane_samples > MAX_HTJ2K_REDUCED_COMPONENT_SAMPLES {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::PacketDecode,
+            "bounded reduced HTJ2K component decode is guarded to at most 16 Mi output samples",
+        ));
+    }
+    let plane_len = usize::try_from(plane_samples).map_err(|_| CodestreamError::SizeOverflow)?;
+    Ok((retained_resolution, output_width, output_height, plane_len))
+}
+
 fn checked_pow2_u32(exponent: u8) -> Result<u32> {
     1_u32
         .checked_shl(u32::from(exponent))
@@ -47467,9 +47671,7 @@ fn ht_reversible_code_block_transfer(
     let Ok(coding_style) = uniform_effective_coding_style(codestream) else {
         return Ok(None);
     };
-    if coding_style.transform != WaveletTransform::Reversible53
-        || coding_style.decomposition_levels > 3
-    {
+    if coding_style.transform != WaveletTransform::Reversible53 {
         return Ok(None);
     }
     let Some(marker) = codestream
@@ -48168,7 +48370,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
         .checked_mul(height)
         .ok_or(CodestreamError::SizeOverflow)?;
     if coding_style.decomposition_levels != 0 {
-        let components = decode_htj2k_lossless_decomp_components(
+        let (width, height, components) = decode_htj2k_lossless_decomp_components(
             candidate,
             payload,
             &contributions,
@@ -48176,8 +48378,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             &codestream,
             coding_style,
             tile_rect,
-            stride,
-            plane_len,
+            None,
             workspace,
         )?;
         let first_component = codestream
@@ -48186,8 +48387,8 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             .first()
             .ok_or(CodestreamError::SizeOverflow)?;
         return Ok(Some(DecodedImage {
-            width: tile_rect.width,
-            height: tile_rect.height,
+            width,
+            height,
             bits_per_sample: first_component.bits_per_sample,
             signed: first_component.signed,
             components,
@@ -48215,6 +48416,506 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
         signed: first_component.signed,
         components,
     }))
+}
+
+/// Prepare transformed component zero from the bounded five-level reversible
+/// HTONLY profile at two discarded resolution levels.
+///
+/// Preparation validates structural Part 15 signalling, effective packet
+/// mechanisms and all profile declarations, then retains the admitted packet
+/// contributions and checked reduced output geometry. Non-HT codestreams
+/// return `None`.
+#[cfg(feature = "std")]
+pub fn prepare_htj2k_reduced_component_decode(
+    input: &[u8],
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<Option<PreparedHtj2kReducedComponentDecode<'_>>> {
+    let codestream = parse(input)?;
+    if codestream.kind != CodestreamKind::Htj2k {
+        return Ok(None);
+    }
+    if request.component_index != 0 || request.discard_levels != 2 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::ComponentCount,
+            "bounded reduced HTJ2K component decode selects transformed component zero at exactly two discarded resolution levels",
+        ));
+    }
+    let (_, preflight_width, preflight_height, _) = htj2k_reduced_component_output_geometry(
+        codestream.image_width(),
+        codestream.image_height(),
+        HTJ2K_REDUCED_COMPONENT_DECOMPOSITION_LEVELS,
+        request,
+    )?;
+    validate_part15_packet_signalling(input, &codestream)?;
+    classify_htj2k_lossless_profile_markers(&codestream)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    validate_htonly_permission_effective_packet_mechanisms(input, &codestream)?;
+
+    let coding_style = uniform_effective_coding_style(&codestream)?;
+    if codestream.siz.component_count() != 3
+        || codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != 8
+                || component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "bounded reduced HTJ2K component decode requires three matching unsigned 8-bit unit-sampled components",
+        ));
+    }
+    if codestream.siz.image_origin_x != 0
+        || codestream.siz.image_origin_y != 0
+        || codestream.siz.tile_origin_x != 0
+        || codestream.siz.tile_origin_y != 0
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::MultipleTiles,
+            "bounded reduced HTJ2K component decode requires zero image and tile origins",
+        ));
+    }
+    if coding_style.progression_order != ProgressionOrder::Lrcp || coding_style.layers != 1 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::ProgressionOrder,
+            "bounded reduced HTJ2K component decode requires one-layer LRCP packet order",
+        ));
+    }
+    if !coding_style.multiple_component_transform {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Transform,
+            "bounded reduced HTJ2K component decode requires reversible MCT signalling",
+        ));
+    }
+    if coding_style.decomposition_levels != HTJ2K_REDUCED_COMPONENT_DECOMPOSITION_LEVELS
+        || coding_style.transform != WaveletTransform::Reversible53
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "bounded reduced HTJ2K component decode requires five reversible 5/3 decomposition levels",
+        ));
+    }
+    if coding_style.code_block_style & !0x40 != 0 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::HtBlockDecode,
+            "bounded reduced HTJ2K component decode does not accept additional code-block style flags",
+        ));
+    }
+    if let Some(marker) = htj2k_non_inline_packet_marker_source(&codestream, coding_style) {
+        return Err(unsupported(
+            None,
+            Some(marker),
+            UnsupportedConstruct::MarkerSegment,
+            "bounded reduced HTJ2K component decode requires inline packet headers",
+        ));
+    }
+    if !codestream.component_coding_styles.is_empty()
+        || htj2k_multilevel_quantization_override(&codestream).is_some()
+        || codestream.markers.iter().any(|segment| {
+            matches!(
+                segment.marker,
+                Marker::Coc
+                    | Marker::Rgn
+                    | Marker::Qcc
+                    | Marker::Poc
+                    | Marker::Tlm
+                    | Marker::Plm
+                    | Marker::Plt
+                    | Marker::Ppm
+                    | Marker::Ppt
+                    | Marker::Crg
+                    | Marker::Unknown(_)
+            )
+        })
+    {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::MarkerSegment,
+            "component overrides, progression changes, packet relocation, ROI, registration and unknown markers are outside bounded reduced HTJ2K component decode",
+        ));
+    }
+    let candidate = match ht_decode_candidate(&codestream) {
+        Some(Ok(candidate)) => candidate,
+        Some(Err(classification)) => {
+            return Err(unsupported(
+                None,
+                None,
+                ht_construct_from_reason(classification.reason),
+                classification.reason.message(),
+            ));
+        }
+        None => {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::MarkerSegment,
+                "HTJ2K decode requires complete marker and tile-part state",
+            ));
+        }
+    };
+    let transfer = ht_reversible_code_block_transfer(input, &codestream)?.ok_or_else(|| {
+        unsupported(
+            None,
+            Some(Marker::Qcd),
+            UnsupportedConstruct::MarkerSegment,
+            "bounded reduced HTJ2K component decode requires one reversible scalar QCD value",
+        )
+    })?;
+    let tile_rects = tile_rects(&codestream)?;
+    if tile_rects.len() != 1 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::MultipleTiles,
+            "bounded reduced HTJ2K component decode requires one tile",
+        ));
+    }
+    let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
+    let (retained_resolution, output_width, output_height, _) =
+        htj2k_reduced_component_output_geometry(
+            tile_rect.width,
+            tile_rect.height,
+            coding_style.decomposition_levels,
+            request,
+        )?;
+    if (output_width, output_height) != (preflight_width, preflight_height) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let contributions =
+        parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    let contributions = contributions
+        .into_iter()
+        .filter(|contribution| {
+            contribution.component_index == request.component_index
+                && contribution.resolution <= retained_resolution
+        })
+        .collect();
+    Ok(Some(PreparedHtj2kReducedComponentDecode {
+        input,
+        codestream,
+        candidate,
+        coding_style,
+        transfer,
+        tile_rect,
+        contributions,
+        request,
+        output_width,
+        output_height,
+    }))
+}
+
+/// Execute an admitted bounded reduced transformed-component HTJ2K plan.
+///
+/// The selected plane is returned before inverse RCT. Call
+/// [`prepare_htj2k_reduced_component_decode`] first when metadata and decode
+/// must share the same complete admission decision.
+#[cfg(feature = "std")]
+pub fn decode_prepared_htj2k_reduced_component_owned_with_workspace(
+    prepared: &PreparedHtj2kReducedComponentDecode<'_>,
+    workspace: &mut HtCodestreamDecodeWorkspace,
+) -> Result<DecodedImage> {
+    let (_, payload) = single_part1_profile_tile(prepared.input, &prepared.codestream)?;
+    let (width, height, components) = decode_htj2k_lossless_decomp_components(
+        prepared.candidate,
+        payload,
+        &prepared.contributions,
+        prepared.transfer,
+        &prepared.codestream,
+        prepared.coding_style,
+        prepared.tile_rect,
+        Some(prepared.request),
+        workspace,
+    )?;
+    if width != prepared.output_width || height != prepared.output_height {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    Ok(DecodedImage {
+        width,
+        height,
+        bits_per_sample: 8,
+        signed: false,
+        components,
+    })
+}
+
+/// Decode transformed component zero from the bounded five-level reversible
+/// HTONLY profile at two discarded resolution levels.
+///
+/// The selected plane is returned before inverse RCT. Structural Part 15
+/// validity and effective HT mechanism admission still inspect the complete
+/// codestream before any reduced output is reconstructed.
+#[cfg(feature = "std")]
+pub fn decode_htj2k_reduced_component_owned_with_workspace(
+    input: &[u8],
+    request: Htj2kReducedComponentDecodeRequest,
+    workspace: &mut HtCodestreamDecodeWorkspace,
+) -> Result<Option<DecodedImage>> {
+    let Some(prepared) = prepare_htj2k_reduced_component_decode(input, request)? else {
+        return Ok(None);
+    };
+    decode_prepared_htj2k_reduced_component_owned_with_workspace(&prepared, workspace).map(Some)
+}
+
+/// Owned-workspace convenience wrapper for
+/// [`decode_htj2k_reduced_component_owned_with_workspace`].
+#[cfg(feature = "std")]
+pub fn decode_htj2k_reduced_component_owned(
+    input: &[u8],
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<Option<DecodedImage>> {
+    let mut workspace = HtCodestreamDecodeWorkspace::new();
+    decode_htj2k_reduced_component_owned_with_workspace(input, request, &mut workspace)
+}
+
+#[cfg(test)]
+mod htj2k_reduced_component_tests {
+    use super::*;
+
+    fn fixture(levels: u8) -> (Vec<u8>, Vec<u8>, u32, u32) {
+        let width = 49_u32;
+        let height = 49_u32;
+        let samples = (0..width * height)
+            .flat_map(|index| {
+                let x = index % width;
+                let y = index / width;
+                let value = ((x * 17 + y * 23 + 11) % 251) as u8;
+                [value, value, value]
+            })
+            .collect::<Vec<_>>();
+        let codestream = encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
+            RgbU8Encode {
+                width,
+                height,
+                samples: &samples,
+                stride_bytes: width as usize * 3,
+            },
+            levels,
+        )
+        .unwrap();
+        (codestream, samples, width, height)
+    }
+
+    #[test]
+    fn five_level_reduced_component_matches_project_authored_transform_oracle() {
+        let (codestream, samples, width, height) = fixture(5);
+        let input = RgbU8Encode {
+            width,
+            height,
+            samples: &samples,
+            stride_bytes: width as usize * 3,
+        };
+        let [mut y, mut db, mut dr] = forward_rct_rgb_components(input)
+            .unwrap()
+            .map(|component| component.coefficients);
+        forward_reversible_5_3_rgb_components(
+            width,
+            height,
+            &mut y,
+            &mut db,
+            &mut dr,
+            5,
+            "project-authored reduced HT fixture transform failed",
+        )
+        .unwrap();
+        let (reduced_width, reduced_height) = resolution_dimensions(width, height, 5, 3).unwrap();
+        let mut expected_coefficients = Vec::new();
+        for row in y.chunks_exact(width as usize).take(reduced_height as usize) {
+            expected_coefficients.extend_from_slice(&row[..reduced_width as usize]);
+        }
+        let mut scratch = vec![0_i32; reduced_width.max(reduced_height) as usize * 3];
+        inverse_reversible_5_3_levels_with_scratch(
+            &mut expected_coefficients,
+            reduced_width as usize,
+            reduced_width,
+            reduced_height,
+            3,
+            &mut scratch,
+        )
+        .unwrap();
+        let expected = component_sample_slice_to_bytes(8, false, &expected_coefficients).unwrap();
+
+        let decoded = decode_htj2k_reduced_component_owned(
+            &codestream,
+            Htj2kReducedComponentDecodeRequest {
+                component_index: 0,
+                discard_levels: 2,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((decoded.width, decoded.height), (13, 13));
+        assert_eq!(decoded.components.len(), 1);
+        assert_eq!(decoded.components[0].samples, expected);
+    }
+
+    #[test]
+    fn bounded_request_and_full_decode_remain_separate() {
+        let (five_levels, _, _, _) = fixture(5);
+        for request in [
+            Htj2kReducedComponentDecodeRequest {
+                component_index: 1,
+                discard_levels: 2,
+            },
+            Htj2kReducedComponentDecodeRequest {
+                component_index: 0,
+                discard_levels: 1,
+            },
+        ] {
+            assert!(matches!(
+                decode_htj2k_reduced_component_owned(&five_levels, request),
+                Err(CodestreamError::Unsupported { .. })
+            ));
+        }
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&five_levels),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::WaveletTransform,
+                ..
+            })
+        ));
+
+        let (one_level, samples, width, height) = fixture(1);
+        let decoded = decode_htj2k_lossless_owned(&one_level).unwrap().unwrap();
+        assert_eq!((decoded.width, decoded.height), (width, height));
+        let interleaved = (0..samples.len() / 3)
+            .flat_map(|index| {
+                decoded
+                    .components
+                    .iter()
+                    .map(move |component| component.samples[index])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            interleaved, samples,
+            "ordinary full HT decode must apply inverse RCT"
+        );
+    }
+
+    #[test]
+    fn nearby_effective_ht_mechanisms_remain_rejected() {
+        let (fixture, _, _, _) = fixture(5);
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 2,
+        };
+        let marker_offset = |bytes: &[u8], marker: Marker| {
+            parse(bytes)
+                .unwrap()
+                .markers
+                .iter()
+                .find(|segment| segment.marker == marker)
+                .unwrap()
+                .offset
+        };
+
+        let mut irreversible = fixture.clone();
+        let cap = marker_offset(&irreversible, Marker::Cap);
+        irreversible[cap + 8..cap + 10].copy_from_slice(&0x0020_u16.to_be_bytes());
+        let cod = marker_offset(&irreversible, Marker::Cod);
+        irreversible[cod + 13] = 0;
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&irreversible, request),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::WaveletTransform,
+                ..
+            })
+        ));
+
+        let mut htmix = fixture.clone();
+        let cap = marker_offset(&htmix, Marker::Cap);
+        htmix[cap + 8..cap + 10].copy_from_slice(&0xc000_u16.to_be_bytes());
+        let cod = marker_offset(&htmix, Marker::Cod);
+        htmix[cod + 12] = 0xc0;
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&htmix, request),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+
+        let mut roi = fixture;
+        let cap = marker_offset(&roi, Marker::Cap);
+        roi[cap + 8..cap + 10].copy_from_slice(&0x1000_u16.to_be_bytes());
+        let sot = marker_offset(&roi, Marker::Sot);
+        roi.splice(sot..sot, [0xff, 0x5e, 0, 5, 0, 0, 1]);
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&roi, request),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reduced_output_geometry_budget_precedes_packet_state_and_bounds_arithmetic() {
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 2,
+        };
+        assert_eq!(
+            htj2k_reduced_component_output_geometry(16_384, 16_384, 5, request).unwrap(),
+            (3, 4096, 4096, 16 * 1024 * 1024)
+        );
+        for (width, height) in [(16_385, 16_384), (u32::MAX, u32::MAX)] {
+            assert!(matches!(
+                htj2k_reduced_component_output_geometry(width, height, 5, request),
+                Err(CodestreamError::Unsupported {
+                    marker: Some(Marker::Siz),
+                    construct: UnsupportedConstruct::PacketDecode,
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            htj2k_reduced_component_output_geometry(
+                49,
+                49,
+                5,
+                Htj2kReducedComponentDecodeRequest {
+                    component_index: 0,
+                    discard_levels: 6,
+                },
+            ),
+            Err(CodestreamError::SizeOverflow)
+        ));
+
+        let oversized =
+            encode_htj2k_reduced_component_empty_packet_test_fixture(32_768, 32_768).unwrap();
+        assert!(oversized.len() < 1024);
+        let parsed = parse(&oversized).unwrap();
+        let style = uniform_effective_coding_style(&parsed).unwrap();
+        assert_eq!(parsed.kind, CodestreamKind::Htj2k);
+        assert_eq!(parsed.siz.component_count(), 3);
+        assert_eq!(style.decomposition_levels, 5);
+        assert!(style.multiple_component_transform);
+        assert!(matches!(
+            prepare_htj2k_reduced_component_decode(&oversized, request),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Siz),
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
+    }
 }
 
 #[cfg(feature = "std")]
@@ -48715,22 +49416,67 @@ fn decode_htj2k_lossless_decomp_components(
     codestream: &Codestream,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
-    stride: usize,
-    plane_len: usize,
+    reduced_request: Option<Htj2kReducedComponentDecodeRequest>,
     workspace: &mut HtCodestreamDecodeWorkspace,
-) -> Result<Vec<DecodedComponent>> {
-    let component_count = usize::from(codestream.siz.component_count());
+) -> Result<(u32, u32, Vec<DecodedComponent>)> {
+    let (retained_resolution, output_width, output_height, plane_len) =
+        if let Some(request) = reduced_request {
+            htj2k_reduced_component_output_geometry(
+                tile_rect.width,
+                tile_rect.height,
+                coding_style.decomposition_levels,
+                request,
+            )?
+        } else {
+            let retained_resolution = coding_style.decomposition_levels;
+            let (output_width, output_height) = resolution_dimensions(
+                tile_rect.width,
+                tile_rect.height,
+                coding_style.decomposition_levels,
+                retained_resolution,
+            )?;
+            let plane_len = usize::try_from(output_width)
+                .ok()
+                .and_then(|width| {
+                    usize::try_from(output_height)
+                        .ok()
+                        .and_then(|height| width.checked_mul(height))
+                })
+                .ok_or(CodestreamError::SizeOverflow)?;
+            (retained_resolution, output_width, output_height, plane_len)
+        };
+    let stride = usize::try_from(output_width).map_err(|_| CodestreamError::SizeOverflow)?;
+    let component_count =
+        reduced_request.map_or_else(|| usize::from(codestream.siz.component_count()), |_| 1);
     let planes = workspace
         .mct_planes
         .get_mut(..component_count)
         .ok_or(CodestreamError::SizeOverflow)?;
     for plane in planes.iter_mut() {
+        if plane.len() < plane_len {
+            plane
+                .try_reserve_exact(plane_len - plane.len())
+                .map_err(|_| {
+                    unsupported(
+                        None,
+                        Some(Marker::Siz),
+                        UnsupportedConstruct::PacketDecode,
+                        "native HTJ2K decomposed plane allocation could not be reserved",
+                    )
+                })?;
+        }
         plane.resize(plane_len, 0);
         plane.fill(0);
     }
     let mut segment_scratch = Vec::new();
 
     for contribution in contributions {
+        if contribution.resolution > retained_resolution
+            || reduced_request
+                .is_some_and(|request| contribution.component_index != request.component_index)
+        {
+            continue;
+        }
         let expanded_coding_set = contribution
             .expanded_ht_coding_sets
             .as_deref()
@@ -48824,8 +49570,10 @@ fn decode_htj2k_lossless_decomp_components(
                 "HT cleanup code-block dispatch did not produce coefficients",
             ));
         }
+        let output_component_index =
+            reduced_request.map_or(usize::from(contribution.component_index), |_| 0);
         let plane = planes
-            .get_mut(usize::from(contribution.component_index))
+            .get_mut(output_component_index)
             .ok_or(CodestreamError::SizeOverflow)?;
         place_ht_code_block_coefficients(
             plane,
@@ -48839,9 +49587,35 @@ fn decode_htj2k_lossless_decomp_components(
         )?;
     }
 
-    inverse_reversible_5_3_component_planes(planes, stride, tile_rect, coding_style, None)?;
+    let max_axis = usize::try_from(output_width.max(output_height))
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    let transform_scratch_len = max_axis
+        .checked_mul(3)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut transform_scratch = Vec::new();
+    transform_scratch
+        .try_reserve_exact(transform_scratch_len)
+        .map_err(|_| {
+            unsupported(
+                None,
+                Some(Marker::Siz),
+                UnsupportedConstruct::PacketDecode,
+                "native HTJ2K transform scratch allocation could not be reserved",
+            )
+        })?;
+    transform_scratch.resize(transform_scratch_len, 0_i32);
+    for plane in planes.iter_mut() {
+        inverse_reversible_5_3_levels_with_scratch(
+            plane,
+            stride,
+            output_width,
+            output_height,
+            retained_resolution,
+            &mut transform_scratch,
+        )?;
+    }
 
-    if coding_style.multiple_component_transform {
+    if reduced_request.is_none() && coding_style.multiple_component_transform {
         let [red, green, blue] = &mut workspace.mct_planes;
         transform::inverse_reversible_color_transform_bounded(red, green, blue).map_err(|_| {
             unsupported(
@@ -48853,12 +49627,19 @@ fn decode_htj2k_lossless_decomp_components(
         })?;
     }
 
-    codestream
-        .siz
-        .components
-        .iter()
+    let component_indices = reduced_request.map_or_else(
+        || (0..codestream.siz.component_count()).collect::<Vec<_>>(),
+        |request| alloc::vec![request.component_index],
+    );
+    let components = component_indices
+        .into_iter()
         .enumerate()
-        .map(|(component_index, component)| {
+        .map(|(component_index, source_component)| {
+            let component = codestream
+                .siz
+                .components
+                .get(usize::from(source_component))
+                .ok_or(CodestreamError::SizeOverflow)?;
             let plane = workspace
                 .mct_planes
                 .get(component_index)
@@ -48866,7 +49647,8 @@ fn decode_htj2k_lossless_decomp_components(
             component_sample_slice_to_bytes(component.bits_per_sample, component.signed, plane)
                 .map(|samples| DecodedComponent { samples })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok((output_width, output_height, components))
 }
 
 #[cfg(feature = "std")]

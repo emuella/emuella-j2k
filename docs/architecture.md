@@ -64,6 +64,29 @@ complete packet source but retains only the first and latest set once this
 unsupported multiplicity is known. Packet contradictions are
 still validity errors before unsupported-mechanism admission.
 
+The native partial API has one HT-owned reduced transformed-component route.
+After the same structural and effective-mechanism stages, it admits a raw,
+origin-aligned single tile containing three matching unsigned 8-bit,
+unit-sampled components, reversible MCT, one-layer LRCP packets and five
+reversible 5/3 decomposition levels. A request must select component 0, discard
+exactly two levels and use planar output without a region, tile or layer limit.
+Packet walking reuses the existing single-effective-precinct inline-header
+route, including signalled SOP and EPH; packed headers remain excluded. Packet
+parsing still validates the complete source, while entropy and
+coefficient work is retained only through resolution 3 for component 0. Three
+inverse-DWT levels reconstruct the checked reduced geometry, and publication
+occurs before inverse RCT. Ordinary full HT decode retains its existing inverse
+DWT and inverse RCT behaviour. One HT-owned prepared plan supplies the checked
+geometry to the public metadata and component-descriptor APIs and retains the
+same packet contributions for owned decode; no geometry is published before
+complete structural and effective-mechanism admission. This mechanism is owned
+by the HT decomposed path and does not reuse the raw Part 1 selective planner.
+Before packet-state construction, checked reduced geometry is limited to 16 Mi
+component samples, matching the native profile component bound. The retained
+`i32` plane and transform scratch use fallible reservation, so oversized SIZ
+declarations and allocation failure remain structured decoder errors rather
+than process-aborting allocation attempts.
+
 This boundary follows ISO/IEC 15444-15:2019, clauses 6.1 and 8.3, normative
 Annex A, A.1–A.4, and Annex B, B.3, PDF pages 10, 31 and 35–41, at retrieval
 revision `10baf9472429d52f5d6b5f9b7a892dbed395b1db`, together with the effective

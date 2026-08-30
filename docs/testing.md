@@ -188,6 +188,24 @@ population modes and excessive cleanup magnitude bounds remain fail closed.
 These tests qualify only admission to the existing bounded lossless HT decode;
 they do not qualify other Part 15 mechanisms or claim general conformance.
 
+Project-authored Layer 1 coverage also qualifies the bounded reduced HT
+component route independently of protected DS0 material. A 49 × 49 RGB fixture
+uses reversible RCT and five reversible 5/3 levels; the component-0 request at
+two discarded levels must produce the independently reconstructed 13 × 13
+transformed plane. Metadata, owned planar output and caller-owned planar output
+must agree. The full one-level HT MCT regression still reconstructs RGB after
+inverse RCT. Negative cases cover all-components and other-component requests,
+full and nearby reduced resolutions, regions, tiles, layer limits, interleaved
+output, irreversible coding, ROI and HTMIX. Metadata and component-descriptor
+queries reject a packet-header contradiction even when its header declarations
+otherwise match the bounded shape. Caller sentinels remain unchanged after
+target validation failure and after an entropy reconstruction failure.
+An otherwise matching project-authored empty-packet codestream declares
+32,768 × 32,768 SIZ geometry and proves that the 16 Mi reduced-sample limit is
+enforced before metadata packet state or output allocation. Arithmetic tests
+cover the exact limit, the first over-limit row, maximum `u32` dimensions and
+discard-level underflow.
+
 The standards route is ISO/IEC 15444-15:2019, clauses 6.1 and 8.3, Annex A,
 A.1–A.4, and Annex B, B.3, PDF pages 10, 31 and 35–41, at retrieval revision
 `10baf9472429d52f5d6b5f9b7a892dbed395b1db`, plus ISO/IEC 15444-1:2024, Annex

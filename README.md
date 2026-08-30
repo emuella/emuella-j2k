@@ -49,6 +49,16 @@ remain unsupported. Supported inputs continue through the existing HT packet,
 entropy, reconstruction and public image path; this is not general Part 15 or
 JPEG 2000 conformance.
 
+Native partial component output adds one bounded reversible HTONLY shape. A raw
+single-tile codestream with three matching unsigned 8-bit components,
+reversible MCT, five reversible 5/3 decomposition levels and one-layer LRCP
+packets on the existing single-effective-precinct inline-header route may
+select transformed component 0 at two discarded resolution levels.
+The planar output is reconstructed at its exact reduced geometry before inverse
+RCT. JPH, rendered output, other selections or reductions, regions, tile
+requests, quality-layer limits, heterogeneous state, ROI, irreversible coding
+and HTMIX remain unsupported by this route.
+
 JPH inspection enforces the bounded Annex D signature, `jph ` file type and
 `jph ` compatibility membership,
 inherited `jp2h` structure including optional-box dependencies, complete HTJ2K
