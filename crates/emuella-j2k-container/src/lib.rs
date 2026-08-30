@@ -489,7 +489,7 @@ pub fn write_signature_box(output: &mut Vec<u8>) -> Result<()> {
 /// Append a JP2/JPH file type box.
 ///
 /// An empty compatibility list selects the deterministic baseline membership:
-/// `jp2 ` for JP2, or `jph ` followed by inherited `jp2 ` for JPH.
+/// the container kind's own brand (`jp2 ` or `jph `).
 pub fn write_file_type_box(
     output: &mut Vec<u8>,
     kind: ContainerKind,
@@ -501,9 +501,6 @@ pub fn write_file_type_box(
     contents.extend_from_slice(&minor_version.to_be_bytes());
     if compatible_brands.is_empty() {
         contents.extend_from_slice(&kind.brand().as_bytes());
-        if kind == ContainerKind::Jph {
-            contents.extend_from_slice(&boxes::BRAND_JP2.as_bytes());
-        }
     } else {
         for brand in compatible_brands {
             contents.extend_from_slice(&brand.as_bytes());
@@ -899,14 +896,12 @@ fn validate_jph_file_type(file_type: &FileTypeBox, record: &BoxRecord) -> Result
             "JPH file type minor version must be zero",
         ));
     }
-    for (brand, name) in [(boxes::BRAND_JPH, "`jph `"), (boxes::BRAND_JP2, "`jp2 `")] {
-        if !file_type.compatible_brands.contains(&brand) {
-            return Err(invalid(
-                Some(record.header_offset),
-                Some(record.box_type),
-                alloc::format!("JPH compatible brands must include {name}"),
-            ));
-        }
+    if !file_type.compatible_brands.contains(&boxes::BRAND_JPH) {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "JPH compatible brands must include `jph `",
+        ));
     }
     Ok(())
 }
@@ -2221,10 +2216,7 @@ mod tests {
         assert_eq!(parsed.kind, ContainerKind::Jph);
         assert_eq!(parsed.file_type.brand, boxes::BRAND_JPH);
         assert_eq!(parsed.file_type.minor_version, 0);
-        assert_eq!(
-            parsed.file_type.compatible_brands,
-            vec![boxes::BRAND_JPH, boxes::BRAND_JP2]
-        );
+        assert_eq!(parsed.file_type.compatible_brands, vec![boxes::BRAND_JPH]);
         assert!(parsed.image_header.is_some());
         assert_eq!(parsed.codestreams.len(), 1);
 
@@ -2244,6 +2236,14 @@ mod tests {
             parse(&duplicates).unwrap().file_type.compatible_brands,
             vec![boxes::BRAND_JPH, boxes::BRAND_JP2, boxes::BRAND_JPH]
         );
+
+        let header = jp2_header(&[image_header(1, 7), colour()]);
+        let mut jph_only = Vec::new();
+        write_signature_box(&mut jph_only).unwrap();
+        write_file_type_box(&mut jph_only, ContainerKind::Jph, 0, &[boxes::BRAND_JPH]).unwrap();
+        jph_only.extend_from_slice(&header);
+        jph_only.extend_from_slice(&codestream_box());
+        assert_eq!(parse(&jph_only).unwrap().kind, ContainerKind::Jph);
     }
 
     #[test]
@@ -2273,21 +2273,19 @@ mod tests {
             }) if offset == file_type + 12
         ));
 
-        for compatible in [&[boxes::BRAND_JPH][..], &[boxes::BRAND_JP2][..]] {
-            let header = jp2_header(&[image_header(1, 7), colour()]);
-            let mut input = Vec::new();
-            write_signature_box(&mut input).unwrap();
-            write_file_type_box(&mut input, ContainerKind::Jph, 0, compatible).unwrap();
-            input.extend_from_slice(&header);
-            input.extend_from_slice(&codestream_box());
-            assert!(matches!(
-                parse(&input),
-                Err(ContainerError::InvalidBox {
-                    box_type: Some(boxes::FILE_TYPE),
-                    ..
-                })
-            ));
-        }
+        let header = jp2_header(&[image_header(1, 7), colour()]);
+        let mut missing_jph = Vec::new();
+        write_signature_box(&mut missing_jph).unwrap();
+        write_file_type_box(&mut missing_jph, ContainerKind::Jph, 0, &[boxes::BRAND_JP2]).unwrap();
+        missing_jph.extend_from_slice(&header);
+        missing_jph.extend_from_slice(&codestream_box());
+        assert!(matches!(
+            parse(&missing_jph),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::FILE_TYPE),
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -271,7 +271,7 @@ mod htj2k_encode_tests {
             metadata.container,
             Some(ContainerInfo {
                 brand: Some("jph ".into()),
-                compatible_brands: vec!["jph ".into(), "jp2 ".into()],
+                compatible_brands: vec!["jph ".into()],
                 codestream_count: 1,
             })
         );

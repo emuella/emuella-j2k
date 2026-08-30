@@ -30946,7 +30946,9 @@ fn parse_default_precinct_packets_from_source(
         .capability
         .as_ref()
         .and_then(|capability| capability.part15)
-        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
+        .is_some_and(|part15| {
+            !part15.multiple_ht_sets_allowed && part15.code_block_mode != Part15CodeBlockMode::Mixed
+        });
     let packet_profile = packet_organisation.component_profile;
     let heterogeneous_single_precinct_permission =
         packet_organisation.heterogeneous_single_precinct_permission;
@@ -31468,6 +31470,31 @@ fn parse_default_precinct_packets_from_source(
                                             first_coding_pass,
                                             announced_coding_passes,
                                         )?;
+                                    let pass_end = first_coding_pass
+                                        .checked_add(announced_coding_passes)
+                                        .ok_or(CodestreamError::SizeOverflow)?;
+                                    let final_set_start = pass_end
+                                        .checked_sub(1)
+                                        .ok_or(CodestreamError::SizeOverflow)?
+                                        / 3
+                                        * 3;
+                                    let actual_start = first_coding_pass.max(final_set_start);
+                                    let actual_set_index = u8::try_from(actual_start / 3)
+                                        .map_err(|_| CodestreamError::SizeOverflow)?;
+                                    if part15_single_ht_declared
+                                        && actual_start.is_multiple_of(3)
+                                        && subband.first_non_empty_ht_set[code_block_index]
+                                            .is_some_and(|first| first != actual_set_index)
+                                    {
+                                        return Err(part15_single_ht_error(codestream));
+                                    }
+                                    if cleanup_set.is_some_and(|(_, cleanup_len)| cleanup_len != 0)
+                                        && subband.first_non_empty_ht_set[code_block_index]
+                                            .is_none()
+                                    {
+                                        subband.first_non_empty_ht_set[code_block_index] =
+                                            Some(actual_set_index);
+                                    }
                                     let ht_missing_bitplanes = cleanup_set.map_or_else(
                                         || {
                                             Ok::<_, CodestreamError>(
@@ -31482,13 +31509,6 @@ fn parse_default_precinct_packets_from_source(
                                                 .ok_or(CodestreamError::SizeOverflow)
                                         },
                                     )?;
-                                    if part15_single_ht_declared
-                                        && cleanup_set.is_some_and(|(set_index, cleanup_len)| {
-                                            set_index != 0 && cleanup_len != 0
-                                        })
-                                    {
-                                        return Err(part15_single_ht_error(codestream));
-                                    }
                                     let ht_coding_set = cleanup_set.map(|(_, cleanup_byte_len)| {
                                         HtCodeBlockCodingSet {
                                             byte_offset: 0,
@@ -31773,7 +31793,9 @@ fn validate_part15_single_ht_packet_sets(
         .capability
         .as_ref()
         .and_then(|capability| capability.part15)
-        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
+        .is_some_and(|part15| {
+            !part15.multiple_ht_sets_allowed && part15.code_block_mode != Part15CodeBlockMode::Mixed
+        });
     if single_ht_declared
         && contributions
             .iter()
@@ -37775,6 +37797,7 @@ struct DefaultPrecinctSubband {
     included: Vec<bool>,
     l_block: Vec<u8>,
     coding_passes: Vec<u16>,
+    first_non_empty_ht_set: Vec<Option<u8>>,
     missing_most_significant_bitplanes: Vec<u8>,
 }
 
@@ -39032,6 +39055,7 @@ fn push_default_precinct_subband(
         included: alloc::vec![false; code_blocks],
         l_block: alloc::vec![3; code_blocks],
         coding_passes: alloc::vec![0; code_blocks],
+        first_non_empty_ht_set: alloc::vec![None; code_blocks],
         missing_most_significant_bitplanes: alloc::vec![0; code_blocks],
     });
     Ok(())
@@ -49339,12 +49363,14 @@ pub fn htj2k_lossless_profile_unsupported_construct(
 /// diagnostics until packet decode is requested.
 #[cfg(feature = "std")]
 pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) -> Result<()> {
-    let single_ht_declared = codestream
+    let Some(part15) = codestream
         .capability
         .as_ref()
         .and_then(|capability| capability.part15)
-        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
-    if !single_ht_declared {
+    else {
+        return Ok(());
+    };
+    if part15.multiple_ht_sets_allowed || part15.code_block_mode == Part15CodeBlockMode::Mixed {
         return Ok(());
     }
     let Ok(tile_rects) = tile_rects(codestream) else {
@@ -51490,40 +51516,11 @@ fn validate_main_header_signalling(
             "CPF is valid only with a declared Part 15 capability",
         ));
     }
-    if let Some(cpf) = corresponding_profile {
-        let expected = if rsiz_profile == 0x0fff {
-            add_small_to_words(&profile.ok_or(CodestreamError::SizeOverflow)?.words, 4096)?
-        } else {
-            alloc::vec![rsiz_profile + 1]
-        };
-        if cpf.words != expected {
-            return Err(invalid(
-                None,
-                Some(Marker::Cpf),
-                "CPFnum does not correspond to the profile declared by SIZ/PRF",
-            ));
-        }
-    }
-
     Ok(if part15.is_some() {
         CodestreamKind::Htj2k
     } else {
         CodestreamKind::J2k
     })
-}
-
-fn add_small_to_words(words: &[u16], addend: u16) -> Result<Vec<u16>> {
-    let mut sum = Vec::with_capacity(words.len().saturating_add(1));
-    let mut carry = u32::from(addend);
-    for &word in words {
-        let value = u32::from(word) + carry;
-        sum.push(value as u16);
-        carry = value >> 16;
-    }
-    if carry != 0 {
-        sum.push(u16::try_from(carry).map_err(|_| CodestreamError::SizeOverflow)?);
-    }
-    Ok(sum)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51809,6 +51806,86 @@ mod part15_signalling_tests {
         encode_htj2k_two_layer_multiple_set_test_fixture(false).unwrap()
     }
 
+    fn delayed_first_ht_set_fixture() -> Vec<u8> {
+        let mut codestream = ht_fixture();
+        let parsed = parse(&codestream).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let tile_part = parsed.tiles[0];
+        let payload = tile_payload(&codestream, &tile_part).unwrap();
+        let contribution =
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+        let cleanup = payload
+            [contribution.payload_offset..contribution.payload_offset + contribution.codeword_len]
+            .to_vec();
+        let block = EncodedCodeBlock {
+            x: contribution.code_block_x,
+            y: contribution.code_block_y,
+            width: contribution.width,
+            height: contribution.height,
+            included: true,
+            missing_bitplanes: contribution.missing_most_significant_bitplanes,
+            coding_passes: 7,
+            segment_offset: 0,
+            segment_len: cleanup.len(),
+        };
+        let mut writer = PacketBitWriter::new();
+        writer.write_bit(1).unwrap();
+        write_component_packet_header(&mut writer, 1, 1, &[block]).unwrap();
+        writer.align();
+        let mut replacement = writer.bytes().to_vec();
+        replacement.extend_from_slice(&cleanup);
+        let mut empty_second_layer = PacketBitWriter::new();
+        empty_second_layer.write_bit(0).unwrap();
+        empty_second_layer.align();
+        replacement.extend_from_slice(empty_second_layer.bytes());
+
+        let payload_offset = tile_part.payload_offset.unwrap();
+        let payload_len = tile_part.payload_len.unwrap();
+        codestream.splice(
+            payload_offset..payload_offset + payload_len,
+            replacement.iter().copied(),
+        );
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        let replacement_len = u32::try_from(replacement.len()).unwrap();
+        let payload_len = u32::try_from(payload_len).unwrap();
+        codestream[sot + 6..sot + 10]
+            .copy_from_slice(&(psot - payload_len + replacement_len).to_be_bytes());
+        codestream
+    }
+
+    fn empty_second_ht_set_fixture() -> Vec<u8> {
+        let mut codestream = ht_fixture();
+        let mut writer = PacketBitWriter::new();
+        writer.write_bit(1).unwrap();
+        writer.write_bit(1).unwrap();
+        write_coding_pass_count(&mut writer, 3).unwrap();
+        writer.write_bit(0).unwrap();
+        writer.write_bits(0, 4).unwrap();
+        writer.align();
+        let second_layer = writer.bytes();
+
+        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
+        codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
+        codestream.splice(eoc..eoc, second_layer.iter().copied());
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(second_layer.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream
+    }
+
     fn move_rgn_to_second_tile_part(mut codestream: Vec<u8>, rgn: &[u8]) -> Vec<u8> {
         let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
         let empty_first = [0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 14, 0, 2, 0xff, 0x93];
@@ -52021,7 +52098,7 @@ mod part15_signalling_tests {
     }
 
     #[test]
-    fn parses_cpf_and_checks_minimal_profile_correspondence() {
+    fn parses_cpf_as_the_independent_corresponding_part1_profile() {
         let fixture = ht_fixture();
         let cpf = profile_segment(Marker::Cpf, &[1]);
         let with_cpf = insert_before(fixture.clone(), Marker::Cod, &cpf);
@@ -52031,18 +52108,19 @@ mod part15_signalling_tests {
             Some(CorrespondingProfileMarker { words: vec![1] })
         );
 
-        let wrong = insert_before(
+        let different_corresponding_profile = insert_before(
             fixture.clone(),
             Marker::Cod,
             &profile_segment(Marker::Cpf, &[2]),
         );
-        assert!(matches!(
-            parse(&wrong),
-            Err(CodestreamError::InvalidMarker {
-                marker: Some(Marker::Cpf),
-                ..
-            })
-        ));
+        assert_eq!(
+            parse(&different_corresponding_profile)
+                .unwrap()
+                .corresponding_profile
+                .unwrap()
+                .words,
+            [2]
+        );
 
         let non_minimal = insert_before(
             fixture.clone(),
@@ -52364,6 +52442,32 @@ mod part15_signalling_tests {
     }
 
     #[test]
+    fn singleht_distinguishes_placeholder_passes_from_later_empty_sets() {
+        let delayed = delayed_first_ht_set_fixture();
+        let parsed = parse(&delayed).unwrap();
+        validate_part15_packet_signalling(&delayed, &parsed).unwrap();
+        let contributions = parse_default_precinct_lrcp_packets(
+            &delayed,
+            &parsed,
+            tile_rects(&parsed).unwrap()[0],
+            tile_payload(&delayed, &parsed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].ht_coding_set_count(), 1);
+
+        let empty_second = empty_second_ht_set_fixture();
+        let parsed = parse(&empty_second).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&empty_second, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn one_decomp_singleht_contradiction_precedes_compatibility_profile_gates() {
         let codestream = encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
         let parsed = parse(&codestream).unwrap();
@@ -52454,6 +52558,29 @@ mod part15_signalling_tests {
             htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid),
             legal_diagnostic
         );
+
+        let mut structurally_mixed = multiple_ht_set_fixture();
+        set_ccap15(&mut structurally_mixed, 0xc000);
+        let cod = find_marker(&structurally_mixed, 0, Marker::Cod).unwrap();
+        structurally_mixed[cod + 12] = 0xc0;
+        let mixed = parse(&structurally_mixed).unwrap();
+        assert!(validate_part15_packet_signalling(&structurally_mixed, &mixed).is_ok());
+        let mixed_contributions = parse_default_precinct_lrcp_packets(
+            &structurally_mixed,
+            &mixed,
+            tile_rects(&mixed).unwrap()[0],
+            tile_payload(&structurally_mixed, &mixed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            mixed_contributions
+                .iter()
+                .any(|contribution| contribution.ht_coding_set_count() > 1)
+        );
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&structurally_mixed, &mixed),
+            Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
     }
 
     #[test]
@@ -52519,12 +52646,7 @@ mod part15_signalling_tests {
     }
 
     #[test]
-    fn reconciles_prf_cpf_with_checked_multiword_carry() {
-        assert_eq!(
-            add_small_to_words(&[0xf000, 0xffff], 4096).unwrap(),
-            [0, 0, 1]
-        );
-
+    fn retains_independent_prf_and_cpf_values() {
         let mut fixture = ht_fixture();
         let siz = find_marker(&fixture, 0, Marker::Siz).unwrap();
         fixture[siz + 4..siz + 6].copy_from_slice(&0x4fff_u16.to_be_bytes());
