@@ -94,9 +94,9 @@ pub(super) fn resolve_maxshift(input: &[u8], c: &Codestream) -> Result<BoundedTi
     let mut effective = None;
     for marker in c.markers.iter().filter(|m| m.marker == Marker::Rgn) {
         let rgn = parse_rgn_declaration(input, marker, &c.siz)?;
-        if rgn.component_index != 0 || rgn.style != 0 || !(1..=15).contains(&rgn.shift) {
+        if rgn.component_index != 0 || rgn.style != 0 || rgn.shift > 37 {
             return Err(outside(
-                "HT reduced ROI requires component-zero main and tile Maxshift of one through fifteen",
+                "HT reduced ROI requires legal component-zero main and tile Maxshift",
             ));
         }
         // The checked one-part envelope orders the sole tile assignment after
@@ -122,6 +122,13 @@ pub(super) fn prepare(
     #[cfg(test)]
     STRUCTURAL_CALLS.with(|calls| calls.set(calls.get() + 1));
     validate_part15_packet_signalling(input, &c)?;
+    for marker in c.markers.iter().filter(|m| m.marker == Marker::Rgn) {
+        if !(1..=15).contains(&parse_rgn_declaration(input, marker, &c.siz)?.shift) {
+            return Err(outside(
+                "HT reduced ROI requires main and tile shifts of one through fifteen",
+            ));
+        }
+    }
     if roi.shift > 9 {
         return Err(outside(
             "HT reduced ROI admits effective Maxshift of one through nine",
@@ -777,6 +784,20 @@ mod tests {
                     })
                 ));
             }
+        }
+        // An unused main shift is a native scope decline, not permission to
+        // hide contradictory packets whose effective tile shift is unchanged.
+        for main_shift in [0, 16, 37] {
+            let mut input = multiple.clone();
+            let main = find_marker(&input, 0, Marker::Rgn).unwrap();
+            input[main + 6] = main_shift;
+            assert!(matches!(
+                prepare_htj2k_reduced_component_decode(&input, request()),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cap),
+                    ..
+                })
+            ));
         }
         let mut permitted = multiple;
         permitted[cap + 8] |= 0x20;
