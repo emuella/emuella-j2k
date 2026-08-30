@@ -248,6 +248,9 @@ pub mod boxes {
     pub const PALETTE: FourCc = FourCc::new(*b"pclr");
     pub const COMPONENT_MAPPING: FourCc = FourCc::new(*b"cmap");
     pub const CHANNEL_DEFINITION: FourCc = FourCc::new(*b"cdef");
+    pub const RESOLUTION: FourCc = FourCc::new(*b"res ");
+    pub const CAPTURE_RESOLUTION: FourCc = FourCc::new(*b"resc");
+    pub const DEFAULT_DISPLAY_RESOLUTION: FourCc = FourCc::new(*b"resd");
     pub const CONTIGUOUS_CODESTREAM: FourCc = FourCc::new(*b"jp2c");
     pub const XML: FourCc = FourCc::new(*b"xml ");
     pub const UUID: FourCc = FourCc::new(*b"uuid");
@@ -403,12 +406,26 @@ pub fn parse(input: &[u8]) -> Result<Container> {
                                 color_specification = Some(parsed);
                             }
                         }
+                        _ => {}
+                    }
+                }
+                validate_jp2_header_fields(
+                    kind,
+                    input,
+                    image_header,
+                    bits_per_component.as_ref(),
+                    &children,
+                    record,
+                )?;
+                for child in &children {
+                    match child.box_type {
                         boxes::XML | boxes::UUID => {
                             metadata.push(preserve_metadata(input, child)?);
                         }
-                        _ => {
-                            metadata.push(preserve_unknown_metadata(input, child)?);
-                        }
+                        boxes::IMAGE_HEADER
+                        | boxes::BITS_PER_COMPONENT
+                        | boxes::COLOR_SPECIFICATION => {}
+                        _ => metadata.push(preserve_unknown_metadata(input, child)?),
                     }
                 }
                 boxes.extend(children);
@@ -428,8 +445,6 @@ pub fn parse(input: &[u8]) -> Result<Container> {
             _ => {}
         }
     }
-
-    validate_jp2_header_fields(image_header, bits_per_component.as_ref(), &boxes)?;
 
     Ok(Container {
         kind,
@@ -1071,16 +1086,24 @@ fn validate_jp2_header_structure(children: &[BoxRecord], header: &BoxRecord) -> 
         ));
     }
 
-    let bits_per_component = children
-        .iter()
-        .filter(|record| record.box_type == boxes::BITS_PER_COMPONENT)
-        .collect::<Vec<_>>();
-    if let Some(duplicate) = bits_per_component.get(1) {
-        return Err(invalid(
-            Some(duplicate.header_offset),
-            Some(duplicate.box_type),
-            "JP2 header box must contain at most one bits-per-component box",
-        ));
+    for (box_type, name) in [
+        (boxes::BITS_PER_COMPONENT, "bits-per-component"),
+        (boxes::PALETTE, "palette"),
+        (boxes::COMPONENT_MAPPING, "component-mapping"),
+        (boxes::CHANNEL_DEFINITION, "channel-definition"),
+        (boxes::RESOLUTION, "resolution"),
+    ] {
+        if let Some(duplicate) = children
+            .iter()
+            .filter(|record| record.box_type == box_type)
+            .nth(1)
+        {
+            return Err(invalid(
+                Some(duplicate.header_offset),
+                Some(duplicate.box_type),
+                alloc::format!("JP2 header box must contain at most one {name} box"),
+            ));
+        }
     }
 
     let colour_indices = children
@@ -1090,13 +1113,6 @@ fn validate_jp2_header_structure(children: &[BoxRecord], header: &BoxRecord) -> 
             (record.box_type == boxes::COLOR_SPECIFICATION).then_some(index)
         })
         .collect::<Vec<_>>();
-    let Some(&first_colour) = colour_indices.first() else {
-        return Err(invalid(
-            Some(header.header_offset),
-            Some(header.box_type),
-            "JP2 header box must contain at least one colour specification box",
-        ));
-    };
     for (&previous, &current) in colour_indices.iter().zip(colour_indices.iter().skip(1)) {
         if current != previous + 1 {
             let record = &children[current];
@@ -1107,14 +1123,16 @@ fn validate_jp2_header_structure(children: &[BoxRecord], header: &BoxRecord) -> 
             ));
         }
     }
-    debug_assert!(first_colour > 0);
     Ok(())
 }
 
 fn validate_jp2_header_fields(
+    kind: ContainerKind,
+    input: &[u8],
     image_header: Option<ImageHeaderBox>,
     bits_per_component: Option<&BitsPerComponentBox>,
-    records: &[BoxRecord],
+    children: &[BoxRecord],
+    header_record: &BoxRecord,
 ) -> Result<()> {
     let image_header = image_header.ok_or_else(|| {
         invalid(
@@ -1123,15 +1141,9 @@ fn validate_jp2_header_fields(
             "JP2 header box must contain an image header box",
         )
     })?;
-    let header_record = records
+    let bits_record = children
         .iter()
-        .find(|record| record.box_type == boxes::JP2_HEADER)
-        .ok_or(ContainerError::SizeOverflow)?;
-    let bits_record = records.iter().find(|record| {
-        record.box_type == boxes::BITS_PER_COMPONENT
-            && record.header_offset >= header_record.data_offset
-            && record.header_offset < header_record.data_offset + header_record.data_len
-    });
+        .find(|record| record.box_type == boxes::BITS_PER_COMPONENT);
 
     match (image_header.bits_per_component == 255, bits_per_component) {
         (true, None) => {
@@ -1159,6 +1171,444 @@ fn validate_jp2_header_fields(
             Some(boxes::BITS_PER_COMPONENT),
             "bits-per-component entry count must match image header component count",
         ));
+    }
+
+    let colour_count = children
+        .iter()
+        .filter(|record| record.box_type == boxes::COLOR_SPECIFICATION)
+        .count();
+    if colour_count == 0 && (kind == ContainerKind::Jp2 || !image_header.unknown_color_space) {
+        return Err(invalid(
+            Some(header_record.header_offset),
+            Some(header_record.box_type),
+            match kind {
+                ContainerKind::Jp2 => {
+                    "JP2 header box must contain at least one colour specification box"
+                }
+                ContainerKind::Jph => {
+                    "JPH may omit colour specification only when image colourspace is unknown"
+                }
+            },
+        ));
+    }
+
+    let palette_record = children
+        .iter()
+        .find(|record| record.box_type == boxes::PALETTE);
+    let mapping_record = children
+        .iter()
+        .find(|record| record.box_type == boxes::COMPONENT_MAPPING);
+    if palette_record.is_some() != mapping_record.is_some() {
+        let record = palette_record
+            .or(mapping_record)
+            .ok_or(ContainerError::SizeOverflow)?;
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "palette and component-mapping boxes must occur together",
+        ));
+    }
+
+    let direct_formats = if let Some(bits_per_component) = bits_per_component {
+        bits_per_component.components.clone()
+    } else {
+        alloc::vec![
+            image_header
+                .sample_format()
+                .ok_or(ContainerError::SizeOverflow)?;
+            usize::from(image_header.components)
+        ]
+    };
+    let channel_formats = match (palette_record, mapping_record) {
+        (Some(palette_record), Some(mapping_record)) => {
+            let palette = validate_palette(input, palette_record)?;
+            validate_component_mapping(
+                input,
+                mapping_record,
+                image_header.components,
+                &direct_formats,
+                &palette,
+            )?
+        }
+        (None, None) => direct_formats,
+        _ => return Err(ContainerError::SizeOverflow),
+    };
+
+    if let Some(record) = children
+        .iter()
+        .find(|record| record.box_type == boxes::CHANNEL_DEFINITION)
+    {
+        validate_channel_definition(kind, input, record, &channel_formats, colour_count == 0)?;
+    }
+    if let Some(record) = children
+        .iter()
+        .find(|record| record.box_type == boxes::RESOLUTION)
+    {
+        validate_resolution(input, record)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct PaletteInfo {
+    columns: Vec<ComponentSampleFormat>,
+}
+
+fn validate_palette(input: &[u8], record: &BoxRecord) -> Result<PaletteInfo> {
+    if record.data_len < 3 {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "palette box is shorter than its entry and column counts",
+        ));
+    }
+    let entries = read_u16(input, record.data_offset)?;
+    if !(1..=1024).contains(&entries) {
+        return Err(invalid(
+            Some(record.data_offset),
+            Some(record.box_type),
+            "palette entry count must be in 1..=1024",
+        ));
+    }
+    let column_count = usize::from(input[record.data_offset + 2]);
+    if column_count == 0 {
+        return Err(invalid(
+            Some(record.data_offset + 2),
+            Some(record.box_type),
+            "palette must contain at least one column",
+        ));
+    }
+    let precision_offset = record
+        .data_offset
+        .checked_add(3)
+        .ok_or(ContainerError::SizeOverflow)?;
+    let precision_end = 3_usize
+        .checked_add(column_count)
+        .ok_or(ContainerError::SizeOverflow)?;
+    if record.data_len < precision_end {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "palette box is shorter than its declared column precisions",
+        ));
+    }
+    let precision_bytes = checked_slice(input, precision_offset, column_count)?;
+    let mut columns = Vec::with_capacity(column_count);
+    let mut row_bytes = 0_usize;
+    for (index, &value) in precision_bytes.iter().enumerate() {
+        if value & 0x7f > 37 {
+            return Err(invalid(
+                Some(precision_offset + index),
+                Some(record.box_type),
+                "palette column precision is reserved",
+            ));
+        }
+        let format = ComponentSampleFormat::from_bpc_byte(value);
+        row_bytes = row_bytes
+            .checked_add(usize::from(format.bits_per_sample).div_ceil(8))
+            .ok_or(ContainerError::SizeOverflow)?;
+        columns.push(format);
+    }
+    let table_len = row_bytes
+        .checked_mul(usize::from(entries))
+        .ok_or(ContainerError::SizeOverflow)?;
+    let expected_len = 3_usize
+        .checked_add(column_count)
+        .and_then(|len| len.checked_add(table_len))
+        .ok_or(ContainerError::SizeOverflow)?;
+    if record.data_len != expected_len {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            alloc::format!(
+                "palette payload length must be {expected_len} bytes for its declared table"
+            ),
+        ));
+    }
+
+    let mut value_offset = precision_offset
+        .checked_add(column_count)
+        .ok_or(ContainerError::SizeOverflow)?;
+    for _ in 0..entries {
+        for column in &columns {
+            let stored_bytes = usize::from(column.bits_per_sample).div_ceil(8);
+            let unused_bits = stored_bytes * 8 - usize::from(column.bits_per_sample);
+            if unused_bits != 0 {
+                let first = *checked_slice(input, value_offset, 1)?
+                    .first()
+                    .ok_or(ContainerError::SizeOverflow)?;
+                if first >> (8 - unused_bits) != 0 {
+                    return Err(invalid(
+                        Some(value_offset),
+                        Some(record.box_type),
+                        "palette value has non-zero high-order padding bits",
+                    ));
+                }
+            }
+            value_offset = value_offset
+                .checked_add(stored_bytes)
+                .ok_or(ContainerError::SizeOverflow)?;
+        }
+    }
+
+    Ok(PaletteInfo { columns })
+}
+
+fn validate_component_mapping(
+    input: &[u8],
+    record: &BoxRecord,
+    component_count: u16,
+    component_formats: &[ComponentSampleFormat],
+    palette: &PaletteInfo,
+) -> Result<Vec<ComponentSampleFormat>> {
+    if record.data_len == 0 || !record.data_len.is_multiple_of(4) {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "component-mapping payload must contain one or more four-byte entries",
+        ));
+    }
+    let channel_count = record.data_len / 4;
+    if channel_count > usize::from(u16::MAX) + 1 {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "component-mapping channel count exceeds the 16-bit channel-index domain",
+        ));
+    }
+    let mut channels = Vec::with_capacity(channel_count);
+    let mut offset = record.data_offset;
+    let end = record.end_offset()?;
+    while offset < end {
+        let component = read_u16(input, offset)?;
+        if component >= component_count {
+            return Err(invalid(
+                Some(offset),
+                Some(record.box_type),
+                "component-mapping component selector is outside the image component domain",
+            ));
+        }
+        let mapping_type = input[offset + 2];
+        let palette_column = input[offset + 3];
+        let format = match mapping_type {
+            0 => {
+                if palette_column != 0 {
+                    return Err(invalid(
+                        Some(offset + 3),
+                        Some(record.box_type),
+                        "direct component mapping requires palette-column selector zero",
+                    ));
+                }
+                *component_formats
+                    .get(usize::from(component))
+                    .ok_or(ContainerError::SizeOverflow)?
+            }
+            1 => {
+                let format = palette
+                    .columns
+                    .get(usize::from(palette_column))
+                    .ok_or_else(|| {
+                        invalid(
+                            Some(offset + 3),
+                            Some(record.box_type),
+                            "palette-column selector is outside the palette column domain",
+                        )
+                    })?;
+                *format
+            }
+            _ => {
+                return Err(invalid(
+                    Some(offset + 2),
+                    Some(record.box_type),
+                    "component-mapping type is reserved",
+                ));
+            }
+        };
+        channels.push(format);
+        offset = offset.checked_add(4).ok_or(ContainerError::SizeOverflow)?;
+    }
+    Ok(channels)
+}
+
+fn validate_channel_definition(
+    kind: ContainerKind,
+    input: &[u8],
+    record: &BoxRecord,
+    channel_formats: &[ComponentSampleFormat],
+    colour_unspecified: bool,
+) -> Result<()> {
+    if record.data_len < 2 {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "channel-definition box is shorter than its entry count",
+        ));
+    }
+    let count = usize::from(read_u16(input, record.data_offset)?);
+    if count == 0 {
+        return Err(invalid(
+            Some(record.data_offset),
+            Some(record.box_type),
+            "channel-definition box must contain at least one entry",
+        ));
+    }
+    let expected_len = count
+        .checked_mul(6)
+        .and_then(|len| len.checked_add(2))
+        .ok_or(ContainerError::SizeOverflow)?;
+    if record.data_len != expected_len {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            alloc::format!(
+                "channel-definition payload length must be {expected_len} bytes for its declared entries"
+            ),
+        ));
+    }
+
+    let mut pairs = Vec::with_capacity(count);
+    let mut alpha_count = 0_usize;
+    let mut offset = record
+        .data_offset
+        .checked_add(2)
+        .ok_or(ContainerError::SizeOverflow)?;
+    for _ in 0..count {
+        let channel = read_u16(input, offset)?;
+        let channel_format = channel_formats.get(usize::from(channel)).ok_or_else(|| {
+            invalid(
+                Some(offset),
+                Some(record.box_type),
+                "channel-definition index is outside the channel domain",
+            )
+        })?;
+        let channel_type = read_u16(input, offset + 2)?;
+        let association = read_u16(input, offset + 4)?;
+        let legal_type = matches!(channel_type, 0 | 1 | 2 | u16::MAX)
+            || (kind == ContainerKind::Jph && channel_type == 3);
+        if !legal_type {
+            return Err(invalid(
+                Some(offset + 2),
+                Some(record.box_type),
+                "channel-definition type is reserved",
+            ));
+        }
+        if colour_unspecified && channel_type == 0 {
+            return Err(invalid(
+                Some(offset + 2),
+                Some(record.box_type),
+                "JPH without colour specification cannot declare a colour-image channel",
+            ));
+        }
+        if matches!(channel_type, 1 | 2) {
+            if channel_format.signed {
+                return Err(invalid(
+                    Some(offset),
+                    Some(record.box_type),
+                    "opacity channels must use unsigned samples",
+                ));
+            }
+            if kind == ContainerKind::Jph {
+                alpha_count += 1;
+                if alpha_count > 1 {
+                    return Err(invalid(
+                        Some(offset + 2),
+                        Some(record.box_type),
+                        "JPH supports at most one opacity or premultiplied-opacity entry",
+                    ));
+                }
+                if association != 0 {
+                    return Err(invalid(
+                        Some(offset + 4),
+                        Some(record.box_type),
+                        "JPH opacity association must describe the whole image",
+                    ));
+                }
+            }
+        }
+        let pair = (channel_type, association);
+        if kind == ContainerKind::Jp2 && pair != (u16::MAX, u16::MAX) && pairs.contains(&pair) {
+            return Err(invalid(
+                Some(offset + 2),
+                Some(record.box_type),
+                "JP2 cannot repeat a channel type and association pair",
+            ));
+        }
+        if kind == ContainerKind::Jp2
+            && matches!(channel_type, 1 | 2)
+            && pairs.contains(&(3 - channel_type, association))
+        {
+            return Err(invalid(
+                Some(offset + 2),
+                Some(record.box_type),
+                "JP2 cannot mix opacity and premultiplied opacity for one association",
+            ));
+        }
+        pairs.push(pair);
+        offset = offset.checked_add(6).ok_or(ContainerError::SizeOverflow)?;
+    }
+    Ok(())
+}
+
+fn validate_resolution(input: &[u8], record: &BoxRecord) -> Result<()> {
+    if record.data_len > 52 {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "resolution superbox exceeds the bounded size of its two defined children",
+        ));
+    }
+    let children = parse_box_range(input, record.data_offset, record.end_offset()?)?;
+    if children.is_empty() {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "resolution superbox must contain capture or default-display resolution",
+        ));
+    }
+    for &box_type in &[boxes::CAPTURE_RESOLUTION, boxes::DEFAULT_DISPLAY_RESOLUTION] {
+        if let Some(duplicate) = children
+            .iter()
+            .filter(|child| child.box_type == box_type)
+            .nth(1)
+        {
+            return Err(invalid(
+                Some(duplicate.header_offset),
+                Some(duplicate.box_type),
+                "resolution superbox cannot repeat a resolution child",
+            ));
+        }
+    }
+    for child in &children {
+        if !matches!(
+            child.box_type,
+            boxes::CAPTURE_RESOLUTION | boxes::DEFAULT_DISPLAY_RESOLUTION
+        ) {
+            return Err(invalid(
+                Some(child.header_offset),
+                Some(child.box_type),
+                "resolution superbox contains an unrecognised child",
+            ));
+        }
+        if child.data_len != 10 {
+            return Err(invalid(
+                Some(child.header_offset),
+                Some(child.box_type),
+                "resolution child must contain exactly ten bytes",
+            ));
+        }
+        for field_offset in [0_usize, 2, 4, 6] {
+            let offset = child
+                .data_offset
+                .checked_add(field_offset)
+                .ok_or(ContainerError::SizeOverflow)?;
+            if read_u16(input, offset)? == 0 {
+                return Err(invalid(
+                    Some(offset),
+                    Some(child.box_type),
+                    "resolution numerator and denominator fields must be non-zero",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1233,6 +1683,7 @@ impl BoxRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn boxed(box_type: FourCc, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -1241,16 +1692,58 @@ mod tests {
     }
 
     fn image_header(components: u16, bpc: u8) -> Vec<u8> {
+        image_header_with_unknown_colour(components, bpc, false)
+    }
+
+    fn image_header_with_unknown_colour(components: u16, bpc: u8, unknown: bool) -> Vec<u8> {
         let mut payload = Vec::new();
         payload.extend_from_slice(&3_u32.to_be_bytes());
         payload.extend_from_slice(&5_u32.to_be_bytes());
         payload.extend_from_slice(&components.to_be_bytes());
-        payload.extend_from_slice(&[bpc, 7, 0, 0]);
+        payload.extend_from_slice(&[bpc, 7, u8::from(unknown), 0]);
         boxed(boxes::IMAGE_HEADER, &payload)
     }
 
     fn colour() -> Vec<u8> {
         boxed(boxes::COLOR_SPECIFICATION, &[1, 0, 0, 0, 0, 0, 17])
+    }
+
+    fn palette(columns: &[u8], values: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1_u16.to_be_bytes());
+        payload.push(u8::try_from(columns.len()).unwrap());
+        payload.extend_from_slice(columns);
+        payload.extend_from_slice(values);
+        boxed(boxes::PALETTE, &payload)
+    }
+
+    fn mapping(entries: &[(u16, u8, u8)]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        for &(component, mapping_type, palette_column) in entries {
+            payload.extend_from_slice(&component.to_be_bytes());
+            payload.extend_from_slice(&[mapping_type, palette_column]);
+        }
+        boxed(boxes::COMPONENT_MAPPING, &payload)
+    }
+
+    fn channel_definition(entries: &[(u16, u16, u16)]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&u16::try_from(entries.len()).unwrap().to_be_bytes());
+        for &(channel, channel_type, association) in entries {
+            payload.extend_from_slice(&channel.to_be_bytes());
+            payload.extend_from_slice(&channel_type.to_be_bytes());
+            payload.extend_from_slice(&association.to_be_bytes());
+        }
+        boxed(boxes::CHANNEL_DEFINITION, &payload)
+    }
+
+    fn resolution(child_type: FourCc) -> Vec<u8> {
+        let mut payload = Vec::new();
+        for value in [1_u16, 1, 1, 1] {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&[0, 0]);
+        boxed(boxes::RESOLUTION, &boxed(child_type, &payload))
     }
 
     fn jp2_header(children: &[Vec<u8>]) -> Vec<u8> {
@@ -1754,6 +2247,344 @@ mod tests {
         assert_eq!(parsed.codestreams.len(), 2);
         assert!(parsed.metadata.iter().any(|record| record.data == [1, 2]));
         assert!(parsed.metadata.iter().any(|record| record.data == [3, 4]));
+    }
+
+    #[test]
+    fn jph_unknown_colour_may_omit_colour_specification_without_weakening_jp2() {
+        let jph = file(
+            ContainerKind::Jph,
+            &[
+                jp2_header(&[image_header_with_unknown_colour(1, 7, true)]),
+                codestream_box(),
+            ],
+        );
+        let parsed = parse(&jph).unwrap();
+        assert!(parsed.image_header.unwrap().unknown_color_space);
+        assert!(parsed.color_specification.is_none());
+
+        for kind in [ContainerKind::Jp2, ContainerKind::Jph] {
+            let input = file(
+                kind,
+                &[
+                    jp2_header(&[image_header_with_unknown_colour(
+                        1,
+                        7,
+                        kind == ContainerKind::Jp2,
+                    )]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::JP2_HEADER),
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn validates_optional_header_boxes_before_they_reach_presentation_policy() {
+        let input = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    palette(&[7, 7], &[0, 0]),
+                    mapping(&[(0, 1, 0), (0, 1, 1)]),
+                    channel_definition(&[(0, 0, 1), (1, 0, 2)]),
+                    resolution(boxes::CAPTURE_RESOLUTION),
+                    colour(),
+                ]),
+                codestream_box(),
+            ],
+        );
+        let parsed = parse(&input).unwrap();
+        for box_type in [
+            boxes::PALETTE,
+            boxes::COMPONENT_MAPPING,
+            boxes::CHANNEL_DEFINITION,
+            boxes::RESOLUTION,
+        ] {
+            assert!(
+                parsed
+                    .boxes
+                    .iter()
+                    .any(|record| record.box_type == box_type)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_optional_box_dependency_and_cardinality_conflicts() {
+        for child in [palette(&[7], &[0]), mapping(&[(0, 0, 0)])] {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(1, 7), colour(), child]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox { .. })
+            ));
+        }
+
+        for duplicate in [
+            palette(&[7], &[0]),
+            mapping(&[(0, 1, 0)]),
+            channel_definition(&[(0, 0, 1)]),
+            resolution(boxes::CAPTURE_RESOLUTION),
+        ] {
+            let mut children = vec![
+                image_header(1, 7),
+                colour(),
+                palette(&[7], &[0]),
+                mapping(&[(0, 1, 0)]),
+            ];
+            children.push(duplicate.clone());
+            children.push(duplicate);
+            let input = file(
+                ContainerKind::Jp2,
+                &[jp2_header(&children), codestream_box()],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_palette_tables_and_padding() {
+        let malformed_payloads = [
+            vec![0, 0, 1, 7, 0],
+            vec![0, 1, 0],
+            vec![0, 1, 1, 38, 0],
+            vec![0, 1, 1, 7],
+            vec![0, 1, 1, 7, 0, 0],
+            vec![0, 1, 1, 0, 0x80],
+        ];
+        for payload in malformed_payloads {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[
+                        image_header(1, 7),
+                        colour(),
+                        boxed(boxes::PALETTE, &payload),
+                        mapping(&[(0, 1, 0)]),
+                    ]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::PALETTE),
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_component_mapping_entries_and_domains() {
+        let mappings = [
+            boxed(boxes::COMPONENT_MAPPING, &[]),
+            boxed(boxes::COMPONENT_MAPPING, &[0, 0, 1]),
+            mapping(&[(1, 0, 0)]),
+            mapping(&[(0, 2, 0)]),
+            mapping(&[(0, 0, 1)]),
+            mapping(&[(0, 1, 1)]),
+        ];
+        for mapping in mappings {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(1, 7), colour(), palette(&[7], &[0]), mapping]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::COMPONENT_MAPPING),
+                    ..
+                })
+            ));
+        }
+
+        let oversized = boxed(
+            boxes::COMPONENT_MAPPING,
+            &vec![0; (usize::from(u16::MAX) + 2) * 4],
+        );
+        let input = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[image_header(1, 7), colour(), palette(&[7], &[0]), oversized]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&input),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::COMPONENT_MAPPING),
+                ..
+            })
+        ));
+
+        let mut truncated_palette = palette(&[7], &[0]);
+        let declared = u32::from_be_bytes(truncated_palette[..4].try_into().unwrap());
+        truncated_palette[..4].copy_from_slice(&(declared + 1).to_be_bytes());
+        let input = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    colour(),
+                    truncated_palette,
+                    mapping(&[(0, 1, 0)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert!(parse(&input).is_err());
+    }
+
+    #[test]
+    fn enforces_inherited_and_jph_channel_definition_rules() {
+        let invalid_jp2 = [
+            boxed(boxes::CHANNEL_DEFINITION, &[]),
+            boxed(boxes::CHANNEL_DEFINITION, &[0, 0]),
+            channel_definition(&[(1, 0, 1)]),
+            channel_definition(&[(0, 3, 0)]),
+            channel_definition(&[(0, 0, 1), (0, 0, 1)]),
+            channel_definition(&[(0, 1, 0), (0, 2, 0)]),
+        ];
+        for definition in invalid_jp2 {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(1, 7), colour(), definition]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::CHANNEL_DEFINITION),
+                    ..
+                })
+            ));
+        }
+
+        let signed_alpha = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 0x87),
+                    colour(),
+                    channel_definition(&[(0, 1, 0)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&signed_alpha),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::CHANNEL_DEFINITION),
+                ..
+            })
+        ));
+
+        for definition in [
+            channel_definition(&[(0, 1, 1)]),
+            channel_definition(&[(0, 1, 0), (0, 2, 0)]),
+        ] {
+            let input = file(
+                ContainerKind::Jph,
+                &[
+                    jp2_header(&[image_header(1, 7), colour(), definition]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::CHANNEL_DEFINITION),
+                    ..
+                })
+            ));
+        }
+
+        let valid_jph = file(
+            ContainerKind::Jph,
+            &[
+                jp2_header(&[
+                    image_header_with_unknown_colour(1, 7, true),
+                    channel_definition(&[(0, 3, 7), (0, 3, 7)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        parse(&valid_jph).unwrap();
+
+        let invalid_unspecified = file(
+            ContainerKind::Jph,
+            &[
+                jp2_header(&[
+                    image_header_with_unknown_colour(1, 7, true),
+                    channel_definition(&[(0, 0, 1)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&invalid_unspecified),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::CHANNEL_DEFINITION),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_resolution_superboxes() {
+        let mut valid_child_payload = Vec::new();
+        for value in [1_u16, 1, 1, 1] {
+            valid_child_payload.extend_from_slice(&value.to_be_bytes());
+        }
+        valid_child_payload.extend_from_slice(&[0, 0]);
+        let valid_child = boxed(boxes::CAPTURE_RESOLUTION, &valid_child_payload);
+        let cases = [
+            boxed(boxes::RESOLUTION, &[]),
+            boxed(boxes::RESOLUTION, &boxed(FourCc::new(*b"free"), &[0])),
+            boxed(
+                boxes::RESOLUTION,
+                &boxed(boxes::CAPTURE_RESOLUTION, &[0; 9]),
+            ),
+            boxed(
+                boxes::RESOLUTION,
+                &boxed(boxes::CAPTURE_RESOLUTION, &[0; 10]),
+            ),
+            boxed(
+                boxes::RESOLUTION,
+                &[valid_child.clone(), valid_child].concat(),
+            ),
+        ];
+        for resolution in cases {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(1, 7), colour(), resolution]),
+                    codestream_box(),
+                ],
+            );
+            assert!(parse(&input).is_err());
+        }
     }
 
     #[test]

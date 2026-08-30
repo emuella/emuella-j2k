@@ -890,6 +890,29 @@ mod jp2_header_validation_tests {
         output
     }
 
+    fn append_valid_optional_presentation(input: &mut Vec<u8>, first: container::FourCc) {
+        let palette = presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]);
+        let mapping = presentation_box(container::boxes::COMPONENT_MAPPING, &[0, 0, 1, 0]);
+        match first {
+            container::boxes::PALETTE => {
+                append_jp2_header_child(input, palette);
+                append_jp2_header_child(input, mapping);
+            }
+            container::boxes::COMPONENT_MAPPING => {
+                append_jp2_header_child(input, mapping);
+                append_jp2_header_child(input, palette);
+            }
+            container::boxes::CHANNEL_DEFINITION => append_jp2_header_child(
+                input,
+                presentation_box(
+                    container::boxes::CHANNEL_DEFINITION,
+                    &[0, 1, 0, 0, 0, 0, 0, 1],
+                ),
+            ),
+            _ => panic!("not an optional presentation box"),
+        }
+    }
+
     fn planar_bytes(image: &Image) -> &[Vec<u8>] {
         let ImageData::Planes(planes) = &image.data else {
             panic!("expected planar image data");
@@ -1149,7 +1172,7 @@ mod jp2_header_validation_tests {
             container::boxes::CHANNEL_DEFINITION,
         ] {
             let mut input = wrap_jp2(raw, 5, 3, components, 7, None);
-            append_jp2_header_child(&mut input, presentation_box(box_type, &[0, 0, 0, 0]));
+            append_valid_optional_presentation(&mut input, box_type);
             inputs.push(input);
         }
         for (method, enumerated) in [
@@ -1466,13 +1489,21 @@ mod jp2_header_validation_tests {
     }
 
     #[test]
-    fn inspect_classifies_unsupported_jp2_presentation_without_parse_failure() {
+    fn inspect_rejects_invalid_and_classifies_valid_optional_jp2_presentation() {
         let raw = codestream(1);
-        let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        let mut invalid_palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
         append_jp2_header_child(
-            &mut palette,
+            &mut invalid_palette,
             presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
         );
+        assert!(matches!(
+            inspect(&invalid_palette, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { message, .. })
+                if message.contains("palette and component-mapping")
+        ));
+
+        let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_valid_optional_presentation(&mut palette, container::boxes::PALETTE);
 
         let mut icc = wrap_jp2(&raw, 5, 3, 1, 7, None);
         set_first_colour(&mut icc, 2, None);
@@ -1510,6 +1541,33 @@ mod jp2_header_validation_tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn jph_unknown_colour_without_colr_is_valid_but_not_presented_as_supported() {
+        let mut input = valid_jph(1);
+        let image_header = box_offset(&input, container::boxes::IMAGE_HEADER);
+        input[image_header + 20] = 1;
+        let colour = box_offset(&input, container::boxes::COLOR_SPECIFICATION);
+        input[colour + 4..colour + 8].copy_from_slice(b"free");
+
+        let metadata = inspect(&input, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jph);
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::ColorModel,
+                ref detail,
+            } if detail.contains("unspecified")
+        ));
+
+        let mut known = input;
+        known[image_header + 20] = 0;
+        assert!(matches!(
+            inspect(&known, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { message, .. })
+                if message.contains("omit colour specification")
+        ));
     }
 
     #[test]
@@ -1559,10 +1617,7 @@ mod jp2_header_validation_tests {
         let mut inputs = Vec::new();
 
         let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
-        append_jp2_header_child(
-            &mut palette,
-            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
-        );
+        append_valid_optional_presentation(&mut palette, container::boxes::PALETTE);
         inputs.push(palette);
         for method in [2, 4] {
             let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
@@ -1725,7 +1780,7 @@ mod jp2_header_validation_tests {
             container::boxes::CHANNEL_DEFINITION,
         ] {
             let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
-            append_jp2_header_child(&mut input, presentation_box(box_type, &[0, 0, 0, 0]));
+            append_valid_optional_presentation(&mut input, box_type);
             inputs.push((input, UnsupportedFeature::ContainerBox));
         }
         for (method, enumerated) in [(1, Some(18)), (2, None), (4, None), (1, Some(99))] {
@@ -1991,7 +2046,7 @@ mod jp2_header_validation_tests {
             container::boxes::CHANNEL_DEFINITION,
         ] {
             let mut input = wrap_jp2(&raw, 7, 3, 1, 11, None);
-            append_jp2_header_child(&mut input, presentation_box(box_type, &[0, 0, 0, 0]));
+            append_valid_optional_presentation(&mut input, box_type);
             indirect_inputs.push(input);
         }
         for (method, enumerated) in [(2, None), (4, None), (1, Some(16)), (1, Some(99))] {
@@ -2255,9 +2310,9 @@ mod jp2_header_validation_tests {
         container::write_contiguous_codestream_box(&mut multiple_codestreams, &raw).unwrap();
 
         let mut channel_definition = wrap_sycc_jp2(&raw, 5, 3);
-        append_jp2_header_child(
+        append_valid_optional_presentation(
             &mut channel_definition,
-            presentation_box(container::boxes::CHANNEL_DEFINITION, &[0, 0]),
+            container::boxes::CHANNEL_DEFINITION,
         );
 
         for input in [
@@ -2957,9 +3012,9 @@ mod jp2_header_validation_tests {
     #[test]
     fn invalid_jph_precedes_unsupported_presentation_and_is_atomic() {
         let mut unsupported_presentation = valid_jph(1);
-        append_jp2_header_child(
+        append_valid_optional_presentation(
             &mut unsupported_presentation,
-            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+            container::boxes::PALETTE,
         );
         assert!(matches!(
             inspect(&unsupported_presentation, &InspectOptions::default())
@@ -2995,6 +3050,17 @@ mod jp2_header_validation_tests {
             assert!(matches!(result, Err(J2kError::InvalidInput { .. })));
         }
 
+        let mut invalid_optional = valid_jph(1);
+        append_jp2_header_child(
+            &mut invalid_optional,
+            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+        );
+        assert!(matches!(
+            inspect(&invalid_optional, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { message, .. })
+                if message.contains("palette and component-mapping")
+        ));
+
         let info = ImageInfo::new(
             5,
             3,
@@ -3013,7 +3079,7 @@ mod jp2_header_validation_tests {
                 planes: &mut planes,
             };
             assert!(matches!(
-                decode_into(&invalid_header, &mut target, &DecodeOptions::default()),
+                decode_into(&invalid_optional, &mut target, &DecodeOptions::default()),
                 Err(J2kError::InvalidInput { .. })
             ));
         }
@@ -9338,6 +9404,14 @@ fn unsupported_container_presentation(
             alloc::format!(
                 "{name} `{}` presentation is not implemented; palette, component mapping, and channel definition remain fail-closed",
                 record.box_type
+            ),
+        )));
+    }
+    if container.color_specification.is_none() {
+        return Ok(Some((
+            UnsupportedFeature::ColorModel,
+            alloc::format!(
+                "{name} colourspace is unspecified; rendered colour interpretation is not implemented"
             ),
         )));
     }

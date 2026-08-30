@@ -125,13 +125,18 @@ decoder success. Positive cases exercise the required signature, file type,
 header and one-or-more codestream ordering; exact `jph ` brand, zero minor
 version, `jph `/`jp2 ` compatibility membership including harmless duplicate
 membership; inherited uniform and varying `ihdr`/`bpcc` forms; legal unknown
-box preservation; multiple complete HTJ2K codestreams; and writer payload
-identity. Negative cases cover missing, misplaced and duplicate structural
-boxes; conflicting file-type fields; absent codestreams; non-HT and incomplete
-primary or later codestreams; trailing bytes after EOC; SIZ disagreement in
-dimensions, component count, precision or signedness; reserved header fields;
-short, truncated, undersized and overflowing box lengths; unsupported
-presentation versus structural-error precedence; and caller-buffer atomicity.
+box preservation; the JPH unknown-colour form without `colr`; structurally
+valid palette/mapping, channel-definition and resolution metadata; multiple
+complete HTJ2K codestreams; and writer payload identity. Negative cases cover
+missing, misplaced and duplicate structural boxes; conflicting file-type
+fields; palette/mapping dependency and selector conflicts; malformed palette
+tables and padding; channel-definition count, index, type, association, alpha
+and unknown-colour contradictions; malformed or duplicate resolution children;
+absent codestreams; non-HT and incomplete primary or later codestreams;
+trailing bytes after EOC; SIZ disagreement in dimensions, component count,
+precision or signedness; reserved header fields; short, truncated, undersized
+and overflowing box lengths; unsupported presentation versus structural-error
+precedence; and caller-buffer atomicity.
 A bounded deterministic mutation matrix rejects every strict prefix of a valid
 JPH file and one-bit changes across signature magic and protected file-type
 fields. Focused tests run through container parsing, inspection, shape

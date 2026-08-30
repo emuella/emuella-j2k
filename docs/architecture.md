@@ -47,13 +47,21 @@ file has exactly one JPEG 2000 signature, followed immediately by exactly one
 file-type box, and exactly one `jp2h` after that file type and before the first
 `jp2c`. The file-type brand is `jph `, its minor version is zero, and its
 compatibility list contains both `jph ` and inherited `jp2 ` membership;
-repeated compatible-brand membership is harmless. The `jp2h` structure and
-field ranges use the existing inherited JP2 checks. At least one `jp2c` is
-required, every `jp2c` must contain a structurally parsed HTJ2K codestream with
-EOC at the end of the box payload, and the first codestream SIZ dimensions,
-component count, precision and signedness must agree with `ihdr` and `bpcc`.
-Checked box arithmetic and exact containing-box bounds precede metadata
-allocation. Legal unknown boxes remain byte-preserved.
+repeated compatible-brand membership is harmless. The inherited `jp2h`
+boundary requires `ihdr` first, conditionally admits one `bpcc`, keeps `colr`
+boxes contiguous, and validates the cardinality and payload structure of
+`pclr`, `cmap`, `cdef` and `res `. Palette and component-mapping dependencies,
+component and palette selectors, channel-definition domains, and resolution
+children are checked before optional presentation is classified. JP2 still
+requires `colr`; JPH may omit it only for an `ihdr` whose colourspace is
+unknown, and such a header cannot describe a type-0 colour channel. The JPH
+single-alpha and application-specified channel rules are applied without
+changing JP2 rules. At least one `jp2c` is required, every `jp2c` must contain a
+structurally parsed HTJ2K codestream with EOC at the end of the box payload,
+and the first codestream SIZ dimensions, component count, precision and
+signedness must agree with `ihdr` and `bpcc`. Checked box arithmetic, field
+domains and exact containing-box bounds precede metadata allocation. Legal
+unknown boxes remain byte-preserved.
 
 This validation is container and codestream admission, not presentation or
 decode expansion. Palette, component mapping, channel definition, alpha, ICC,
