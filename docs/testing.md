@@ -180,13 +180,30 @@ admission, including when the sets span tile parts. With multiple sets
 permitted, the same actual mechanism is structurally valid but remains an
 unsupported native mechanism and cannot modify caller-owned output. This
 includes a later zero-byte second Cleanup-set announcement after the first
-non-empty set; leading zero-byte placeholders remain excluded. A maximum
+non-empty set; leading zero-byte placeholders do not count as actual sets. A maximum
 checked-pass-count sequence proves native admission consumes every packet but
 retains only two set records before rejecting multiplicity. Actual RGN use,
 heterogeneous tile-header coding, irreversible coding, HTMIX/HT-declared
 population modes and excessive cleanup magnitude bounds remain fail closed.
 These tests qualify only admission to the existing bounded lossless HT decode;
 they do not qualify other Part 15 mechanisms or claim general conformance.
+
+Project-authored native-grid tests cover horizontal, vertical and two-axis
+subsampling, odd non-zero reference origins, native-plane dimensions and exact
+three-level reversible reconstruction. Effective COC/QCC tests deliberately
+replace the raw irreversible defaults with reversible component state and vary
+guard bits while preserving the coefficient-transfer bound.
+Six-layer fixtures cover all 24 packets with SOP/EPH and reject a late EPH
+contradiction. Adjacent progression, layer, MCT, precision, decomposition,
+block-style and multi-tile shapes remain outside the native-grid profile.
+Public inspection,
+shape, owned, caller-retained HT workspace and caller-planar routes agree on
+the admitted request; padding is preserved. Wrong phase, empty or oversized
+grids, excluded requests, undersized target geometry, truncated input and a
+late entropy failure reject without partially publishing caller samples.
+A 3,600-case synthetic placeholder-length matrix varies the first pass and
+announced pass count, then checks the next header bit exactly. No protected
+input or reference sample participates in these ordinary tests.
 
 Project-authored Layer 1 coverage also qualifies the bounded reduced HT
 component route independently of protected DS0 material. A 49 × 49 RGB fixture

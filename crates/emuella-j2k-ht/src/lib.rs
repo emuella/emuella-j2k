@@ -174,6 +174,13 @@ impl HtUnsupportedReason {
 
 /// Classify the marker-level HTJ2K subset without attempting pixel decode.
 pub fn classify_decode_subset(state: HtMarkerState) -> HtClassification {
+    classify_decode_subset_with_component_grid(state, false)
+}
+
+fn classify_decode_subset_with_component_grid(
+    state: HtMarkerState,
+    caller_owns_component_grid: bool,
+) -> HtClassification {
     let unsupported = |reason| HtClassification {
         class: HtSupportClass::Unsupported,
         reason,
@@ -192,7 +199,7 @@ pub fn classify_decode_subset(state: HtMarkerState) -> HtClassification {
     {
         return unsupported(HtUnsupportedReason::SamplePrecision);
     }
-    if !state.all_components_unit_sampled {
+    if !state.all_components_unit_sampled && !caller_owns_component_grid {
         return unsupported(HtUnsupportedReason::ComponentSampling);
     }
     if !state.has_tile_part {
@@ -233,7 +240,27 @@ pub fn classify_decode_subset(state: HtMarkerState) -> HtClassification {
 /// decode plumbing can consume, while returning the same structured
 /// classification for unsupported states.
 pub fn plan_decode_candidate(state: HtMarkerState) -> Result<HtDecodeCandidate, HtClassification> {
-    let classification = classify_decode_subset(state);
+    plan_decode_candidate_with_component_grid(state, false)
+}
+
+/// Plan a block-local candidate after the caller has independently admitted
+/// and taken ownership of non-unit native component-grid geometry.
+///
+/// The HT block coder neither interprets nor resamples image component grids;
+/// all other marker-level candidate checks remain unchanged. Callers must not
+/// use this entry point as a general sampling-permission bypass.
+pub fn plan_decode_candidate_for_native_component_grid(
+    state: HtMarkerState,
+) -> Result<HtDecodeCandidate, HtClassification> {
+    plan_decode_candidate_with_component_grid(state, true)
+}
+
+fn plan_decode_candidate_with_component_grid(
+    state: HtMarkerState,
+    caller_owns_component_grid: bool,
+) -> Result<HtDecodeCandidate, HtClassification> {
+    let classification =
+        classify_decode_subset_with_component_grid(state, caller_owns_component_grid);
     if classification.class != HtSupportClass::Candidate {
         return Err(classification);
     }
