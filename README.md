@@ -169,6 +169,23 @@ reference-plane preflight applies before packet preparation. Full-image decode,
 other selections/reductions, region/tile/layer requests, additional tile
 overrides, POC, relocation, HTMIX and JPH/rendered output remain unsupported.
 
+A separate high-component native route qualifies locked P0.13 HTONLY. It
+accepts four through 257 unit-sampled 8–16-bit components in one zero-origin
+tile/part of at most 64×64 samples. Every effective main COD/COC has one
+reversible 5/3 level, one RLCP layer, MCT, 32/64-sample block axes and explicit
+128×128/256×256 precincts without SOP/EPH. Main POC partitions all components
+into two adjacent complete volumes, first RLCP then CPRL; resolution bounds
+are clipped to actual resolutions. Main QCD/QCC resolves reversible quantisers
+for every component, with positive exponents and at most 30 ROI-extended
+magnitude bits. One main Maxshift assignment of 1–15 must name an unselected
+component. The first three MCT component formats match; later native formats
+may differ. Every packet is validated, but only component zero is reconstructed
+before inverse RCT. Use full `decode` or `decode_htj2k_with_workspace` with
+explicit planar component zero in component mode; `decode_shape` shares the
+admission. All-component support inspection remains unsupported. Other
+selections, partial requests, layer limits, tile overrides, packet relocation,
+HTMIX and JPH/rendered output remain outside this route.
+
 The command-line adapter installs the `emuella-j2k` executable:
 
 ```sh
