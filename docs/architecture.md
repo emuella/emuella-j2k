@@ -177,6 +177,39 @@ B.12.1.5 (physical pages 46, 49–54 and 98), retrieval
 separates native reconstruction from Class-0 signed arithmetic scaling.
 Project-authored fixtures and implementation contain no protected payloads.
 
+### Scalar-derived sampled reduced component
+
+The independent reduction-three sampled-PCRL permission admits four unsigned
+8-bit components with sampling 1×1/1×1/2×2/2×2, effective decomposition counts
+6/3/6/6 and transforms 9/7, 9/7, 9/7 and 5/3. One zero-origin tile/part,
+no MCT, one through seven layers, 32×32 blocks and explicit square 128/256
+precincts bound the packet shape. Only main COD/COC/QCD/QCC overrides are
+functional; inline SOP/EPH, ROI, POC, relocation and tile-header state remain
+excluded. The existing 16 Mi-sample reference-plane cap is checked before
+packet topology; packet/precinct caps and fallible retained allocations remain.
+
+The shared packet walker independently rechecks this HT-owned permission and
+resolves each native component grid, coding style and quantiser. Component zero
+must use scalar-derived steps, components one/two scalar-expounded steps and
+component three reversible exponents. Positive resolved exponents and at most
+30 guard-adjusted magnitude bits bound every effective quantiser, including
+unselected components. Scalar-derived expansion remains relative to the full
+component's subband sequence, not a renumbered reduced image. Each retained
+contribution carries its resolved step and magnitude width into the existing
+HT half-step transfer and 9/7 synthesis. The entropy candidate represents only
+the selected unit-sampled plane after complete packet admission. Only component
+zero through resolution three reaches reconstruction; metadata and caller
+output reuse that prepared plan. This does not grant full-image, resampled or
+container output, other selectors/reductions, ROI or HTMIX support.
+
+The quantisation and sampled-PCRL basis is ISO/IEC 15444-1:2024 A.6.1/A.6.2,
+A.6.4/A.6.5, B.12.1.4 and E.1.1 (physical pages 46, 49–50, 52–54, 97 and
+129–130), retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+Class-0 component-zero reduced comparison follows Part 4:2024 B.2.3/B.2.5
+(pages 25–26), retrieval `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
+All implementation and synthetic evidence is project-authored; no standards
+expression, protected payload or decoded pixels enter public artefacts.
+
 ### Full native grids
 
 The full native component-grid route has its own prepared admission plan. It

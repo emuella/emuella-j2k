@@ -108,8 +108,22 @@ zero through resolution one is reconstructed, retaining its native precision
 and signedness. The 16 Mi-sample reference-plane bound applies before packet
 preparation. Only planar component-zero output without region, tile or layer
 limits is admitted; MCT, sampling, tile overrides, ROI, HTMIX, JPH and rendered
-output remain outside this route. This qualifies the locked P0.08 HTONLY point,
-not P0.05's scalar-derived/mixed-transform sampled PCRL shape.
+output remain outside this route. This qualifies the locked P0.08 HTONLY point.
+
+A separate scalar-derived reduction-three route selects raw component zero
+from one zero-origin tile/part with four unsigned 8-bit components sampled
+1×1, 1×1, 2×2 and 2×2. Effective main COD/COC resolves 6/3/6/6 levels,
+9/7 for the first three components and 5/3 for the fourth, no MCT, one through
+seven PCRL layers, 32×32 blocks and explicit square 128/256 precincts.
+QCD/QCC resolves scalar-derived component zero, scalar-expounded components
+one/two and reversible component three; every resolved exponent is positive
+and its guard-adjusted magnitude width is at most 30 bits. All components and
+packets are validated, but only component zero through resolution three is
+reconstructed. The 16 Mi-sample reference-plane limit applies before packet
+preparation. This qualifies the locked P0.05 HTONLY point with planar
+component-zero output; other selections, reductions, regions, tile/layer
+requests, inline packet markers, tile overrides, ROI, HTMIX, JPH and rendered
+resampling remain outside this route.
 
 JPH inspection enforces the bounded Annex D signature, `jph ` file type and
 `jph ` compatibility membership,

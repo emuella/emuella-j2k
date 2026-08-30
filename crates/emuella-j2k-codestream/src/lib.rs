@@ -11405,6 +11405,207 @@ fn encode_ht_heterogeneous_reduced_fixture(
     write_tile_part(&mut output, 0, &packets, true)?;
     Ok(output)
 }
+/// Synthetic sampled-PCRL scalar-derived test support, not an encode profile.
+#[doc(hidden)]
+pub fn encode_htj2k_scalar_derived_reduced_component_test_fixture(
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>> {
+    encode_ht_scalar_derived_reduced_fixture(width, height, 7, 0x88)
+}
+
+fn encode_ht_scalar_derived_reduced_fixture(
+    width: u32,
+    height: u32,
+    layers: u16,
+    high_precinct: u8,
+) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    write_native_main_header(
+        &mut output,
+        width,
+        height,
+        width,
+        height,
+        8,
+        4,
+        false,
+        6,
+        &[10; 19],
+        true,
+        0,
+        1,
+    )?;
+    let siz = find_marker(&output, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    for component in 2..4 {
+        output[siz + 41 + component * 3..siz + 43 + component * 3].fill(2);
+    }
+    let cap = find_marker(&output, 0, Marker::Cap).ok_or(CodestreamError::SizeOverflow)?;
+    output[cap + 8..cap + 10].copy_from_slice(&0x002a_u16.to_be_bytes());
+    let cod = find_marker(&output, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    output[cod + 5] = 3;
+    output[cod + 6..cod + 8].copy_from_slice(&layers.to_be_bytes());
+    output[cod + 10..cod + 12].fill(3);
+    output[cod + 13] = 0;
+    let qcd = find_marker(&output, 0, Marker::Qcd).ok_or(CodestreamError::SizeOverflow)?;
+    output.truncate(qcd);
+    output.extend_from_slice(&[0xff, 0x5c, 0, 41, 0x62]);
+    for _ in 0..19 {
+        output.extend_from_slice(&((9_u16 << 11) | 512).to_be_bytes());
+    }
+
+    let mut segments = Vec::new();
+    let mut component_subbands = Vec::new();
+    // Sort independently authored precinct-origin records in the reference
+    // grid. Only actual precincts enter this fixture's packet schedule.
+    let mut schedule = BTreeMap::<(u32, u32, u8, u8), (u32, u32, u32)>::new();
+    for component in 0..4_u8 {
+        let levels = if component == 1 { 3 } else { 6 };
+        let separation = if component < 2 { 1 } else { 2 };
+        let cw = width.div_ceil(separation);
+        let ch = height.div_ceil(separation);
+        let precincts = (0..=levels)
+            .map(|r| {
+                if r == 0 && component != 1 {
+                    0x77
+                } else {
+                    high_precinct
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut coc = alloc::vec![component, 1, levels, 3, 3, 0x40, u8::from(component == 3)];
+        coc.extend_from_slice(&precincts);
+        output.extend_from_slice(&[0xff, 0x53]);
+        output.extend_from_slice(&(coc.len() as u16 + 2).to_be_bytes());
+        output.extend_from_slice(&coc);
+        // Leave component two on QCD; the other three exercise QCC precedence.
+        if component != 2 {
+            let mut qcc = alloc::vec![
+                component,
+                if component == 0 {
+                    0x61
+                } else if component == 3 {
+                    0x60
+                } else {
+                    0x62
+                }
+            ];
+            let count = if component == 0 {
+                1
+            } else {
+                1 + 3 * usize::from(levels)
+            };
+            for _ in 0..count {
+                if component == 3 {
+                    qcc.push(9 << 3);
+                } else {
+                    qcc.extend_from_slice(&((9_u16 << 11) | 512).to_be_bytes());
+                }
+            }
+            output.extend_from_slice(&[0xff, 0x5d]);
+            output.extend_from_slice(&(qcc.len() as u16 + 2).to_be_bytes());
+            output.extend_from_slice(&qcc);
+        }
+        let specs = decomp_subband_specs(cw, ch, levels)?;
+        let mut plane = alloc::vec![0_i32; checked_component_sample_count(cw, ch)?];
+        for spec in &specs {
+            for y in 0..spec.height {
+                for x in 0..spec.width {
+                    plane[((spec.y + y) * cw + spec.x + x) as usize] =
+                        ((x + 3 * y + 5 * u32::from(spec.index) + u32::from(component)) % 15)
+                            as i32
+                            - 7;
+                }
+            }
+        }
+        let mut subbands = Vec::new();
+        for spec in specs {
+            let exponent = if component == 0 {
+                9 - spec.resolution.saturating_sub(1)
+            } else {
+                9
+            };
+            subbands.push(encode_ht_decomp_subband_with_block_size(
+                cw,
+                &plane,
+                spec,
+                exponent + 2,
+                &mut segments,
+                32,
+            )?);
+        }
+        component_subbands.push(subbands);
+        for resolution in 0..=levels {
+            let side = 1_u32 << (precincts[usize::from(resolution)] & 15);
+            let (rw, rh) = resolution_dimensions(cw, ch, levels, resolution)?;
+            for py in 0..rh.div_ceil(side) {
+                for px in 0..rw.div_ceil(side) {
+                    let scale = separation << (levels - resolution);
+                    schedule.insert(
+                        (py * side * scale, px * side * scale, component, resolution),
+                        (px, py, side),
+                    );
+                }
+            }
+        }
+    }
+    let mut packets = Vec::new();
+    for ((_, _, component, resolution), (px, py, side)) in schedule {
+        let blocks_per_axis = (if resolution == 0 { side } else { side / 2 }) / 32;
+        let mut precinct = Vec::new();
+        for subband in component_subbands[usize::from(component)]
+            .iter()
+            .filter(|band| band.resolution == resolution)
+        {
+            let mut part = subband.clone();
+            part.code_blocks.retain(|block| {
+                u32::from(block.x) / blocks_per_axis == px
+                    && u32::from(block.y) / blocks_per_axis == py
+            });
+            if part.code_blocks.is_empty() {
+                continue;
+            }
+            for block in &mut part.code_blocks {
+                block.x -= (px * blocks_per_axis) as u16;
+                block.y -= (py * blocks_per_axis) as u16;
+            }
+            part.code_block_cols = part.code_blocks.iter().map(|block| block.x).max().unwrap() + 1;
+            part.code_block_rows = part.code_blocks.iter().map(|block| block.y).max().unwrap() + 1;
+            precinct.push(part);
+        }
+        for layer in 0..layers {
+            let contributes = layer == (u16::from(component) + u16::from(resolution)) % layers;
+            let mut writer = PacketBitWriter::new();
+            writer.write_bit(u32::from(contributes))?;
+            if contributes {
+                for subband in &precinct {
+                    write_component_packet_header(
+                        &mut writer,
+                        subband.code_block_cols,
+                        subband.code_block_rows,
+                        &subband.code_blocks,
+                    )?;
+                }
+            }
+            writer.align();
+            packets.extend_from_slice(writer.bytes());
+            if contributes {
+                for subband in &precinct {
+                    for block in subband.code_blocks.iter().filter(|block| block.included) {
+                        packets.extend_from_slice(checked_slice(
+                            &segments,
+                            block.segment_offset,
+                            block.segment_len,
+                        )?);
+                    }
+                }
+            }
+        }
+    }
+    write_tile_part(&mut output, 0, &packets, true)?;
+    Ok(output)
+}
+
 /// Build a header-complete five-level reversible-MCT HTJ2K fixture whose
 /// declared SIZ geometry is paired with empty LRCP packets.
 ///
@@ -50699,8 +50900,8 @@ fn prepare_ht_six_level_reduced_component(
 }
 
 /// Prepare component zero from the bounded five-level profiles at reduction
-/// two, six-level irreversible RLCP at reduction three, or heterogeneous
-/// reversible CPRL at reduction five. No request performs an inverse colour
+/// two, six-level irreversible RLCP or sampled scalar-derived PCRL at reduction
+/// three, or heterogeneous reversible CPRL at reduction five. No request performs an inverse colour
 /// transform; output retains the selected component's precision and signedness.
 ///
 /// Preparation validates structural Part 15 signalling, effective packet
@@ -51461,6 +51662,145 @@ mod htj2k_reduced_component_tests {
     }
 
     #[test]
+    fn scalar_derived_reduced_pcrl_matches_subband_and_coefficient_oracles() {
+        for (width, height, layers, precinct) in [
+            (65, 97, 1, 0x77),
+            (529, 401, 4, 0x88),
+            (2057, 65, 7, 0x88),
+            (1033, 65, 7, 0x77),
+        ] {
+            let input =
+                encode_ht_scalar_derived_reduced_fixture(width, height, layers, precinct).unwrap();
+            let request = Htj2kReducedComponentDecodeRequest {
+                component_index: 0,
+                discard_levels: 3,
+            };
+            let parsed = parse(&input).unwrap();
+            let config = PacketOrganisationConfig::HT_SCALAR_DERIVED_REDUCED;
+            let styles = packet_component_styles(&parsed, config).unwrap();
+            let quantizers = parse_component_quantization_for_styles(
+                &input,
+                &parsed,
+                &styles,
+                &[19, 10, 19, 19],
+                19,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                quantizers[0]
+                    .steps
+                    .iter()
+                    .map(|step| step.exponent)
+                    .collect::<Vec<_>>(),
+                [9, 9, 9, 9, 8, 8, 8, 7, 7, 7, 6, 6, 6, 5, 5, 5, 4, 4, 4]
+            );
+            assert!(quantizers[0].steps.iter().all(|step| step.mantissa == 512));
+            assert_eq!(
+                quantizers.iter().map(|q| q.style).collect::<Vec<_>>(),
+                [
+                    transform::QuantizationStyle::ScalarDerived,
+                    transform::QuantizationStyle::ScalarExpounded,
+                    transform::QuantizationStyle::ScalarExpounded,
+                    transform::QuantizationStyle::NoQuantization
+                ]
+            );
+            let (tile, payload) = single_part1_profile_tile(&input, &parsed).unwrap();
+            let all = parse_default_precinct_packets_from_source_with_ht_retention(
+                &input,
+                &parsed,
+                tile,
+                &ContiguousPacketSource { bytes: payload },
+                None,
+                None,
+                None,
+                config,
+                None,
+                HtCodingSetRetention::NativeAdmission,
+            )
+            .unwrap()
+            .contributions;
+            assert!(
+                (0..4).all(|component| all.iter().any(|part| part.component_index == component))
+            );
+            assert!(
+                all.iter()
+                    .any(|part| part.component_index == 0 && part.resolution == 6)
+            );
+            let prepared = prepare_htj2k_reduced_component_decode(&input, request)
+                .unwrap()
+                .unwrap();
+            assert!(
+                prepared
+                    .contributions
+                    .iter()
+                    .all(|part| part.component_index == 0 && part.resolution <= 3)
+            );
+            for block in &prepared.contributions {
+                let expected_exponent = [9, 9, 8, 7][usize::from(block.resolution)];
+                assert_eq!(
+                    block.irreversible_quantization_step,
+                    Some(
+                        transform::IrreversibleQuantizationStep::new(expected_exponent, 512)
+                            .unwrap()
+                    )
+                );
+                assert_eq!(block.available_bitplanes, expected_exponent + 2);
+            }
+            let (ow, oh) = (width.div_ceil(8), height.div_ceil(8));
+            assert_eq!(
+                (prepared.output_width(), prepared.output_height()),
+                (ow, oh)
+            );
+            let mut oracle = vec![0.0_f32; (ow * oh) as usize];
+            // The oracle starts from authored quantised coefficients and
+            // explicit per-resolution scales, not parsed quantiser values or
+            // entropy output. Only synthesis is shared with execution.
+            for spec in decomp_subband_specs(ow, oh, 3).unwrap() {
+                let gain = match spec.kind {
+                    PacketSubbandKind::LowLow => 1.0,
+                    PacketSubbandKind::HighHigh => 4.0,
+                    _ => 2.0,
+                };
+                let scale = [0.625, 0.625, 1.25, 2.5][usize::from(spec.resolution)] * gain;
+                for y in 0..spec.height {
+                    for x in 0..spec.width {
+                        let quantised = ((x + 3 * y + 5 * u32::from(spec.index)) % 15) as i32 - 7;
+                        let coefficient = if quantised == 0 {
+                            0.0
+                        } else {
+                            quantised as f32 + 0.5 * quantised.signum() as f32
+                        };
+                        oracle[((spec.y + y) * ow + spec.x + x) as usize] = coefficient * scale;
+                    }
+                }
+            }
+            let mut scratch = vec![0.0; ow.max(oh) as usize * 2];
+            inverse_irreversible_9_7_levels_with_scratch(
+                &mut oracle,
+                ow as usize,
+                ow,
+                oh,
+                3,
+                &mut scratch,
+            )
+            .unwrap();
+            let expected = oracle
+                .iter()
+                .map(|value| (value.round_ties_even() as i32 + 128).clamp(0, 255) as u8)
+                .collect::<Vec<_>>();
+            let decoded = decode_htj2k_reduced_component_owned(&input, request)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                decoded.components[0].samples, expected,
+                "{width}x{height}, {layers}, {precinct}"
+            );
+            assert!(expected.windows(2).any(|pair| pair[0] != pair[1]));
+        }
+    }
+
+    #[test]
     fn heterogeneous_reduced_precision_signedness_and_layer_matrix() {
         let request = Htj2kReducedComponentDecodeRequest {
             component_index: 0,
@@ -51501,6 +51841,120 @@ mod htj2k_reduced_component_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn scalar_derived_reduced_validation_precedence_and_work_are_bounded() {
+        let input = encode_htj2k_scalar_derived_reduced_component_test_fixture(65, 97).unwrap();
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 3,
+        };
+        let parsed = parse(&input).unwrap();
+        let marker = |kind| parsed.markers.iter().find(|m| m.marker == kind).unwrap();
+        let qcc = |component| {
+            parsed
+                .markers
+                .iter()
+                .find(|m| m.marker == Marker::Qcc && input[m.data_offset] == component)
+                .unwrap()
+        };
+        let expected = decode_htj2k_reduced_component_owned(&input, request).unwrap();
+        for offset in [marker(Marker::Qcd).data_offset + 2, qcc(1).data_offset + 3] {
+            let mut changed = input.clone();
+            changed[offset] ^= 1;
+            assert_eq!(
+                decode_htj2k_reduced_component_owned(&changed, request).unwrap(),
+                expected
+            );
+        }
+        let mut changed = input.clone();
+        changed[qcc(0).data_offset + 2] ^= 4; // Change only selected mantissa.
+        assert_ne!(
+            decode_htj2k_reduced_component_owned(&changed, request).unwrap(),
+            expected
+        );
+        for (offset, value) in [
+            (qcc(0).data_offset + 2, 0), // Derived high-resolution exponents collapse.
+            (qcc(1).data_offset + 1, 0x63),
+            (qcc(3).data_offset + 2, 31 << 3),
+            (marker(Marker::Qcd).data_offset, 0x63),
+        ] {
+            let mut changed = input.clone();
+            changed[offset] = value;
+            assert!(prepare_htj2k_reduced_component_decode(&changed, request).is_err());
+        }
+        // A malformed late, unselected packet remains a preparation failure.
+        let tile = parsed.tiles[0];
+        let end = tile.payload_offset.unwrap() + tile.payload_len.unwrap();
+        let mut late = input.clone();
+        late[end - 1] = 0xff;
+        assert!(prepare_htj2k_reduced_component_decode(&late, request).is_err());
+        for count in [1000, 2000, 4000, 8000] {
+            let mut markers = parsed.markers.clone();
+            let index = markers
+                .iter()
+                .position(|marker| marker.marker == Marker::Sot)
+                .unwrap();
+            markers.splice(
+                index..index,
+                core::iter::repeat_n(
+                    MarkerSegment {
+                        marker: Marker::Com,
+                        ..*marker(Marker::Siz)
+                    },
+                    count,
+                ),
+            );
+            let mut visited = 0;
+            assert!(ht_heterogeneous_reduced_markers(
+                markers.iter().inspect(|_| visited += 1)
+            ));
+            assert_eq!(visited, markers.len());
+        }
+        let mut oversized = input.clone();
+        let siz = marker(Marker::Siz).offset;
+        for offset in [siz + 6, siz + 10, siz + 22, siz + 26] {
+            oversized[offset..offset + 4].copy_from_slice(&32768_u32.to_be_bytes());
+        }
+        assert!(!ht_scalar_derived_reduced_envelope(
+            &parse(&oversized).unwrap()
+        ));
+        assert!(prepare_htj2k_reduced_component_decode(&oversized, request).is_err());
+        // Use the first retained single-block LL packet to announce a later
+        // empty HT set. SINGLEHT is invalid; MULTIHT is valid but unsupported.
+        let prepared = prepare_htj2k_reduced_component_decode(&input, request)
+            .unwrap()
+            .unwrap();
+        let first = &prepared.contributions[0];
+        let after = tile.payload_offset.unwrap() + first.payload_offset + first.codeword_len;
+        assert_eq!(input[after], 0);
+        let mut writer = PacketBitWriter::new();
+        writer.write_bit(1).unwrap();
+        writer.write_bit(1).unwrap();
+        write_coding_pass_count(&mut writer, 3).unwrap();
+        writer.write_bit(0).unwrap();
+        let lblock = (usize::BITS - first.codeword_len.leading_zeros()).max(3) as u8;
+        writer.write_bits(0, lblock + 1).unwrap();
+        writer.align();
+        let mut multiple = input.clone();
+        multiple.splice(after..after + 1, writer.bytes().iter().copied());
+        let sot = marker(Marker::Sot).offset;
+        let length = read_u32(&input, sot + 6).unwrap() + writer.bytes().len() as u32 - 1;
+        multiple[sot + 6..sot + 10].copy_from_slice(&length.to_be_bytes());
+        assert!(matches!(
+            validate_part15_packet_signalling(&multiple, &parse(&multiple).unwrap()),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        multiple[marker(Marker::Cap).offset + 8] |= 0x20;
+        assert!(validate_part15_packet_signalling(&multiple, &parse(&multiple).unwrap()).is_ok());
+        assert!(
+            matches!(prepare_htj2k_reduced_component_decode(&multiple, request),
+            Err(CodestreamError::Unsupported { message, .. }) if message.contains("multiple effective HT coding sets"))
+        );
     }
 
     #[test]
