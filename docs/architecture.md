@@ -32,6 +32,10 @@ runtime dependencies.
 
 ## Part 15 signalling and admission
 
+The [HTMIX architecture decision](htmix-disposition.md) records the accepted
+unsupported boundary, the mixed-packet admission correction and the distinct
+block-discovery/state contracts required by any separately authorised change.
+
 The codestream parser retains SIZ, CAP, PRF and CPF as separate structural
 state. CPF identifies the profile of the corresponding Part 1 codestream used
 for reversible transcoding; it is not required to equal the profile field of

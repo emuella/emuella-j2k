@@ -403,6 +403,11 @@ lists `HTMIX` points as `not-applicable` with a deliberately-unsupported
 diagnostic, without invoking the worker for them. It does not turn unsupported
 points into passes or required failures.
 
+The [HTMIX architecture decision](htmix-disposition.md) makes this a deliberate
+support boundary. Project-authored mixed signalling, packet admission, public
+route and caller-atomicity tests preserve it independently of actual MULTIHT
+set multiplicity and the individually qualified HTONLY request envelopes.
+
 The runner applies the same clean catalogue, exact lock, inventory, archive,
 complete-tree, codec checkout and executable-snapshot boundaries as the
 inspection journey. Its deterministic output contains only case, coding-mode,

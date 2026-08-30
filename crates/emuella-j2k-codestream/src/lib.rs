@@ -31071,6 +31071,8 @@ fn precinct_subband_exponents(resolution: u8, packed: u8) -> Option<(u8, u8)> {
 /// trees, and code-block segment lengths. LRCP and RLCP support multiple layers
 /// and resolutions. RPCL, PCRL, and CPRL are supported when the profile's
 /// single-precinct invariant removes the spatial precinct-position axis.
+/// Packet-dependent mixed classic/HT coding is unsupported: marker inspection
+/// does not establish the entropy coder of each individual code-block.
 pub fn parse_default_precinct_lrcp_packets(
     input: &[u8],
     codestream: &Codestream,
@@ -32264,6 +32266,19 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
     let heterogeneous_single_precinct_permission =
         packet_organisation.heterogeneous_single_precinct_permission;
     let component_styles = packet_component_styles(codestream, packet_organisation)?;
+    // A mixed tile-component needs per-block grammar discovery before either
+    // length reader can run. Bit 6 alone is not an HT dispatch decision.
+    if component_styles
+        .iter()
+        .any(|style| style.code_block_style & 0x80 != 0)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "packet-dependent mixed classic/HT code-block grammar is unsupported",
+        ));
+    }
     let coding_style = *component_styles
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
@@ -56921,6 +56936,81 @@ mod part15_signalling_tests {
     }
 
     #[test]
+    fn mixed_packet_admission_requires_block_grammar_discovery() {
+        for style in [0xc0, 0xc2, 0xc8, 0xd0, 0xe0, 0xfa] {
+            for component_override in [false, true] {
+                let mut input = ht_fixture();
+                set_ccap15(&mut input, 0xc000);
+                if component_override {
+                    input = insert_before(
+                        input,
+                        Marker::Qcd,
+                        &[0xff, 0x53, 0, 9, 0, 0, 0, 4, 4, style, 1],
+                    );
+                } else {
+                    let cod = find_marker(&input, 0, Marker::Cod).unwrap();
+                    input[cod + 12] = style;
+                }
+                let parsed = parse(&input).unwrap();
+                assert_eq!(
+                    parsed
+                        .capability
+                        .as_ref()
+                        .unwrap()
+                        .part15
+                        .unwrap()
+                        .code_block_mode,
+                    Part15CodeBlockMode::Mixed
+                );
+                assert!(validate_part15_packet_signalling(&input, &parsed).is_ok());
+                let tile = tile_rects(&parsed).unwrap()[0];
+                // Even an empty payload cannot be read under an invented HT
+                // grammar. Marker validity does not qualify these bytes.
+                for payload in [tile_payload(&input, &parsed.tiles[0]).unwrap(), &[]] {
+                    assert!(matches!(
+                        parse_default_precinct_lrcp_packets(&input, &parsed, tile, payload),
+                        Err(CodestreamError::Unsupported {
+                            construct: UnsupportedConstruct::PacketDecode,
+                            message,
+                            ..
+                        }) if message.contains("mixed classic/HT")
+                    ));
+                }
+                assert!(!is_htj2k_lossless_profile(&input, &parsed));
+                assert!(matches!(
+                    decode_htj2k_lossless_owned(&input),
+                    Err(CodestreamError::Unsupported {
+                        construct: UnsupportedConstruct::HtBlockDecode,
+                        ..
+                    })
+                ));
+            }
+        }
+
+        // Population permission is distinct from the effective packet grammar.
+        // These unchanged project-authored HT packets have no mixed selector.
+        for declaration in [0x0000, 0x2000, 0x8000, 0xc000, 0xe000] {
+            let mut input = ht_fixture();
+            set_ccap15(&mut input, declaration);
+            let parsed = parse(&input).unwrap();
+            let contributions = parse_default_precinct_lrcp_packets(
+                &input,
+                &parsed,
+                tile_rects(&parsed).unwrap()[0],
+                tile_payload(&input, &parsed.tiles[0]).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(contributions.len(), 1);
+            assert!(contributions[0].ht_coded);
+            assert_eq!(contributions[0].ht_coding_set_count(), 1);
+            assert_eq!(
+                is_htj2k_lossless_profile(&input, &parsed),
+                declaration < 0x8000
+            );
+        }
+    }
+
+    #[test]
     fn actual_permission_gated_mechanisms_remain_fail_closed() {
         let mut irreversible = ht_fixture();
         set_ccap15(&mut irreversible, 0x0020);
@@ -57499,13 +57589,14 @@ mod part15_signalling_tests {
             &mixed,
             tile_rects(&mixed).unwrap()[0],
             tile_payload(&structurally_mixed, &mixed.tiles[0]).unwrap(),
-        )
-        .unwrap();
-        assert!(
-            mixed_contributions
-                .iter()
-                .any(|contribution| contribution.ht_coding_set_count() > 1)
         );
+        assert!(matches!(
+            mixed_contributions,
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            })
+        ));
         assert!(matches!(
             htj2k_lossless_profile_unsupported_construct(&structurally_mixed, &mixed),
             Some((UnsupportedConstruct::HtBlockDecode, _))

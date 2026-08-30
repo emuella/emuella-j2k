@@ -50,6 +50,12 @@ full inputs continue
 through the existing HT packet, entropy, reconstruction and public image path;
 this is not general Part 15 or JPEG 2000 conformance.
 
+[HTMIX is deliberately unsupported](docs/htmix-disposition.md), independently
+of MULTIHT permission and the HTONLY envelopes below. Legal mixed signalling
+remains inspectable; packet-dependent mixed classic/HT block interpretation
+does not fall back to either homogeneous decoder. Locked HTMIX points are not
+applicable to the HTONLY qualification claim, not decoded-pixel passes.
+
 A separate raw native ROI window route admits one unit-sampled component with
 1–16-bit signed or unsigned precision, zero origins, one reversible 5/3 level,
 32/64-sample block axes, 128×128/256×256 precincts and one through eight layers.
