@@ -47,6 +47,32 @@ structurally inspectable but outside native decode and packet-semantic
 admission, because a mixed code-block must first be distinguished from a
 classic Part 1 code-block.
 
+Native HTONLY admission is deliberately later than both stages above. The
+profile classifier uses effective main-header COD/COC state and parsed packet
+contributions, rather than treating every `Ccap^15` permission bit as proof
+that its mechanism occurs. Declaration-only permission for multiple HT sets,
+ROI, heterogeneous state or irreversible coding can therefore retain the
+existing native route when the effective mechanisms are still one HT coding
+set per code-block, no RGN use, one supported coding style and reversible 5/3.
+The decoder and support classification share the effective packet-mechanism
+predicate. Actual multiple sets, RGN use, heterogeneous component or
+tile-header state, irreversible coding, HTMIX/HT-declared population modes and
+a cleanup magnitude bound above 18 fail closed. A later zero-byte Cleanup-set
+announcement counts as an actual second set once the first non-empty set has
+appeared; leading zero-byte placeholders do not. Native admission walks the
+complete packet source but retains only the first and latest set once this
+unsupported multiplicity is known. Packet contradictions are
+still validity errors before unsupported-mechanism admission.
+
+This boundary follows ISO/IEC 15444-15:2019, clauses 6.1 and 8.3, normative
+Annex A, A.1–A.4, and Annex B, B.3, PDF pages 10, 31 and 35–41, at retrieval
+revision `10baf9472429d52f5d6b5f9b7a892dbed395b1db`, together with the effective
+COD/COC precedence in ISO/IEC 15444-1:2024, Annex A, A.6.1 and Table A.15, PDF
+pages 46–48, at retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. The admission logic and synthetic
+tests are project-authored and reproduce no protected standards text or
+payload.
+
 ## Bounded reversible HTJ2K encode and JPH output
 
 `encode_htj2k` writes raw HTJ2K codestreams only. Its

@@ -15481,10 +15481,10 @@ mod effective_coding_style_tests {
         let decode_options = DecodeOptions::default();
         let valid_shape = decode_shape(&fixture(), &decode_options).unwrap();
         let info = valid_shape.image_info().unwrap();
-        let mut samples = vec![0x6d; usize::try_from(info.width * info.height).unwrap()];
+        let mut invalid_samples = vec![0x6d; usize::try_from(info.width * info.height).unwrap()];
         {
             let plane = PlaneMut::new(
-                &mut samples,
+                &mut invalid_samples,
                 info.width,
                 info.height,
                 usize::try_from(info.width).unwrap(),
@@ -15501,7 +15501,7 @@ mod effective_coding_style_tests {
                 Err(J2kError::InvalidInput { .. })
             ));
         }
-        assert!(samples.iter().all(|sample| *sample == 0x6d));
+        assert!(invalid_samples.iter().all(|sample| *sample == 0x6d));
 
         let mut broader_capability = fixture();
         let cap = broader_capability
@@ -15509,15 +15509,14 @@ mod effective_coding_style_tests {
             .position(|bytes| bytes == [0xff, 0x50])
             .unwrap();
         broader_capability[cap + 8..cap + 10].copy_from_slice(&0x2000_u16.to_be_bytes());
-        assert!(matches!(
+        assert_eq!(
             inspect(&broader_capability, &InspectOptions::default())
                 .unwrap()
                 .support,
-            SupportStatus::Unsupported {
-                feature: UnsupportedFeature::EntropyCoder,
-                ..
-            }
-        ));
+            SupportStatus::Supported
+        );
+        let broader_owned = decode(&broader_capability, &decode_options).unwrap();
+        assert_eq!(planar_bytes(&broader_owned)[0], samples);
         let mut broader_samples = vec![0x7b; usize::try_from(info.width * info.height).unwrap()];
         {
             let plane = PlaneMut::new(
@@ -15533,15 +15532,106 @@ mod effective_coding_style_tests {
                 info: &info,
                 planes: &mut planes,
             };
+            decode_into(&broader_capability, &mut target, &decode_options).unwrap();
+        }
+        assert_eq!(broader_samples, samples);
+
+        let mut actual_multiple_sets =
+            codestream::encode_htj2k_two_layer_multiple_set_test_fixture(false).unwrap();
+        let cap = actual_multiple_sets
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x50])
+            .unwrap();
+        actual_multiple_sets[cap + 8..cap + 10].copy_from_slice(&0x2000_u16.to_be_bytes());
+        assert!(matches!(
+            inspect(&actual_multiple_sets, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::EntropyCoder,
+                ref detail,
+            } if detail.contains("multiple effective HT coding sets")
+        ));
+        let mut multiple_set_samples =
+            vec![0x7b; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut multiple_set_samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
             assert!(matches!(
-                decode_into(&broader_capability, &mut target, &decode_options),
+                decode_into(&actual_multiple_sets, &mut target, &decode_options),
                 Err(J2kError::Unsupported {
                     feature: UnsupportedFeature::EntropyCoder,
                     ..
                 })
             ));
         }
-        assert!(broader_samples.iter().all(|sample| *sample == 0x7b));
+        assert!(multiple_set_samples.iter().all(|sample| *sample == 0x7b));
+
+        let empty_second_singleht =
+            codestream::encode_htj2k_two_layer_empty_second_set_test_fixture().unwrap();
+        assert!(matches!(
+            inspect(&empty_second_singleht, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { ref message, .. })
+                if message.contains("SINGLEHT")
+        ));
+        let mut empty_second_multiht = empty_second_singleht;
+        let cap = empty_second_multiht
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x50])
+            .unwrap();
+        empty_second_multiht[cap + 8..cap + 10].copy_from_slice(&0x2000_u16.to_be_bytes());
+        assert!(matches!(
+            inspect(&empty_second_multiht, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::EntropyCoder,
+                ref detail,
+            } if detail.contains("multiple effective HT coding sets")
+        ));
+        assert!(matches!(
+            decode(&empty_second_multiht, &decode_options),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::EntropyCoder,
+                ..
+            })
+        ));
+        let mut empty_second_samples =
+            vec![0x4e; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut empty_second_samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&empty_second_multiht, &mut target, &decode_options),
+                Err(J2kError::Unsupported {
+                    feature: UnsupportedFeature::EntropyCoder,
+                    ..
+                })
+            ));
+        }
+        assert!(empty_second_samples.iter().all(|sample| *sample == 0x4e));
 
         for split_across_tile_parts in [false, true] {
             let mut contradictory_sets =

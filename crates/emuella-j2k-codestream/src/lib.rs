@@ -6596,8 +6596,10 @@ pub struct PacketCodeBlockContribution {
     /// existing contribution fields describe that set without another
     /// allocation.
     pub ht_coded: bool,
-    /// All independently decodable HT coding sets when more than one set is
-    /// retained. Empty for classic Tier-1 and the common one-set HT case.
+    /// All retained HT coding-set announcements when more than one set is
+    /// present. A later empty set is retained as a zero-byte, zero-pass entry
+    /// for validity and admission. Empty for classic Tier-1 and the common
+    /// one-set HT case.
     pub expanded_ht_coding_sets: Option<Box<[HtCodeBlockCodingSet]>>,
 }
 
@@ -6615,8 +6617,8 @@ impl PacketCodeBlockContribution {
         })
     }
 
-    /// Returns all independently decodable HT coding sets in packet/layer
-    /// order.
+    /// Returns all retained HT coding-set announcements in packet/layer order.
+    /// A zero-byte, zero-pass item represents a later empty set.
     pub fn ht_coding_sets(&self) -> impl Iterator<Item = HtCodeBlockCodingSet> + '_ {
         let expanded = self.expanded_ht_coding_sets.as_deref().unwrap_or(&[]);
         let inline = expanded
@@ -6626,7 +6628,7 @@ impl PacketCodeBlockContribution {
         inline.into_iter().chain(expanded.iter().copied())
     }
 
-    /// Returns the last independently decodable HT coding set.
+    /// Returns the last retained HT coding-set announcement.
     pub fn final_ht_coding_set(&self) -> Option<HtCodeBlockCodingSet> {
         self.expanded_ht_coding_sets
             .as_deref()
@@ -6635,7 +6637,7 @@ impl PacketCodeBlockContribution {
             .or_else(|| self.inline_ht_coding_set())
     }
 
-    /// Returns the number of independently decodable HT coding sets.
+    /// Returns the number of effective HT coding-set announcements.
     pub fn ht_coding_set_count(&self) -> usize {
         self.expanded_ht_coding_sets
             .as_deref()
@@ -6643,7 +6645,10 @@ impl PacketCodeBlockContribution {
     }
 }
 
-/// One independently decodable HT Cleanup plus optional SPP/MRP set.
+/// One retained HT Cleanup plus optional SPP/MRP set announcement.
+///
+/// A zero-byte, zero-pass value represents a later empty set for Part 15
+/// validity and native admission; it is never dispatched for block decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HtCodeBlockCodingSet {
     /// Byte offset within the contribution's concatenated code-block bytes.
@@ -9607,6 +9612,65 @@ fn repeated_cleanup_second_ht_set_packet(cleanup: &[u8]) -> Result<Vec<u8>> {
     let mut packet = writer.bytes().to_vec();
     packet.extend_from_slice(cleanup);
     Ok(packet)
+}
+
+/// Build a deterministic two-layer HT fixture whose second layer announces a
+/// second Cleanup set with no bytes after the first non-empty set.
+///
+/// This is project test infrastructure for Part 15 packet validity and native
+/// admission, not a supported general-purpose multi-set encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_two_layer_empty_second_set_test_fixture() -> Result<Vec<u8>> {
+    encode_htj2k_empty_later_sets_test_fixture(2)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn encode_htj2k_empty_later_sets_test_fixture(layers: u16) -> Result<Vec<u8>> {
+    if layers < 2 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let samples = (0_u8..64).collect::<Vec<_>>();
+    let mut codestream = encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+        width: 8,
+        height: 8,
+        samples: &samples,
+        stride_bytes: 8,
+    })?;
+    let mut writer = PacketBitWriter::new();
+    writer.write_bit(1)?;
+    writer.write_bit(1)?;
+    write_coding_pass_count(&mut writer, 3)?;
+    writer.write_bit(0)?;
+    writer.write_bits(0, 4)?;
+    writer.align();
+    let empty_later_packet = writer.bytes();
+    let empty_packet_count = usize::from(layers - 1);
+    let added_len = empty_later_packet
+        .len()
+        .checked_mul(empty_packet_count)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut empty_later_packets = Vec::new();
+    empty_later_packets
+        .try_reserve_exact(added_len)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    for _ in 0..empty_packet_count {
+        empty_later_packets.extend_from_slice(empty_later_packet);
+    }
+
+    let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[cod + 6..cod + 8].copy_from_slice(&layers.to_be_bytes());
+    let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
+    let psot = read_u32(&codestream, sot + 6)?;
+    let eoc = find_marker(&codestream, sot, Marker::Eoc).ok_or(CodestreamError::SizeOverflow)?;
+    codestream.splice(eoc..eoc, empty_later_packets);
+    codestream[sot + 6..sot + 10].copy_from_slice(
+        &psot
+            .checked_add(u32::try_from(added_len).map_err(|_| CodestreamError::SizeOverflow)?)
+            .ok_or(CodestreamError::SizeOverflow)?
+            .to_be_bytes(),
+    );
+    Ok(codestream)
 }
 
 /// Build a deterministic one-decomposition, two-layer HT fixture in which
@@ -30942,6 +31006,42 @@ fn parse_default_precinct_packets_from_source(
     packet_organisation: PacketOrganisationConfig,
     physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
+    parse_default_precinct_packets_from_source_with_ht_retention(
+        input,
+        codestream,
+        tile_rect,
+        payload,
+        max_layers,
+        max_resolution,
+        selected_components,
+        packet_organisation,
+        physical_tile_part_order,
+        HtCodingSetRetention::Complete,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtCodingSetRetention {
+    /// Preserve every set for the general packet API and reconstruction paths.
+    Complete,
+    /// Preserve the first and latest sets. Native admission only needs to know
+    /// that a second set exists, but still walks and validates every packet.
+    NativeAdmission,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_default_precinct_packets_from_source_with_ht_retention(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_rect: TileRect,
+    payload: &dyn PacketByteSource,
+    max_layers: Option<u16>,
+    max_resolution: Option<u8>,
+    selected_components: Option<&[u16]>,
+    packet_organisation: PacketOrganisationConfig,
+    physical_tile_part_order: Option<&[TilePartOrderEntry]>,
+    ht_coding_set_retention: HtCodingSetRetention,
+) -> Result<ParsedPacketContributions> {
     let part15_single_ht_declared = codestream
         .capability
         .as_ref()
@@ -31479,11 +31579,12 @@ fn parse_default_precinct_packets_from_source(
                                         / 3
                                         * 3;
                                     let actual_start = first_coding_pass.max(final_set_start);
-                                    let actual_set_index = u8::try_from(actual_start / 3)
-                                        .map_err(|_| CodestreamError::SizeOverflow)?;
+                                    let actual_set_index = actual_start / 3;
+                                    let first_non_empty_set =
+                                        subband.first_non_empty_ht_set[code_block_index];
                                     if part15_single_ht_declared
                                         && actual_start.is_multiple_of(3)
-                                        && subband.first_non_empty_ht_set[code_block_index]
+                                        && first_non_empty_set
                                             .is_some_and(|first| first != actual_set_index)
                                     {
                                         return Err(part15_single_ht_error(codestream));
@@ -31495,30 +31596,60 @@ fn parse_default_precinct_packets_from_source(
                                         subband.first_non_empty_ht_set[code_block_index] =
                                             Some(actual_set_index);
                                     }
-                                    let ht_missing_bitplanes = cleanup_set.map_or_else(
-                                        || {
-                                            Ok::<_, CodestreamError>(
-                                                subband.missing_most_significant_bitplanes
-                                                    [code_block_index],
+                                    let starts_non_empty_ht_set = cleanup_set
+                                        .is_some_and(|(_, cleanup_len)| cleanup_len != 0);
+                                    let starts_effective_ht_set = actual_start.is_multiple_of(3)
+                                        && (starts_non_empty_ht_set
+                                            || first_non_empty_set.is_some());
+                                    let ht_missing_bitplanes = if starts_effective_ht_set
+                                        && starts_non_empty_ht_set
+                                    {
+                                        subband.missing_most_significant_bitplanes[code_block_index]
+                                            .checked_add(
+                                                u8::try_from(actual_set_index)
+                                                    .map_err(|_| CodestreamError::SizeOverflow)?,
                                             )
-                                        },
-                                        |(set_index, _)| {
-                                            subband.missing_most_significant_bitplanes
-                                                [code_block_index]
-                                                .checked_add(set_index)
-                                                .ok_or(CodestreamError::SizeOverflow)
-                                        },
-                                    )?;
-                                    let ht_coding_set = cleanup_set.map(|(_, cleanup_byte_len)| {
-                                        HtCodeBlockCodingSet {
+                                            .ok_or(CodestreamError::SizeOverflow)?
+                                    } else if starts_effective_ht_set {
+                                        subband.missing_most_significant_bitplanes[code_block_index]
+                                    } else {
+                                        cleanup_set.map_or_else(
+                                            || {
+                                                Ok::<_, CodestreamError>(
+                                                    subband.missing_most_significant_bitplanes
+                                                        [code_block_index],
+                                                )
+                                            },
+                                            |(set_index, _)| {
+                                                subband.missing_most_significant_bitplanes
+                                                    [code_block_index]
+                                                    .checked_add(set_index)
+                                                    .ok_or(CodestreamError::SizeOverflow)
+                                            },
+                                        )?
+                                    };
+                                    let ht_coding_set = if starts_effective_ht_set {
+                                        Some(HtCodeBlockCodingSet {
                                             byte_offset: 0,
                                             byte_len: codeword_len,
-                                            cleanup_byte_len,
+                                            cleanup_byte_len: cleanup_set
+                                                .map_or(0, |(_, cleanup_len)| cleanup_len),
                                             coding_passes,
                                             missing_most_significant_bitplanes:
                                                 ht_missing_bitplanes,
-                                        }
-                                    });
+                                        })
+                                    } else {
+                                        cleanup_set.map(|(_, cleanup_byte_len)| {
+                                            HtCodeBlockCodingSet {
+                                                byte_offset: 0,
+                                                byte_len: codeword_len,
+                                                cleanup_byte_len,
+                                                coding_passes,
+                                                missing_most_significant_bitplanes:
+                                                    ht_missing_bitplanes,
+                                            }
+                                        })
+                                    };
                                     (
                                         codeword_len,
                                         coding_segments,
@@ -31574,7 +31705,7 @@ fn parse_default_precinct_packets_from_source(
                             subband.coding_passes[code_block_index] = first_coding_pass
                                 .checked_add(announced_coding_passes)
                                 .ok_or(CodestreamError::SizeOverflow)?;
-                            if ht_coded && codeword_len == 0 {
+                            if ht_coded && codeword_len == 0 && ht_coding_set.is_none() {
                                 continue;
                             }
                             packet_contributions.push(PendingPacketContribution {
@@ -31643,6 +31774,7 @@ fn parse_default_precinct_packets_from_source(
                             &mut contribution_indices,
                             pending,
                             segment_offset,
+                            ht_coding_set_retention,
                         )?;
                     } else {
                         push_default_precinct_contribution(
@@ -34434,6 +34566,7 @@ fn append_default_precinct_contribution(
     contribution_indices: &mut BTreeMap<PacketCodeBlockKey, usize>,
     mut pending: PendingPacketContribution,
     segment_offset: usize,
+    ht_coding_set_retention: HtCodingSetRetention,
 ) -> Result<()> {
     let key = PacketCodeBlockKey {
         component_index: pending.component_index,
@@ -34450,16 +34583,12 @@ fn append_default_precinct_contribution(
         let contribution = contributions
             .get_mut(index)
             .ok_or(CodestreamError::SizeOverflow)?;
-        if contribution.segment_ranges.is_empty() {
-            contribution
-                .segment_ranges
-                .push(PacketCodeBlockSegmentRange {
-                    payload_offset: contribution.payload_offset,
-                    codeword_len: contribution.codeword_len,
-                });
-        }
+        let mut retained_empty_ht_set = false;
         if let Some(mut coding_set) = pending.ht_coding_set.take() {
-            if coding_set.cleanup_byte_len == 0 {
+            let empty_set_announcement = coding_set.cleanup_byte_len == 0
+                && coding_set.byte_len == 0
+                && coding_set.coding_passes == 0;
+            if coding_set.cleanup_byte_len == 0 && !empty_set_announcement {
                 if contribution.expanded_ht_coding_sets.is_none() {
                     if !contribution.ht_coded
                         || contribution.missing_most_significant_bitplanes
@@ -34527,6 +34656,16 @@ fn append_default_precinct_contribution(
                         .ok_or(CodestreamError::SizeOverflow)?;
                     contribution.expanded_ht_coding_sets =
                         Some(alloc::vec![first, coding_set].into_boxed_slice());
+                } else if ht_coding_set_retention == HtCodingSetRetention::NativeAdmission {
+                    // Multiplicity is already represented by the two retained
+                    // entries. Keep the latest set for subsequent refinement
+                    // validation without growing state for an unsupported path.
+                    let latest = contribution
+                        .expanded_ht_coding_sets
+                        .as_deref_mut()
+                        .and_then(<[HtCodeBlockCodingSet]>::last_mut)
+                        .ok_or(CodestreamError::SizeOverflow)?;
+                    *latest = coding_set;
                 } else {
                     let mut coding_sets = Vec::from(
                         contribution
@@ -34537,7 +34676,19 @@ fn append_default_precinct_contribution(
                     coding_sets.push(coding_set);
                     contribution.expanded_ht_coding_sets = Some(coding_sets.into_boxed_slice());
                 }
+                retained_empty_ht_set = empty_set_announcement;
             }
+        }
+        if retained_empty_ht_set {
+            return Ok(());
+        }
+        if contribution.segment_ranges.is_empty() {
+            contribution
+                .segment_ranges
+                .push(PacketCodeBlockSegmentRange {
+                    payload_offset: contribution.payload_offset,
+                    codeword_len: contribution.codeword_len,
+                });
         }
         contribution.coding_passes = contribution
             .coding_passes
@@ -37797,7 +37948,7 @@ struct DefaultPrecinctSubband {
     included: Vec<bool>,
     l_block: Vec<u8>,
     coding_passes: Vec<u16>,
-    first_non_empty_ht_set: Vec<Option<u8>>,
+    first_non_empty_ht_set: Vec<Option<u16>>,
     missing_most_significant_bitplanes: Vec<u8>,
 }
 
@@ -46197,14 +46348,17 @@ fn classify_htj2k_lossless_profile_markers(
             "native HTJ2K decode supports only an HTONLY Part 15 declaration",
         ));
     }
-    if part15.multiple_ht_sets_allowed
-        || part15.roi_allowed
-        || part15.heterogeneous_allowed
-        || part15.irreversible_allowed
+    // Permission bits describe mechanisms that may occur. Native admission is
+    // based on the effective marker and packet state below, after structural
+    // Part 15 validation has already retained the declarations.
+    if codestream
+        .markers
+        .iter()
+        .any(|segment| segment.marker == Marker::Rgn)
     {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::HtBlockDecode,
-            "native HTJ2K decode does not admit broader Ccap^15 capability declarations",
+            "native HTJ2K decode does not implement the ROI mechanism declared by an RGN marker",
         ));
     }
     if part15.cleanup_magnitude_bound > 18 {
@@ -46229,7 +46383,35 @@ fn classify_htj2k_lossless_profile_markers(
             "native HTJ2K decode does not admit packet-dependent mixed SPcod/SPcoc signalling",
         ));
     }
-
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map_or(usize::MAX, |segment| segment.offset);
+    if codestream.markers.iter().any(|segment| {
+        segment.offset > first_tile_offset
+            && matches!(
+                segment.marker,
+                Marker::Coc | Marker::Qcd | Marker::Qcc | Marker::Poc | Marker::Ppt
+            )
+    }) {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K decode does not implement heterogeneous tile-header coding, quantisation, progression, or packet-header state",
+        ));
+    }
+    let effective_style = codestream.uniform_effective_coding_style().ok_or_else(|| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K decode does not implement heterogeneous effective COD/COC state",
+        )
+    })?;
+    if effective_style.transform != WaveletTransform::Reversible53 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::WaveletTransform,
+            "native HTJ2K lossless decode does not implement the effective irreversible transform mechanism",
+        ));
+    }
     match ht_decode_candidate(codestream) {
         Some(Ok(_candidate)) => {}
         Some(Err(classification)) => {
@@ -46337,6 +46519,16 @@ fn classify_htj2k_lossless_profile(
             "native HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides",
         ));
     }
+    if codestream
+        .markers
+        .iter()
+        .any(|segment| segment.marker == Marker::Qcc)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K decode does not implement component-specific quantisation",
+        ));
+    }
 
     match ht_reversible_code_block_transfer(input, codestream) {
         Ok(Some(_transfer)) => {}
@@ -46374,39 +46566,41 @@ fn classify_htj2k_lossless_profile(
             ));
         }
     }
+    let single_tile = tile_rects.len() == 1;
 
     for tile_rect in tile_rects {
-        let Some(tile_part) = codestream
-            .tiles
-            .iter()
-            .find(|tile| tile.tile_index == tile_rect.tile_index)
-        else {
-            return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::MarkerSegment,
-                "native HTJ2K lossless decode requires retained payload state for every tile",
-            ));
-        };
-        let payload = tile_payload(input, tile_part).map_err(|_| {
+        let payload = tile_payload_spans_for_rect(input, codestream, tile_rect).map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
                 UnsupportedConstruct::MarkerSegment,
                 "native HTJ2K lossless decode requires retained payload state for every tile",
             )
         })?;
-        let contributions = parse_default_precinct_lrcp_packets(
-            input, codestream, tile_rect, payload,
+        let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
+            input,
+            codestream,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+            HtCodingSetRetention::NativeAdmission,
         )
         .map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
                 UnsupportedConstruct::PacketDecode,
                 "native HTJ2K lossless packet parsing failed for the admitted marker profile",
             )
-        })?;
-        if !ht_contributions_have_supported_final_sets(&contributions) {
-            return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::HtBlockDecode,
-                "native HTJ2K lossless decode requires an HT final coding set of one through three passes for every contribution",
-            ));
-        }
+        })?
+        .contributions;
+        classify_htonly_native_packet_mechanisms(&contributions)?;
+    }
+    if single_tile && codestream.tiles.len() != 1 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native single-tile HTJ2K lossless decode requires one tile-part payload",
+        ));
     }
 
     Ok(())
@@ -47834,6 +48028,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
         ));
     }
+    validate_htonly_permission_effective_packet_mechanisms(input, &codestream)?;
 
     let candidate = match ht_decode_candidate(&codestream) {
         Some(Ok(candidate)) => candidate,
@@ -47964,6 +48159,8 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
     let contributions =
         parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
 
     let stride = usize::try_from(tile_rect.width).map_err(|_| CodestreamError::SizeOverflow)?;
     let height = usize::try_from(tile_rect.height).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -48272,6 +48469,8 @@ fn decode_htj2k_multitile_tile_components(
         .ok_or(CodestreamError::SizeOverflow)?;
     let payload = tile_payload(input, &tile_part)?;
     let contributions = parse_default_precinct_lrcp_packets(input, codestream, tile_rect, payload)?;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
     let stride = usize::try_from(tile_rect.width).map_err(|_| CodestreamError::SizeOverflow)?;
     let height = usize::try_from(tile_rect.height).map_err(|_| CodestreamError::SizeOverflow)?;
     let plane_len = stride
@@ -49419,6 +49618,66 @@ fn ht_contributions_have_supported_final_sets(
                     }),
             )
     })
+}
+
+#[cfg(feature = "std")]
+fn classify_htonly_native_packet_mechanisms(
+    contributions: &[PacketCodeBlockContribution],
+) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
+    if contributions
+        .iter()
+        .any(|contribution| contribution.ht_coding_set_count() > 1)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K decode does not implement multiple effective HT coding sets for one code-block",
+        ));
+    }
+    if !ht_contributions_have_supported_final_sets(contributions) {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K lossless decode requires an HT final coding set of one through three passes for every contribution",
+        ));
+    }
+    Ok(())
+}
+
+/// Recheck packet mechanisms when Ccap^15 permits multiple sets. SINGLEHT
+/// declarations have already taken the validity path; this path distinguishes
+/// a declaration-only permission from an actual unsupported mechanism.
+#[cfg(feature = "std")]
+fn validate_htonly_permission_effective_packet_mechanisms(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Result<()> {
+    let multiple_sets_declared = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .is_some_and(|part15| part15.multiple_ht_sets_allowed);
+    if !multiple_sets_declared {
+        return Ok(());
+    }
+    for tile_rect in tile_rects(codestream)? {
+        let payload = tile_payload_spans_for_rect(input, codestream, tile_rect)?;
+        let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
+            input,
+            codestream,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+            HtCodingSetRetention::NativeAdmission,
+        )?
+        .contributions;
+        classify_htonly_native_packet_mechanisms(&contributions).map_err(|diagnostic| {
+            unsupported(None, None, diagnostic.construct, diagnostic.detail)
+        })?;
+    }
+    Ok(())
 }
 
 /// Decode the zero-decomposition subset with caller-retained workspace.
@@ -51861,29 +52120,7 @@ mod part15_signalling_tests {
     }
 
     fn empty_second_ht_set_fixture() -> Vec<u8> {
-        let mut codestream = ht_fixture();
-        let mut writer = PacketBitWriter::new();
-        writer.write_bit(1).unwrap();
-        writer.write_bit(1).unwrap();
-        write_coding_pass_count(&mut writer, 3).unwrap();
-        writer.write_bit(0).unwrap();
-        writer.write_bits(0, 4).unwrap();
-        writer.align();
-        let second_layer = writer.bytes();
-
-        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
-        codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
-        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
-        let psot = read_u32(&codestream, sot + 6).unwrap();
-        let eoc = find_marker(&codestream, sot, Marker::Eoc).unwrap();
-        codestream.splice(eoc..eoc, second_layer.iter().copied());
-        codestream[sot + 6..sot + 10].copy_from_slice(
-            &psot
-                .checked_add(u32::try_from(second_layer.len()).unwrap())
-                .unwrap()
-                .to_be_bytes(),
-        );
-        codestream
+        encode_htj2k_two_layer_empty_second_set_test_fixture().unwrap()
     }
 
     fn move_rgn_to_second_tile_part(mut codestream: Vec<u8>, rgn: &[u8]) -> Vec<u8> {
@@ -52059,30 +52296,33 @@ mod part15_signalling_tests {
     }
 
     #[test]
-    fn legal_broader_part15_declarations_parse_but_are_not_natively_admitted() {
-        for ccap in [0x8000, 0x2000, 0x1000, 0x0800, 0x0020, 0x000b] {
+    fn declaration_only_part15_permissions_use_the_effective_htonly_mechanisms() {
+        let expected = (0_u8..64).collect::<Vec<_>>();
+        for ccap in [0x2000, 0x1000, 0x0800, 0x0020] {
             let mut codestream = ht_fixture();
             set_ccap15(&mut codestream, ccap);
             let parsed = parse(&codestream).unwrap();
             assert_eq!(parsed.kind, CodestreamKind::Htj2k);
+            assert_eq!(
+                htj2k_lossless_profile_unsupported_construct(&codestream, &parsed),
+                None
+            );
+            let decoded = decode_htj2k_lossless_owned(&codestream).unwrap().unwrap();
+            assert_eq!(decoded.components[0].samples, expected);
+            let mut workspace = HtCodestreamDecodeWorkspace::new();
+            let decoded = decode_htj2k_lossless_owned_with_workspace(&codestream, &mut workspace)
+                .unwrap()
+                .unwrap();
+            assert_eq!(decoded.components[0].samples, expected);
+        }
+
+        for ccap in [0x8000, 0x000b] {
+            let mut codestream = ht_fixture();
+            set_ccap15(&mut codestream, ccap);
+            let parsed = parse(&codestream).unwrap();
             assert!(matches!(
                 htj2k_lossless_profile_unsupported_construct(&codestream, &parsed),
                 Some((UnsupportedConstruct::HtBlockDecode, _))
-            ));
-            assert!(matches!(
-                decode_htj2k_lossless_owned(&codestream),
-                Err(CodestreamError::Unsupported {
-                    construct: UnsupportedConstruct::HtBlockDecode,
-                    ..
-                })
-            ));
-            let mut workspace = HtCodestreamDecodeWorkspace::new();
-            assert!(matches!(
-                decode_htj2k_lossless_owned_with_workspace(&codestream, &mut workspace),
-                Err(CodestreamError::Unsupported {
-                    construct: UnsupportedConstruct::HtBlockDecode,
-                    ..
-                })
             ));
         }
 
@@ -52094,6 +52334,34 @@ mod part15_signalling_tests {
         assert!(matches!(
             htj2k_lossless_profile_unsupported_construct(&mixed, &parsed),
             Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
+    }
+
+    #[test]
+    fn actual_permission_gated_mechanisms_remain_fail_closed() {
+        let mut irreversible = ht_fixture();
+        set_ccap15(&mut irreversible, 0x0020);
+        let cod = find_marker(&irreversible, 0, Marker::Cod).unwrap();
+        irreversible[cod + 13] = 0;
+        let parsed = parse(&irreversible).unwrap();
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&irreversible, &parsed),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail.contains("effective irreversible transform")
+        ));
+
+        let mut heterogeneous = ht_fixture();
+        set_ccap15(&mut heterogeneous, 0x0800);
+        let cod = find_marker(&heterogeneous, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&heterogeneous, cod + 2).unwrap());
+        let mut tile_cod = heterogeneous[cod..cod + 2 + lcod].to_vec();
+        tile_cod[6..8].copy_from_slice(&2_u16.to_be_bytes());
+        let heterogeneous = insert_tile_header(heterogeneous, &tile_cod);
+        let parsed = parse(&heterogeneous).unwrap();
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&heterogeneous, &parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("tile-header COD")
         ));
     }
 
@@ -52465,6 +52733,86 @@ mod part15_signalling_tests {
                 ..
             })
         ));
+
+        let mut multiht_empty_second = empty_second;
+        set_ccap15(&mut multiht_empty_second, 0x2000);
+        let parsed = parse(&multiht_empty_second).unwrap();
+        validate_part15_packet_signalling(&multiht_empty_second, &parsed).unwrap();
+        let contributions = parse_default_precinct_lrcp_packets(
+            &multiht_empty_second,
+            &parsed,
+            tile_rects(&parsed).unwrap()[0],
+            tile_payload(&multiht_empty_second, &parsed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].ht_coding_set_count(), 2);
+        let empty_set = contributions[0].final_ht_coding_set().unwrap();
+        assert_eq!((empty_set.byte_len, empty_set.coding_passes), (0, 0));
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&multiht_empty_second, &parsed),
+            Some((UnsupportedConstruct::HtBlockDecode, detail))
+                if detail.contains("multiple effective HT coding sets")
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&multiht_empty_second),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn native_admission_bounds_the_maximum_empty_ht_set_sequence() {
+        // The first packet announces one pass and every later packet announces
+        // three; one more layer would exceed the u16 coding-pass domain.
+        const LAYERS: u16 = 21_845;
+
+        let mut codestream = encode_htj2k_empty_later_sets_test_fixture(LAYERS).unwrap();
+        set_ccap15(&mut codestream, 0x2000);
+        let parsed = parse(&codestream).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let payload = tile_payload_spans_for_rect(&codestream, &parsed, tile_rect).unwrap();
+        let parsed_packets = parse_default_precinct_packets_from_source_with_ht_retention(
+            &codestream,
+            &parsed,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+            HtCodingSetRetention::NativeAdmission,
+        )
+        .unwrap();
+
+        assert_eq!(parsed_packets.packet_count, u64::from(LAYERS));
+        assert_eq!(parsed_packets.contributions.len(), 1);
+        let contribution = &parsed_packets.contributions[0];
+        assert_eq!(contribution.ht_coding_set_count(), 2);
+        assert_eq!(
+            contribution
+                .expanded_ht_coding_sets
+                .as_deref()
+                .map(<[HtCodeBlockCodingSet]>::len),
+            Some(2)
+        );
+        assert!(matches!(
+            classify_htonly_native_packet_mechanisms(&parsed_packets.contributions),
+            Err(Htj2kLosslessProfileDiagnostic {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&codestream),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -52528,17 +52876,15 @@ mod part15_signalling_tests {
     }
 
     #[test]
-    fn support_diagnostic_requires_separate_part15_validity() {
-        let mut legal_but_unsupported = ht_fixture();
-        set_ccap15(&mut legal_but_unsupported, 0x1000);
-        let legal = parse(&legal_but_unsupported).unwrap();
-        assert!(validate_part15_packet_signalling(&legal_but_unsupported, &legal).is_ok());
-        let legal_diagnostic =
-            htj2k_lossless_profile_unsupported_construct(&legal_but_unsupported, &legal);
-        assert!(matches!(
-            legal_diagnostic,
-            Some((UnsupportedConstruct::HtBlockDecode, _))
-        ));
+    fn part15_validity_precedes_effective_mechanism_admission() {
+        let mut legal_declaration_only = ht_fixture();
+        set_ccap15(&mut legal_declaration_only, 0x1000);
+        let legal = parse(&legal_declaration_only).unwrap();
+        assert!(validate_part15_packet_signalling(&legal_declaration_only, &legal).is_ok());
+        assert_eq!(
+            htj2k_lossless_profile_unsupported_construct(&legal_declaration_only, &legal),
+            None
+        );
 
         let mut invalid_and_unsupported = multiple_ht_set_fixture();
         set_ccap15(&mut invalid_and_unsupported, 0x1000);
@@ -52554,9 +52900,9 @@ mod part15_signalling_tests {
             &invalid_and_unsupported,
             &invalid
         ));
-        assert_eq!(
-            htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid),
-            legal_diagnostic
+        assert!(
+            htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid)
+                .is_some()
         );
 
         let mut structurally_mixed = multiple_ht_set_fixture();

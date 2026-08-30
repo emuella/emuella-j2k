@@ -164,6 +164,37 @@ the repository.
 
 ### HTJ2K DS0 qualification
 
+The native HTONLY admission foundation is qualified separately from structural
+syntax and packet validity. Project-authored 8 × 8 inputs mutate only the
+structured `Ccap^15` value and decode through the ordinary public native API.
+The `0x2000` declaration-only multiple-set permission reproduces every expected
+sample exactly; declaration-only ROI, heterogeneous and irreversible
+permissions exercise the same effective-mechanism boundary in codestream
+tests. This calibration selected permission widening because the unchanged
+packet contribution contains one effective HT coding set and the existing HT
+entropy and reconstruction route already produces exact pixels.
+
+Negative synthetic cases keep the stages distinct. A SINGLEHT declaration over
+an actual second HT set is an invalid CAP contradiction before support
+admission, including when the sets span tile parts. With multiple sets
+permitted, the same actual mechanism is structurally valid but remains an
+unsupported native mechanism and cannot modify caller-owned output. This
+includes a later zero-byte second Cleanup-set announcement after the first
+non-empty set; leading zero-byte placeholders remain excluded. A maximum
+checked-pass-count sequence proves native admission consumes every packet but
+retains only two set records before rejecting multiplicity. Actual RGN use,
+heterogeneous tile-header coding, irreversible coding, HTMIX/HT-declared
+population modes and excessive cleanup magnitude bounds remain fail closed.
+These tests qualify only admission to the existing bounded lossless HT decode;
+they do not qualify other Part 15 mechanisms or claim general conformance.
+
+The standards route is ISO/IEC 15444-15:2019, clauses 6.1 and 8.3, Annex A,
+A.1–A.4, and Annex B, B.3, PDF pages 10, 31 and 35–41, at retrieval revision
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db`, plus ISO/IEC 15444-1:2024, Annex
+A, A.6.1 and Table A.15, PDF pages 46–48, at retrieval revision
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. All mutations, samples and
+assertions are project-authored.
+
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
 and the capability claim in `testdata.lock.toml`:
 
