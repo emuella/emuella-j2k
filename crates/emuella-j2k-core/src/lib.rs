@@ -891,8 +891,24 @@ mod jp2_header_validation_tests {
     }
 
     fn append_valid_optional_presentation(input: &mut Vec<u8>, first: container::FourCc) {
-        let palette = presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]);
-        let mapping = presentation_box(container::boxes::COMPONENT_MAPPING, &[0, 0, 1, 0]);
+        let image_header = box_offset(input, container::boxes::IMAGE_HEADER);
+        let components = u16::from_be_bytes(
+            input[image_header + 16..image_header + 18]
+                .try_into()
+                .unwrap(),
+        );
+        let required_colours = if components == 1 { 1_u8 } else { 3 };
+        let presentation_channels =
+            required_colours + u8::from(first == container::boxes::CHANNEL_DEFINITION);
+        let mut palette_payload = vec![0, 1, presentation_channels];
+        palette_payload.extend(core::iter::repeat_n(7, usize::from(presentation_channels)));
+        palette_payload.extend(core::iter::repeat_n(0, usize::from(presentation_channels)));
+        let palette = presentation_box(container::boxes::PALETTE, &palette_payload);
+        let mut mapping_payload = Vec::new();
+        for column in 0..presentation_channels {
+            mapping_payload.extend_from_slice(&[0, 0, 1, column]);
+        }
+        let mapping = presentation_box(container::boxes::COMPONENT_MAPPING, &mapping_payload);
         match first {
             container::boxes::PALETTE => {
                 append_jp2_header_child(input, palette);
@@ -902,13 +918,24 @@ mod jp2_header_validation_tests {
                 append_jp2_header_child(input, mapping);
                 append_jp2_header_child(input, palette);
             }
-            container::boxes::CHANNEL_DEFINITION => append_jp2_header_child(
-                input,
-                presentation_box(
-                    container::boxes::CHANNEL_DEFINITION,
-                    &[0, 1, 0, 0, 0, 0, 0, 1],
-                ),
-            ),
+            container::boxes::CHANNEL_DEFINITION => {
+                let mut definition = Vec::new();
+                definition.extend_from_slice(&u16::from(presentation_channels).to_be_bytes());
+                for colour in 0..required_colours {
+                    definition.extend_from_slice(&u16::from(colour).to_be_bytes());
+                    definition.extend_from_slice(&0_u16.to_be_bytes());
+                    definition.extend_from_slice(&u16::from(colour + 1).to_be_bytes());
+                }
+                definition.extend_from_slice(&u16::from(required_colours).to_be_bytes());
+                definition.extend_from_slice(&1_u16.to_be_bytes());
+                definition.extend_from_slice(&0_u16.to_be_bytes());
+                append_jp2_header_child(
+                    input,
+                    presentation_box(container::boxes::CHANNEL_DEFINITION, &definition),
+                );
+                append_jp2_header_child(input, palette);
+                append_jp2_header_child(input, mapping);
+            }
             _ => panic!("not an optional presentation box"),
         }
     }
@@ -1386,10 +1413,10 @@ mod jp2_header_validation_tests {
             5
         );
 
-        let mut varying = codestream(2);
+        let mut varying = codestream(3);
         let siz = marker_offset(&varying, [0xff, 0x51]);
         varying[siz + 43] = 0x89;
-        let varying_jp2 = wrap_jp2(&varying, 5, 3, 2, 255, Some(&[7, 0x89]));
+        let varying_jp2 = wrap_jp2(&varying, 5, 3, 3, 255, Some(&[7, 0x89, 7]));
         let metadata = inspect(&varying_jp2, &InspectOptions::default()).unwrap();
         assert_eq!(metadata.format, InputFormat::Jp2);
         assert_eq!(
@@ -1406,7 +1433,10 @@ mod jp2_header_validation_tests {
             (6, 3, 1, 4, "width"),
             (5, 3, 2, 8, "component count"),
         ] {
-            let input = wrap_jp2(&raw, width, height, components, 7, None);
+            let mut input = wrap_jp2(&raw, width, height, components, 7, None);
+            if message_fragment == "component count" {
+                set_first_colour(&mut input, 4, None);
+            }
             let expected =
                 (box_offset(&input, container::boxes::IMAGE_HEADER) + 8) as u64 + field_offset;
             assert!(matches!(
@@ -1419,20 +1449,20 @@ mod jp2_header_validation_tests {
 
     #[test]
     fn rejects_uniform_and_varying_siz_sample_mismatches_at_exact_fields() {
-        let mut uniform = codestream(2);
+        let mut uniform = codestream(3);
         let siz = marker_offset(&uniform, [0xff, 0x51]);
         uniform[siz + 43] = 8;
-        let uniform_jp2 = wrap_jp2(&uniform, 5, 3, 2, 7, None);
+        let uniform_jp2 = wrap_jp2(&uniform, 5, 3, 3, 7, None);
         let expected = (box_offset(&uniform_jp2, container::boxes::IMAGE_HEADER) + 18) as u64;
         assert!(matches!(
             inspect(&uniform_jp2, &InspectOptions::default()),
             Err(J2kError::InvalidInput { offset: Some(offset), .. }) if offset == expected
         ));
 
-        let mut varying = codestream(2);
+        let mut varying = codestream(3);
         let siz = marker_offset(&varying, [0xff, 0x51]);
         varying[siz + 43] = 0x89;
-        let varying_jp2 = wrap_jp2(&varying, 5, 3, 2, 255, Some(&[7, 9]));
+        let varying_jp2 = wrap_jp2(&varying, 5, 3, 3, 255, Some(&[7, 9, 7]));
         let expected = (box_offset(&varying_jp2, container::boxes::BITS_PER_COMPONENT) + 9) as u64;
         assert!(matches!(
             inspect(&varying_jp2, &InspectOptions::default()),
@@ -1502,18 +1532,56 @@ mod jp2_header_validation_tests {
                 if message.contains("palette and component-mapping")
         ));
 
+        let mut redundant_definition = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        append_jp2_header_child(
+            &mut redundant_definition,
+            presentation_box(
+                container::boxes::CHANNEL_DEFINITION,
+                &[0, 1, 0, 0, 0, 0, 0, 1],
+            ),
+        );
+        assert!(matches!(
+            inspect(&redundant_definition, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { message, .. }) if message.contains("must omit")
+        ));
+
+        let rgb_raw = codestream(3);
+        let mut incomplete_definition = wrap_jp2(&rgb_raw, 5, 3, 3, 7, None);
+        append_jp2_header_child(
+            &mut incomplete_definition,
+            presentation_box(
+                container::boxes::CHANNEL_DEFINITION,
+                &[0, 1, 0, 0, 0, 1, 0, 0],
+            ),
+        );
+        assert!(matches!(
+            inspect(&incomplete_definition, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { message, .. })
+                if message.contains("must describe every")
+        ));
+
         let mut palette = wrap_jp2(&raw, 5, 3, 1, 7, None);
         append_valid_optional_presentation(&mut palette, container::boxes::PALETTE);
+
+        let mut reordered = wrap_jp2(&rgb_raw, 5, 3, 3, 7, None);
+        append_jp2_header_child(
+            &mut reordered,
+            presentation_box(
+                container::boxes::CHANNEL_DEFINITION,
+                &[0, 3, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 0, 3],
+            ),
+        );
 
         let mut icc = wrap_jp2(&raw, 5, 3, 1, 7, None);
         set_first_colour(&mut icc, 2, None);
         let mut reserved = wrap_jp2(&raw, 5, 3, 1, 7, None);
         set_first_colour(&mut reserved, 4, None);
-        let mut sycc = wrap_jp2(&raw, 5, 3, 1, 7, None);
+        let mut sycc = wrap_jp2(&rgb_raw, 5, 3, 3, 7, None);
         set_first_colour(&mut sycc, 1, Some(18));
 
         for (input, expected_feature, fragment) in [
             (&palette, UnsupportedFeature::ContainerBox, "pclr"),
+            (&reordered, UnsupportedFeature::ContainerBox, "cdef"),
             (&icc, UnsupportedFeature::ColorModel, "ICC"),
             (&reserved, UnsupportedFeature::ColorModel, "reserved"),
             (&sycc, UnsupportedFeature::ColorModel, "sYCC"),
@@ -1541,6 +1609,19 @@ mod jp2_header_validation_tests {
                 }
             );
         }
+
+        let component_options = DecodeOptions {
+            mode: DecodeMode::Components,
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        };
+        for invalid in [&redundant_definition, &incomplete_definition] {
+            assert!(matches!(
+                decode(invalid, &component_options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+        }
+        decode(&reordered, &component_options).unwrap();
     }
 
     #[test]
@@ -1624,10 +1705,6 @@ mod jp2_header_validation_tests {
             set_first_colour(&mut input, method, None);
             inputs.push(input);
         }
-        let mut sycc = wrap_jp2(&raw, 5, 3, 1, 7, None);
-        set_first_colour(&mut sycc, 1, Some(18));
-        inputs.push(sycc);
-
         for input in inputs {
             let decoded = decode(
                 &input,
@@ -1783,7 +1860,7 @@ mod jp2_header_validation_tests {
             append_valid_optional_presentation(&mut input, box_type);
             inputs.push((input, UnsupportedFeature::ContainerBox));
         }
-        for (method, enumerated) in [(1, Some(18)), (2, None), (4, None), (1, Some(99))] {
+        for (method, enumerated) in [(2, None), (4, None), (1, Some(99))] {
             let mut input = wrap_jp2(&raw, 5, 3, 1, 7, None);
             set_first_colour(&mut input, method, enumerated);
             inputs.push((input, UnsupportedFeature::ColorModel));
@@ -2978,7 +3055,8 @@ mod jp2_header_validation_tests {
 
     #[test]
     fn jph_header_fields_match_the_first_codestream_siz() {
-        let base = valid_jph(1);
+        let mut base = valid_jph(1);
+        set_first_colour(&mut base, 4, None);
         let image_header = box_offset(&base, container::boxes::IMAGE_HEADER);
         for (field, bytes, fragment) in [
             (8_usize, 4_u32.to_be_bytes().to_vec(), "height"),
@@ -3053,12 +3131,15 @@ mod jp2_header_validation_tests {
         let mut invalid_optional = valid_jph(1);
         append_jp2_header_child(
             &mut invalid_optional,
-            presentation_box(container::boxes::PALETTE, &[0, 1, 1, 7, 0]),
+            presentation_box(
+                container::boxes::CHANNEL_DEFINITION,
+                &[0, 1, 0, 0, 0, 1, 0, 0],
+            ),
         );
         assert!(matches!(
             inspect(&invalid_optional, &InspectOptions::default()),
             Err(J2kError::InvalidInput { message, .. })
-                if message.contains("palette and component-mapping")
+                if message.contains("required colour")
         ));
 
         let info = ImageInfo::new(

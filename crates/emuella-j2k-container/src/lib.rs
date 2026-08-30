@@ -414,6 +414,7 @@ pub fn parse(input: &[u8]) -> Result<Container> {
                     input,
                     image_header,
                     bits_per_component.as_ref(),
+                    color_specification,
                     &children,
                     record,
                 )?;
@@ -1131,6 +1132,7 @@ fn validate_jp2_header_fields(
     input: &[u8],
     image_header: Option<ImageHeaderBox>,
     bits_per_component: Option<&BitsPerComponentBox>,
+    color_specification: Option<ColorSpecificationBox>,
     children: &[BoxRecord],
     header_record: &BoxRecord,
 ) -> Result<()> {
@@ -1234,11 +1236,27 @@ fn validate_jp2_header_fields(
         _ => return Err(ContainerError::SizeOverflow),
     };
 
+    let required_colour_count = required_colour_count(color_specification);
     if let Some(record) = children
         .iter()
         .find(|record| record.box_type == boxes::CHANNEL_DEFINITION)
     {
-        validate_channel_definition(kind, input, record, &channel_formats, colour_count == 0)?;
+        validate_channel_definition(
+            kind,
+            input,
+            record,
+            &channel_formats,
+            colour_count == 0,
+            required_colour_count,
+        )?;
+    } else if let Some(required_colour_count) = required_colour_count
+        && channel_formats.len() != required_colour_count
+    {
+        return Err(invalid(
+            Some(header_record.header_offset),
+            Some(boxes::CHANNEL_DEFINITION),
+            "non-default channel count requires a complete channel-definition box",
+        ));
     }
     if let Some(record) = children
         .iter()
@@ -1247,6 +1265,18 @@ fn validate_jp2_header_fields(
         validate_resolution(input, record)?;
     }
     Ok(())
+}
+
+fn required_colour_count(color_specification: Option<ColorSpecificationBox>) -> Option<usize> {
+    let colour = color_specification?;
+    if colour.method != ColorSpecificationMethod::Enumerated {
+        return None;
+    }
+    match colour.enumerated_color_space? {
+        EnumeratedColorSpace::Greyscale => Some(1),
+        EnumeratedColorSpace::SRgb | EnumeratedColorSpace::SYcc => Some(3),
+        EnumeratedColorSpace::Unknown(_) => None,
+    }
 }
 
 #[derive(Debug)]
@@ -1436,6 +1466,7 @@ fn validate_channel_definition(
     record: &BoxRecord,
     channel_formats: &[ComponentSampleFormat],
     colour_unspecified: bool,
+    required_colour_count: Option<usize>,
 ) -> Result<()> {
     if record.data_len < 2 {
         return Err(invalid(
@@ -1467,6 +1498,10 @@ fn validate_channel_definition(
     }
 
     let mut pairs = Vec::with_capacity(count);
+    let mut described_channels = alloc::vec![false; channel_formats.len()];
+    let mut described_colours = alloc::vec![false; required_colour_count.unwrap_or(0)];
+    let mut default_ordered_colours =
+        required_colour_count.is_some_and(|required| channel_formats.len() == required);
     let mut alpha_count = 0_usize;
     let mut offset = record
         .data_offset
@@ -1481,6 +1516,7 @@ fn validate_channel_definition(
                 "channel-definition index is outside the channel domain",
             )
         })?;
+        described_channels[usize::from(channel)] = true;
         let channel_type = read_u16(input, offset + 2)?;
         let association = read_u16(input, offset + 4)?;
         let legal_type = matches!(channel_type, 0 | 1 | 2 | u16::MAX)
@@ -1498,6 +1534,32 @@ fn validate_channel_definition(
                 Some(record.box_type),
                 "JPH without colour specification cannot declare a colour-image channel",
             ));
+        }
+        if channel_type == 0 {
+            if association == 0 || association == u16::MAX {
+                return Err(invalid(
+                    Some(offset + 4),
+                    Some(record.box_type),
+                    "colour-image channels must be associated with a particular colour",
+                ));
+            }
+            if let Some(required_colour_count) = required_colour_count {
+                let association_index = usize::from(association - 1);
+                let Some(described) = described_colours.get_mut(association_index) else {
+                    return Err(invalid(
+                        Some(offset + 4),
+                        Some(record.box_type),
+                        "colour association is outside the enumerated colourspace domain",
+                    ));
+                };
+                *described = true;
+                default_ordered_colours &= usize::from(channel) == association_index;
+                debug_assert_eq!(described_colours.len(), required_colour_count);
+            } else {
+                default_ordered_colours = false;
+            }
+        } else {
+            default_ordered_colours = false;
         }
         if matches!(channel_type, 1 | 2) {
             if channel_format.signed {
@@ -1524,6 +1586,16 @@ fn validate_channel_definition(
                     ));
                 }
             }
+            if let Some(required_colour_count) = required_colour_count
+                && association != 0
+                && usize::from(association) > required_colour_count
+            {
+                return Err(invalid(
+                    Some(offset + 4),
+                    Some(record.box_type),
+                    "opacity association is outside the enumerated colourspace domain",
+                ));
+            }
         }
         let pair = (channel_type, association);
         if kind == ContainerKind::Jp2 && pair != (u16::MAX, u16::MAX) && pairs.contains(&pair) {
@@ -1545,6 +1617,27 @@ fn validate_channel_definition(
         }
         pairs.push(pair);
         offset = offset.checked_add(6).ok_or(ContainerError::SizeOverflow)?;
+    }
+    if described_channels.iter().any(|described| !described) {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "channel-definition box must describe every image channel",
+        ));
+    }
+    if described_colours.iter().any(|described| !described) {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "channel-definition box must describe every required colour",
+        ));
+    }
+    if default_ordered_colours {
+        return Err(invalid(
+            Some(record.header_offset),
+            Some(record.box_type),
+            "default ordered colour channels must omit the channel-definition box",
+        ));
     }
     Ok(())
 }
@@ -1577,6 +1670,23 @@ fn validate_resolution(input: &[u8], record: &BoxRecord) -> Result<()> {
                 "resolution superbox cannot repeat a resolution child",
             ));
         }
+    }
+    let capture_index = children
+        .iter()
+        .position(|child| child.box_type == boxes::CAPTURE_RESOLUTION);
+    let display_index = children
+        .iter()
+        .position(|child| child.box_type == boxes::DEFAULT_DISPLAY_RESOLUTION);
+    if capture_index
+        .zip(display_index)
+        .is_some_and(|(capture, display)| capture > display)
+    {
+        let display = &children[display_index.ok_or(ContainerError::SizeOverflow)?];
+        return Err(invalid(
+            Some(display.header_offset),
+            Some(display.box_type),
+            "capture resolution must precede default display resolution",
+        ));
     }
     for child in &children {
         if !matches!(
@@ -1705,7 +1815,13 @@ mod tests {
     }
 
     fn colour() -> Vec<u8> {
-        boxed(boxes::COLOR_SPECIFICATION, &[1, 0, 0, 0, 0, 0, 17])
+        enumerated_colour(17)
+    }
+
+    fn enumerated_colour(value: u32) -> Vec<u8> {
+        let mut payload = vec![1, 0, 0];
+        payload.extend_from_slice(&value.to_be_bytes());
+        boxed(boxes::COLOR_SPECIFICATION, &payload)
     }
 
     fn palette(columns: &[u8], values: &[u8]) -> Vec<u8> {
@@ -1810,9 +1926,9 @@ mod tests {
             ContainerKind::Jp2,
             &[
                 jp2_header(&[
-                    image_header(2, 255),
-                    boxed(boxes::BITS_PER_COMPONENT, &[7, 0x89]),
-                    colour(),
+                    image_header(3, 255),
+                    boxed(boxes::BITS_PER_COMPONENT, &[7, 0x89, 7]),
+                    enumerated_colour(16),
                 ]),
                 codestream_box(),
             ],
@@ -1827,6 +1943,10 @@ mod tests {
                 ComponentSampleFormat {
                     bits_per_sample: 10,
                     signed: true,
+                },
+                ComponentSampleFormat {
+                    bits_per_sample: 8,
+                    signed: false,
                 },
             ]
         );
@@ -2293,7 +2413,7 @@ mod tests {
                     image_header(1, 7),
                     palette(&[7, 7], &[0, 0]),
                     mapping(&[(0, 1, 0), (0, 1, 1)]),
-                    channel_definition(&[(0, 0, 1), (1, 0, 2)]),
+                    channel_definition(&[(0, 0, 1), (1, 1, 0)]),
                     resolution(boxes::CAPTURE_RESOLUTION),
                     colour(),
                 ]),
@@ -2456,6 +2576,17 @@ mod tests {
 
     #[test]
     fn enforces_inherited_and_jph_channel_definition_rules() {
+        for (components, colour) in [(1, colour()), (3, enumerated_colour(16))] {
+            let default_channels = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(components, 7), colour]),
+                    codestream_box(),
+                ],
+            );
+            parse(&default_channels).unwrap();
+        }
+
         let invalid_jp2 = [
             boxed(boxes::CHANNEL_DEFINITION, &[]),
             boxed(boxes::CHANNEL_DEFINITION, &[0, 0]),
@@ -2474,6 +2605,163 @@ mod tests {
             );
             assert!(matches!(
                 parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::CHANNEL_DEFINITION),
+                    ..
+                })
+            ));
+        }
+
+        for (components, colour, definition) in [
+            (1, colour(), channel_definition(&[(0, 0, 1)])),
+            (
+                3,
+                enumerated_colour(16),
+                channel_definition(&[(0, 0, 1), (1, 0, 2), (2, 0, 3)]),
+            ),
+        ] {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(components, 7), colour, definition]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::CHANNEL_DEFINITION),
+                    message,
+                    ..
+                }) if message.contains("must omit")
+            ));
+        }
+
+        let redundant_jph_definitions = file(
+            ContainerKind::Jph,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    colour(),
+                    channel_definition(&[(0, 0, 1), (0, 0, 1)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        assert!(matches!(
+            parse(&redundant_jph_definitions),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::CHANNEL_DEFINITION),
+                message,
+                ..
+            }) if message.contains("must omit")
+        ));
+
+        for (components, colour, definition) in [
+            (2, colour(), channel_definition(&[(1, 1, 0)])),
+            (
+                3,
+                enumerated_colour(16),
+                channel_definition(&[(0, 0, 1), (1, 0, 2), (2, 1, 0)]),
+            ),
+            (
+                3,
+                enumerated_colour(16),
+                channel_definition(&[(0, 0, 1), (1, 0, 2), (2, 0, 4)]),
+            ),
+        ] {
+            let input = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(components, 7), colour, definition]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&input),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::CHANNEL_DEFINITION),
+                    ..
+                })
+            ));
+        }
+
+        for kind in [ContainerKind::Jp2, ContainerKind::Jph] {
+            let greyscale_alpha = file(
+                kind,
+                &[
+                    jp2_header(&[
+                        image_header(2, 7),
+                        colour(),
+                        channel_definition(&[(0, 0, 1), (1, 1, 0)]),
+                    ]),
+                    codestream_box(),
+                ],
+            );
+            parse(&greyscale_alpha).unwrap();
+        }
+
+        for kind in [ContainerKind::Jp2, ContainerKind::Jph] {
+            let reordered_rgb = file(
+                kind,
+                &[
+                    jp2_header(&[
+                        image_header(3, 7),
+                        enumerated_colour(16),
+                        channel_definition(&[(0, 0, 2), (1, 0, 1), (2, 0, 3)]),
+                    ]),
+                    codestream_box(),
+                ],
+            );
+            parse(&reordered_rgb).unwrap();
+        }
+
+        let multiple_jph_colour_channels = file(
+            ContainerKind::Jph,
+            &[
+                jp2_header(&[
+                    image_header(4, 7),
+                    enumerated_colour(16),
+                    channel_definition(&[(0, 0, 1), (1, 0, 1), (2, 0, 2), (3, 0, 3)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        parse(&multiple_jph_colour_channels).unwrap();
+        let mut jp2_duplicate = multiple_jph_colour_channels;
+        let file_type = box_offset(&jp2_duplicate, boxes::FILE_TYPE, 0);
+        jp2_duplicate[file_type + 8..file_type + 12].copy_from_slice(b"jp2 ");
+        assert!(matches!(
+            parse(&jp2_duplicate),
+            Err(ContainerError::InvalidBox {
+                box_type: Some(boxes::CHANNEL_DEFINITION),
+                ..
+            })
+        ));
+
+        let unknown_colour_count = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    boxed(boxes::COLOR_SPECIFICATION, &[4, 0, 0]),
+                    channel_definition(&[(0, 0, 9)]),
+                ]),
+                codestream_box(),
+            ],
+        );
+        parse(&unknown_colour_count).unwrap();
+
+        for (components, colour) in [(2, colour()), (2, enumerated_colour(16))] {
+            let missing_definition = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[image_header(components, 7), colour]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&missing_definition),
                 Err(ContainerError::InvalidBox {
                     box_type: Some(boxes::CHANNEL_DEFINITION),
                     ..
@@ -2559,6 +2847,22 @@ mod tests {
         }
         valid_child_payload.extend_from_slice(&[0, 0]);
         let valid_child = boxed(boxes::CAPTURE_RESOLUTION, &valid_child_payload);
+        let valid_display = boxed(boxes::DEFAULT_DISPLAY_RESOLUTION, &valid_child_payload);
+        let ordered = file(
+            ContainerKind::Jp2,
+            &[
+                jp2_header(&[
+                    image_header(1, 7),
+                    colour(),
+                    boxed(
+                        boxes::RESOLUTION,
+                        &[valid_child.clone(), valid_display.clone()].concat(),
+                    ),
+                ]),
+                codestream_box(),
+            ],
+        );
+        parse(&ordered).unwrap();
         let cases = [
             boxed(boxes::RESOLUTION, &[]),
             boxed(boxes::RESOLUTION, &boxed(FourCc::new(*b"free"), &[0])),
@@ -2573,6 +2877,14 @@ mod tests {
             boxed(
                 boxes::RESOLUTION,
                 &[valid_child.clone(), valid_child].concat(),
+            ),
+            boxed(
+                boxes::RESOLUTION,
+                &[
+                    valid_display,
+                    boxed(boxes::CAPTURE_RESOLUTION, &valid_child_payload),
+                ]
+                .concat(),
             ),
         ];
         for resolution in cases {

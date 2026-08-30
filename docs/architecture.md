@@ -52,7 +52,12 @@ boundary requires `ihdr` first, conditionally admits one `bpcc`, keeps `colr`
 boxes contiguous, and validates the cardinality and payload structure of
 `pclr`, `cmap`, `cdef` and `res `. Palette and component-mapping dependencies,
 component and palette selectors, channel-definition domains, and resolution
-children are checked before optional presentation is classified. JP2 still
+children are checked before optional presentation is classified. For
+enumerated greyscale, sRGB and sYCC, an explicit channel definition must cover
+every channel and required colour; the default ordered colour channels must
+omit that box. Unsupported ICC and vendor methods do not acquire an inferred
+colour count. When both resolution children occur, capture resolution precedes
+default display resolution. JP2 still
 requires `colr`; JPH may omit it only for an `ihdr` whose colourspace is
 unknown, and such a header cannot describe a type-0 colour channel. The JPH
 single-alpha and application-specified channel rules are applied without

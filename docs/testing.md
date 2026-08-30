@@ -131,7 +131,9 @@ complete HTJ2K codestreams; and writer payload identity. Negative cases cover
 missing, misplaced and duplicate structural boxes; conflicting file-type
 fields; palette/mapping dependency and selector conflicts; malformed palette
 tables and padding; channel-definition count, index, type, association, alpha
-and unknown-colour contradictions; malformed or duplicate resolution children;
+and unknown-colour contradictions; missing required colours, incomplete channel
+lists and redundant default channel definitions; malformed, duplicate or
+reversed resolution children;
 absent codestreams; non-HT and incomplete primary or later codestreams;
 trailing bytes after EOC; SIZ disagreement in dimensions, component count,
 precision or signedness; reserved header fields; short, truncated, undersized
