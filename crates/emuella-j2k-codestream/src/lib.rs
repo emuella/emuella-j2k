@@ -9554,6 +9554,85 @@ pub fn encode_htj2k_grayscale_u8_no_decomp(input: GrayscaleU8Encode<'_>) -> Resu
     })
 }
 
+/// Build a project-authored single-component HTONLY fixture on one non-unit
+/// native grid with caller-chosen image and tile origins.
+///
+/// This is test support for the bounded native component-grid decoder, not a
+/// general subsampled HTJ2K encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn encode_htj2k_grayscale_u8_native_component_grid_test_fixture(
+    reference_width: u32,
+    reference_height: u32,
+    image_origin_x: u32,
+    image_origin_y: u32,
+    tile_origin_x: u32,
+    tile_origin_y: u32,
+    horizontal_separation: u8,
+    vertical_separation: u8,
+    samples: &[u8],
+) -> Result<Vec<u8>> {
+    if reference_width == 0
+        || reference_height == 0
+        || horizontal_separation == 0
+        || vertical_separation == 0
+        || (horizontal_separation == 1 && vertical_separation == 1)
+        || tile_origin_x > image_origin_x
+        || tile_origin_y > image_origin_y
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let reference_end_x = image_origin_x
+        .checked_add(reference_width)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let reference_end_y = image_origin_y
+        .checked_add(reference_height)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let component_x0 = image_origin_x.div_ceil(u32::from(horizontal_separation));
+    let component_y0 = image_origin_y.div_ceil(u32::from(vertical_separation));
+    let component_x1 = reference_end_x.div_ceil(u32::from(horizontal_separation));
+    let component_y1 = reference_end_y.div_ceil(u32::from(vertical_separation));
+    let component_width = component_x1
+        .checked_sub(component_x0)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let component_height = component_y1
+        .checked_sub(component_y0)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if samples.len() != checked_component_sample_count(component_width, component_height)? {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    // Translating by a whole coarsest-level code-block grid preserves the
+    // project fixture encoder's packet partition as well as transform phase.
+    if !component_x0.is_multiple_of(512) || !component_y0.is_multiple_of(512) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let mut codestream = encode_htj2k_grayscale_u8_decomp_test_fixture(
+        GrayscaleU8Encode {
+            width: component_width,
+            height: component_height,
+            samples,
+            stride_bytes: usize::try_from(component_width)
+                .map_err(|_| CodestreamError::SizeOverflow)?,
+        },
+        3,
+    )?;
+    let siz = find_marker(&codestream, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[siz + 6..siz + 10].copy_from_slice(&reference_end_x.to_be_bytes());
+    codestream[siz + 10..siz + 14].copy_from_slice(&reference_end_y.to_be_bytes());
+    codestream[siz + 14..siz + 18].copy_from_slice(&image_origin_x.to_be_bytes());
+    codestream[siz + 18..siz + 22].copy_from_slice(&image_origin_y.to_be_bytes());
+    codestream[siz + 22..siz + 26]
+        .copy_from_slice(&(reference_end_x - tile_origin_x).to_be_bytes());
+    codestream[siz + 26..siz + 30]
+        .copy_from_slice(&(reference_end_y - tile_origin_y).to_be_bytes());
+    codestream[siz + 30..siz + 34].copy_from_slice(&tile_origin_x.to_be_bytes());
+    codestream[siz + 34..siz + 38].copy_from_slice(&tile_origin_y.to_be_bytes());
+    codestream[siz + 41] = horizontal_separation;
+    codestream[siz + 42] = vertical_separation;
+    Ok(codestream)
+}
+
 /// Build a deterministic two-layer HT fixture in which the second layer adds
 /// a second Cleanup set for the same code-block.
 ///
@@ -9833,7 +9912,7 @@ pub fn encode_htj2k_grayscale_u8_one_decomp(input: GrayscaleU8Encode<'_>) -> Res
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn encode_htj2k_grayscale_u8_decomp_test_fixture(
     input: GrayscaleU8Encode<'_>,
     decomposition_levels: u8,
@@ -31302,6 +31381,26 @@ fn recheck_validator_granted_two_volume_single_precinct_schedule(
     Ok(())
 }
 
+fn ht_single_native_component_precinct_grid(
+    codestream: &Codestream,
+    tile_rect: TileRect,
+    coding_style: CodingStyleMarker,
+) -> bool {
+    codestream.kind == CodestreamKind::Htj2k
+        && codestream.siz.components.len() == 1
+        && codestream.siz.components.iter().any(|component| {
+            component.horizontal_separation != 1 || component.vertical_separation != 1
+        })
+        && Part1PrecinctTopology::new(&codestream.siz, tile_rect, 0, coding_style).is_ok_and(
+            |topology| {
+                topology
+                    .resolutions
+                    .iter()
+                    .all(|resolution| resolution.precinct_count == 1)
+            },
+        )
+}
+
 fn packet_precinct_grid_supported(
     codestream: &Codestream,
     tile_rect: TileRect,
@@ -31334,6 +31433,10 @@ fn packet_precinct_grid_supported(
         return bounded_heterogeneous_single_precincts;
     }
     coding_style_has_supported_precinct_grid(coding_style, tile_rect)
+        // Structural packet walking uses the absolute native precinct grid.
+        // Native decode admission remains a separate, narrower mechanism gate.
+        || (component_styles.len() == 1
+            && ht_single_native_component_precinct_grid(codestream, tile_rect, coding_style))
         || (packet_organisation.explicit_precinct_permission
             == ExplicitPrecinctPermission::ValidatedProfile0P004
             && coding_style_has_supported_p0_04_precinct_grid(coding_style, tile_rect))
@@ -31914,6 +32017,8 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                                             subband.l_block[code_block_index],
                                             first_coding_pass,
                                             announced_coding_passes,
+                                            subband.first_non_empty_ht_set[code_block_index]
+                                                .is_some(),
                                         )?;
                                     let pass_end = first_coding_pass
                                         .checked_add(announced_coding_passes)
@@ -34776,6 +34881,7 @@ fn read_layered_ht_codeword_lengths(
     l_block: u8,
     first_coding_pass: u16,
     announced_coding_passes: u16,
+    has_non_empty_ht_set: bool,
 ) -> Result<(
     usize,
     Vec<tier1::CodeBlockSegment>,
@@ -34826,6 +34932,29 @@ fn read_layered_ht_codeword_lengths(
     let cleanup_len = usize::try_from(reader.read_bits_with_stuffing(cleanup_length_bits)?)
         .map_err(|_| CodestreamError::SizeOverflow)?;
     if cleanup_len == 0 {
+        if !has_non_empty_ht_set {
+            // Before the first actual cleanup, an all-placeholder packet
+            // contribution has one zero-length field whose width covers all
+            // announced passes. Complete it before reading the next block.
+            // ISO/IEC 15444-15:2019, B.1–B.3, physical pages 40–41;
+            // retrieval 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+            let placeholder_length_bits = l_block
+                .checked_add(
+                    u8::try_from(u32::from(announced_coding_passes).ilog2())
+                        .map_err(|_| CodestreamError::SizeOverflow)?,
+                )
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let remaining = placeholder_length_bits
+                .checked_sub(cleanup_length_bits)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if remaining != 0 && reader.read_bits_with_stuffing(remaining)? != 0 {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Sod),
+                    "HT placeholder-only segment has a non-zero length",
+                ));
+            }
+        }
         return Ok((0, Vec::new(), 0, None));
     }
     if !(2..65_535).contains(&cleanup_len) {
@@ -46756,6 +46885,7 @@ fn htj2k_tile_header_cod(codestream: &Codestream) -> Option<&MarkerSegment> {
 fn classify_htj2k_profile_markers(
     codestream: &Codestream,
     allow_irreversible_transform: bool,
+    caller_owns_component_grid: bool,
 ) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
     if codestream.kind != CodestreamKind::Htj2k {
         return Err(Htj2kLosslessProfileDiagnostic::new(
@@ -46850,7 +46980,11 @@ fn classify_htj2k_profile_markers(
             "native HTJ2K lossless decode does not implement the effective irreversible transform mechanism",
         ));
     }
-    match ht_decode_candidate_with_transform_permission(codestream, allow_irreversible_transform) {
+    match ht_decode_candidate_with_permissions(
+        codestream,
+        allow_irreversible_transform,
+        caller_owns_component_grid,
+    ) {
         Some(Ok(_candidate)) => {}
         Some(Err(classification)) => {
             return Err(Htj2kLosslessProfileDiagnostic::from_marker_reason(
@@ -46878,16 +47012,155 @@ fn classify_htj2k_profile_markers(
     Ok(())
 }
 
+#[cfg(feature = "std")]
+fn classify_htj2k_native_component_grid_markers(
+    codestream: &Codestream,
+) -> core::result::Result<bool, Htj2kLosslessProfileDiagnostic> {
+    let sampled = codestream.siz.components.iter().any(|component| {
+        component.horizontal_separation != 1 || component.vertical_separation != 1
+    });
+    if !sampled {
+        return Ok(false);
+    }
+    if codestream.siz.component_count() != 1 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::ComponentSampling,
+            "native HTJ2K component-grid decode admits exactly one non-unit component",
+        ));
+    }
+    let coding_style = uniform_effective_coding_style(codestream).map_err(|_| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K component-grid decode requires one effective coding style",
+        )
+    })?;
+    if coding_style.decomposition_levels != 3
+        || coding_style.transform != WaveletTransform::Reversible53
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::WaveletTransform,
+            "native HTJ2K component-grid decode requires three reversible decomposition levels",
+        ));
+    }
+    if coding_style.multiple_component_transform {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::Transform,
+            "native HTJ2K component-grid decode does not apply a multiple-component transform",
+        ));
+    }
+    if codestream.siz.tile_count_x().ok() != Some(1)
+        || codestream.siz.tile_count_y().ok() != Some(1)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MultipleTiles,
+            "native HTJ2K component-grid decode admits exactly one tile",
+        ));
+    }
+    let component_samples = native_part1_component_grid_samples(codestream).ok_or_else(|| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::PacketDecode,
+            "native HTJ2K component-grid geometry exceeds checked arithmetic",
+        )
+    })?;
+    if component_samples == 0 || component_samples > MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::PacketDecode,
+            "native HTJ2K component-grid decode is guarded to at most 16 Mi samples",
+        ));
+    }
+    let component = codestream.siz.components.first().ok_or_else(|| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::ComponentCount,
+            "native HTJ2K component-grid decode requires one component",
+        )
+    })?;
+    if component.bits_per_sample != 8 || component.signed {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::SamplePrecision,
+            "native HTJ2K component-grid decode requires unsigned 8-bit samples",
+        ));
+    }
+    // The existing synthesis kernel has low-pass-first phase at every level.
+    // Align the absolute component origin, not the reference-image origin.
+    let component_x0 = codestream
+        .siz
+        .image_origin_x
+        .div_ceil(u32::from(component.horizontal_separation));
+    let component_y0 = codestream
+        .siz
+        .image_origin_y
+        .div_ceil(u32::from(component.vertical_separation));
+    if !component_x0.is_multiple_of(8) || !component_y0.is_multiple_of(8) {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::WaveletTransform,
+            "native HTJ2K component-grid decode requires component origins aligned to eight samples",
+        ));
+    }
+    if coding_style.progression_order != ProgressionOrder::Lrcp
+        || !(1..=6).contains(&coding_style.layers)
+        || coding_style.code_block_style != 0x40
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::PacketDecode,
+            "native HTJ2K component-grid decode requires one through six LRCP layers and the HT-only code-block style",
+        ));
+    }
+    if codestream.markers.iter().any(|segment| {
+        matches!(
+            segment.marker,
+            Marker::Rgn
+                | Marker::Poc
+                | Marker::Tlm
+                | Marker::Plm
+                | Marker::Plt
+                | Marker::Ppm
+                | Marker::Ppt
+                | Marker::Crg
+                | Marker::Unknown(_)
+        )
+    }) || codestream
+        .markers
+        .iter()
+        .filter(|segment| segment.marker == Marker::Qcd)
+        .count()
+        != 1
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K component-grid decode requires one main QCD without ROI, progression, pointer, packed-header or registration markers",
+        ));
+    }
+    let tiles = tile_rects(codestream).map_err(|_| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MultipleTiles,
+            "native HTJ2K component-grid decode requires one valid tile",
+        )
+    })?;
+    let component_tile = component_tile_rect(codestream, tiles[0], component).map_err(|_| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::ComponentSampling,
+            "native HTJ2K component-grid bounds are invalid",
+        )
+    })?;
+    if component_tile.width == 0 || component_tile.height == 0 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::ComponentSampling,
+            "native HTJ2K component-grid bounds are empty",
+        ));
+    }
+    Ok(true)
+}
+
 fn classify_htj2k_lossless_profile_markers(
     codestream: &Codestream,
 ) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
-    classify_htj2k_profile_markers(codestream, false)
+    classify_htj2k_profile_markers(codestream, false, false)
 }
 
 fn classify_htj2k_reduced_component_profile_markers(
     codestream: &Codestream,
 ) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
-    classify_htj2k_profile_markers(codestream, true)
+    classify_htj2k_profile_markers(codestream, true, false)
 }
 
 fn htj2k_non_inline_packet_marker_source(
@@ -47816,7 +48089,24 @@ fn ht_decode_candidate_with_transform_permission(
     codestream: &Codestream,
     allow_irreversible_transform: bool,
 ) -> Option<core::result::Result<HtCodestreamDecodeCandidate, ht::HtClassification>> {
+    ht_decode_candidate_with_permissions(codestream, allow_irreversible_transform, false)
+}
+
+fn ht_decode_candidate_with_permissions(
+    codestream: &Codestream,
+    allow_irreversible_transform: bool,
+    caller_owns_component_grid: bool,
+) -> Option<core::result::Result<HtCodestreamDecodeCandidate, ht::HtClassification>> {
     let mut marker_state = ht_marker_state(codestream)?;
+    if caller_owns_component_grid {
+        marker_state.precincts_declared =
+            !uniform_effective_coding_style(codestream).is_ok_and(|style| {
+                tile_rects(codestream).is_ok_and(|tiles| {
+                    tiles.len() == 1
+                        && ht_single_native_component_precinct_grid(codestream, tiles[0], style)
+                })
+            });
+    }
     if allow_irreversible_transform
         && codestream
             .uniform_effective_coding_style()
@@ -47828,7 +48118,11 @@ fn ht_decode_candidate_with_transform_permission(
         // transform and quantisation contract at the codestream layer.
         marker_state.reversible_transform = true;
     }
-    let marker_candidate = match ht::plan_decode_candidate(marker_state) {
+    let marker_candidate = match if caller_owns_component_grid {
+        ht::plan_decode_candidate_for_native_component_grid(marker_state)
+    } else {
+        ht::plan_decode_candidate(marker_state)
+    } {
         Ok(candidate) => candidate,
         Err(classification) => return Some(Err(classification)),
     };
@@ -48681,6 +48975,475 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
         signed: first_component.signed,
         components,
     }))
+}
+
+/// An admitted full native component-grid route, distinct from reduced output.
+/// Packet admission and checked native geometry are retained together.
+#[cfg(feature = "std")]
+pub struct PreparedHtj2kNativeComponentGridDecode<'a> {
+    input: &'a [u8],
+    codestream: Codestream,
+    candidate: HtCodestreamDecodeCandidate,
+    coding_style: CodingStyleMarker,
+    transfer: HtReversibleCodeBlockTransfer,
+    component_rect: TileRect,
+    contributions: Vec<PacketCodeBlockContribution>,
+}
+
+#[cfg(feature = "std")]
+impl PreparedHtj2kNativeComponentGridDecode<'_> {
+    /// Width of the native sample plane, not the reference image.
+    pub fn output_width(&self) -> u32 {
+        self.component_rect.width
+    }
+
+    /// Height of the native sample plane, not the reference image.
+    pub fn output_height(&self) -> u32 {
+        self.component_rect.height
+    }
+}
+
+/// Prepare the bounded single-tile, unsigned 8-bit, subsampled HTONLY route.
+/// It admits three reversible levels, component origins aligned to eight,
+/// one through six LRCP layers, one effective precinct per resolution and
+/// inline SOP/EPH. Output remains native: no resampling or MCT is performed.
+/// Non-HT and unit-sampled inputs return `None`; other shapes fail closed.
+#[cfg(feature = "std")]
+pub fn prepare_htj2k_native_component_grid_decode(
+    input: &[u8],
+) -> Result<Option<PreparedHtj2kNativeComponentGridDecode<'_>>> {
+    let codestream = parse(input)?;
+    if codestream.kind != CodestreamKind::Htj2k {
+        return Ok(None);
+    }
+    if codestream
+        .siz
+        .components
+        .iter()
+        .all(|component| component.horizontal_separation == 1 && component.vertical_separation == 1)
+    {
+        return Ok(None);
+    }
+    if native_part1_component_grid_samples(&codestream)
+        .is_none_or(|samples| samples == 0 || samples > MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::PacketDecode,
+            "native HTJ2K component-grid decode is guarded to at most 16 Mi samples",
+        ));
+    }
+    validate_part15_packet_signalling(input, &codestream)?;
+    if !classify_htj2k_native_component_grid_markers(&codestream)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?
+    {
+        return Ok(None);
+    }
+    // Geometry and the output allocation limit precede the packet walker.
+    classify_htj2k_profile_markers(&codestream, false, true)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    validate_htonly_permission_effective_packet_mechanisms(input, &codestream)?;
+    let coding_style = uniform_effective_coding_style(&codestream)?;
+    let quantization = parse_component_quantization(input, &codestream, 10)?;
+    if quantization.len() != 1
+        || quantization[0].style != transform::QuantizationStyle::NoQuantization
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcd),
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K component-grid decode requires effective reversible quantisation",
+        ));
+    }
+    let quantization = &quantization[0];
+    for step in &quantization.steps {
+        if step
+            .exponent
+            .checked_add(quantization.guard_bits)
+            .and_then(|value| value.checked_sub(1))
+            .is_none_or(|value| value > 31)
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Qcc),
+                UnsupportedConstruct::SamplePrecision,
+                "native HTJ2K component-grid quantisation exceeds the coefficient transfer bound",
+            ));
+        }
+    }
+    let exponent = quantization.steps[0].exponent;
+    let k_max = exponent + quantization.guard_bits - 1;
+    let transfer = HtReversibleCodeBlockTransfer {
+        qcd_guard_bits: quantization.guard_bits,
+        qcd_exponent: exponent,
+        k_max,
+        shift: 31 - k_max,
+    };
+    let candidate = ht_decode_candidate_with_permissions(&codestream, false, true)
+        .ok_or(CodestreamError::SizeOverflow)?
+        .map_err(|classification| {
+            unsupported(
+                None,
+                None,
+                ht_construct_from_reason(classification.reason),
+                classification.reason.message(),
+            )
+        })?;
+    let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
+    let topology = Part1PrecinctTopology::new(&codestream.siz, tile_rect, 0, coding_style)?;
+    if topology
+        .resolutions
+        .iter()
+        .any(|resolution| resolution.precinct_count != 1)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "native HTJ2K component-grid decode requires one effective precinct per resolution",
+        ));
+    }
+    let component_rect =
+        component_tile_rect(&codestream, tile_rect, &codestream.siz.components[0])?;
+    let contributions =
+        parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    Ok(Some(PreparedHtj2kNativeComponentGridDecode {
+        input,
+        codestream,
+        candidate,
+        coding_style,
+        transfer,
+        component_rect,
+        contributions,
+    }))
+}
+
+/// Execute a completely admitted native-grid plan into private owned storage.
+/// The image dimensions describe the reference image; the sole plane has the
+/// native dimensions computed from SIZ by the prepared plan.
+#[cfg(feature = "std")]
+pub fn decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+    prepared: &PreparedHtj2kNativeComponentGridDecode<'_>,
+    workspace: &mut HtCodestreamDecodeWorkspace,
+) -> Result<DecodedImage> {
+    let (_, payload) = single_part1_profile_tile(prepared.input, &prepared.codestream)?;
+    let (_, _, components) = decode_htj2k_lossless_decomp_components(
+        prepared.candidate,
+        payload,
+        &prepared.contributions,
+        prepared.transfer,
+        &prepared.codestream,
+        prepared.coding_style,
+        prepared.component_rect,
+        None,
+        workspace,
+    )?;
+    Ok(DecodedImage {
+        width: prepared.codestream.image_width(),
+        height: prepared.codestream.image_height(),
+        bits_per_sample: 8,
+        signed: false,
+        components,
+    })
+}
+
+#[cfg(test)]
+mod htj2k_native_component_grid_tests {
+    use super::*;
+
+    fn fixture(origin: (u32, u32), sampling: (u8, u8)) -> (Vec<u8>, Vec<u8>) {
+        let width = 35_u32;
+        let height = 41_u32;
+        let reference_width = width * u32::from(sampling.0);
+        let reference_height = height * u32::from(sampling.1);
+        let samples = (0..width * height)
+            .map(|i| ((i * 29 + i / width * 17) % 251) as u8)
+            .collect::<Vec<_>>();
+        let bytes = encode_htj2k_grayscale_u8_native_component_grid_test_fixture(
+            reference_width,
+            reference_height,
+            origin.0,
+            origin.1,
+            origin.0.saturating_sub(3),
+            origin.1.saturating_sub(5),
+            sampling.0,
+            sampling.1,
+            &samples,
+        )
+        .unwrap();
+        (bytes, samples)
+    }
+
+    #[test]
+    fn native_component_grid_reconstructs_absolute_sampled_bounds() {
+        for (origin, sampling) in [
+            ((0, 0), (2, 1)),
+            ((0, 0), (1, 3)),
+            ((1023, 1534), (2, 3)),
+            ((2047, 1023), (4, 2)),
+        ] {
+            let (bytes, samples) = fixture(origin, sampling);
+            let plan = prepare_htj2k_native_component_grid_decode(&bytes)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (plan.component_rect.width, plan.component_rect.height),
+                (35, 41)
+            );
+            let mut workspace = HtCodestreamDecodeWorkspace::new();
+            let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+                &plan,
+                &mut workspace,
+            )
+            .unwrap();
+            assert_eq!(
+                decoded.components[0].samples, samples,
+                "{origin:?} {sampling:?}"
+            );
+            assert_eq!(
+                (decoded.width, decoded.height),
+                (35 * u32::from(sampling.0), 41 * u32::from(sampling.1))
+            );
+            assert!(!is_htj2k_lossless_profile(&bytes, &parse(&bytes).unwrap()));
+        }
+    }
+
+    #[test]
+    fn native_component_grid_shape_preflights_before_packet_work() {
+        let (bytes, _) = fixture((0, 0), (2, 1));
+        let siz = find_marker(&bytes, 0, Marker::Siz).unwrap();
+        let mut excessive = bytes.clone();
+        for (offset, value) in [(6, 16384_u32), (10, 8192), (22, 16384), (26, 8192)] {
+            excessive[siz + offset..siz + offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        assert!(
+            matches!(prepare_htj2k_native_component_grid_decode(&excessive),
+            Err(CodestreamError::Unsupported { construct: UnsupportedConstruct::PacketDecode, message, .. }) if message.contains("16 Mi"))
+        );
+        let mut phase = bytes.clone();
+        phase[siz + 14..siz + 18].copy_from_slice(&2_u32.to_be_bytes());
+        assert!(matches!(
+            prepare_htj2k_native_component_grid_decode(&phase),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::WaveletTransform,
+                ..
+            })
+        ));
+        let mut empty = bytes;
+        empty[siz + 6..siz + 10].copy_from_slice(&2_u32.to_be_bytes());
+        empty[siz + 14..siz + 18].copy_from_slice(&1_u32.to_be_bytes());
+        assert!(prepare_htj2k_native_component_grid_decode(&empty).is_err());
+    }
+
+    #[test]
+    fn native_component_grid_uses_native_not_reference_precinct_bounds() {
+        for origin in [(0, 0), (1023, 512)] {
+            let (bytes, samples) = fixture(origin, (2, 1));
+            for precinct in [0x66, 0x77] {
+                let mut explicit = bytes.clone();
+                let cod = find_marker(&explicit, 0, Marker::Cod).unwrap();
+                let length = usize::from(read_u16(&explicit, cod + 2).unwrap());
+                explicit[cod + 4] |= 1;
+                explicit[cod + 2..cod + 4]
+                    .copy_from_slice(&u16::try_from(length + 4).unwrap().to_be_bytes());
+                explicit.splice(cod + 2 + length..cod + 2 + length, [precinct; 4]);
+                let parsed = parse(&explicit).unwrap();
+                // The ordinary unit-grid marker planner remains unchanged.
+                assert!(ht_decode_candidate(&parsed).unwrap().is_err());
+                let plan = prepare_htj2k_native_component_grid_decode(&explicit)
+                    .unwrap()
+                    .unwrap();
+                let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+                    &plan,
+                    &mut HtCodestreamDecodeWorkspace::new(),
+                )
+                .unwrap();
+                assert_eq!(decoded.components[0].samples, samples);
+                // 32-sample precincts split the actual 35×41 native grid.
+                explicit[cod + 2 + length..cod + 2 + length + 4].fill(0x55);
+                assert!(prepare_htj2k_native_component_grid_decode(&explicit).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn native_component_grid_admits_eight_sample_phase_and_rejects_neighbours() {
+        let (mut bytes, samples) = fixture((0, 0), (2, 1));
+        let siz = find_marker(&bytes, 0, Marker::Siz).unwrap();
+        for (offset, value) in [(6, 85_u32), (10, 49), (14, 15), (18, 8), (22, 85), (26, 49)] {
+            bytes[siz + offset..siz + offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        let plan = prepare_htj2k_native_component_grid_decode(&bytes)
+            .unwrap()
+            .unwrap();
+        let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+            &plan,
+            &mut HtCodestreamDecodeWorkspace::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded.components[0].samples, samples);
+        let cod = find_marker(&bytes, 0, Marker::Cod).unwrap();
+        for (offset, value) in [
+            (cod + 5, 1),
+            (cod + 7, 7),
+            (cod + 8, 1),
+            (cod + 9, 2),
+            (cod + 12, 0x41),
+            (siz + 40, 8),
+            (siz + 40, 0x87),
+        ] {
+            let mut rejected = bytes.clone();
+            rejected[offset] = value;
+            assert!(
+                prepare_htj2k_native_component_grid_decode(&rejected).is_err(),
+                "offset {offset} value {value}"
+            );
+        }
+        let mut multi_tile = bytes;
+        multi_tile[siz + 22..siz + 26].copy_from_slice(&50_u32.to_be_bytes());
+        assert!(prepare_htj2k_native_component_grid_decode(&multi_tile).is_err());
+    }
+
+    #[test]
+    fn native_component_grid_walks_six_layers_with_inline_delimiters() {
+        let (mut bytes, samples) = fixture((0, 0), (2, 1));
+        let parsed = parse(&bytes).unwrap();
+        let tile = tile_rects(&parsed).unwrap()[0];
+        let original = tile_payload(&bytes, &parsed.tiles[0]).unwrap();
+        let contributions =
+            parse_default_precinct_lrcp_packets(&bytes, &parsed, tile, original).unwrap();
+        let mut payload = Vec::new();
+        let mut start = 0;
+        for sequence in 0_u16..24 {
+            payload.extend_from_slice(&[0xff, 0x91, 0, 4]);
+            payload.extend_from_slice(&sequence.to_be_bytes());
+            if sequence < 4 {
+                let blocks = contributions
+                    .iter()
+                    .filter(|c| c.resolution == sequence as u8)
+                    .collect::<Vec<_>>();
+                let header_end = blocks.iter().map(|c| c.payload_offset).min().unwrap();
+                let end = blocks
+                    .iter()
+                    .map(|c| c.payload_offset + c.codeword_len)
+                    .max()
+                    .unwrap();
+                payload.extend_from_slice(&original[start..header_end]);
+                payload.extend_from_slice(&[0xff, 0x92]);
+                payload.extend_from_slice(&original[header_end..end]);
+                start = end;
+            } else {
+                payload.extend_from_slice(&[0, 0xff, 0x92]);
+            }
+        }
+        assert_eq!(start, original.len());
+        let offset = parsed.tiles[0].payload_offset.unwrap();
+        bytes.splice(offset..offset + original.len(), payload.iter().copied());
+        let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
+        bytes[sot + 6..sot + 10]
+            .copy_from_slice(&u32::try_from(payload.len() + 14).unwrap().to_be_bytes());
+        let cod = find_marker(&bytes, 0, Marker::Cod).unwrap();
+        bytes[cod + 4] = 6;
+        bytes[cod + 6..cod + 8].copy_from_slice(&6_u16.to_be_bytes());
+        let plan = prepare_htj2k_native_component_grid_decode(&bytes)
+            .unwrap()
+            .unwrap();
+        let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+            &plan,
+            &mut HtCodestreamDecodeWorkspace::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded.components[0].samples, samples);
+        let end = offset + payload.len();
+        bytes[end - 1] = 0;
+        assert!(prepare_htj2k_native_component_grid_decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn native_component_grid_resolves_main_coc_and_qcc_before_transfer() {
+        let (mut bytes, samples) = fixture((0, 0), (2, 1));
+        let parsed = parse(&bytes).unwrap();
+        let cod = parsed
+            .markers
+            .iter()
+            .find(|m| m.marker == Marker::Cod)
+            .unwrap();
+        let qcd = parsed
+            .markers
+            .iter()
+            .find(|m| m.marker == Marker::Qcd)
+            .unwrap();
+        let mut coc = vec![0xff, 0x53, 0, 9, 0, 0];
+        coc.extend_from_slice(&bytes[cod.offset + 9..cod.offset + 14]);
+        let mut qcc = vec![0xff, 0x5d];
+        qcc.extend_from_slice(&u16::try_from(qcd.data_len + 3).unwrap().to_be_bytes());
+        qcc.push(0);
+        qcc.extend_from_slice(&bytes[qcd.data_offset..qcd.data_offset + qcd.data_len]);
+        // Preserve each effective transfer bound while varying the owner of
+        // its guard bits and exponent. The packet coder remains unchanged.
+        qcc[5] = 3 << 5;
+        for exponent in &mut qcc[6..] {
+            *exponent -= 2 << 3;
+        }
+        let mut default_qcd = vec![0xff, 0x5c, 0, 23, (2 << 5) | 2];
+        for _ in 0..10 {
+            default_qcd.extend_from_slice(&(8_u16 << 11).to_be_bytes());
+        }
+        default_qcd.extend_from_slice(&qcc);
+        bytes.splice(qcd.offset..qcd.data_offset + qcd.data_len, default_qcd);
+        bytes[cod.offset + 13] = 0;
+        bytes[cod.offset + 10] = 3;
+        let cap = find_marker(&bytes, 0, Marker::Cap).unwrap();
+        bytes[cap + 9] |= 0x20;
+        bytes.splice(
+            cod.data_offset + cod.data_len..cod.data_offset + cod.data_len,
+            coc,
+        );
+        let parsed = parse(&bytes).unwrap();
+        assert_eq!(
+            parsed.coding_style.unwrap().transform,
+            WaveletTransform::Irreversible97
+        );
+        let plan = prepare_htj2k_native_component_grid_decode(&bytes)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.coding_style.transform, WaveletTransform::Reversible53);
+        assert_eq!(plan.transfer.qcd_guard_bits, 3);
+        let decoded = decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+            &plan,
+            &mut HtCodestreamDecodeWorkspace::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded.components[0].samples, samples);
+    }
+
+    #[test]
+    fn placeholder_only_length_consumes_every_announced_pass_width() {
+        for first in 0_u16..60 {
+            for announced in 1_u16..=60 {
+                let mut writer = PacketBitWriter::new();
+                let bits = 3 + u8::try_from(u32::from(announced).ilog2()).unwrap();
+                writer.write_bits(0, bits).unwrap();
+                writer.write_bits(1, 1).unwrap();
+                let source = ContiguousPacketSource {
+                    bytes: writer.bytes(),
+                };
+                let mut reader = PacketBitReader::at(&source, 0).unwrap();
+                let result =
+                    read_layered_ht_codeword_lengths(&mut reader, 3, first, announced, false)
+                        .unwrap();
+                assert_eq!((result.0, result.2, result.3), (0, 0, None));
+                assert_eq!(
+                    reader.read_bits_with_stuffing(1).unwrap(),
+                    1,
+                    "first {first}, announced {announced}"
+                );
+            }
+        }
+    }
 }
 
 /// Prepare transformed component zero from the bounded five-level reversible
@@ -51105,6 +51868,14 @@ pub fn decode_htj2k_lossless_owned(input: &[u8]) -> Result<Option<DecodedImage>>
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_profile(input: &[u8], codestream: &Codestream) -> bool {
     classify_htj2k_lossless_profile(input, codestream).is_ok()
+}
+
+/// Return whether the codestream fits the bounded single-component native
+/// grid route, including structural and effective packet admission.
+#[cfg(feature = "std")]
+pub fn is_htj2k_native_component_grid_profile(input: &[u8], codestream: &Codestream) -> bool {
+    codestream.kind == CodestreamKind::Htj2k
+        && prepare_htj2k_native_component_grid_decode(input).is_ok_and(|plan| plan.is_some())
 }
 
 /// Return the first native lossless-profile support gate that rejects an

@@ -49,6 +49,17 @@ magnitude bounds above 18 remain unsupported. Supported full inputs continue
 through the existing HT packet, entropy, reconstruction and public image path;
 this is not general Part 15 or JPEG 2000 conformance.
 
+A separate native-grid full decode route admits one unsigned 8-bit subsampled
+component, one tile/part, three effective reversible 5/3 levels, one through
+six LRCP layers and one effective precinct per resolution. Main COC/QCC
+overrides resolve before reconstruction; component origins must be aligned to
+eight native samples. Use component mode, planar output and all components or
+component zero. `ImageInfo` and `decode_shape` retain reference-image dimensions;
+`Image::component_info` describes the actual native plane and its origin and
+sampling. No resampling is performed. JPH, rendered/interleaved output, MCT,
+other transform phases, regions, reductions and layer limits are outside this
+route.
+
 Native partial component output adds two bounded HTONLY reconstruction branches
 behind one request shape. A raw origin-aligned single-tile codestream with five
 decomposition levels and one-layer LRCP packets on the existing

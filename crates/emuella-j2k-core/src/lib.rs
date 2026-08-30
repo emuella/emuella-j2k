@@ -740,6 +740,188 @@ mod htj2k_encode_tests {
 }
 
 #[cfg(test)]
+mod htj2k_native_component_grid_tests {
+    use super::*;
+
+    fn fixture() -> (Vec<u8>, Vec<u8>) {
+        let samples = (0..35 * 41)
+            .map(|i| ((i * 31 + i / 35 * 13) % 251) as u8)
+            .collect::<Vec<_>>();
+        let bytes = codestream::encode_htj2k_grayscale_u8_native_component_grid_test_fixture(
+            70, 123, 1023, 1534, 1020, 1530, 2, 3, &samples,
+        )
+        .unwrap();
+        (bytes, samples)
+    }
+
+    fn options() -> DecodeOptions {
+        DecodeOptions {
+            mode: DecodeMode::Components,
+            requested_components: ComponentSelection::Indices(vec![0]),
+            target_layout: ComponentLayout::Planar,
+            ..DecodeOptions::default()
+        }
+    }
+
+    #[test]
+    fn native_grid_public_routes_preserve_component_shapes_and_padding() {
+        let (bytes, samples) = fixture();
+        let options = options();
+        let metadata = inspect(&bytes, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.support, SupportStatus::Supported);
+        let owned = decode(&bytes, &options).unwrap();
+        let shape = decode_shape(&bytes, &options).unwrap();
+        assert_eq!((shape.width, shape.height), (70, 123));
+        assert_eq!(shape.image_info().unwrap(), owned.info);
+        let component = &owned.component_info[0];
+        assert_eq!((component.width, component.height), (35, 41));
+        assert_eq!((component.x_origin, component.y_origin), (512, 512));
+        assert_eq!(
+            (
+                component.horizontal_separation,
+                component.vertical_separation
+            ),
+            (2, 3)
+        );
+        assert_eq!(component.source_component, Some(0));
+        assert!(matches!(&owned.data, ImageData::Planes(planes) if planes == &[samples.clone()]));
+        let mut workspace = Htj2kDecodeWorkspace::new();
+        for selection in [
+            ComponentSelection::All,
+            ComponentSelection::Indices(vec![0]),
+        ] {
+            let selected = DecodeOptions {
+                requested_components: selection,
+                ..options.clone()
+            };
+            let repeated = decode_htj2k_with_workspace(&bytes, &selected, &mut workspace)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                repeated.info,
+                decode_shape(&bytes, &selected)
+                    .unwrap()
+                    .image_info()
+                    .unwrap()
+            );
+            assert_eq!(repeated.component_info, owned.component_info);
+            assert_eq!(repeated.data, owned.data);
+            assert_eq!(repeated, decode(&bytes, &selected).unwrap());
+        }
+        let stride = 42;
+        let mut caller = vec![0xa6; stride * 41];
+        let mut planes = [PlaneMut::new(&mut caller, 35, 41, stride, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &owned.info,
+            planes: &mut planes,
+        };
+        decode_into(&bytes, &mut target, &options).unwrap();
+        for (row, expected) in samples.chunks_exact(35).enumerate() {
+            assert_eq!(&caller[row * stride..row * stride + 35], expected);
+            assert!(
+                caller[row * stride + 35..(row + 1) * stride]
+                    .iter()
+                    .all(|b| *b == 0xa6)
+            );
+        }
+    }
+
+    #[test]
+    fn native_grid_jph_inspection_and_decode_reject_without_publishing() {
+        let (bytes, _) = fixture();
+        let options = options();
+        let info = inspect(&bytes, &InspectOptions::default())
+            .unwrap()
+            .image
+            .unwrap();
+        let mut jph = Vec::new();
+        write_jph_encode_output(&info, &bytes, &mut jph).unwrap();
+        let metadata = inspect(&jph, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.format, InputFormat::Jph);
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::InputFormat,
+                ..
+            }
+        ));
+        assert!(decode_shape(&jph, &options).is_err());
+        assert!(decode(&jph, &options).is_err());
+        assert!(
+            decode_htj2k_with_workspace(&jph, &options, &mut Htj2kDecodeWorkspace::new()).is_err()
+        );
+        let mut caller = vec![0x93; 35 * 41];
+        let mut planes = [PlaneMut::new(&mut caller, 35, 41, 35, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        assert!(decode_into(&jph, &mut target, &options).is_err());
+        assert!(caller.iter().all(|sample| *sample == 0x93));
+    }
+
+    #[test]
+    fn native_grid_rejects_excluded_requests_and_late_failure_atomically() {
+        let (bytes, _) = fixture();
+        let options = options();
+        let info = decode_shape(&bytes, &options)
+            .unwrap()
+            .image_info()
+            .unwrap();
+        for rejected in [
+            DecodeOptions {
+                mode: DecodeMode::Rendered,
+                ..options.clone()
+            },
+            DecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..options.clone()
+            },
+            DecodeOptions {
+                requested_components: ComponentSelection::Indices(vec![1]),
+                ..options.clone()
+            },
+            DecodeOptions {
+                max_quality_layers: Some(1),
+                ..options.clone()
+            },
+        ] {
+            assert!(decode_shape(&bytes, &rejected).is_err());
+            assert!(decode(&bytes, &rejected).is_err());
+        }
+        let parsed = codestream::parse(&bytes).unwrap();
+        let tile = parsed.tiles[0];
+        let end = tile.payload_offset.unwrap() + tile.payload_len.unwrap();
+        let mut corrupt = bytes.clone();
+        corrupt[end - 2..end].fill(0);
+        assert!(
+            codestream::prepare_htj2k_native_component_grid_decode(&corrupt)
+                .unwrap()
+                .is_some()
+        );
+        for input in [&corrupt, &bytes[..bytes.len() - 3]] {
+            let mut caller = vec![0x93; 35 * 41];
+            let mut planes = [PlaneMut::new(&mut caller, 35, 41, 35, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_into(input, &mut target, &options).is_err());
+            assert!(caller.iter().all(|b| *b == 0x93));
+        }
+        let mut caller = vec![0x93; 34 * 41];
+        let mut planes = [PlaneMut::new(&mut caller, 34, 41, 34, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        assert!(decode_into(&bytes, &mut target, &options).is_err());
+        assert!(caller.iter().all(|b| *b == 0x93));
+        assert!(decode_partial(&bytes, &PartialDecodeOptions::default()).is_err());
+    }
+}
+
+#[cfg(test)]
 mod htj2k_reduced_component_tests {
     use super::*;
 
@@ -4780,7 +4962,7 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
 /// workspace.
 ///
 /// Returns `Ok(None)` for non-HTJ2K input or HTJ2K outside the admitted
-/// lossless no-decomposition profile.
+/// lossless profiles, including the bounded native component-grid profile.
 #[cfg(feature = "std")]
 pub fn decode_htj2k_with_workspace(
     input: &[u8],
@@ -4793,14 +4975,17 @@ pub fn decode_htj2k_with_workspace(
             remaining: 0,
         });
     }
-    if !matches!(options.requested_components, ComponentSelection::All) {
+    let metadata = inspect(input, &InspectOptions::default())?;
+    let native_component_grid =
+        validate_htj2k_native_component_grid_request(input, &metadata, options)?;
+    if native_component_grid.is_none()
+        && !matches!(options.requested_components, ComponentSelection::All)
+    {
         return Err(unsupported(
             UnsupportedFeature::ComponentLayout,
-            "component-subset full decode is not enabled for HTJ2K",
+            "component-subset full decode is not enabled for this HTJ2K profile",
         ));
     }
-
-    let metadata = inspect(input, &InspectOptions::default())?;
     validate_max_quality_layers(options.mode, options.max_quality_layers)?;
     validate_max_quality_layer_profile(input, &metadata, options)?;
     reject_unsupported_rendered_projection(input, &metadata, options)?;
@@ -4900,6 +5085,9 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     if let Some(shape) = p0_10_subsampled_reversible_mct_decode_shape(input, &metadata, options)? {
         return Ok(shape);
     }
+
+    let _native_component_grid =
+        validate_htj2k_native_component_grid_request(input, &metadata, options)?;
 
     require_native_full_decode_coverage(input, &metadata, options)?;
 
@@ -5674,6 +5862,59 @@ fn primary_htj2k_codestream_bytes<'a>(
     }
 }
 
+fn validate_htj2k_native_component_grid_request(
+    input: &[u8],
+    metadata: &Metadata,
+    options: &DecodeOptions,
+) -> Result<Option<Vec<ComponentInfo>>> {
+    #[cfg(not(feature = "std"))]
+    {
+        let _ = (input, metadata, options);
+        Ok(None)
+    }
+    #[cfg(feature = "std")]
+    {
+        let Some(codestream_bytes) = primary_htj2k_codestream_bytes(input, metadata)? else {
+            return Ok(None);
+        };
+        let Some(prepared) =
+            codestream::prepare_htj2k_native_component_grid_decode(codestream_bytes)
+                .map_err(map_codestream_error)?
+        else {
+            return Ok(None);
+        };
+        if metadata.format != InputFormat::Htj2kCodestream {
+            return Err(unsupported(
+                UnsupportedFeature::InputFormat,
+                "native HTJ2K component-grid decode is limited to a raw codestream",
+            ));
+        }
+        let component_zero = matches!(&options.requested_components, ComponentSelection::All)
+            || matches!(
+                &options.requested_components,
+                ComponentSelection::Indices(indices) if indices.as_slice() == [0]
+            );
+        if options.mode != DecodeMode::Components
+            || options.target_layout != ComponentLayout::Planar
+            || !component_zero
+        {
+            return Err(unsupported(
+                UnsupportedFeature::ComponentLayout,
+                "native HTJ2K component-grid decode requires planar component zero without resampling",
+            ));
+        }
+        let components =
+            part1_component_info(codestream_bytes, &options.requested_components, None)?;
+        if components.len() != 1
+            || (components[0].width, components[0].height)
+                != (prepared.output_width(), prepared.output_height())
+        {
+            return Err(sample_size_overflow());
+        }
+        Ok(Some(components))
+    }
+}
+
 fn reject_unsupported_rendered_projection(
     input: &[u8],
     metadata: &Metadata,
@@ -5850,10 +6091,14 @@ fn native_full_decode_is_available(input: &[u8], metadata: &Metadata) -> Result<
         #[cfg(feature = "std")]
         {
             let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-            return Ok(codestream::is_htj2k_lossless_profile(
-                codestream_bytes,
-                &parsed,
-            ));
+            return Ok(
+                codestream::is_htj2k_lossless_profile(codestream_bytes, &parsed)
+                    || (metadata.format == InputFormat::Htj2kCodestream
+                        && codestream::is_htj2k_native_component_grid_profile(
+                            codestream_bytes,
+                            &parsed,
+                        )),
+            );
         }
         #[cfg(not(feature = "std"))]
         {
@@ -6445,11 +6690,21 @@ pub fn decode_into_with_workspace(
     };
     let expected_shape = decode_shape(input, &owned_options)?;
     let expected_info = expected_shape.image_info()?;
-    validate_decode_target(&expected_info, target)?;
+    let metadata = inspect(input, &InspectOptions::default())?;
+    let native_component_info =
+        validate_htj2k_native_component_grid_request(input, &metadata, &owned_options)?;
+    if let Some(component_info) = &native_component_info {
+        validate_decode_target_components(&expected_info, component_info, target)?;
+    } else {
+        validate_decode_target(&expected_info, target)?;
+    }
     if decode_part1_components_into_direct(input, target, &owned_options, workspace)? {
         return Ok(());
     }
     let decoded = decode(input, &owned_options)?;
+    if native_component_info.is_some() {
+        return copy_native_component_image_into_target(&decoded, target);
+    }
     copy_image_into_target(&decoded, target)
 }
 
@@ -9858,7 +10113,7 @@ fn metadata_from_container(
                         .into(),
                 }
             }
-            (_, Some(codestream)) => support_from_codestream(codestream, primary_codestream),
+            (_, Some(codestream)) => support_from_codestream(codestream, primary_codestream, false),
             (_, None) => SupportStatus::Unknown {
                 detail: "container parsed without a contiguous codestream box".into(),
             },
@@ -10378,7 +10633,7 @@ fn metadata_from_codestream(
     };
     let image = image_info_from_codestream(&codestream);
     let support = if options.classify_support {
-        support_from_codestream(&codestream, Some(input))
+        support_from_codestream(&codestream, Some(input), true)
     } else {
         SupportStatus::Unknown {
             detail: "support classification was not requested".into(),
@@ -10419,11 +10674,23 @@ fn codestream_info_from_codestream(codestream: &codestream::Codestream) -> Codes
 fn support_from_codestream(
     codestream: &codestream::Codestream,
     bytes: Option<&[u8]>,
+    _raw_codestream: bool,
 ) -> SupportStatus {
     #[cfg(feature = "std")]
     if codestream.kind == codestream::CodestreamKind::Htj2k
         && let Some(bytes) = bytes
     {
+        if codestream::is_htj2k_native_component_grid_profile(bytes, codestream) {
+            return if _raw_codestream {
+                SupportStatus::Supported
+            } else {
+                SupportStatus::Unsupported {
+                    feature: UnsupportedFeature::InputFormat,
+                    detail: "native HTJ2K component-grid decode is limited to a raw codestream"
+                        .into(),
+                }
+            };
+        }
         return match codestream::htj2k_lossless_profile_unsupported_construct(bytes, codestream) {
             None => SupportStatus::Supported,
             Some((construct, detail)) => SupportStatus::Unsupported {
@@ -10481,6 +10748,18 @@ fn decode_algorithmic_htj2k_with_workspace(
     let Some(codestream_bytes) = primary_htj2k_codestream_bytes(input, metadata)? else {
         return Ok(None);
     };
+    let component_info = validate_htj2k_native_component_grid_request(input, metadata, options)?;
+    if let Some(prepared) = codestream::prepare_htj2k_native_component_grid_decode(codestream_bytes)
+        .map_err(map_codestream_error)?
+    {
+        let decoded = codestream::decode_prepared_htj2k_native_component_grid_owned_with_workspace(
+            &prepared,
+            &mut workspace.codestream,
+        )
+        .map_err(map_codestream_error)?;
+        return decoded_baseline_to_image_with_component_info(decoded, options, component_info)
+            .map(Some);
+    }
     let Some(decoded) = codestream::decode_htj2k_lossless_owned_with_workspace(
         codestream_bytes,
         &mut workspace.codestream,
@@ -10489,7 +10768,7 @@ fn decode_algorithmic_htj2k_with_workspace(
     else {
         return Ok(None);
     };
-    decoded_baseline_to_image_with_component_info(decoded, options, None).map(Some)
+    decoded_baseline_to_image_with_component_info(decoded, options, component_info).map(Some)
 }
 
 #[cfg(feature = "std")]
@@ -11545,6 +11824,89 @@ fn copy_image_into_target(image: &Image, target: &mut ImageViewMut<'_>) -> Resul
                     target.samples,
                     target.stride_bytes,
                     image.info.height,
+                )?;
+            }
+
+            Ok(())
+        }
+        (
+            ImageData::Interleaved(source),
+            ImageViewMut::Interleaved {
+                info,
+                samples,
+                stride_bytes,
+            },
+        ) => {
+            validate_decode_target_info(&image.info, info)?;
+            let row_bytes = checked_public_row_bytes(
+                "target.info",
+                image.info.width,
+                image.info.components,
+                public_bytes_per_sample("target.info", image.info.sample_format)?,
+            )?;
+            copy_rows(source, row_bytes, samples, *stride_bytes, image.info.height)
+        }
+        _ => Err(J2kError::InvalidParameter {
+            parameter: "target",
+            message: "target layout must match decode layout",
+        }),
+    }
+}
+
+fn copy_native_component_image_into_target(
+    image: &Image,
+    target: &mut ImageViewMut<'_>,
+) -> Result<()> {
+    if matches!(image.data, ImageData::Planes(_)) {
+        validate_decode_target_components(&image.info, &image.component_info, target)?;
+    }
+    match (&image.data, target) {
+        (
+            ImageData::Planes(source_planes),
+            ImageViewMut::Planar {
+                info: _,
+                planes: target_planes,
+            },
+        ) => {
+            if source_planes.len() != image.component_info.len() {
+                return Err(sample_size_overflow());
+            }
+            for ((source, target), component) in source_planes
+                .iter()
+                .zip(target_planes.iter())
+                .zip(&image.component_info)
+            {
+                let row_bytes = checked_public_row_bytes(
+                    "plane.sample_format",
+                    component.width,
+                    1,
+                    public_bytes_per_sample("plane.sample_format", component.sample_format)?,
+                )?;
+                validate_copy_rows(
+                    source,
+                    row_bytes,
+                    target.samples.len(),
+                    target.stride_bytes,
+                    component.height,
+                )?;
+            }
+            for ((source, target), component) in source_planes
+                .iter()
+                .zip(target_planes.iter_mut())
+                .zip(&image.component_info)
+            {
+                let row_bytes = checked_public_row_bytes(
+                    "plane.sample_format",
+                    component.width,
+                    1,
+                    public_bytes_per_sample("plane.sample_format", component.sample_format)?,
+                )?;
+                copy_rows(
+                    source,
+                    row_bytes,
+                    target.samples,
+                    target.stride_bytes,
+                    component.height,
                 )?;
             }
 
@@ -16248,7 +16610,7 @@ mod effective_coding_style_tests {
         let mut parsed = codestream::parse(&retained_payload_failure).unwrap();
         parsed.tiles[0].payload_offset = Some(usize::MAX);
         assert!(matches!(
-            support_from_codestream(&parsed, Some(&retained_payload_failure)),
+            support_from_codestream(&parsed, Some(&retained_payload_failure), true),
             SupportStatus::Unsupported {
                 feature: UnsupportedFeature::MarkerSegment,
                 ref detail,

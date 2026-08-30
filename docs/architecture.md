@@ -111,6 +111,43 @@ pages 46–48, at retrieval revision
 tests are project-authored and reproduce no protected standards text or
 payload.
 
+## Native HTONLY component grids
+
+The full native component-grid route has its own prepared admission plan. It
+requires one unsigned 8-bit non-unit-sampled component, one tile and tile-part,
+three effective reversible 5/3 levels, one through six LRCP layers, one
+effective precinct per resolution and inline headers (including SOP/EPH).
+Main COD/COC and QCD/QCC resolve before block dimensions, transform and
+coefficient-transfer guard bits are selected. Unused irreversible defaults do
+not change an effective reversible component into an irreversible one.
+
+Absolute SIZ endpoints determine the native plane. The 16 Mi-sample bound is
+checked before packet-state construction. Component origins aligned to eight
+samples preserve the existing low-pass-first phase through all three synthesis
+levels, including non-zero and odd reference-image origins. Other phases fail
+closed. The plan retains native dimensions alongside admitted contributions;
+the HT block coder receives a grid-neutral block candidate only after this
+ownership boundary. Reversible coefficient transfer and integer synthesis use
+the native dimensions, not the reference-image dimensions.
+
+The public route accepts only raw codestreams, component mode and planar all-
+or component-zero selection. Reference-image `ImageInfo`/`decode_shape` and
+native `ComponentInfo` remain distinct. Owned reconstruction completes before
+copying validated native rows into caller storage; row padding is untouched.
+No rendered resampling, JPH projection, MCT, multi-tile composition, ROI,
+tile-header overrides, reductions or layer limits are admitted. The existing
+unit-sampled lossless and reduced classifiers retain their boundaries.
+
+Leading placeholder-only layered HT contributions consume a complete
+zero-length field covering their announced passes before the next block's
+header. This repairs packet alignment without treating placeholders as actual
+HT sets or relaxing SINGLEHT validity. The geometry and override basis is
+ISO/IEC 15444-1:2024, A.6.1/A.6.2, A.6.4/A.6.5, B.2/B.3 and F.1–F.3,
+physical pages 46–53, 79–82 and 132–133, retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`; the placeholder basis is
+ISO/IEC 15444-15:2019, B.1–B.3, physical pages 40–41, retrieval
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db`.
+
 ## Bounded reversible HTJ2K encode and JPH output
 
 `encode_htj2k` writes raw HTJ2K codestreams only. Its
