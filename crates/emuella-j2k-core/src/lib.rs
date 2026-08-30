@@ -15067,6 +15067,48 @@ mod effective_coding_style_tests {
         }
         assert!(broader_samples.iter().all(|sample| *sample == 0x7b));
 
+        for split_across_tile_parts in [false, true] {
+            let mut contradictory_sets =
+                codestream::encode_htj2k_two_layer_multiple_set_test_fixture(
+                    split_across_tile_parts,
+                )
+                .unwrap();
+            let cap = contradictory_sets
+                .windows(2)
+                .position(|bytes| bytes == [0xff, 0x50])
+                .unwrap();
+            contradictory_sets[cap + 8..cap + 10].copy_from_slice(&0x1000_u16.to_be_bytes());
+            assert!(matches!(
+                inspect(&contradictory_sets, &InspectOptions::default()),
+                Err(J2kError::InvalidInput { ref message, .. })
+                    if message.contains("SINGLEHT")
+            ));
+
+            let mut contradiction_samples =
+                vec![0x53; usize::try_from(info.width * info.height).unwrap()];
+            {
+                let plane = PlaneMut::new(
+                    &mut contradiction_samples,
+                    info.width,
+                    info.height,
+                    usize::try_from(info.width).unwrap(),
+                    info.sample_format,
+                )
+                .unwrap();
+                let mut planes = [plane];
+                let mut target = ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                };
+                assert!(matches!(
+                    decode_into(&contradictory_sets, &mut target, &decode_options),
+                    Err(J2kError::InvalidInput { ref message, .. })
+                        if message.contains("SINGLEHT")
+                ));
+            }
+            assert!(contradiction_samples.iter().all(|sample| *sample == 0x53));
+        }
+
         let multitile_decomposition = multitile_fixture(1, 1);
         assert!(matches!(
             inspect(&multitile_decomposition, &InspectOptions::default())

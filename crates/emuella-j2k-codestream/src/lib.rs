@@ -9486,6 +9486,122 @@ pub fn encode_htj2k_grayscale_u8_no_decomp(input: GrayscaleU8Encode<'_>) -> Resu
     })
 }
 
+/// Build a deterministic two-layer HT fixture in which the second layer adds
+/// a second Cleanup set for the same code-block.
+///
+/// This is project test infrastructure for Part 15 packet-signalling
+/// validation, not a supported general-purpose multi-set encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_two_layer_multiple_set_test_fixture(
+    split_across_tile_parts: bool,
+) -> Result<Vec<u8>> {
+    let samples = (0_u8..64).collect::<Vec<_>>();
+    let mut codestream = encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+        width: 8,
+        height: 8,
+        samples: &samples,
+        stride_bytes: 8,
+    })?;
+    let parsed = parse(&codestream)?;
+    let tile_rect = *tile_rects(&parsed)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part = *parsed.tiles.first().ok_or(CodestreamError::SizeOverflow)?;
+    let payload = tile_payload(&codestream, &tile_part)?;
+    let first_packet_len = payload.len();
+    let contributions =
+        parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)?;
+    let [contribution] = contributions.as_slice() else {
+        return Err(CodestreamError::SizeOverflow);
+    };
+    if !contribution.ht_coded || contribution.coding_passes != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let cleanup = checked_slice(
+        payload,
+        contribution.payload_offset,
+        contribution.codeword_len,
+    )?
+    .to_vec();
+
+    let mut l_block = 3_u8;
+    while cleanup.len() >= (1_usize << u32::from(l_block)) {
+        l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    let mut writer = PacketBitWriter::new();
+    writer.write_bit(1)?;
+    writer.write_bit(1)?;
+    write_coding_pass_count(&mut writer, 3)?;
+    while cleanup.len() >= (1_usize << u32::from(l_block + 1)) {
+        writer.write_bit(1)?;
+        l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    writer.write_bit(0)?;
+    writer.write_bits(
+        u32::try_from(cleanup.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )?;
+    writer.align();
+    let mut second_layer = writer.bytes().to_vec();
+    second_layer.extend_from_slice(&cleanup);
+
+    let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+    let eoc = find_marker(
+        &codestream,
+        tile_part
+            .payload_offset
+            .ok_or(CodestreamError::SizeOverflow)?,
+        Marker::Eoc,
+    )
+    .ok_or(CodestreamError::SizeOverflow)?;
+    codestream.splice(eoc..eoc, second_layer.iter().copied());
+    let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
+    let psot = read_u32(&codestream, sot + 6)?;
+    codestream[sot + 6..sot + 10].copy_from_slice(
+        &psot
+            .checked_add(
+                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?
+            .to_be_bytes(),
+    );
+
+    if split_across_tile_parts {
+        let second_psot = 14_u32
+            .checked_add(
+                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let mut second_header = Marker::Sot.code().to_be_bytes().to_vec();
+        second_header.extend_from_slice(&10_u16.to_be_bytes());
+        second_header.extend_from_slice(&0_u16.to_be_bytes());
+        second_header.extend_from_slice(&second_psot.to_be_bytes());
+        second_header.extend_from_slice(&[1, 2]);
+        second_header.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        let split_offset = tile_part
+            .payload_offset
+            .and_then(|offset| offset.checked_add(first_packet_len))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        codestream.splice(split_offset..split_offset, second_header);
+        let first_psot = 14_u32
+            .checked_add(
+                u32::try_from(first_packet_len).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?;
+        codestream[sot + 6..sot + 10].copy_from_slice(&first_psot.to_be_bytes());
+        codestream[sot + 11] = 2;
+    }
+    Ok(codestream)
+}
+
 /// Encode a single-tile unsigned 8-bit grayscale cleanup-only HTJ2K
 /// codestream with one reversible 5/3 decomposition level.
 pub fn encode_htj2k_grayscale_u8_one_decomp(input: GrayscaleU8Encode<'_>) -> Result<Vec<u8>> {
@@ -47597,6 +47713,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    validate_part15_packet_signalling(input, &codestream)?;
     classify_htj2k_lossless_profile_markers(&codestream)
         .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
     if let Some(segment) = htj2k_tile_header_cod(&codestream) {
@@ -49141,26 +49258,26 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
         return Ok(());
     };
     for tile_rect in tile_rects {
-        let Some(tile_part) = codestream
-            .tiles
-            .iter()
-            .find(|tile| tile.tile_index == tile_rect.tile_index)
-        else {
+        let Ok(payload) = tile_payload_spans_for_rect(input, codestream, tile_rect) else {
             continue;
         };
-        let Ok(payload) = tile_payload(input, tile_part) else {
-            continue;
-        };
-        if let Err(error) =
-            parse_default_precinct_lrcp_packets(input, codestream, tile_rect, payload)
-            && matches!(
-                &error,
-                CodestreamError::InvalidMarker {
-                    marker: Some(Marker::Cap),
-                    ..
-                }
-            )
-        {
+        if let Err(error) = parse_default_precinct_packets_from_source(
+            input,
+            codestream,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+        ) && matches!(
+            &error,
+            CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            }
+        ) {
             return Err(error);
         }
     }
@@ -51590,54 +51707,7 @@ mod part15_signalling_tests {
     }
 
     fn multiple_ht_set_fixture() -> Vec<u8> {
-        let mut codestream = ht_fixture();
-        let parsed = parse(&codestream).unwrap();
-        let tile_rect = tile_rects(&parsed).unwrap()[0];
-        let tile_part = parsed.tiles[0];
-        let payload = tile_payload(&codestream, &tile_part).unwrap();
-        let contributions =
-            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload).unwrap();
-        assert_eq!(contributions.len(), 1);
-        let contribution = &contributions[0];
-        assert!(contribution.ht_coded);
-        assert_eq!(contribution.coding_passes, 1);
-        let cleanup = payload
-            .get(
-                contribution.payload_offset
-                    ..contribution.payload_offset + contribution.codeword_len,
-            )
-            .unwrap()
-            .to_vec();
-
-        let mut l_block = 3_u8;
-        while cleanup.len() >= (1_usize << u32::from(l_block)) {
-            l_block += 1;
-        }
-        let mut writer = PacketBitWriter::new();
-        writer.write_bit(1).unwrap(); // non-empty packet
-        writer.write_bit(1).unwrap(); // previously included code-block contributes
-        write_coding_pass_count(&mut writer, 3).unwrap();
-        while cleanup.len() >= (1_usize << u32::from(l_block + 1)) {
-            writer.write_bit(1).unwrap();
-            l_block += 1;
-        }
-        writer.write_bit(0).unwrap();
-        writer
-            .write_bits(u32::try_from(cleanup.len()).unwrap(), l_block + 1)
-            .unwrap();
-        writer.align();
-        let mut second_layer = writer.bytes().to_vec();
-        second_layer.extend_from_slice(&cleanup);
-
-        let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
-        codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
-        let eoc = find_marker(&codestream, tile_part.payload_offset.unwrap(), Marker::Eoc).unwrap();
-        codestream.splice(eoc..eoc, second_layer.iter().copied());
-        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
-        let psot = read_u32(&codestream, sot + 6).unwrap();
-        codestream[sot + 6..sot + 10]
-            .copy_from_slice(&(psot + u32::try_from(second_layer.len()).unwrap()).to_be_bytes());
-        codestream
+        encode_htj2k_two_layer_multiple_set_test_fixture(false).unwrap()
     }
 
     fn move_rgn_to_second_tile_part(mut codestream: Vec<u8>, rgn: &[u8]) -> Vec<u8> {
@@ -52156,6 +52226,24 @@ mod part15_signalling_tests {
             })
         ));
 
+        let mut broader_singleht = codestream.clone();
+        set_ccap15(&mut broader_singleht, 0x1000);
+        let parsed = parse(&broader_singleht).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&broader_singleht, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&broader_singleht),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
         let mut broader = codestream;
         set_ccap15(&mut broader, 0x2000);
         let parsed = parse(&broader).unwrap();
@@ -52169,6 +52257,50 @@ mod part15_signalling_tests {
         assert_eq!(contributions[0].ht_coding_set_count(), 2);
         assert!(matches!(
             decode_htj2k_lossless_owned(&broader),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn singleht_validation_uses_all_tile_part_payload_spans() {
+        let codestream = encode_htj2k_two_layer_multiple_set_test_fixture(true).unwrap();
+        let parsed = parse(&codestream).unwrap();
+        assert_eq!(parsed.tiles.len(), 2);
+        assert!(matches!(
+            validate_part15_packet_signalling(&codestream, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut broader_singleht = codestream.clone();
+        set_ccap15(&mut broader_singleht, 0x1000);
+        let parsed = parse(&broader_singleht).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&broader_singleht, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut multiht = codestream;
+        set_ccap15(&mut multiht, 0x2000);
+        let parsed = parse(&multiht).unwrap();
+        assert!(validate_part15_packet_signalling(&multiht, &parsed).is_ok());
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&multiht),
             Err(CodestreamError::Unsupported {
                 construct: UnsupportedConstruct::HtBlockDecode,
                 ..
