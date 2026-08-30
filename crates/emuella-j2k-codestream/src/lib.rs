@@ -2500,6 +2500,7 @@ impl HtCodestreamDecodeWorkspace {
         self.clear_last_vlc_cleanup_progress();
 
         let codestream = parse(input)?;
+        validate_part15_packet_signalling(input, &codestream)?;
         let Some(decode_input) = ht_decode_input_from_codestream(input, &codestream) else {
             return Ok(None);
         };
@@ -9525,32 +9526,7 @@ pub fn encode_htj2k_two_layer_multiple_set_test_fixture(
     )?
     .to_vec();
 
-    let mut l_block = 3_u8;
-    while cleanup.len() >= (1_usize << u32::from(l_block)) {
-        l_block = l_block
-            .checked_add(1)
-            .ok_or(CodestreamError::SizeOverflow)?;
-    }
-    let mut writer = PacketBitWriter::new();
-    writer.write_bit(1)?;
-    writer.write_bit(1)?;
-    write_coding_pass_count(&mut writer, 3)?;
-    while cleanup.len() >= (1_usize << u32::from(l_block + 1)) {
-        writer.write_bit(1)?;
-        l_block = l_block
-            .checked_add(1)
-            .ok_or(CodestreamError::SizeOverflow)?;
-    }
-    writer.write_bit(0)?;
-    writer.write_bits(
-        u32::try_from(cleanup.len()).map_err(|_| CodestreamError::SizeOverflow)?,
-        l_block
-            .checked_add(1)
-            .ok_or(CodestreamError::SizeOverflow)?,
-    )?;
-    writer.align();
-    let mut second_layer = writer.bytes().to_vec();
-    second_layer.extend_from_slice(&cleanup);
+    let second_layer = repeated_cleanup_second_ht_set_packet(&cleanup)?;
 
     let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
     codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
@@ -9599,6 +9575,115 @@ pub fn encode_htj2k_two_layer_multiple_set_test_fixture(
         codestream[sot + 6..sot + 10].copy_from_slice(&first_psot.to_be_bytes());
         codestream[sot + 11] = 2;
     }
+    Ok(codestream)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn repeated_cleanup_second_ht_set_packet(cleanup: &[u8]) -> Result<Vec<u8>> {
+    let mut l_block = 3_u8;
+    while cleanup.len() >= (1_usize << u32::from(l_block)) {
+        l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    let mut writer = PacketBitWriter::new();
+    writer.write_bit(1)?;
+    writer.write_bit(1)?;
+    write_coding_pass_count(&mut writer, 3)?;
+    while cleanup.len() >= (1_usize << u32::from(l_block + 1)) {
+        writer.write_bit(1)?;
+        l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    writer.write_bit(0)?;
+    writer.write_bits(
+        u32::try_from(cleanup.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )?;
+    writer.align();
+    let mut packet = writer.bytes().to_vec();
+    packet.extend_from_slice(cleanup);
+    Ok(packet)
+}
+
+/// Build a deterministic one-decomposition, two-layer HT fixture in which
+/// the second layer adds another Cleanup set to the low-resolution block.
+///
+/// This is project test infrastructure for validity-before-support admission,
+/// not a supported general-purpose multi-set encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture() -> Result<Vec<u8>> {
+    let samples = (0_u16..64)
+        .map(|sample| {
+            u8::try_from((sample * 17 + 3) % 251).map_err(|_| CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut codestream = encode_htj2k_grayscale_u8_one_decomp(GrayscaleU8Encode {
+        width: 8,
+        height: 8,
+        samples: &samples,
+        stride_bytes: 8,
+    })?;
+    let parsed = parse(&codestream)?;
+    let coding_style = uniform_effective_coding_style(&parsed)?;
+    if coding_style.decomposition_levels != 1 || coding_style.layers != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let tile_rect = *tile_rects(&parsed)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part = *parsed.tiles.first().ok_or(CodestreamError::SizeOverflow)?;
+    let payload = tile_payload(&codestream, &tile_part)?;
+    let contributions =
+        parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)?;
+    let contribution = contributions
+        .iter()
+        .find(|contribution| {
+            contribution.resolution == 0
+                && contribution.subband == PacketSubbandKind::LowLow
+                && contribution.code_block_x == 0
+                && contribution.code_block_y == 0
+        })
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if !contribution.ht_coded || contribution.coding_passes != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let cleanup = checked_slice(
+        payload,
+        contribution.payload_offset,
+        contribution.codeword_len,
+    )?;
+    let mut second_layer = repeated_cleanup_second_ht_set_packet(cleanup)?;
+    let mut empty_high_resolution_packet = PacketBitWriter::new();
+    empty_high_resolution_packet.write_bit(0)?;
+    empty_high_resolution_packet.align();
+    second_layer.extend_from_slice(empty_high_resolution_packet.bytes());
+
+    let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+    let eoc = find_marker(
+        &codestream,
+        tile_part
+            .payload_offset
+            .ok_or(CodestreamError::SizeOverflow)?,
+        Marker::Eoc,
+    )
+    .ok_or(CodestreamError::SizeOverflow)?;
+    codestream.splice(eoc..eoc, second_layer.iter().copied());
+    let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
+    let psot = read_u32(&codestream, sot + 6)?;
+    codestream[sot + 6..sot + 10].copy_from_slice(
+        &psot
+            .checked_add(
+                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?
+            .to_be_bytes(),
+    );
     Ok(codestream)
 }
 
@@ -47486,6 +47571,7 @@ pub fn htj2k_lossless_no_decomp_workload_profile(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    validate_part15_packet_signalling(input, &codestream)?;
     if htj2k_tile_header_cod(&codestream).is_some() {
         return Ok(None);
     }
@@ -49216,18 +49302,25 @@ pub fn decode_htj2k_lossless_owned(input: &[u8]) -> Result<Option<DecodedImage>>
     decode_htj2k_lossless_owned_with_workspace(input, &mut workspace)
 }
 
-/// Return whether marker and packet state fits the algorithmic lossless HTJ2K
-/// profile accepted by [`decode_htj2k_lossless_owned`].
+/// Return whether marker and packet state fits the supported algorithmic
+/// lossless HTJ2K profile.
+///
+/// This is a support classifier, not a codestream-validity result. Call
+/// [`validate_part15_packet_signalling`] first when validity and support must
+/// remain distinct, as they are in [`decode_htj2k_lossless_owned`].
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_profile(input: &[u8], codestream: &Codestream) -> bool {
     classify_htj2k_lossless_profile(input, codestream).is_ok()
 }
 
-/// Return the first native lossless-profile gate that rejects an HTJ2K
-/// codestream, or `None` when the complete current admission predicate passes.
+/// Return the first native lossless-profile support gate that rejects an
+/// HTJ2K codestream, or `None` when the current support predicate passes.
 ///
-/// Diagnostics follow decoder gate order and are derived from parsed structure
-/// and packet grammar rather than fixture identity or exact payload matching.
+/// This function classifies support only and cannot represent structural
+/// invalidity in its return type. Call [`validate_part15_packet_signalling`]
+/// first before presenting this diagnostic as a decoder-admission result.
+/// Diagnostics are derived from parsed structure and packet grammar rather
+/// than fixture identity or exact payload matching.
 #[cfg(feature = "std")]
 pub fn htj2k_lossless_profile_unsupported_construct(
     input: &[u8],
@@ -49312,16 +49405,18 @@ pub fn decode_htj2k_lossless_no_decomp_owned_with_workspace(
     workspace: &mut HtCodestreamDecodeWorkspace,
 ) -> Result<Option<DecodedImage>> {
     let codestream = parse(input)?;
-    if codestream.kind == CodestreamKind::Htj2k
-        && uniform_effective_coding_style(&codestream)
+    if codestream.kind == CodestreamKind::Htj2k {
+        validate_part15_packet_signalling(input, &codestream)?;
+        if uniform_effective_coding_style(&codestream)
             .is_ok_and(|style| style.decomposition_levels != 0)
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::WaveletTransform,
-            "zero-decomposition HTJ2K compatibility decode does not accept wavelet decomposition",
-        ));
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::WaveletTransform,
+                "zero-decomposition HTJ2K compatibility decode does not accept wavelet decomposition",
+            ));
+        }
     }
     decode_htj2k_lossless_owned_with_workspace(input, workspace)
 }
@@ -49334,8 +49429,12 @@ pub fn decode_htj2k_lossless_no_decomp_owned(input: &[u8]) -> Result<Option<Deco
     decode_htj2k_lossless_no_decomp_owned_with_workspace(input, &mut workspace)
 }
 
-/// Return whether marker and packet state fits the zero-decomposition
-/// compatibility profile.
+/// Return whether marker and packet state fits the supported
+/// zero-decomposition compatibility profile.
+///
+/// This support predicate does not replace
+/// [`validate_part15_packet_signalling`] when validity and support must remain
+/// distinct.
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_no_decomp_profile(input: &[u8], codestream: &Codestream) -> bool {
     uniform_effective_coding_style(codestream).is_ok_and(|style| style.decomposition_levels == 0)
@@ -52262,6 +52361,99 @@ mod part15_signalling_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn one_decomp_singleht_contradiction_precedes_compatibility_profile_gates() {
+        let codestream = encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
+        let parsed = parse(&codestream).unwrap();
+        let coding_style = parsed.uniform_effective_coding_style().unwrap();
+        assert_eq!(coding_style.decomposition_levels, 1);
+        assert_eq!(coding_style.layers, 2);
+        assert!(matches!(
+            validate_part15_packet_signalling(&codestream, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_no_decomp_owned(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        let mut workspace = HtCodestreamDecodeWorkspace::new();
+        assert!(matches!(
+            decode_htj2k_lossless_no_decomp_owned_with_workspace(&codestream, &mut workspace),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            htj2k_lossless_no_decomp_workload_profile(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            workspace.decode_cleanup_vlc_output_probe(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut declared_multiht = codestream;
+        set_ccap15(&mut declared_multiht, 0x2000);
+        let parsed = parse(&declared_multiht).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let contributions = parse_default_precinct_lrcp_packets(
+            &declared_multiht,
+            &parsed,
+            tile_rect,
+            tile_payload(&declared_multiht, &parsed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert!(contributions.iter().any(|contribution| {
+            contribution.resolution == 0 && contribution.ht_coding_set_count() == 2
+        }));
+    }
+
+    #[test]
+    fn support_diagnostic_requires_separate_part15_validity() {
+        let mut legal_but_unsupported = ht_fixture();
+        set_ccap15(&mut legal_but_unsupported, 0x1000);
+        let legal = parse(&legal_but_unsupported).unwrap();
+        assert!(validate_part15_packet_signalling(&legal_but_unsupported, &legal).is_ok());
+        let legal_diagnostic =
+            htj2k_lossless_profile_unsupported_construct(&legal_but_unsupported, &legal);
+        assert!(matches!(
+            legal_diagnostic,
+            Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
+
+        let mut invalid_and_unsupported = multiple_ht_set_fixture();
+        set_ccap15(&mut invalid_and_unsupported, 0x1000);
+        let invalid = parse(&invalid_and_unsupported).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&invalid_and_unsupported, &invalid),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(!is_htj2k_lossless_profile(
+            &invalid_and_unsupported,
+            &invalid
+        ));
+        assert_eq!(
+            htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid),
+            legal_diagnostic
+        );
     }
 
     #[test]

@@ -15109,6 +15109,36 @@ mod effective_coding_style_tests {
             assert!(contradiction_samples.iter().all(|sample| *sample == 0x53));
         }
 
+        let one_decomp_contradiction =
+            codestream::encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
+        assert!(matches!(
+            inspect(&one_decomp_contradiction, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { ref message, .. })
+                if message.contains("SINGLEHT")
+        ));
+        let mut one_decomp_samples = vec![0x39; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut one_decomp_samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&one_decomp_contradiction, &mut target, &decode_options),
+                Err(J2kError::InvalidInput { ref message, .. })
+                    if message.contains("SINGLEHT")
+            ));
+        }
+        assert!(one_decomp_samples.iter().all(|sample| *sample == 0x39));
+
         let multitile_decomposition = multitile_fixture(1, 1);
         assert!(matches!(
             inspect(&multitile_decomposition, &InspectOptions::default())
