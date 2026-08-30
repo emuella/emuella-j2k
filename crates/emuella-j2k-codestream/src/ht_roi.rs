@@ -8,8 +8,14 @@
 
 use super::*;
 
+#[cfg(test)]
+std::thread_local! {
+    static STRUCTURAL_VALIDATION_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
 pub(super) fn envelope(c: &Codestream) -> bool {
     c.kind == CodestreamKind::Htj2k
+        && c.markers.iter().any(|m| m.marker == Marker::Rgn)
         && c.siz.components.len() == 1
         && c.siz.components.iter().all(|component| {
             (1..=16).contains(&component.bits_per_sample)
@@ -201,11 +207,14 @@ pub fn prepare_htj2k_roi_window_decode(
     {
         return Ok(None);
     }
-    // Packet-level contradictions of SINGLEHT are input invalidity, even when
-    // the requested window or native coefficient bounds are unsupported. This
-    // uses the same bounded structural walk as inspection before admission.
-    validate_part15_packet_signalling(input, &codestream)?;
+    // Resolve the bounded tile/component/style resource envelope before any
+    // structural packet walk. It must not enumerate unsupported large grids.
     let roi = resolve_maxshift(input, &codestream)?;
+    // Within that envelope, contradictory SINGLEHT signalling is invalid even
+    // when the requested window or native coefficient bounds are unsupported.
+    #[cfg(test)]
+    STRUCTURAL_VALIDATION_CALLS.with(|calls| calls.set(calls.get() + 1));
+    validate_part15_packet_signalling(input, &codestream)?;
     let part15 = codestream
         .capability
         .as_ref()
@@ -711,6 +720,17 @@ mod tests {
         bytes.splice(cod + 14..cod + 14, [0x77, 0x88]);
         let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
         bytes.splice(sot..sot, [0xff, 0x5f, 0, 9, 0, 0, 0, 2, 33, 255, 0]);
+        // Without RGN this belongs to the existing default structural route.
+        // The ROI selector must not intercept it and hide the contradiction.
+        let parsed = parse(&bytes).unwrap();
+        assert!(!envelope(&parsed));
+        assert!(matches!(
+            validate_part15_packet_signalling(&bytes, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
         let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
         let len = read_u32(&bytes, sot + 6).unwrap();
         bytes[sot + 6..sot + 10].copy_from_slice(&(len + 7).to_be_bytes());
@@ -742,6 +762,45 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn ht_roi_resource_preflight_precedes_structural_packet_walking() {
+        let (bytes, _) = fixture(8, 8, 4, true, 7, 1, 8, 64, false, false).unwrap();
+        STRUCTURAL_VALIDATION_CALLS.with(|calls| calls.set(0));
+        prepare_htj2k_roi_window_decode(&bytes, region(8, 8)).unwrap();
+        STRUCTURAL_VALIDATION_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+
+        // Structurally legal, tiny empty tile parts make a large unsupported
+        // grid without a large image allocation. Reject before packet walking,
+        // not after the shared walk's per-tile source lookup work.
+        let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
+        for count in [65_u16, 256, 1024] {
+            let mut oversized = bytes[..sot].to_vec();
+            let siz = find_marker(&oversized, 0, Marker::Siz).unwrap();
+            oversized[siz + 6..siz + 10].copy_from_slice(&(128 * u32::from(count)).to_be_bytes());
+            for index in 0..count {
+                oversized.extend_from_slice(&[0xff, 0x90, 0, 10]);
+                oversized.extend_from_slice(&index.to_be_bytes());
+                oversized.extend_from_slice(&(if index == 0 { 21_u32 } else { 14 }).to_be_bytes());
+                oversized.extend_from_slice(&[0, 1]);
+                if index == 0 {
+                    oversized.extend_from_slice(&[0xff, 0x5e, 0, 5, 0, 0, 7]);
+                }
+                oversized.extend_from_slice(&[0xff, 0x93]);
+            }
+            oversized.extend_from_slice(&[0xff, 0xd9]);
+            assert_eq!(parse(&oversized).unwrap().tiles.len(), usize::from(count));
+            STRUCTURAL_VALIDATION_CALLS.with(|calls| calls.set(0));
+            assert!(matches!(
+                prepare_htj2k_roi_window_decode(&oversized, region(8, 8)),
+                Err(CodestreamError::Unsupported {
+                    construct: UnsupportedConstruct::HtBlockDecode,
+                    ..
+                })
+            ));
+            STRUCTURAL_VALIDATION_CALLS.with(|calls| assert_eq!(calls.get(), 0));
+        }
     }
 
     #[test]
