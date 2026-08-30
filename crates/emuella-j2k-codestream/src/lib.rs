@@ -56971,7 +56971,7 @@ mod part15_signalling_tests {
                         parse_default_precinct_lrcp_packets(&input, &parsed, tile, payload),
                         Err(CodestreamError::Unsupported {
                             construct: UnsupportedConstruct::PacketDecode,
-                            ref message,
+                            message,
                             ..
                         }) if message.contains("mixed classic/HT")
                     ));
