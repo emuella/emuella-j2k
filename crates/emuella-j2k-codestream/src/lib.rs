@@ -39,6 +39,8 @@ mod ht_reduced_roi;
 pub use ht_high_component::prepare_htj2k_high_component_decode;
 mod ht_roi;
 #[cfg(feature = "std")]
+mod ht_tile_window;
+#[cfg(feature = "std")]
 #[doc(hidden)]
 pub use ht_reduced_roi::encode_htj2k_reduced_roi_multiple_set_test_fixture;
 #[doc(hidden)]
@@ -49,6 +51,14 @@ pub use ht_roi::encode_htj2k_roi_window_test_fixture;
 pub use ht_roi::{
     PreparedHtj2kRoiWindowDecode, decode_prepared_htj2k_roi_window_owned,
     prepare_htj2k_roi_window_decode,
+};
+#[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
+#[doc(hidden)]
+pub use ht_tile_window::encode_htj2k_tile_window_test_fixture;
+#[cfg(feature = "std")]
+pub use ht_tile_window::{
+    PreparedHtj2kTileWindowDecode, decode_prepared_htj2k_tile_window_owned,
+    prepare_htj2k_tile_window_decode,
 };
 #[cfg(feature = "std")]
 mod openjph_transfer;
@@ -54111,6 +54121,9 @@ pub fn htj2k_lossless_profile_unsupported_construct(
 /// diagnostics until packet decode is requested.
 #[cfg(feature = "std")]
 pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) -> Result<()> {
+    if ht_tile_window::envelope(codestream) {
+        return ht_tile_window::validate_signalling(input, codestream);
+    }
     let Some(part15) = codestream
         .capability
         .as_ref()

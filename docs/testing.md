@@ -363,6 +363,21 @@ The locked P0.03 and P0.15 full-resolution windows each compare 16,384 samples
 at peak/MSE 0/0 within unchanged 0/0 bounds. Their alternative reduced outputs
 are not claimed by this route.
 
+The independent tile-progression window route qualifies the locked P0.07
+HTONLY native component-zero window: 16,384 samples at peak/MSE 0/0 within
+the unchanged 10/0.34 limits. Project-authored coefficient planes cover
+8/12/16-bit signed/unsigned formats, 32/64/128-sample tiles, one/two/eight
+layers, all three resolution-prefix splits and optional SOP/EPH. The expected
+window is synthesised directly from authored coefficients, without external
+pixels. A 256-tile probe checks exact packet counts and bounded tile-local
+marker work; excessive grids stop before packets. Unselected multiple sets,
+late malformed packets, premature POC use and neighbouring coding/quantiser,
+ROI/MCT and main POC headers fail closed. SINGLEHT contradictions precede
+native cleanup/window declines. Public tests compare metadata, native
+descriptors, owned output and padded caller output, including entropy-failure
+atomicity and unsupported JPH/request shapes. This is neither HTMIX support
+nor a general conformance claim.
+
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
 and the capability claim in `testdata.lock.toml`:
 

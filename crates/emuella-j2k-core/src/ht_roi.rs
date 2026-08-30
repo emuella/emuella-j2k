@@ -1,17 +1,30 @@
 //! Native partial ROI presentation, independent of the Part 1 request planner.
 use super::*;
 
+pub(super) enum NativeWindow<'a> {
+    Roi(codestream::PreparedHtj2kRoiWindowDecode<'a>),
+    Tile(codestream::PreparedHtj2kTileWindowDecode<'a>),
+}
+impl NativeWindow<'_> {
+    fn bits_per_sample(&self) -> u8 {
+        match self {
+            Self::Roi(p) => p.bits_per_sample(),
+            Self::Tile(p) => p.bits_per_sample(),
+        }
+    }
+    fn signed(&self) -> bool {
+        match self {
+            Self::Roi(p) => p.signed(),
+            Self::Tile(p) => p.signed(),
+        }
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub(super) fn prepare<'a>(
     input: &'a [u8],
     options: &PartialDecodeOptions,
-) -> Result<
-    Option<(
-        codestream::PreparedHtj2kRoiWindowDecode<'a>,
-        ImageInfo,
-        Vec<ComponentInfo>,
-    )>,
-> {
+) -> Result<Option<(NativeWindow<'a>, ImageInfo, Vec<ComponentInfo>)>> {
     let Some(region) = options.region else {
         return Ok(None);
     };
@@ -24,17 +37,21 @@ pub(super) fn prepare<'a>(
     {
         return Ok(None);
     }
-    let Some(prepared) = codestream::prepare_htj2k_roi_window_decode(
-        input,
-        codestream::TileRegionRequest {
-            x: region.x,
-            y: region.y,
-            width: region.width,
-            height: region.height,
-        },
-    )
-    .map_err(map_codestream_error)?
-    else {
+    let window = codestream::TileRegionRequest {
+        x: region.x,
+        y: region.y,
+        width: region.width,
+        height: region.height,
+    };
+    let prepared = if let Some(p) =
+        codestream::prepare_htj2k_tile_window_decode(input, window).map_err(map_codestream_error)?
+    {
+        NativeWindow::Tile(p)
+    } else if let Some(p) =
+        codestream::prepare_htj2k_roi_window_decode(input, window).map_err(map_codestream_error)?
+    {
+        NativeWindow::Roi(p)
+    } else {
         return Ok(None);
     };
     let sample_format = SampleFormat::with_byte_order(
@@ -67,8 +84,11 @@ pub(super) fn decode(input: &[u8], options: &PartialDecodeOptions) -> Result<Opt
     let Some((prepared, _, components)) = prepare(input, options)? else {
         return Ok(None);
     };
-    let decoded = codestream::decode_prepared_htj2k_roi_window_owned(&prepared)
-        .map_err(map_codestream_error)?;
+    let decoded = match &prepared {
+        NativeWindow::Roi(p) => codestream::decode_prepared_htj2k_roi_window_owned(p),
+        NativeWindow::Tile(p) => codestream::decode_prepared_htj2k_tile_window_owned(p),
+    }
+    .map_err(map_codestream_error)?;
     decoded_baseline_to_image_with_component_info(
         decoded,
         &DecodeOptions {
@@ -85,6 +105,160 @@ pub(super) fn decode(input: &[u8], options: &PartialDecodeOptions) -> Result<Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ht_tile_window_public_routes_preserve_native_metadata_and_atomicity() {
+        let bytes = codestream::encode_htj2k_tile_window_test_fixture(3, false).unwrap();
+        let request = PartialDecodeOptions {
+            region: Some(Region {
+                x: 3,
+                y: 5,
+                width: 17,
+                height: 19,
+            }),
+            components: ComponentSelection::Indices(vec![0]),
+            target_layout: ComponentLayout::Planar,
+            ..PartialDecodeOptions::default()
+        };
+        let info = decode_partial_info(&bytes, &request).unwrap();
+        let image = decode_partial(&bytes, &request).unwrap();
+        assert_eq!(image.info, info);
+        assert_eq!(
+            image.component_info,
+            decode_partial_component_info(&bytes, &request).unwrap()
+        );
+        assert_eq!(
+            info.sample_format,
+            SampleFormat::with_byte_order(12, true, Some(SampleEndian::Little)).unwrap()
+        );
+        let ImageData::Planes(expected) = image.data else {
+            panic!("planar")
+        };
+        let write = |input: &[u8], options: &PartialDecodeOptions, caller: &mut [u8]| {
+            let mut planes = [PlaneMut::new(caller, 17, 19, 40, info.sample_format).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            decode_partial_into(input, &mut target, options)
+        };
+        let mut caller = vec![0xa6; 40 * 19];
+        write(&bytes, &request, &mut caller).unwrap();
+        for (row, pixels) in expected[0].chunks_exact(34).enumerate() {
+            assert_eq!(&caller[row * 40..row * 40 + 34], pixels);
+            assert!(
+                caller[row * 40 + 34..(row + 1) * 40]
+                    .iter()
+                    .all(|b| *b == 0xa6)
+            );
+        }
+        let metadata = inspect(&bytes, &InspectOptions::default()).unwrap();
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported { .. }
+        ));
+        let mut jph = Vec::new();
+        write_jph_encode_output(metadata.image.as_ref().unwrap(), &bytes, &mut jph).unwrap();
+        let mut rejected = vec![(jph, request.clone())];
+        for options in [
+            PartialDecodeOptions {
+                components: ComponentSelection::All,
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(1),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 31,
+                    y: 0,
+                    width: 17,
+                    height: 19,
+                }),
+                ..request.clone()
+            },
+        ] {
+            rejected.push((bytes.clone(), options));
+        }
+        let c = codestream::parse(&bytes).unwrap();
+        let last = c.tiles.iter().find(|p| p.tile_index == 2).unwrap();
+        let mut malformed = bytes.clone();
+        malformed[last.payload_offset.unwrap() + last.payload_len.unwrap() - 1] = 0xff;
+        rejected.push((malformed, request.clone()));
+        let mut entropy = bytes.clone();
+        let first = c.tiles[0].payload_offset.unwrap();
+        let body = first
+            + bytes[first..]
+                .windows(2)
+                .position(|w| w == [0xff, 0x92])
+                .unwrap()
+            + 2;
+        let next = body
+            + bytes[body..]
+                .windows(2)
+                .position(|w| w == [0xff, 0x91])
+                .unwrap();
+        entropy[next - 2..next].copy_from_slice(&[0xff, 0xff]);
+        assert!(decode_partial_info(&entropy, &request).is_ok());
+        assert!(decode_partial(&entropy, &request).is_err());
+        let mut caller = vec![0xa6; 40 * 19];
+        assert!(write(&entropy, &request, &mut caller).is_err());
+        assert!(caller.iter().all(|b| *b == 0xa6));
+        for (input, options) in rejected {
+            assert!(decode_partial_info(&input, &options).is_err());
+            assert!(decode_partial_component_info(&input, &options).is_err());
+            assert!(decode_partial(&input, &options).is_err());
+            caller.fill(0xa6);
+            assert!(write(&input, &options, &mut caller).is_err());
+            assert!(caller.iter().all(|b| *b == 0xa6));
+        }
+        let invalid = codestream::encode_htj2k_tile_window_test_fixture(3, true).unwrap();
+        assert!(matches!(
+            inspect(&invalid, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { .. })
+        ));
+        for x in [3, 31] {
+            let options = PartialDecodeOptions {
+                region: Some(Region {
+                    x,
+                    y: 5,
+                    width: 17,
+                    height: 19,
+                }),
+                ..request.clone()
+            };
+            assert!(matches!(
+                decode_partial_info(&invalid, &options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            assert!(matches!(
+                decode_partial_component_info(&invalid, &options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            assert!(matches!(
+                decode_partial(&invalid, &options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            caller.fill(0xa6);
+            assert!(matches!(
+                write(&invalid, &options, &mut caller),
+                Err(J2kError::InvalidInput { .. })
+            ));
+            assert!(caller.iter().all(|b| *b == 0xa6));
+        }
+    }
 
     #[test]
     fn ht_roi_singleht_invalidity_precedes_native_bounds_and_window_admission() {
