@@ -293,8 +293,22 @@ Public tests cover metadata/descriptor/executor agreement, signed padded caller
 rows, late packet and entropy failure atomicity, full-image separation, JPH and
 neighbouring requests. Locked P0.08 compares native signed 12-bit component zero
 at reduction five after the existing arithmetic scale to its signed 8-bit
-reference; no protected samples enter ordinary tests. P0.05/P0.06, ROI,
-tile-header heterogeneity and HTMIX still need their own admission evidence.
+reference; no protected samples enter ordinary tests.
+
+Scalar-derived reduction-three tests independently enumerate actual sampled
+PCRL precinct origins for four mixed-transform components. Generated odd grids
+65×97, 529×401, 2057×65 and 1033×65 exercise one/four/seven layers, both
+128/256 precinct sizes, and retained/discarded precinct crossings. Explicit
+subband exponent/mantissa expectations and a coefficient-domain oracle with
+independent scales check step expansion, HT half-step transfer and three-level
+9/7 synthesis. Every component contributes non-zero packets. Tests check
+selected/unselected quantiser behaviour, malformed late packets, linear marker
+visits, pre-topology size rejection, and invalid SINGLEHT versus unsupported
+MULTIHT. Public metadata, descriptors, owned and padded caller routes agree;
+neighbouring requests, JPH, ROI, tile overrides, malformed quantisers and
+selected entropy failures preserve caller storage. Locked P0.05 uses its
+unchanged component-zero reduction-three and error-bound contract. P0.06,
+ROI, tile-header heterogeneity and HTMIX still need separate admission evidence.
 
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
 and the capability claim in `testdata.lock.toml`:

@@ -1483,6 +1483,204 @@ mod htj2k_reduced_component_tests {
     }
 
     #[test]
+    fn scalar_derived_reduced_public_routes_and_failures_are_atomic() {
+        let input =
+            codestream::encode_htj2k_scalar_derived_reduced_component_test_fixture(65, 97).unwrap();
+        let request = PartialDecodeOptions {
+            resolution: ResolutionLevel::Reduced { discard_levels: 3 },
+            ..options()
+        };
+        let info = decode_partial_info(&input, &request).unwrap();
+        assert_eq!(
+            (info.width, info.height, info.components, info.sample_format),
+            (9, 13, 1, SampleFormat::U8)
+        );
+        let owned = decode_partial(&input, &request).unwrap();
+        assert_eq!(owned.info, info);
+        assert_eq!(
+            decode_partial_component_info(&input, &request).unwrap(),
+            owned.component_info
+        );
+        let ImageData::Planes(expected) = owned.data else {
+            panic!("expected planar output");
+        };
+        let mut caller = vec![0xa6; 12 * 13];
+        {
+            let mut planes = [PlaneMut::new(&mut caller, 9, 13, 12, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            decode_partial_into(&input, &mut target, &request).unwrap();
+        }
+        for (row, expected) in expected[0].chunks_exact(9).enumerate() {
+            assert_eq!(&caller[row * 12..row * 12 + 9], expected);
+            assert!(
+                caller[row * 12 + 9..(row + 1) * 12]
+                    .iter()
+                    .all(|&value| value == 0xa6)
+            );
+        }
+        let metadata = inspect(&input, &InspectOptions::default()).unwrap();
+        assert!(matches!(
+            metadata.support,
+            SupportStatus::Unsupported { .. }
+        ));
+        assert!(decode(&input, &DecodeOptions::default()).is_err());
+        let parsed = codestream::parse(&input).unwrap();
+        let offset = |kind| {
+            parsed
+                .markers
+                .iter()
+                .find(|m| m.marker == kind)
+                .unwrap()
+                .offset
+        };
+        let cod = offset(codestream::Marker::Cod);
+        let coc = offset(codestream::Marker::Coc);
+        let siz = offset(codestream::Marker::Siz);
+        let cap = offset(codestream::Marker::Cap);
+        let qcc = parsed
+            .markers
+            .iter()
+            .rfind(|m| m.marker == codestream::Marker::Qcc)
+            .unwrap()
+            .offset;
+        let mut rejected = Vec::new();
+        for (offset, value) in [
+            (cod + 5, 4),
+            (cod + 7, 8),
+            (cod + 8, 1),
+            (cod + 4, 2),
+            (cod + 4, 4), // Inline SOP/EPH are not admitted here.
+            (coc + 6, 5),
+            (coc + 10, 1),
+            (coc + 11, 0x66),
+            (siz + 41, 2),
+            (siz + 47, 1),
+            (siz + 40, 0x87),
+            (cap + 9, 0x2b),
+            (cap + 8, 0x40),
+            (qcc + 5, 0x63),
+        ] {
+            let mut changed = input.clone();
+            changed[offset] = value;
+            rejected.push(changed);
+        }
+        let tile = parsed.tiles[0];
+        let start = tile.payload_offset.unwrap();
+        let end = start + tile.payload_len.unwrap();
+        let mut late = input.clone();
+        late[end - 1] = 0xff;
+        rejected.push(late);
+        let mut oversized = input.clone();
+        for offset in [siz + 6, siz + 10, siz + 22, siz + 26] {
+            oversized[offset..offset + 4].copy_from_slice(&32768_u32.to_be_bytes());
+        }
+        rejected.push(oversized);
+        // A valid JPH wrapper does not grant a raw-only partial route.
+        let mut jph = Vec::new();
+        write_jph_encode_output(metadata.image.as_ref().unwrap(), &input, &mut jph).unwrap();
+        rejected.push(jph);
+        // Main ROI and an otherwise identical tile coding override are out of
+        // scope independently of whether their selected pixels would differ.
+        let sot = offset(codestream::Marker::Sot);
+        let mut roi = input.clone();
+        roi.splice(sot..sot, [0xff, 0x5e, 0, 5, 0, 0, 1]);
+        rejected.push(roi);
+        let mut tile_style = input.clone();
+        let cod_length = usize::from(u16::from_be_bytes([input[cod + 2], input[cod + 3]])) + 2;
+        tile_style.splice(
+            start - 2..start - 2,
+            input[cod..cod + cod_length].iter().copied(),
+        );
+        let length =
+            u32::from_be_bytes(input[sot + 6..sot + 10].try_into().unwrap()) + cod_length as u32;
+        tile_style[sot + 6..sot + 10].copy_from_slice(&length.to_be_bytes());
+        rejected.push(tile_style);
+        for bytes in rejected {
+            assert!(decode_partial_info(&bytes, &request).is_err());
+            assert!(decode_partial_component_info(&bytes, &request).is_err());
+            assert!(decode_partial(&bytes, &request).is_err());
+            caller.fill(0xa6);
+            let mut planes = [PlaneMut::new(&mut caller, 9, 13, 12, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_partial_into(&bytes, &mut target, &request).is_err());
+            assert!(caller.iter().all(|&value| value == 0xa6));
+        }
+        // This authored fixture's first packet is one cleanup-coded LL block.
+        // Locate its complete extent with the existing single-block parser;
+        // no entropy-body assumptions or golden fixture bytes are needed.
+        let first_packet_end = (1..128)
+            .find(|&len| {
+                codestream::parse_no_decomp_lrcp_packet(&input[start..start + len]).is_ok()
+            })
+            .unwrap()
+            + start;
+        let mut entropy = input.clone();
+        entropy[first_packet_end - 2] &= 0xf0;
+        entropy[first_packet_end - 1] = 0;
+        assert_eq!(decode_partial_info(&entropy, &request).unwrap(), info);
+        assert!(decode_partial(&entropy, &request).is_err());
+        caller.fill(0xa6);
+        let mut planes = [PlaneMut::new(&mut caller, 9, 13, 12, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        assert!(decode_partial_into(&entropy, &mut target, &request).is_err());
+        assert!(caller.iter().all(|&value| value == 0xa6));
+        for neighbour in [
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 2 },
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 5 },
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::All,
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![1]),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(1),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                ..request.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                }),
+                ..request.clone()
+            },
+        ] {
+            assert!(decode_partial_info(&input, &neighbour).is_err());
+            assert!(decode_partial(&input, &neighbour).is_err());
+        }
+    }
+
+    #[test]
     fn public_irreversible_mct_cross_envelope_fails_atomically() {
         let mut input = irreversible_fixture();
         let options = options();
