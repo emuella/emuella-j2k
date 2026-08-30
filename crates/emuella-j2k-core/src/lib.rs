@@ -740,6 +740,313 @@ mod htj2k_encode_tests {
 }
 
 #[cfg(test)]
+mod htj2k_reduced_component_tests {
+    use super::*;
+
+    fn fixture() -> Vec<u8> {
+        let width = 49_u32;
+        let height = 49_u32;
+        let samples = (0..width * height)
+            .flat_map(|index| {
+                let x = index % width;
+                let y = index / width;
+                let value = ((x * 17 + y * 23 + 11) % 251) as u8;
+                [value, value, value]
+            })
+            .collect::<Vec<_>>();
+        codestream::encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
+            codestream::RgbU8Encode {
+                width,
+                height,
+                samples: &samples,
+                stride_bytes: width as usize * 3,
+            },
+            5,
+        )
+        .unwrap()
+    }
+
+    fn options() -> PartialDecodeOptions {
+        PartialDecodeOptions {
+            resolution: ResolutionLevel::Reduced { discard_levels: 2 },
+            components: ComponentSelection::Indices(vec![0]),
+            ..PartialDecodeOptions::default()
+        }
+    }
+
+    #[test]
+    fn public_owned_metadata_and_caller_planar_routes_agree() {
+        let input = fixture();
+        let options = options();
+        let info = decode_partial_info(&input, &options).unwrap();
+        assert_eq!((info.width, info.height, info.components), (13, 13, 1));
+        assert_eq!(info.sample_format, SampleFormat::U8);
+        assert_eq!(info.color_model, ColorModel::Unknown);
+        let component_info = decode_partial_component_info(&input, &options).unwrap();
+        assert_eq!(component_info.len(), 1);
+        assert_eq!(component_info[0].source_component, Some(0));
+        assert_eq!(
+            (component_info[0].width, component_info[0].height),
+            (13, 13)
+        );
+
+        let owned = decode_partial(&input, &options).unwrap();
+        let ImageData::Planes(owned_planes) = &owned.data else {
+            panic!("bounded reduced HT output was not planar")
+        };
+        let mut caller = vec![0x5a_u8; 13 * 13];
+        let mut planes = [PlaneMut::new(&mut caller, 13, 13, 13, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        decode_partial_into(&input, &mut target, &options).unwrap();
+        assert_eq!(caller, owned_planes[0]);
+        assert!(caller.iter().any(|sample| *sample != caller[0]));
+    }
+
+    #[test]
+    fn nearby_requests_fail_closed_and_caller_output_is_atomic() {
+        let input = fixture();
+        let admitted = options();
+        let rejected = [
+            PartialDecodeOptions {
+                components: ComponentSelection::All,
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                components: ComponentSelection::Indices(vec![1]),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Full,
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                region: Some(Region {
+                    x: 0,
+                    y: 0,
+                    width: 49,
+                    height: 49,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                tile: Some(TileSelection {
+                    tile_x: 0,
+                    tile_y: 0,
+                }),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                max_quality_layers: Some(1),
+                ..admitted.clone()
+            },
+            PartialDecodeOptions {
+                target_layout: ComponentLayout::Interleaved,
+                ..admitted.clone()
+            },
+        ];
+        for request in rejected {
+            assert!(
+                decode_partial(&input, &request).is_err(),
+                "nearby request was admitted"
+            );
+            assert!(decode_partial_info(&input, &request).is_err());
+        }
+
+        let marker_offset = |bytes: &[u8], marker: codestream::Marker| {
+            codestream::parse(bytes)
+                .unwrap()
+                .markers
+                .iter()
+                .find(|segment| segment.marker == marker)
+                .unwrap()
+                .offset
+        };
+        let siz = marker_offset(&input, codestream::Marker::Siz);
+        let cod = marker_offset(&input, codestream::Marker::Cod);
+        let mut wrong_depth = input.clone();
+        wrong_depth[siz + 40] = 8;
+        let mut wrong_sampling = input.clone();
+        wrong_sampling[siz + 44] = 2;
+        let mut no_mct = input.clone();
+        no_mct[cod + 8] = 0;
+        let mut four_levels = input.clone();
+        four_levels[cod + 9] = 4;
+        for nearby_input in [wrong_depth, wrong_sampling, no_mct, four_levels] {
+            assert!(decode_partial_info(&nearby_input, &admitted).is_err());
+            assert!(decode_partial(&nearby_input, &admitted).is_err());
+        }
+
+        let mut htmix = input.clone();
+        let cap = marker_offset(&htmix, codestream::Marker::Cap);
+        htmix[cap + 8..cap + 10].copy_from_slice(&0xc000_u16.to_be_bytes());
+        let cod = marker_offset(&htmix, codestream::Marker::Cod);
+        htmix[cod + 12] = 0xc0;
+        assert!(decode_partial_info(&htmix, &admitted).is_err());
+        assert!(decode_partial(&htmix, &admitted).is_err());
+
+        let mut roi = input.clone();
+        let cap = marker_offset(&roi, codestream::Marker::Cap);
+        roi[cap + 8..cap + 10].copy_from_slice(&0x1000_u16.to_be_bytes());
+        let sot = marker_offset(&roi, codestream::Marker::Sot);
+        roi.splice(sot..sot, [0xff, 0x5e, 0, 5, 0, 0, 1]);
+        assert!(decode_partial_info(&roi, &admitted).is_err());
+        assert!(decode_partial(&roi, &admitted).is_err());
+
+        let info = decode_partial_info(&input, &admitted).unwrap();
+        let mut caller = vec![0x6d_u8; 13 * 13];
+        let wrong_info = ImageInfo {
+            width: 12,
+            ..info.clone()
+        };
+        {
+            let mut planes = [PlaneMut::new(&mut caller, 13, 13, 13, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &wrong_info,
+                planes: &mut planes,
+            };
+            assert!(decode_partial_into(&input, &mut target, &admitted).is_err());
+        }
+        assert!(caller.iter().all(|sample| *sample == 0x6d));
+
+        let parsed = codestream::parse(&input).unwrap();
+        let tile = parsed.tiles[0];
+        let payload_offset = tile.payload_offset.unwrap();
+        let payload_len = tile.payload_len.unwrap();
+        let tile_rect = codestream::TileRect {
+            tile_index: 0,
+            tile_x: 0,
+            tile_y: 0,
+            x: 0,
+            y: 0,
+            width: 49,
+            height: 49,
+        };
+        let contributions = codestream::parse_default_precinct_lrcp_packets(
+            &input,
+            &parsed,
+            tile_rect,
+            &input[payload_offset..payload_offset + payload_len],
+        )
+        .unwrap();
+        let contribution = contributions
+            .iter()
+            .find(|contribution| {
+                contribution.component_index == 0
+                    && contribution.resolution <= 3
+                    && contribution.coding_passes == 1
+                    && contribution.codeword_len >= 2
+            })
+            .unwrap();
+        let cleanup_end = payload_offset + contribution.payload_offset + contribution.codeword_len;
+        let mut reconstruction_failure = input.clone();
+        reconstruction_failure[cleanup_end - 2] &= 0xf0;
+        reconstruction_failure[cleanup_end - 1] = 0;
+        assert!(
+            codestream::prepare_htj2k_reduced_component_decode(
+                &reconstruction_failure,
+                codestream::Htj2kReducedComponentDecodeRequest {
+                    component_index: 0,
+                    discard_levels: 2,
+                },
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert_eq!(
+            decode_partial_info(&reconstruction_failure, &admitted).unwrap(),
+            info
+        );
+        {
+            let mut planes = [PlaneMut::new(&mut caller, 13, 13, 13, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_partial_into(&reconstruction_failure, &mut target, &admitted).is_err());
+        }
+        assert!(caller.iter().all(|sample| *sample == 0x6d));
+
+        let mut packet_contradiction = input.clone();
+        let sod = packet_contradiction
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x93])
+            .unwrap();
+        packet_contradiction[sod + 2] ^= 0x40;
+        codestream::parse(&packet_contradiction).unwrap();
+        assert!(
+            codestream::prepare_htj2k_reduced_component_decode(
+                &packet_contradiction,
+                codestream::Htj2kReducedComponentDecodeRequest {
+                    component_index: 0,
+                    discard_levels: 2,
+                },
+            )
+            .is_err()
+        );
+        assert!(decode_partial_info(&packet_contradiction, &admitted).is_err());
+        assert!(decode_partial_component_info(&packet_contradiction, &admitted).is_err());
+        {
+            let mut planes = [PlaneMut::new(&mut caller, 13, 13, 13, SampleFormat::U8).unwrap()];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(decode_partial_into(&packet_contradiction, &mut target, &admitted).is_err());
+        }
+        assert!(caller.iter().all(|sample| *sample == 0x6d));
+    }
+
+    #[test]
+    fn oversized_reduced_geometry_fails_before_metadata_packet_state_or_allocation() {
+        let input =
+            codestream::encode_htj2k_reduced_component_empty_packet_test_fixture(32_768, 32_768)
+                .unwrap();
+        assert!(input.len() < 1024);
+        let options = options();
+        assert!(matches!(
+            decode_partial_info(&input, &options),
+            Err(J2kError::Unsupported { .. })
+        ));
+        assert!(matches!(
+            decode_partial_component_info(&input, &options),
+            Err(J2kError::Unsupported { .. })
+        ));
+        assert!(matches!(
+            decode_partial(&input, &options),
+            Err(J2kError::Unsupported { .. })
+        ));
+
+        let info = ImageInfo::new(
+            1,
+            1,
+            1,
+            SampleFormat::U8,
+            ColorModel::Unknown,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let mut caller = [0x6d_u8];
+        let mut planes = [PlaneMut::new(&mut caller, 1, 1, 1, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        assert!(matches!(
+            decode_partial_into(&input, &mut target, &options),
+            Err(J2kError::Unsupported { .. })
+        ));
+        assert_eq!(caller, [0x6d]);
+    }
+}
+
+#[cfg(test)]
 mod jp2_header_validation_tests {
     use super::*;
 
@@ -4114,6 +4421,10 @@ pub enum ComponentSelection {
 }
 
 /// Scoped partial decode request. Unsupported combinations must fail explicitly.
+///
+/// Native HTJ2K currently admits one reduced transformed-component shape:
+/// planar component 0 at two discarded levels from the documented reversible
+/// five-level HTONLY profile. It returns the plane before inverse RCT.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialDecodeOptions {
     /// Non-empty full-resolution image-relative reference-grid rectangle.
@@ -6111,6 +6422,10 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
         });
     }
 
+    #[cfg(feature = "std")]
+    if let Some(image) = decode_owned_htj2k_reduced_component(input, options)? {
+        return Ok(image);
+    }
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_partial_quality_layer_profile(input, &metadata, options)?;
     if let Some(image) =
@@ -6509,7 +6824,97 @@ pub fn decode_partial_component_info(
             "native component descriptors require planar output",
         ));
     }
+    #[cfg(feature = "std")]
+    {
+        if let Some((_, _, component_info)) =
+            prepare_htj2k_reduced_component_target(input, options)?
+        {
+            return Ok(component_info);
+        }
+    }
     Ok(prepare_part1_decode(input, options)?.component_info)
+}
+
+#[cfg(feature = "std")]
+fn is_htj2k_reduced_component_request(options: &PartialDecodeOptions) -> bool {
+    options.region.is_none()
+        && options.tile.is_none()
+        && options.resolution == ResolutionLevel::Reduced { discard_levels: 2 }
+        && matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
+        && options.max_quality_layers.is_none()
+        && options.target_layout == ComponentLayout::Planar
+}
+
+#[cfg(feature = "std")]
+fn prepare_htj2k_reduced_component_target<'a>(
+    input: &'a [u8],
+    options: &PartialDecodeOptions,
+) -> Result<
+    Option<(
+        codestream::PreparedHtj2kReducedComponentDecode<'a>,
+        ImageInfo,
+        Vec<ComponentInfo>,
+    )>,
+> {
+    if !is_htj2k_reduced_component_request(options) || !input.starts_with(&[0xff, 0x4f]) {
+        return Ok(None);
+    }
+    let Some(prepared) = codestream::prepare_htj2k_reduced_component_decode(
+        input,
+        codestream::Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 2,
+        },
+    )
+    .map_err(map_codestream_error)?
+    else {
+        return Ok(None);
+    };
+    let info = ImageInfo::new(
+        prepared.output_width(),
+        prepared.output_height(),
+        1,
+        SampleFormat::U8,
+        ColorModel::Unknown,
+        ComponentLayout::Planar,
+    )?;
+    let component_info = alloc::vec![ComponentInfo {
+        source_component: Some(prepared.component_index()),
+        width: prepared.output_width(),
+        height: prepared.output_height(),
+        x_origin: 0,
+        y_origin: 0,
+        horizontal_separation: 1,
+        vertical_separation: 1,
+        sample_format: SampleFormat::U8,
+    }];
+    Ok(Some((prepared, info, component_info)))
+}
+
+#[cfg(feature = "std")]
+fn decode_owned_htj2k_reduced_component(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+) -> Result<Option<Image>> {
+    let Some((prepared, _info, component_info)) =
+        prepare_htj2k_reduced_component_target(input, options)?
+    else {
+        return Ok(None);
+    };
+    let mut workspace = codestream::HtCodestreamDecodeWorkspace::new();
+    let decoded = codestream::decode_prepared_htj2k_reduced_component_owned_with_workspace(
+        &prepared,
+        &mut workspace,
+    )
+    .map_err(map_codestream_error)?;
+    let decode_options = DecodeOptions {
+        mode: DecodeMode::Components,
+        requested_components: options.components.clone(),
+        target_layout: ComponentLayout::Planar,
+        ..DecodeOptions::default()
+    };
+    decoded_baseline_to_image_with_component_info(decoded, &decode_options, Some(component_info))
+        .map(Some)
 }
 
 fn decode_owned_selective_part1_discard(
@@ -10627,6 +11032,10 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
         });
     }
 
+    #[cfg(feature = "std")]
+    if let Some((_, info, _)) = prepare_htj2k_reduced_component_target(input, options)? {
+        return Ok(info);
+    }
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_partial_quality_layer_profile(input, &metadata, options)?;
     if let Some(codestream_bytes) = primary_part1_codestream_bytes(input, &metadata)? {
