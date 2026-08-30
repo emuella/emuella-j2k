@@ -193,9 +193,10 @@ component route independently of protected DS0 material. A 49 × 49 RGB fixture
 uses reversible RCT and five reversible 5/3 levels; the component-0 request at
 two discarded levels must produce the independently reconstructed 13 × 13
 transformed plane. A separate odd 17 × 37 fixture uses five irreversible 9/7
-levels, one main-header scalar-derived QCD and varied retained LL/HL/LH/HH
-coefficient signs and magnitudes; the same request must produce its exact 5 ×
-10 component-zero bytes. The irreversible branch retains raw signed HT
+levels in exactly one unsigned 8-bit unit-sampled component without MCT, one
+main-header scalar-derived QCD and varied retained LL/HL/LH/HH coefficient signs
+and magnitudes; the same request must produce its exact 5 × 10 component-zero
+bytes. The irreversible branch retains raw signed HT
 coefficients, applies the resolved subband gain and `0.5 × Delta_b`, performs
 three 9/7 synthesis levels, and uses the established finite, ties-to-even,
 level-shift and clamp conversion. Metadata, component descriptors, owned planar
@@ -207,7 +208,8 @@ inverse RCT.
 Negative cases cover all-components and other-component requests, full and
 nearby reduced resolutions, regions, tiles, layer limits, interleaved output,
 scalar-expounded or malformed quantisation, missing irreversible permission,
-ROI, HTMIX and other irreversible shapes. Metadata and component-descriptor
+cross-branch component/MCT envelopes, ROI, HTMIX and other irreversible shapes.
+Metadata and component-descriptor
 queries reject a packet-header or QCD contradiction even when other header
 declarations match the bounded shape. Caller sentinels remain unchanged after
 target validation failure, malformed irreversible QCD and entropy

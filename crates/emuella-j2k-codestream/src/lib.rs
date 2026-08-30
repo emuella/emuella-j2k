@@ -10743,9 +10743,16 @@ pub fn encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
 ///
 /// The fixture is synthetic test support, not an application encode profile.
 /// Its retained LL/HL/LH/HH coefficients deliberately vary in sign and
-/// magnitude, while components one and two remain empty packet planes.
+/// magnitude in the sole component packet plane.
 #[doc(hidden)]
 pub fn encode_htj2k_irreversible_reduced_component_test_fixture() -> Result<Vec<u8>> {
+    encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(1, false)
+}
+
+fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
+    component_count: u16,
+    multiple_component_transform: bool,
+) -> Result<Vec<u8>> {
     const WIDTH: u32 = 17;
     const HEIGHT: u32 = 37;
     const LEVELS: u8 = 5;
@@ -10784,11 +10791,6 @@ pub fn encode_htj2k_irreversible_reduced_component_test_fixture() -> Result<Vec<
         }
     }
     let empty = alloc::vec![0_i32; plane_len];
-    let component_planes = [
-        component_zero.as_slice(),
-        empty.as_slice(),
-        empty.as_slice(),
-    ];
     let qcd_steps = specs
         .iter()
         .enumerate()
@@ -10816,8 +10818,13 @@ pub fn encode_htj2k_irreversible_reduced_component_test_fixture() -> Result<Vec<
         .collect::<Result<Vec<_>>>()?;
 
     let mut segments = Vec::new();
-    let mut component_subbands = Vec::with_capacity(component_planes.len());
-    for plane in component_planes {
+    let mut component_subbands = Vec::with_capacity(usize::from(component_count));
+    for component_index in 0..component_count {
+        let plane = if component_index == 0 {
+            component_zero.as_slice()
+        } else {
+            empty.as_slice()
+        };
         let mut subbands = Vec::with_capacity(specs.len());
         for (spec, available_bitplanes) in specs.iter().zip(&available_bitplanes) {
             subbands.push(encode_ht_decomp_subband(
@@ -10841,8 +10848,8 @@ pub fn encode_htj2k_irreversible_reduced_component_test_fixture() -> Result<Vec<
         WIDTH,
         HEIGHT,
         8,
-        3,
-        true,
+        component_count,
+        multiple_component_transform,
         LEVELS,
         &available_bitplanes,
         true,
@@ -48639,21 +48646,6 @@ pub fn prepare_htj2k_reduced_component_decode(
     validate_htonly_permission_effective_packet_mechanisms(input, &codestream)?;
 
     let coding_style = uniform_effective_coding_style(&codestream)?;
-    if codestream.siz.component_count() != 3
-        || codestream.siz.components.iter().any(|component| {
-            component.bits_per_sample != 8
-                || component.signed
-                || component.horizontal_separation != 1
-                || component.vertical_separation != 1
-        })
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Siz),
-            UnsupportedConstruct::ComponentSampling,
-            "bounded reduced HTJ2K component decode requires three matching unsigned 8-bit unit-sampled components",
-        ));
-    }
     if codestream.siz.image_origin_x != 0
         || codestream.siz.image_origin_y != 0
         || codestream.siz.tile_origin_x != 0
@@ -48672,14 +48664,6 @@ pub fn prepare_htj2k_reduced_component_decode(
             Some(Marker::Cod),
             UnsupportedConstruct::ProgressionOrder,
             "bounded reduced HTJ2K component decode requires one-layer LRCP packet order",
-        ));
-    }
-    if !coding_style.multiple_component_transform {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::Transform,
-            "bounded reduced HTJ2K component decode requires multiple-component transform signalling",
         ));
     }
     if coding_style.decomposition_levels != HTJ2K_REDUCED_COMPONENT_DECOMPOSITION_LEVELS {
@@ -48753,6 +48737,29 @@ pub fn prepare_htj2k_reduced_component_decode(
     };
     let reconstruction = match coding_style.transform {
         WaveletTransform::Reversible53 => {
+            if codestream.siz.component_count() != 3
+                || codestream.siz.components.iter().any(|component| {
+                    component.bits_per_sample != 8
+                        || component.signed
+                        || component.horizontal_separation != 1
+                        || component.vertical_separation != 1
+                })
+            {
+                return Err(unsupported(
+                    None,
+                    Some(Marker::Siz),
+                    UnsupportedConstruct::ComponentSampling,
+                    "bounded reduced reversible HTJ2K component decode requires three matching unsigned 8-bit unit-sampled components",
+                ));
+            }
+            if !coding_style.multiple_component_transform {
+                return Err(unsupported(
+                    None,
+                    Some(Marker::Cod),
+                    UnsupportedConstruct::Transform,
+                    "bounded reduced reversible HTJ2K component decode requires multiple-component transform signalling",
+                ));
+            }
             let transfer = ht_reversible_code_block_transfer(input, &codestream)?.ok_or_else(|| {
                 unsupported(
                     None,
@@ -48764,6 +48771,29 @@ pub fn prepare_htj2k_reduced_component_decode(
             Htj2kReducedComponentReconstruction::Reversible(transfer)
         }
         WaveletTransform::Irreversible97 => {
+            if codestream.siz.component_count() != 1
+                || codestream.siz.components.first().is_none_or(|component| {
+                    component.bits_per_sample != 8
+                        || component.signed
+                        || component.horizontal_separation != 1
+                        || component.vertical_separation != 1
+                })
+            {
+                return Err(unsupported(
+                    None,
+                    Some(Marker::Siz),
+                    UnsupportedConstruct::ComponentSampling,
+                    "bounded reduced irreversible HTJ2K component decode requires one unsigned 8-bit unit-sampled component",
+                ));
+            }
+            if coding_style.multiple_component_transform {
+                return Err(unsupported(
+                    None,
+                    Some(Marker::Cod),
+                    UnsupportedConstruct::Transform,
+                    "bounded reduced irreversible HTJ2K component decode does not accept multiple-component transform signalling",
+                ));
+            }
             let expected_subbands = 1usize
                 .checked_add(
                     usize::from(coding_style.decomposition_levels)
@@ -49181,8 +49211,10 @@ mod htj2k_reduced_component_tests {
         let codestream = encode_htj2k_irreversible_reduced_component_test_fixture().unwrap();
         let parsed = parse(&codestream).unwrap();
         let style = uniform_effective_coding_style(&parsed).unwrap();
+        assert_eq!(parsed.siz.component_count(), 1);
         assert_eq!(style.transform, WaveletTransform::Irreversible97);
         assert_eq!(style.decomposition_levels, 5);
+        assert!(!style.multiple_component_transform);
         let quantization = parse_component_quantization(&codestream, &parsed, 16).unwrap();
         assert!(
             quantization.iter().all(|component| {
@@ -49209,6 +49241,72 @@ mod htj2k_reduced_component_tests {
                 135, 134, 120, 119, 142, 139, 95, 124, 130, 129, 123, 126, 144, 115, 119, 143, 118,
             ]
         );
+    }
+
+    #[test]
+    fn reduced_transform_branches_reject_each_others_component_and_mct_envelopes() {
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 2,
+        };
+
+        let (mut reversible_without_mct, _, _, _) = fixture(5);
+        let cod = find_marker(&reversible_without_mct, 0, Marker::Cod).unwrap();
+        reversible_without_mct[cod + 8] = 0;
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&reversible_without_mct, request),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::Transform,
+                ..
+            })
+        ));
+
+        let mut reversible_with_irreversible_envelope =
+            encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(1, false)
+                .unwrap();
+        let cod = find_marker(&reversible_with_irreversible_envelope, 0, Marker::Cod).unwrap();
+        reversible_with_irreversible_envelope[cod + 13] = 1;
+        assert!(parse(&reversible_with_irreversible_envelope).is_ok());
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&reversible_with_irreversible_envelope, request),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Siz),
+                construct: UnsupportedConstruct::ComponentSampling,
+                ..
+            })
+        ));
+
+        let irreversible_with_mct =
+            encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(1, true)
+                .unwrap();
+        assert!(parse(&irreversible_with_mct).is_ok());
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&irreversible_with_mct, request),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Cod),
+                construct: UnsupportedConstruct::Transform,
+                ..
+            })
+        ));
+
+        for multiple_component_transform in [false, true] {
+            let old_three_component_envelope =
+                encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
+                    3,
+                    multiple_component_transform,
+                )
+                .unwrap();
+            assert!(parse(&old_three_component_envelope).is_ok());
+            assert!(matches!(
+                decode_htj2k_reduced_component_owned(&old_three_component_envelope, request),
+                Err(CodestreamError::Unsupported {
+                    marker: Some(Marker::Siz),
+                    construct: UnsupportedConstruct::ComponentSampling,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]

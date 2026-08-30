@@ -50,13 +50,14 @@ through the existing HT packet, entropy, reconstruction and public image path;
 this is not general Part 15 or JPEG 2000 conformance.
 
 Native partial component output adds two bounded HTONLY reconstruction branches
-behind one request shape. A raw
-single-tile codestream with three matching unsigned 8-bit components,
-MCT, five decomposition levels and one-layer LRCP packets on the existing
+behind one request shape. A raw origin-aligned single-tile codestream with five
+decomposition levels and one-layer LRCP packets on the existing
 single-effective-precinct inline-header route may select transformed component
-0 at two discarded resolution levels. The transform is either reversible 5/3
-with the existing no-quantisation QCD contract or irreversible 9/7 with exactly
-one main-header scalar-derived QCD and no component or tile overrides. The
+0 at two discarded resolution levels. The reversible 5/3 branch requires three
+matching unsigned 8-bit unit-sampled components, MCT and the existing
+no-quantisation QCD contract. The irreversible 9/7 branch instead requires
+exactly one unsigned 8-bit unit-sampled component, no MCT, exactly one
+main-header scalar-derived QCD and no component or tile overrides. The
 planar output is reconstructed at its exact reduced geometry before inverse
 colour transformation. JPH, rendered output, other selections or reductions,
 regions, tile requests, quality-layer limits, heterogeneous coding or

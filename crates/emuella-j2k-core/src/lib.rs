@@ -815,6 +815,7 @@ mod htj2k_reduced_component_tests {
         let options = options();
         let inspected = inspect(&input, &InspectOptions::default()).unwrap();
         assert_eq!(inspected.format, InputFormat::Htj2kCodestream);
+        assert_eq!(inspected.image.as_ref().unwrap().components, 1);
         assert_eq!(
             inspected.codestream.as_ref().unwrap().transform,
             Some(WaveletTransform::Irreversible97)
@@ -855,6 +856,33 @@ mod htj2k_reduced_component_tests {
         };
         decode_partial_into(&input, &mut target, &options).unwrap();
         assert_eq!(caller, owned_planes[0]);
+    }
+
+    #[test]
+    fn public_irreversible_mct_cross_envelope_fails_atomically() {
+        let mut input = irreversible_fixture();
+        let options = options();
+        let valid_info = decode_partial_info(&input, &options).unwrap();
+        let cod = codestream::parse(&input)
+            .unwrap()
+            .markers
+            .iter()
+            .find(|segment| segment.marker == codestream::Marker::Cod)
+            .unwrap()
+            .offset;
+        input[cod + 8] = 1;
+        assert!(decode_partial_info(&input, &options).is_err());
+        assert!(decode_partial_component_info(&input, &options).is_err());
+        assert!(decode_partial(&input, &options).is_err());
+
+        let mut caller = vec![0x6d_u8; 5 * 10];
+        let mut planes = [PlaneMut::new(&mut caller, 5, 10, 5, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &valid_info,
+            planes: &mut planes,
+        };
+        assert!(decode_partial_into(&input, &mut target, &options).is_err());
+        assert!(caller.iter().all(|sample| *sample == 0x6d));
     }
 
     #[test]
