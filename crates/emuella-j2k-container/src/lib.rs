@@ -1587,7 +1587,7 @@ fn validate_channel_definition(
                 }
             }
             if let Some(required_colour_count) = required_colour_count
-                && association != 0
+                && !matches!(association, 0 | u16::MAX)
                 && usize::from(association) > required_colour_count
             {
                 return Err(invalid(
@@ -2699,6 +2699,41 @@ mod tests {
                 ],
             );
             parse(&greyscale_alpha).unwrap();
+        }
+
+        for channel_type in [1, 2] {
+            let unassociated_alpha = file(
+                ContainerKind::Jp2,
+                &[
+                    jp2_header(&[
+                        image_header(2, 7),
+                        colour(),
+                        channel_definition(&[(0, 0, 1), (1, channel_type, u16::MAX)]),
+                    ]),
+                    codestream_box(),
+                ],
+            );
+            parse(&unassociated_alpha).unwrap();
+
+            let jph_unassociated_alpha = file(
+                ContainerKind::Jph,
+                &[
+                    jp2_header(&[
+                        image_header(2, 7),
+                        colour(),
+                        channel_definition(&[(0, 0, 1), (1, channel_type, u16::MAX)]),
+                    ]),
+                    codestream_box(),
+                ],
+            );
+            assert!(matches!(
+                parse(&jph_unassociated_alpha),
+                Err(ContainerError::InvalidBox {
+                    box_type: Some(boxes::CHANNEL_DEFINITION),
+                    message,
+                    ..
+                }) if message.contains("whole image")
+            ));
         }
 
         for kind in [ContainerKind::Jp2, ContainerKind::Jph] {
