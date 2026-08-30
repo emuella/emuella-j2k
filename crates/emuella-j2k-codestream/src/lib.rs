@@ -49943,38 +49943,30 @@ fn ht_six_level_reduced_envelope(codestream: &Codestream) -> bool {
             .all(|&value| value == 0x77)
         && !style.sop_markers
         && !style.eph_markers
-        && codestream.markers.iter().all(|segment| {
-            matches!(
-                segment.marker,
-                Marker::Soc
-                    | Marker::Siz
-                    | Marker::Cap
-                    | Marker::Cpf
-                    | Marker::Cod
-                    | Marker::Qcd
-                    | Marker::Qcc
-                    | Marker::Com
-                    | Marker::Sot
-                    | Marker::Sod
-                    | Marker::Eoc
-            )
-        })
-        && codestream
-            .markers
-            .iter()
-            .filter(|segment| segment.marker == Marker::Qcd)
-            .count()
-            == 1
-        && htj2k_tile_header_cod(codestream).is_none()
-        && codestream.markers.iter().all(|segment| {
-            segment.offset
-                < codestream
-                    .markers
-                    .iter()
-                    .find(|marker| marker.marker == Marker::Sot)
-                    .map_or(0, |marker| marker.offset)
-                || !matches!(segment.marker, Marker::Qcd | Marker::Qcc)
-        })
+        && ht_six_level_reduced_markers(codestream.markers.iter())
+}
+
+// Consume marker state once. In particular, comments are unbounded in count;
+// locating SOT afresh for each comment would make admission quadratic.
+fn ht_six_level_reduced_markers<'a>(markers: impl Iterator<Item = &'a MarkerSegment>) -> bool {
+    let mut in_tile = false;
+    let mut qcd_count = 0;
+    for segment in markers {
+        match segment.marker {
+            Marker::Sot => in_tile = true,
+            Marker::Cod | Marker::Qcc if !in_tile => {}
+            Marker::Qcd if !in_tile => qcd_count += 1,
+            Marker::Soc
+            | Marker::Siz
+            | Marker::Cap
+            | Marker::Cpf
+            | Marker::Com
+            | Marker::Sod
+            | Marker::Eoc => {}
+            _ => return false,
+        }
+    }
+    in_tile && qcd_count == 1
 }
 
 #[cfg(feature = "std")]
@@ -50874,6 +50866,31 @@ mod htj2k_reduced_component_tests {
         let tile = parsed.tiles[0];
         late_packet[tile.payload_offset.unwrap() + tile.payload_len.unwrap() - 1] = 0xff;
         assert!(prepare_htj2k_reduced_component_decode(&late_packet, request).is_err());
+    }
+
+    #[test]
+    fn six_level_reduced_marker_inventory_has_linear_counted_work() {
+        let original = encode_htj2k_six_level_reduced_component_test_fixture(17, 37).unwrap();
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 3,
+        };
+        let expected = decode_htj2k_reduced_component_owned(&original, request).unwrap();
+        for comments in [1_000, 2_000, 4_000, 8_000] {
+            let mut input = original.clone();
+            let sot = find_marker(&input, 0, Marker::Sot).unwrap();
+            input.splice(sot..sot, [0xff, 0x64, 0, 4, 0, 1].repeat(comments));
+            let parsed = parse(&input).unwrap();
+            let mut visited = 0;
+            assert!(ht_six_level_reduced_markers(
+                parsed.markers.iter().inspect(|_| visited += 1)
+            ));
+            assert_eq!(visited, parsed.markers.len());
+            assert_eq!(
+                decode_htj2k_reduced_component_owned(&input, request).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
