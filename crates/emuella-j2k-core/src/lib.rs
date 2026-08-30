@@ -3921,6 +3921,9 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
 
     if input.starts_with(&[0xff, 0x4f]) {
         let codestream = codestream::parse(input).map_err(map_codestream_error)?;
+        #[cfg(feature = "std")]
+        codestream::validate_part15_packet_signalling(input, &codestream)
+            .map_err(map_codestream_error)?;
         return Ok(metadata_from_codestream(input, codestream, options));
     }
 
@@ -8921,7 +8924,13 @@ fn metadata_from_container(
         .primary_codestream(input)
         .map_err(map_container_error)?;
     let parsed_codestream = match primary_codestream {
-        Some(bytes) => Some(codestream::parse(bytes).map_err(map_codestream_error)?),
+        Some(bytes) => {
+            let codestream = codestream::parse(bytes).map_err(map_codestream_error)?;
+            #[cfg(feature = "std")]
+            codestream::validate_part15_packet_signalling(bytes, &codestream)
+                .map_err(map_codestream_error)?;
+            Some(codestream)
+        }
         None => None,
     };
     if container.kind == container::ContainerKind::Jp2
@@ -15017,6 +15026,46 @@ mod effective_coding_style_tests {
             ));
         }
         assert!(samples.iter().all(|sample| *sample == 0x6d));
+
+        let mut broader_capability = fixture();
+        let cap = broader_capability
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x50])
+            .unwrap();
+        broader_capability[cap + 8..cap + 10].copy_from_slice(&0x2000_u16.to_be_bytes());
+        assert!(matches!(
+            inspect(&broader_capability, &InspectOptions::default())
+                .unwrap()
+                .support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::EntropyCoder,
+                ..
+            }
+        ));
+        let mut broader_samples = vec![0x7b; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut broader_samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&broader_capability, &mut target, &decode_options),
+                Err(J2kError::Unsupported {
+                    feature: UnsupportedFeature::EntropyCoder,
+                    ..
+                })
+            ));
+        }
+        assert!(broader_samples.iter().all(|sample| *sample == 0x7b));
 
         let multitile_decomposition = multitile_fixture(1, 1);
         assert!(matches!(
