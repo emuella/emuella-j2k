@@ -824,12 +824,6 @@ impl<'a> FastVlcReader<'a> {
     }
 
     #[inline(always)]
-    pub(super) fn peek7(&mut self) -> Result<u8, HtLayoutError> {
-        self.ensure(7)?;
-        Ok((self.reservoir & 0x7f) as u8)
-    }
-
-    #[inline(always)]
     pub(super) fn take(&mut self, count: u32) -> Result<u32, HtLayoutError> {
         if count > 32 {
             return Err(self.unavailable(count as usize));
@@ -858,7 +852,13 @@ impl<'a> FastVlcReader<'a> {
         if context.get() == 0 && zero_context_mel_event == Some(false) {
             return Ok(HtVlcQuadCodeword::ZERO);
         }
-        let prefix = self.peek7()?;
+        while self.available < 7 && self.next != 0 {
+            self.refill()?;
+        }
+        // The table is expanded to seven-bit prefixes, but a final VLC
+        // codeword may need fewer physical bits. Zero-padding is safe for the
+        // lookup only; the selected codeword remains bounded by `available`.
+        let prefix = (self.reservoir & 0x7f) as u8;
         let mut codeword = table.lookup(context, prefix);
         if context.get() == 0
             && let Some(mel_event) = zero_context_mel_event
@@ -867,6 +867,9 @@ impl<'a> FastVlcReader<'a> {
         }
         let consumed_bits = u32::from(codeword.consumed_bits());
         debug_assert!(consumed_bits <= 7);
+        if consumed_bits > self.available {
+            return Err(self.unavailable(consumed_bits as usize));
+        }
         self.consume_codeword(consumed_bits);
         Ok(codeword)
     }
@@ -882,7 +885,10 @@ impl<'a> FastVlcReader<'a> {
         if context.get() == 0 && zero_context_mel_event == Some(false) {
             return Ok(HtVlcQuadCodeword::ZERO);
         }
-        self.ensure_steady(7)?;
+        while self.available < 7 && self.next != 0 {
+            self.refill_steady()?;
+        }
+        // Match the checked tail behaviour above on steady-state line pairs.
         let prefix = (self.reservoir & 0x7f) as u8;
         let mut codeword = table.lookup(context, prefix);
         if context.get() == 0
@@ -892,6 +898,9 @@ impl<'a> FastVlcReader<'a> {
         }
         let consumed_bits = u32::from(codeword.consumed_bits());
         debug_assert!(consumed_bits <= 7);
+        if consumed_bits > self.available {
+            return Err(self.unavailable(consumed_bits as usize));
+        }
         self.consume_codeword(consumed_bits);
         Ok(codeword)
     }
@@ -2066,4 +2075,45 @@ pub(super) fn benchmark_mel_events(
         read_count: event_count,
         consumed_bits: reader.consumed_bits(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vlc_tail_lookup_uses_only_the_selected_codeword_bits() {
+        let table = crate::ht_vlc_initial_lookup_table();
+        let mut accepted_short_codewords = 0;
+        let mut rejected_overlong_codewords = 0;
+
+        for nibble in 0_u8..16 {
+            let segment = [nibble << 4, 0];
+            let physical_bits = 4 - u8::from((nibble & 0x7) == 0x7);
+            let prefix = nibble & ((1_u8 << physical_bits) - 1);
+            for context_value in 1..=HtVlcContext::MAX {
+                let context = HtVlcContext::new(context_value).unwrap();
+                let expected = table.lookup(context, prefix);
+                let mut reader = FastVlcReader::new(&segment).unwrap();
+                let decoded = reader.decode_codeword(table, context, None);
+
+                if expected.consumed_bits() <= physical_bits {
+                    assert_eq!(decoded.unwrap(), expected);
+                    accepted_short_codewords += 1;
+                } else {
+                    assert!(matches!(
+                        decoded,
+                        Err(HtLayoutError::StreamBitReadUnavailable {
+                            stream: HtCleanupStreamKind::Vlc,
+                            ..
+                        })
+                    ));
+                    rejected_overlong_codewords += 1;
+                }
+            }
+        }
+
+        assert!(accepted_short_codewords > 0);
+        assert!(rejected_overlong_codewords > 0);
+    }
 }

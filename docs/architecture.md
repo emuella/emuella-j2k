@@ -82,9 +82,11 @@ parsing still validates the complete source, while entropy and
 coefficient work is retained only through resolution 3 for component 0. Three
 inverse-DWT levels reconstruct the checked reduced geometry. Reversible HT
 coefficients retain the existing transfer and 5/3 synthesis. Irreversible HT
-coefficients remain raw signed `i32` values, are placed into a reduced `f32`
-plane with the resolved subband gain and `0.5 × Delta_b`, then use the existing
-9/7 synthesis and finite, ties-to-even, level-shift and clamp conversion.
+coefficients remain raw signed `i32` values. Placement normalises their HT
+bitplane alignment to doubled half-step `f32` values from the resolved subband
+magnitude-bitplane count, applies the resolved subband gain and
+`0.5 × Delta_b`, then uses the existing 9/7 synthesis and finite, ties-to-even,
+level-shift and clamp conversion.
 Publication occurs before inverse colour transformation. Ordinary full HT
 decode retains its existing inverse-DWT and inverse-RCT behaviour. One HT-owned
 prepared plan supplies the checked geometry to the public metadata and

@@ -198,10 +198,12 @@ main-header scalar-expounded QCD with independently varied legal per-subband
 steps, and varied retained LL/HL/LH/HH coefficient signs and magnitudes. The
 same request must produce its exact 5 × 10 component-zero bytes. The
 irreversible branch retains raw signed HT
-coefficients, applies the resolved subband gain and `0.5 × Delta_b`, performs
-three 9/7 synthesis levels, and uses the established finite, ties-to-even,
-level-shift and clamp conversion. Metadata, component descriptors, owned planar
-output and caller-owned planar output must agree for both branches. Full-image
+coefficients, normalises their HT bitplane alignment to doubled half-step
+`f32` values from each resolved subband magnitude-bitplane count, applies the
+resolved subband gain and `0.5 × Delta_b`, performs three 9/7 synthesis levels,
+and uses the established finite, ties-to-even, level-shift and clamp
+conversion. Metadata, component descriptors, owned planar output and
+caller-owned planar output must agree for both branches. Full-image
 support classification remains unsupported for the irreversible fixture, and
 the full one-level reversible HT MCT regression still reconstructs RGB after
 inverse RCT.

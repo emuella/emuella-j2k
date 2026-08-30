@@ -10757,7 +10757,7 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
     const HEIGHT: u32 = 37;
     const LEVELS: u8 = 5;
     const QCD_GUARD_BITS: u8 = 2;
-    const QCD_BASE_EXPONENT: u8 = 20;
+    const QCD_BASE_EXPONENT: u8 = 8;
 
     let specs = decomp_subband_specs(WIDTH, HEIGHT, LEVELS)?;
     let plane_len = checked_component_sample_count(WIDTH, HEIGHT)?;
@@ -40240,6 +40240,63 @@ fn place_irreversible_code_block_coefficients(
     Ok(())
 }
 
+#[cfg(feature = "std")]
+fn place_ht_irreversible_code_block_coefficients(
+    plane: &mut [f32],
+    stride: usize,
+    contribution: &PacketCodeBlockContribution,
+    aligned_coefficients: &[i32],
+    scale: f32,
+) -> Result<()> {
+    let width = usize::from(contribution.width);
+    let height = usize::from(contribution.height);
+    let coefficient_count = width
+        .checked_mul(height)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if aligned_coefficients.len() < coefficient_count {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let start_x = usize::try_from(contribution.x).map_err(|_| CodestreamError::SizeOverflow)?;
+    let start_y = usize::try_from(contribution.y).map_err(|_| CodestreamError::SizeOverflow)?;
+    for row in 0..height {
+        let destination_start = start_y
+            .checked_add(row)
+            .and_then(|y| y.checked_mul(stride))
+            .and_then(|offset| offset.checked_add(start_x))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let destination = plane
+            .get_mut(destination_start..destination_start + width)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let source = &aligned_coefficients[row * width..(row + 1) * width];
+        for (destination, coefficient) in destination.iter_mut().zip(source) {
+            let doubled_half_step = ht_irreversible_doubled_half_step_coefficient(
+                *coefficient,
+                contribution.available_bitplanes,
+            )?;
+            *destination = doubled_half_step * scale;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "std")]
+fn ht_irreversible_doubled_half_step_coefficient(
+    coefficient: i32,
+    available_bitplanes: u8,
+) -> Result<f32> {
+    if !(1..=30).contains(&available_bitplanes) {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    // HT materialisation keeps its signed coefficient aligned beneath the
+    // sign bit. Irreversible dequantisation consumes the doubled half-step
+    // index represented by the resolved subband magnitude-bitplane count.
+    let shift = 30_u8
+        .checked_sub(available_bitplanes)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let alignment = (1_u32 << shift) as f32;
+    Ok(coefficient as f32 / alignment)
+}
+
 fn selected_component_output_position(
     source_to_output: Option<&[u16]>,
     component_indices: &[u16],
@@ -49069,7 +49126,7 @@ fn decode_htj2k_reduced_irreversible_component(
         let delta = step
             .delta(component.bits_per_sample, gain)
             .map_err(|_| CodestreamError::SizeOverflow)?;
-        place_irreversible_code_block_coefficients(
+        place_ht_irreversible_code_block_coefficients(
             plane,
             stride,
             contribution,
@@ -49223,6 +49280,33 @@ mod htj2k_reduced_component_tests {
     }
 
     #[test]
+    fn ht_irreversible_transfer_normalises_aligned_signed_coefficients() {
+        let unit = 1_i32 << 21;
+        assert_eq!(
+            ht_irreversible_doubled_half_step_coefficient(3 * unit, 9).unwrap(),
+            3.0
+        );
+        assert_eq!(
+            ht_irreversible_doubled_half_step_coefficient(-3 * unit, 9).unwrap(),
+            -3.0
+        );
+        assert_eq!(
+            ht_irreversible_doubled_half_step_coefficient(3 * unit + unit / 2, 9).unwrap(),
+            3.5
+        );
+        assert_eq!(
+            ht_irreversible_doubled_half_step_coefficient(-3 * unit - unit / 2, 9).unwrap(),
+            -3.5
+        );
+        assert!(ht_irreversible_doubled_half_step_coefficient(0, 0).is_err());
+        assert_eq!(
+            ht_irreversible_doubled_half_step_coefficient(i32::MIN, 30).unwrap(),
+            i32::MIN as f32
+        );
+        assert!(ht_irreversible_doubled_half_step_coefficient(0, 31).is_err());
+    }
+
+    #[test]
     fn five_level_irreversible_reduced_component_matches_exact_project_fixture() {
         let codestream = encode_htj2k_irreversible_reduced_component_test_fixture().unwrap();
         let parsed = parse(&codestream).unwrap();
@@ -49279,9 +49363,9 @@ mod htj2k_reduced_component_tests {
         assert_eq!(
             decoded.components[0].samples,
             [
-                106, 135, 139, 140, 110, 166, 102, 121, 135, 119, 125, 123, 138, 130, 133, 131,
-                116, 145, 140, 94, 126, 130, 124, 123, 132, 175, 111, 112, 157, 116, 129, 118, 121,
-                135, 135, 119, 118, 144, 141, 91, 123, 131, 129, 123, 126, 147, 113, 117, 146, 117,
+                79, 139, 152, 149, 84, 196, 74, 119, 142, 105, 115, 119, 156, 134, 134, 139, 110,
+                168, 150, 53, 141, 143, 120, 113, 129, 230, 96, 92, 186, 111, 123, 100, 107, 148,
+                158, 95, 98, 159, 155, 56, 97, 124, 133, 113, 112, 143, 88, 111, 158, 91,
             ]
         );
     }
