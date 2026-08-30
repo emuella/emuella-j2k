@@ -29572,6 +29572,7 @@ enum ExplicitPrecinctPermission {
     HtRoiWindow,
     HtReducedRoi,
     HtHighComponent,
+    HtTileWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29606,6 +29607,10 @@ struct PacketOrganisationConfig {
 
 impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    const HT_TILE_WINDOW: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtTileWindow,
+        ..Self::DEFAULT
+    };
     const HT_HIGH_COMPONENT: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtHighComponent,
         ..Self::DEFAULT
@@ -32504,10 +32509,12 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                 tile_maxshift
                     .filter(|maxshift| usize::from(maxshift.component_index) == component_index)
                     .map(|maxshift| maxshift.shift),
-                if packet_organisation.explicit_precinct_permission
-                    == ExplicitPrecinctPermission::HtHighComponent
-                {
-                    PacketBitplaneDomain::HtHighComponentHeaders
+                if matches!(
+                    packet_organisation.explicit_precinct_permission,
+                    ExplicitPrecinctPermission::HtHighComponent
+                        | ExplicitPrecinctPermission::HtTileWindow
+                ) {
+                    PacketBitplaneDomain::HtBoundedHeaders
                 } else {
                     PacketBitplaneDomain::ClassicCoefficientStore
                 },
@@ -40262,7 +40269,7 @@ mod qcc_marker_tests {
 #[derive(Clone, Copy)]
 enum PacketBitplaneDomain {
     ClassicCoefficientStore,
-    HtHighComponentHeaders,
+    HtBoundedHeaders,
 }
 
 fn default_precinct_subbands(
@@ -40315,7 +40322,7 @@ fn default_precinct_subbands(
                 subband_topology,
                 coding_style,
                 match bitplane_domain {
-                    PacketBitplaneDomain::HtHighComponentHeaders
+                    PacketBitplaneDomain::HtBoundedHeaders
                         if coding_style.entropy_coder == EntropyCoder::HtBlockCoding =>
                     {
                         // Header metadata is not an i32 coefficient store. The

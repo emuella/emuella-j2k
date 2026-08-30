@@ -191,7 +191,7 @@ fn walk(input: &[u8], c: &Codestream) -> Result<Selected> {
             None,
             None,
             None,
-            PacketOrganisationConfig::DEFAULT,
+            PacketOrganisationConfig::HT_TILE_WINDOW,
             None,
             HtCodingSetRetention::NativeAdmission,
         ) {
@@ -674,6 +674,23 @@ mod tests {
                 prepare_htj2k_tile_window_decode(&bytes, region()),
                 Err(CodestreamError::Unsupported { .. })
             ));
+        }
+        for sets in [false, true] {
+            let mut input = encode_htj2k_tile_window_test_fixture(3, sets).unwrap();
+            let q = find_marker(&input, 0, Marker::Qcd).unwrap();
+            input[q + 5..q + 15].fill(30 << 3); // Thirty-one structural magnitude bits.
+            let result = prepare_htj2k_tile_window_decode(&input, region());
+            if sets {
+                assert!(matches!(
+                    result,
+                    Err(CodestreamError::InvalidMarker {
+                        marker: Some(Marker::Cap),
+                        ..
+                    })
+                ));
+            } else {
+                assert!(matches!(result, Err(CodestreamError::Unsupported { .. })));
+            }
         }
     }
 
