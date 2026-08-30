@@ -203,6 +203,7 @@ pub fn prepare_htj2k_high_component_decode(
     let mut state = ht_marker_state(&c).ok_or(CodestreamError::SizeOverflow)?;
     state.components = 1;
     state.all_components_same_sample_format = true;
+    state.reversible_transform = true;
     state.packet_progression_supported = true;
     state.precincts_declared = false;
     state.code_block_width =
@@ -239,4 +240,262 @@ pub fn prepare_htj2k_high_component_decode(
         output_height: c.image_height(),
         codestream: c,
     }))
+}
+
+/// Project-authored high-component packet fixture, not an application encoder.
+#[doc(hidden)]
+pub fn encode_htj2k_high_component_test_fixture(
+    width: u32,
+    height: u32,
+    components: u16,
+) -> Result<Vec<u8>> {
+    if !(4..=257).contains(&components) || !(1..=64).contains(&width) || !(1..=64).contains(&height)
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    fixture(
+        width,
+        height,
+        components,
+        8,
+        false,
+        components - 1,
+        3,
+        components / 2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture(
+    width: u32,
+    height: u32,
+    components: u16,
+    bits: u8,
+    signed: bool,
+    roi: u16,
+    shift: u8,
+    split: u16,
+) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    write_native_main_header(
+        &mut output,
+        width,
+        height,
+        width,
+        height,
+        bits,
+        components,
+        true,
+        1,
+        &[8, 9, 10, 11],
+        true,
+        0,
+        1,
+    )?;
+    let siz = find_marker(&output, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    for c in 0..usize::from(components) {
+        output[siz + 40 + c * 3] = (bits - 1) | if signed { 0x80 } else { 0 };
+    }
+    let cap = find_marker(&output, 0, Marker::Cap).ok_or(CodestreamError::SizeOverflow)?;
+    output[cap + 8..cap + 10].copy_from_slice(&0x100a_u16.to_be_bytes());
+    let cod = find_marker(&output, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    output[cod + 2..cod + 4].copy_from_slice(&14_u16.to_be_bytes());
+    output[cod + 4] = 1;
+    output[cod + 5] = 1;
+    output[cod + 10] = 3;
+    output[cod + 11] = 3;
+    output.splice(cod + 14..cod + 14, [0x77, 0x88]);
+    let selector = |c: u16| -> Vec<u8> {
+        if components < 257 {
+            alloc::vec![c as u8]
+        } else {
+            c.to_be_bytes().to_vec()
+        }
+    };
+    let marker = |out: &mut Vec<u8>, code: u8, data: &[u8]| {
+        out.extend_from_slice(&[0xff, code]);
+        out.extend_from_slice(&(data.len() as u16 + 2).to_be_bytes());
+        out.extend_from_slice(data);
+    };
+    let mut rgn = selector(roi);
+    rgn.extend_from_slice(&[0, shift]);
+    marker(&mut output, 0x5e, &rgn);
+    let mut poc = Vec::new();
+    for (start, end, order) in [(0, split, 1), (split, components, 4)] {
+        poc.push(0);
+        poc.extend(selector(start));
+        poc.extend_from_slice(&[0, 1, 33]);
+        poc.extend(selector(end));
+        poc.push(order);
+    }
+    marker(&mut output, 0x5f, &poc);
+    let mut segments = Vec::new();
+    let mut bands = Vec::new();
+    for c in 0..components {
+        let block = if c % 2 == 0 { 32 } else { 64 };
+        let mut coc = selector(c);
+        coc.extend_from_slice(&[
+            1,
+            1,
+            if block == 32 { 3 } else { 4 },
+            if block == 32 { 3 } else { 4 },
+            0x40,
+            1,
+            0x77,
+            0x88,
+        ]);
+        marker(&mut output, 0x53, &coc);
+        let guard = 1 + (c % 3) as u8;
+        let mut qcc = selector(c);
+        qcc.push(guard << 5);
+        for exponent in [8, 9, 10, 11] {
+            qcc.push(exponent << 3);
+        }
+        marker(&mut output, 0x5d, &qcc);
+        let mut plane = alloc::vec![0_i32; checked_component_sample_count(width,height)?];
+        let specs = decomp_subband_specs(width, height, 1)?;
+        for spec in &specs {
+            for y in 0..spec.height {
+                for x in 0..spec.width {
+                    let n = x + 3 * y + u32::from(spec.index) + u32::from(c);
+                    let v = (n % 9) as i32 - 4;
+                    let v = if v == 0 { 1 } else { v };
+                    plane[((spec.y + y) * width + spec.x + x) as usize] = if c == roi && n % 2 == 0
+                    {
+                        v * (1_i32 << shift)
+                    } else {
+                        v
+                    };
+                }
+            }
+        }
+        let mut component = Vec::new();
+        for spec in specs {
+            component.push(encode_ht_decomp_subband_with_block_size(
+                width,
+                &plane,
+                spec,
+                8 + spec.index + guard - 1 + if c == roi { shift } else { 0 },
+                &mut segments,
+                block,
+            )?);
+        }
+        bands.push(component);
+    }
+    // Independently enumerate the two volumes; never call the production
+    // progression planner when constructing this oracle's packet order.
+    let schedule = (0..=1)
+        .flat_map(|r| (0..split).map(move |c| (c, r)))
+        .chain((split..components).flat_map(|c| (0..=1).map(move |r| (c, r))));
+    let mut packets = Vec::new();
+    for (c, r) in schedule {
+        let active = bands[usize::from(c)]
+            .iter()
+            .filter(|b| b.resolution == r && !b.code_blocks.is_empty())
+            .collect::<Vec<_>>();
+        let mut writer = PacketBitWriter::new();
+        writer.write_bit(1)?;
+        for b in &active {
+            write_component_packet_header(
+                &mut writer,
+                b.code_block_cols,
+                b.code_block_rows,
+                &b.code_blocks,
+            )?;
+        }
+        writer.align();
+        packets.extend_from_slice(writer.bytes());
+        for b in active {
+            for block in b.code_blocks.iter().filter(|b| b.included) {
+                packets.extend_from_slice(checked_slice(
+                    &segments,
+                    block.segment_offset,
+                    block.segment_len,
+                )?);
+            }
+        }
+    }
+    write_tile_part(&mut output, 0, &packets, true)?;
+    Ok(output)
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    fn prepared(bytes: &[u8]) -> PreparedHtj2kReducedComponentDecode<'_> {
+        prepare_htj2k_high_component_decode(bytes).unwrap().unwrap()
+    }
+
+    #[test]
+    fn high_component_index_widths_progression_and_native_output() {
+        for (count, split, roi, shift, width, height, bits, signed) in [
+            (4, 2, 3, 1, 17, 29, 8, false),
+            (255, 127, 254, 3, 1, 1, 12, true),
+            (256, 255, 255, 11, 3, 5, 16, false),
+            (257, 256, 256, 15, 7, 3, 16, true),
+            (257, 128, 3, 11, 1, 1, 8, false),
+            (9, 4, 8, 7, 64, 64, 8, true),
+        ] {
+            let bytes = fixture(width, height, count, bits, signed, roi, shift, split).unwrap();
+            let p = prepared(&bytes);
+            assert_eq!(
+                component_selector_len(&p.codestream.siz),
+                if count < 257 { 1 } else { 2 }
+            );
+            let packets = parse_default_precinct_packets_from_source_with_ht_retention(
+                &bytes,
+                &p.codestream,
+                p.tile_rect,
+                &ContiguousPacketSource {
+                    bytes: single_part1_profile_tile(&bytes, &p.codestream).unwrap().1,
+                },
+                None,
+                None,
+                None,
+                PacketOrganisationConfig::HT_HIGH_COMPONENT,
+                None,
+                HtCodingSetRetention::NativeAdmission,
+            )
+            .unwrap();
+            assert_eq!(packets.packet_count, u64::from(count) * 2);
+            assert!(
+                packets
+                    .contributions
+                    .iter()
+                    .any(|c| c.component_index == count - 1)
+            );
+            assert!(p.contributions.iter().all(|c| c.component_index == 0));
+            let mut expected = vec![0_i32; (width * height) as usize];
+            for s in decomp_subband_specs(width, height, 1).unwrap() {
+                for y in 0..s.height {
+                    for x in 0..s.width {
+                        let v = ((x + 3 * y + u32::from(s.index)) % 9) as i32 - 4;
+                        expected[((s.y + y) * width + s.x + x) as usize] =
+                            if v == 0 { 1 } else { v };
+                    }
+                }
+            }
+            inverse_reversible_5_3_levels_with_scratch(
+                &mut expected,
+                width as usize,
+                width,
+                height,
+                1,
+                &mut vec![0; width.max(height) as usize * 3],
+            )
+            .unwrap();
+            let expected = component_sample_slice_to_bytes(bits, signed, &expected).unwrap();
+            let decoded = decode_prepared_htj2k_reduced_component_owned_with_workspace(
+                &p,
+                &mut HtCodestreamDecodeWorkspace::new(),
+            )
+            .unwrap();
+            assert_eq!(decoded.components.len(), 1);
+            assert_eq!(
+                decoded.components[0].samples, expected,
+                "count={count} roi={roi} shift={shift}"
+            );
+        }
+    }
 }

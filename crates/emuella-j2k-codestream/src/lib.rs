@@ -26,6 +26,8 @@ pub use emuella_j2k_transform as transform;
 #[doc(hidden)]
 pub mod geometry;
 mod ht_high_component;
+#[doc(hidden)]
+pub use ht_high_component::encode_htj2k_high_component_test_fixture;
 mod ht_reduced_roi;
 #[cfg(feature = "std")]
 pub use ht_high_component::prepare_htj2k_high_component_decode;
