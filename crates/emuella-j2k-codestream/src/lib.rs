@@ -51272,7 +51272,7 @@ mod htj2k_reduced_component_tests {
                     let mut input =
                         encode_ht_heterogeneous_reduced_fixture(65, 97, layers).unwrap();
                     let siz = find_marker(&input, 0, Marker::Siz).unwrap();
-                    input[siz + 40] = bits - 1 | if is_signed { 0x80 } else { 0 };
+                    input[siz + 40] = (bits - 1) | if is_signed { 0x80 } else { 0 };
                     let decoded = decode_htj2k_reduced_component_owned(&input, request)
                         .unwrap()
                         .unwrap();
