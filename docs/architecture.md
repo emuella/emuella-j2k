@@ -43,8 +43,10 @@ the current HTJ2K codestream. Part 15 kind identification requires the mapped
 Rsiz and Pcap declaration, while native decode admission remains a later,
 narrower decision.
 
-Packet-level SINGLEHT checking is applied only where the retained coding mode
-establishes homogeneous HT code-block grammar. Placeholder passes before the
+Packet-level SINGLEHT checking is bounded: the validator skips every CAP
+`Mixed` declaration, even when effective COD/COC is homogeneous HT (`0x40`).
+It does not establish SINGLEHT contradictions for those declarations.
+For admitted homogeneous grammar, placeholder passes before the
 first non-empty cleanup are not HT sets; once that first set has appeared, a
 later empty or non-empty set contradicts SINGLEHT. HTMIX syntax remains
 structurally inspectable but outside native decode and packet-semantic
@@ -59,11 +61,13 @@ ROI, heterogeneous state or irreversible coding can therefore retain the
 existing native route when the effective mechanisms are still one HT coding
 set per code-block, no RGN use, one supported coding style and reversible 5/3.
 The decoder and support classification share the effective packet-mechanism
-predicate. Actual multiple sets, RGN use outside the native ROI window below,
-heterogeneous component or
-tile-header state, irreversible coding outside the bounded reduced route below,
-HTMIX/HT-declared population modes and a cleanup magnitude bound above 18 fail
-closed. A later zero-byte Cleanup-set
+predicate for the common full-image route. Actual multiple sets, RGN use,
+heterogeneous state and irreversible coding are not admitted by that route.
+The independently prepared native-grid, reduced, ROI, high-component and
+tile-progression routes below have their own bounded effective-state and
+request contracts; their envelopes are not interchangeable. HTMIX/HT-declared
+population modes and a cleanup magnitude bound above 18 fail native admission
+across these routes. A later zero-byte Cleanup-set
 announcement counts as an actual second set once the first non-empty set has
 appeared; leading zero-byte placeholders do not. Native admission walks the
 complete packet source but retains only the first and latest set once this

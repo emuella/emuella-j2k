@@ -51053,9 +51053,11 @@ fn prepare_ht_six_level_reduced_component(
 }
 
 /// Prepare component zero from the bounded five-level profiles at reduction
-/// two, six-level irreversible RLCP or sampled scalar-derived PCRL at reduction
-/// three, or heterogeneous reversible CPRL at reduction five. No request performs an inverse colour
-/// transform; output retains the selected component's precision and signedness.
+/// two; six-level irreversible RLCP, sampled scalar-derived PCRL or
+/// heterogeneous sampled-RPCL ROI at reduction three; or heterogeneous
+/// reversible CPRL at reduction five. Each route has independent admission.
+/// No request performs an inverse colour transform; output retains the selected
+/// component's precision and signedness.
 ///
 /// Preparation validates structural Part 15 signalling, effective packet
 /// mechanisms and all profile declarations, then retains the admitted packet
@@ -51560,12 +51562,12 @@ fn decode_htj2k_reduced_irreversible_component(
     ))
 }
 
-/// Decode transformed component zero from the bounded five-level profiles
-/// at reduction two or six-level irreversible RLCP profile at reduction three.
+/// Decode native component zero through the independently bounded reduced
+/// routes documented by [`prepare_htj2k_reduced_component_decode`], including
+/// heterogeneous sampled-RPCL ROI at reduction three.
 ///
 /// The selected plane is returned before inverse colour transformation.
-/// Structural Part 15
-/// validity and effective HT mechanism admission still inspect the complete
+/// Structural Part 15 validity and effective HT mechanism admission inspect the complete
 /// codestream before any reduced output is reconstructed.
 #[cfg(feature = "std")]
 pub fn decode_htj2k_reduced_component_owned_with_workspace(
