@@ -48936,7 +48936,7 @@ pub fn prepare_htj2k_reduced_component_decode(
 
 /// Execute an admitted bounded reduced transformed-component HTJ2K plan.
 ///
-/// The selected plane is returned before inverse RCT. Call
+/// The selected plane is returned before inverse colour transformation. Call
 /// [`prepare_htj2k_reduced_component_decode`] first when metadata and decode
 /// must share the same complete admission decision.
 #[cfg(feature = "std")]
@@ -49172,7 +49172,8 @@ fn decode_htj2k_reduced_irreversible_component(
 /// Decode transformed component zero from the bounded five-level reversible
 /// or irreversible HTONLY profile at two discarded resolution levels.
 ///
-/// The selected plane is returned before inverse RCT. Structural Part 15
+/// The selected plane is returned before inverse colour transformation.
+/// Structural Part 15
 /// validity and effective HT mechanism admission still inspect the complete
 /// codestream before any reduced output is reconstructed.
 #[cfg(feature = "std")]
