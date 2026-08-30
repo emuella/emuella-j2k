@@ -12898,22 +12898,22 @@ mod effective_coding_style_tests {
         let siz_segment = fixture[siz..siz + 2 + lsiz].to_vec();
         let mut duplicate_main_siz = fixture.clone();
         duplicate_main_siz.splice(cod..cod, siz_segment.iter().copied());
-        let parsed_duplicate_main_siz = codestream::parse(&duplicate_main_siz).unwrap();
-        assert!(
-            !codestream::is_supported_part1_native_multitile_partial_profile(
-                &duplicate_main_siz,
-                &parsed_duplicate_main_siz,
-            )
-        );
+        assert!(matches!(
+            codestream::parse(&duplicate_main_siz),
+            Err(codestream::CodestreamError::InvalidMarker {
+                marker: Some(codestream::Marker::Siz),
+                ..
+            })
+        ));
         nearby.push(duplicate_main_siz);
         let tile_header_siz = insert_first_tile_header_segment(fixture.clone(), &siz_segment);
-        let parsed_tile_header_siz = codestream::parse(&tile_header_siz).unwrap();
-        assert!(
-            !codestream::is_supported_part1_native_multitile_partial_profile(
-                &tile_header_siz,
-                &parsed_tile_header_siz,
-            )
-        );
+        assert!(matches!(
+            codestream::parse(&tile_header_siz),
+            Err(codestream::CodestreamError::InvalidMarker {
+                marker: Some(codestream::Marker::Siz),
+                ..
+            })
+        ));
         nearby.push(tile_header_siz);
         let mut bytes_after_eoc = fixture.clone();
         bytes_after_eoc.extend_from_slice(&[0, 1]);
@@ -14982,21 +14982,41 @@ mod effective_coding_style_tests {
             } if detail.contains("reversible scalar QCD")
         ));
 
-        let mut unsupported_final_set = fixture();
-        let cod = unsupported_final_set
+        let mut contradictory_classic_style = fixture();
+        let cod = contradictory_classic_style
             .windows(2)
             .position(|bytes| bytes == [0xff, 0x52])
             .unwrap();
-        unsupported_final_set[cod + 12] = 0;
+        contradictory_classic_style[cod + 12] = 0;
         assert!(matches!(
-            inspect(&unsupported_final_set, &InspectOptions::default())
-                .unwrap()
-                .support,
-            SupportStatus::Unsupported {
-                feature: UnsupportedFeature::EntropyCoder,
-                ref detail,
-            } if detail.contains("HT final coding set")
+            inspect(&contradictory_classic_style, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { ref message, .. })
+                if message.contains("HT-only code-blocks")
         ));
+        let decode_options = DecodeOptions::default();
+        let valid_shape = decode_shape(&fixture(), &decode_options).unwrap();
+        let info = valid_shape.image_info().unwrap();
+        let mut samples = vec![0x6d; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&contradictory_classic_style, &mut target, &decode_options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+        }
+        assert!(samples.iter().all(|sample| *sample == 0x6d));
 
         let multitile_decomposition = multitile_fixture(1, 1);
         assert!(matches!(
