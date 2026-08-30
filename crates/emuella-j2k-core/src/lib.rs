@@ -33,6 +33,505 @@ pub struct ProjectSummary {
 }
 
 #[cfg(test)]
+mod htj2k_encode_tests {
+    use super::*;
+
+    const WIDTH: u32 = 257;
+    const HEIGHT: u32 = 193;
+
+    fn sample_planes(components: u16, sample_format: SampleFormat) -> Vec<Vec<u8>> {
+        let bytes_per_sample = usize::from(sample_format.bits_per_sample).div_ceil(8);
+        (0..components)
+            .map(|component| {
+                let mut samples =
+                    Vec::with_capacity(usize::try_from(WIDTH * HEIGHT).unwrap() * bytes_per_sample);
+                let modulus = 1_u32 << sample_format.bits_per_sample;
+                for y in 0..HEIGHT {
+                    for x in 0..WIDTH {
+                        let mut value = x
+                            .wrapping_add(y.wrapping_mul(WIDTH))
+                            .wrapping_add(u32::from(component).wrapping_mul(0x9e37_79b9));
+                        value ^= value << 13;
+                        value ^= value >> 17;
+                        value ^= value << 5;
+                        value %= modulus;
+                        if bytes_per_sample == 1 {
+                            samples.push(value as u8);
+                        } else {
+                            samples.extend_from_slice(&(value as u16).to_le_bytes());
+                        }
+                    }
+                }
+                samples
+            })
+            .collect()
+    }
+
+    fn padded_planes(compact: &[Vec<u8>], bytes_per_sample: usize) -> Vec<Vec<u8>> {
+        let row_bytes = usize::try_from(WIDTH).unwrap() * bytes_per_sample;
+        let stride = row_bytes + 5;
+        compact
+            .iter()
+            .map(|plane| {
+                let mut padded = vec![0xa5; stride * usize::try_from(HEIGHT).unwrap()];
+                for row in 0..usize::try_from(HEIGHT).unwrap() {
+                    padded[row * stride..row * stride + row_bytes]
+                        .copy_from_slice(&plane[row * row_bytes..(row + 1) * row_bytes]);
+                }
+                padded
+            })
+            .collect()
+    }
+
+    fn interleave(compact: &[Vec<u8>], bytes_per_sample: usize) -> (Vec<u8>, usize) {
+        let pixel_bytes = compact.len() * bytes_per_sample;
+        let row_bytes = usize::try_from(WIDTH).unwrap() * pixel_bytes;
+        let stride = row_bytes + 7;
+        let mut interleaved = vec![0x5a; stride * usize::try_from(HEIGHT).unwrap()];
+        for y in 0..usize::try_from(HEIGHT).unwrap() {
+            for x in 0..usize::try_from(WIDTH).unwrap() {
+                for (component, plane) in compact.iter().enumerate() {
+                    let source = (y * usize::try_from(WIDTH).unwrap() + x) * bytes_per_sample;
+                    let destination = y * stride + x * pixel_bytes + component * bytes_per_sample;
+                    interleaved[destination..destination + bytes_per_sample]
+                        .copy_from_slice(&plane[source..source + bytes_per_sample]);
+                }
+            }
+        }
+        (interleaved, stride)
+    }
+
+    fn assert_one_decomp_case(
+        components: u16,
+        sample_format: SampleFormat,
+        layout: ComponentLayout,
+    ) {
+        let colour = if components == 1 {
+            ColorModel::Grayscale
+        } else {
+            ColorModel::Rgb
+        };
+        let info =
+            ImageInfo::new(WIDTH, HEIGHT, components, sample_format, colour, layout).unwrap();
+        let compact = sample_planes(components, sample_format);
+        let bytes_per_sample = usize::from(sample_format.bits_per_sample).div_ceil(8);
+        let options = Htj2kEncodeOptions {
+            decomposition_levels: 1,
+        };
+
+        let (first, second) = match layout {
+            ComponentLayout::Planar => {
+                let buffers = padded_planes(&compact, bytes_per_sample);
+                let stride = usize::try_from(WIDTH).unwrap() * bytes_per_sample + 5;
+                let planes = buffers
+                    .iter()
+                    .map(|samples| {
+                        Plane::new(samples, WIDTH, HEIGHT, stride, sample_format).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let image = ImageView::Planar {
+                    info: &info,
+                    planes: &planes,
+                };
+                (
+                    encode_htj2k(image, &options).unwrap(),
+                    encode_htj2k(image, &options).unwrap(),
+                )
+            }
+            ComponentLayout::Interleaved => {
+                let (samples, stride_bytes) = interleave(&compact, bytes_per_sample);
+                let image = ImageView::Interleaved {
+                    info: &info,
+                    samples: &samples,
+                    stride_bytes,
+                };
+                (
+                    encode_htj2k(image, &options).unwrap(),
+                    encode_htj2k(image, &options).unwrap(),
+                )
+            }
+        };
+        assert_eq!(first, second);
+
+        let parsed = codestream::parse(&first).unwrap();
+        assert_eq!(parsed.kind, codestream::CodestreamKind::Htj2k);
+        assert_ne!(parsed.siz.capabilities & 0x4000, 0);
+        assert!(parsed.capability.is_some());
+        let style = parsed.uniform_effective_coding_style().unwrap();
+        assert_eq!(style.entropy_coder, codestream::EntropyCoder::HtBlockCoding);
+        assert_eq!(style.decomposition_levels, 1);
+        assert_eq!(style.transform, codestream::WaveletTransform::Reversible53);
+        assert!(!style.multiple_component_transform);
+
+        let decoded = decode(
+            &first,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap_or_else(|error| {
+            panic!("{components}-component {sample_format:?} {layout:?} decode failed: {error:?}")
+        });
+        let ImageData::Planes(decoded_planes) = decoded.data else {
+            panic!("ordinary HTJ2K component decode returned interleaved samples");
+        };
+        assert_eq!(decoded_planes, compact);
+    }
+
+    fn assert_grayscale_u16_one_decomp_round_trip(width: u32, height: u32, samples: &[u16]) {
+        let native = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        let info = ImageInfo::new(
+            width,
+            height,
+            1,
+            SampleFormat::U16_LE,
+            ColorModel::Grayscale,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        let image = ImageView::Interleaved {
+            info: &info,
+            samples: &native,
+            stride_bytes: usize::try_from(width).unwrap() * 2,
+        };
+        let options = Htj2kEncodeOptions {
+            decomposition_levels: 1,
+        };
+        let first = encode_htj2k(image, &options).unwrap();
+        let second = encode_htj2k(image, &options).unwrap();
+        assert_eq!(first, second, "{width}x{height} output is not repeatable");
+
+        let decoded = decode(
+            &first,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("{width}x{height} decode failed: {error:?}"));
+        assert_eq!(decoded.data, ImageData::Planes(vec![native]));
+    }
+
+    #[test]
+    fn one_decomp_raw_ht_matrix_is_repeatable_structural_and_lossless() {
+        for components in [1, 3] {
+            for sample_format in [SampleFormat::U8, SampleFormat::U16_LE] {
+                for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
+                    assert_one_decomp_case(components, sample_format, layout);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_decomp_public_output_still_matches_the_existing_codec_path() {
+        let samples = (0..17 * 13)
+            .map(|index| ((index * 29 + index / 17 * 7 + 3) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let info = ImageInfo::new(
+            17,
+            13,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        let image = ImageView::Interleaved {
+            info: &info,
+            samples: &samples,
+            stride_bytes: 17,
+        };
+        let public = encode_htj2k(image, &Htj2kEncodeOptions::default()).unwrap();
+        let existing =
+            codestream::encode_htj2k_grayscale_u8_no_decomp(codestream::GrayscaleU8Encode {
+                width: 17,
+                height: 13,
+                samples: &samples,
+                stride_bytes: 17,
+            })
+            .unwrap();
+        assert_eq!(public, existing);
+    }
+
+    #[test]
+    fn one_decomp_sparse_linear_u8_rows_round_trip() {
+        let width = 53_u32;
+        let height = 2_u32;
+        let samples = (0..width * height)
+            .map(|index| (index % width) as u8)
+            .collect::<Vec<_>>();
+        let info = ImageInfo::new(
+            width,
+            height,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        let encoded = encode_htj2k(
+            ImageView::Interleaved {
+                info: &info,
+                samples: &samples,
+                stride_bytes: usize::try_from(width).unwrap(),
+            },
+            &Htj2kEncodeOptions {
+                decomposition_levels: 1,
+            },
+        )
+        .unwrap();
+        let decoded = decode(
+            &encoded,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(decoded.data, ImageData::Planes(vec![samples]));
+    }
+
+    #[test]
+    fn one_decomp_nonconstant_single_axis_images_round_trip() {
+        let cases = [
+            (1_u32, 2_u32, SampleFormat::U8, vec![0, 255]),
+            (2, 1, SampleFormat::U8, vec![0, 255]),
+            (
+                1,
+                2,
+                SampleFormat::U16_LE,
+                [0_u16, u16::MAX]
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            ),
+            (
+                2,
+                1,
+                SampleFormat::U16_LE,
+                [0_u16, u16::MAX]
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            ),
+        ];
+
+        for (width, height, sample_format, samples) in cases {
+            let info = ImageInfo::new(
+                width,
+                height,
+                1,
+                sample_format,
+                ColorModel::Grayscale,
+                ComponentLayout::Interleaved,
+            )
+            .unwrap();
+            let image = ImageView::Interleaved {
+                info: &info,
+                samples: &samples,
+                stride_bytes: usize::try_from(width).unwrap()
+                    * usize::from(sample_format.bits_per_sample).div_ceil(8),
+            };
+            let options = Htj2kEncodeOptions {
+                decomposition_levels: 1,
+            };
+            let first = encode_htj2k(image, &options).unwrap();
+            let second = encode_htj2k(image, &options).unwrap();
+            assert_eq!(first, second);
+
+            let parsed = codestream::parse(&first).unwrap();
+            assert_eq!(parsed.kind, codestream::CodestreamKind::Htj2k);
+            let style = parsed.uniform_effective_coding_style().unwrap();
+            assert_eq!(style.decomposition_levels, 1);
+            assert_eq!(style.transform, codestream::WaveletTransform::Reversible53);
+            assert_eq!(style.entropy_coder, codestream::EntropyCoder::HtBlockCoding);
+
+            let decoded = decode(
+                &first,
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    ..DecodeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(decoded.data, ImageData::Planes(vec![samples]));
+        }
+    }
+
+    #[test]
+    fn one_decomp_full_range_u16_boundary_patterns_round_trip() {
+        for (width, height) in [
+            (1_u32, 1_u32),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (23, 23),
+            (53, 53),
+            (63, 63),
+            (64, 64),
+            (65, 65),
+            (65, 63),
+            (63, 65),
+            (129, 65),
+            (257, 193),
+        ] {
+            let count = usize::try_from(width * height).unwrap();
+            let mut patterns = vec![vec![0_u16; count], vec![u16::MAX; count]];
+            patterns.push(
+                (0..count)
+                    .map(|index| if index % 2 == 0 { 0 } else { u16::MAX })
+                    .collect(),
+            );
+            patterns.push(
+                (0..count)
+                    .map(|index| {
+                        if (index / usize::try_from(width).unwrap()) % 2 == 0 {
+                            0
+                        } else {
+                            u16::MAX
+                        }
+                    })
+                    .collect(),
+            );
+            patterns.push(
+                (0..count)
+                    .map(|index| {
+                        let x = index % usize::try_from(width).unwrap();
+                        let y = index / usize::try_from(width).unwrap();
+                        if (x + y) % 2 == 0 { 0 } else { u16::MAX }
+                    })
+                    .collect(),
+            );
+            patterns.push(
+                (0..count)
+                    .map(|index| {
+                        let x = index % usize::try_from(width).unwrap();
+                        let y = index / usize::try_from(width).unwrap();
+                        if (x + y) % 2 == 0 { u16::MAX } else { 0 }
+                    })
+                    .collect(),
+            );
+            for position in [0, count / 2, count - 1] {
+                let mut single_maximum = vec![0_u16; count];
+                single_maximum[position] = u16::MAX;
+                patterns.push(single_maximum);
+
+                let mut single_minimum = vec![u16::MAX; count];
+                single_minimum[position] = 0;
+                patterns.push(single_minimum);
+            }
+
+            for samples in patterns {
+                assert_grayscale_u16_one_decomp_round_trip(width, height, &samples);
+            }
+        }
+    }
+
+    #[test]
+    fn ht_encode_decomposition_and_profile_boundaries_fail_closed() {
+        let samples = vec![0_u8; 8 * 8];
+        let info = ImageInfo::new(
+            8,
+            8,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        let image = ImageView::Interleaved {
+            info: &info,
+            samples: &samples,
+            stride_bytes: 8,
+        };
+        for decomposition_levels in [2, u8::MAX] {
+            assert!(matches!(
+                encode_htj2k(
+                    image,
+                    &Htj2kEncodeOptions {
+                        decomposition_levels,
+                    },
+                ),
+                Err(J2kError::Unsupported {
+                    feature: UnsupportedFeature::WaveletTransform,
+                    ..
+                })
+            ));
+        }
+
+        let two_component_info = ImageInfo::new(
+            8,
+            8,
+            2,
+            SampleFormat::U8,
+            ColorModel::Unknown,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        assert!(matches!(
+            encode_htj2k(
+                ImageView::Interleaved {
+                    info: &two_component_info,
+                    samples: &[0_u8; 8 * 8 * 2],
+                    stride_bytes: 16,
+                },
+                &Htj2kEncodeOptions {
+                    decomposition_levels: 1,
+                },
+            ),
+            Err(J2kError::Unsupported {
+                feature: UnsupportedFeature::ComponentLayout,
+                ..
+            })
+        ));
+
+        for sample_format in [
+            SampleFormat::with_byte_order(16, false, Some(SampleEndian::Big)).unwrap(),
+            SampleFormat::with_byte_order(16, true, Some(SampleEndian::Little)).unwrap(),
+            SampleFormat::with_byte_order(12, false, Some(SampleEndian::Little)).unwrap(),
+        ] {
+            let unsupported_info = ImageInfo::new(
+                8,
+                8,
+                1,
+                sample_format,
+                ColorModel::Grayscale,
+                ComponentLayout::Interleaved,
+            )
+            .unwrap();
+            assert!(matches!(
+                encode_htj2k(
+                    ImageView::Interleaved {
+                        info: &unsupported_info,
+                        samples: &[0_u8; 8 * 8 * 2],
+                        stride_bytes: 16,
+                    },
+                    &Htj2kEncodeOptions {
+                        decomposition_levels: 1,
+                    },
+                ),
+                Err(J2kError::Unsupported { .. })
+            ));
+        }
+
+        assert!(matches!(
+            codestream::encode_htj2k_grayscale_u8_one_decomp(codestream::GrayscaleU8Encode {
+                width: u32::MAX,
+                height: 2,
+                samples: &[],
+                stride_bytes: usize::MAX,
+            }),
+            Err(codestream::CodestreamError::SizeOverflow)
+        ));
+    }
+}
+
+#[cfg(test)]
 mod jp2_header_validation_tests {
     use super::*;
 
@@ -3001,8 +3500,8 @@ impl Default for EncodeOptions {
 /// Encode parameters for raw lossless HTJ2K output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Htj2kEncodeOptions {
-    /// Reversible 5/3 decomposition levels. The initial algorithmic surface
-    /// supports cleanup-only no-decomposition codestreams.
+    /// Reversible 5/3 decomposition levels. The bounded algorithmic surface
+    /// supports cleanup-only codestreams with zero or one level.
     pub decomposition_levels: u8,
 }
 
@@ -6472,10 +6971,10 @@ pub fn encode(image: ImageView<'_>, options: &EncodeOptions) -> Result<Vec<u8>> 
 /// coder.
 pub fn encode_htj2k(image: ImageView<'_>, options: &Htj2kEncodeOptions) -> Result<Vec<u8>> {
     validate_image_view(&image)?;
-    if options.decomposition_levels != 0 {
+    if options.decomposition_levels > 1 {
         return Err(unsupported(
             UnsupportedFeature::WaveletTransform,
-            "HTJ2K encode currently supports no wavelet decomposition",
+            "HTJ2K encode supports zero or one reversible 5/3 decomposition level",
         ));
     }
     #[cfg(feature = "std")]
@@ -6483,16 +6982,32 @@ pub fn encode_htj2k(image: ImageView<'_>, options: &Htj2kEncodeOptions) -> Resul
         let info = image_info(image);
         validate_htj2k_encode_image_info(info)?;
         if is_native_grayscale_u8_encode(info) {
-            return encode_native_htj2k_grayscale_u8_no_decomp(image);
+            return match options.decomposition_levels {
+                0 => encode_native_htj2k_grayscale_u8_no_decomp(image),
+                1 => encode_native_htj2k_grayscale_u8_one_decomp(image),
+                _ => unreachable!(),
+            };
         }
         if is_native_rgb_u8_encode(info) {
-            return encode_native_htj2k_rgb_u8_no_decomp(image);
+            return match options.decomposition_levels {
+                0 => encode_native_htj2k_rgb_u8_no_decomp(image),
+                1 => encode_native_htj2k_rgb_u8_one_decomp(image),
+                _ => unreachable!(),
+            };
         }
         if is_native_grayscale_u16_le_ht_encode(info) {
-            return encode_native_htj2k_grayscale_u16_le_no_decomp(image);
+            return match options.decomposition_levels {
+                0 => encode_native_htj2k_grayscale_u16_le_no_decomp(image),
+                1 => encode_native_htj2k_grayscale_u16_le_one_decomp(image),
+                _ => unreachable!(),
+            };
         }
         if is_native_rgb_u16_le_ht_encode(info) {
-            return encode_native_htj2k_rgb_u16_le_no_decomp(image);
+            return match options.decomposition_levels {
+                0 => encode_native_htj2k_rgb_u16_le_no_decomp(image),
+                1 => encode_native_htj2k_rgb_u16_le_one_decomp(image),
+                _ => unreachable!(),
+            };
         }
         Err(unsupported(
             UnsupportedFeature::ComponentLayout,
@@ -6920,6 +7435,36 @@ fn encode_native_htj2k_grayscale_u8_no_decomp(image: ImageView<'_>) -> Result<Ve
 }
 
 #[cfg(feature = "std")]
+fn encode_native_htj2k_grayscale_u8_one_decomp(image: ImageView<'_>) -> Result<Vec<u8>> {
+    let info = image_info(image);
+    let input = match image {
+        ImageView::Planar { planes, .. } => {
+            let plane = planes.first().ok_or(J2kError::InvalidParameter {
+                parameter: "planes",
+                message: "grayscale encode requires one input plane",
+            })?;
+            codestream::GrayscaleU8Encode {
+                width: info.width,
+                height: info.height,
+                samples: plane.samples,
+                stride_bytes: plane.stride_bytes,
+            }
+        }
+        ImageView::Interleaved {
+            samples,
+            stride_bytes,
+            ..
+        } => codestream::GrayscaleU8Encode {
+            width: info.width,
+            height: info.height,
+            samples,
+            stride_bytes,
+        },
+    };
+    codestream::encode_htj2k_grayscale_u8_one_decomp(input).map_err(map_codestream_error)
+}
+
+#[cfg(feature = "std")]
 fn encode_native_grayscale_u8_decomp(
     image: ImageView<'_>,
     decomposition_levels: u8,
@@ -7184,6 +7729,40 @@ fn encode_native_htj2k_grayscale_u16_le_no_decomp(image: ImageView<'_>) -> Resul
 }
 
 #[cfg(feature = "std")]
+fn encode_native_htj2k_grayscale_u16_le_one_decomp(image: ImageView<'_>) -> Result<Vec<u8>> {
+    let info = image_info(image);
+    let input = match image {
+        ImageView::Planar { planes, .. } => {
+            let plane = planes.first().ok_or(J2kError::InvalidParameter {
+                parameter: "planes",
+                message: "grayscale encode requires one input plane",
+            })?;
+            codestream::GrayscaleU16LeEncode {
+                width: info.width,
+                height: info.height,
+                samples: plane.samples,
+                stride_bytes: plane.stride_bytes,
+            }
+        }
+        ImageView::Interleaved {
+            samples,
+            stride_bytes,
+            ..
+        } => codestream::GrayscaleU16LeEncode {
+            width: info.width,
+            height: info.height,
+            samples,
+            stride_bytes,
+        },
+    };
+    codestream::encode_htj2k_grayscale_u16_le_one_decomp_with_precision(
+        input,
+        info.sample_format.bits_per_sample,
+    )
+    .map_err(map_codestream_error)
+}
+
+#[cfg(feature = "std")]
 fn encode_native_grayscale_u16_le_decomp(
     image: ImageView<'_>,
     decomposition_levels: u8,
@@ -7347,6 +7926,37 @@ fn encode_native_htj2k_rgb_u8_no_decomp(image: ImageView<'_>) -> Result<Vec<u8>>
 }
 
 #[cfg(feature = "std")]
+fn encode_native_htj2k_rgb_u8_one_decomp(image: ImageView<'_>) -> Result<Vec<u8>> {
+    let info = image_info(image);
+    match image {
+        ImageView::Planar { planes, .. } => {
+            let samples = interleaved_rgb_from_planes(info, planes, SampleFormat::U8)?;
+            codestream::encode_htj2k_rgb_u8_one_decomp(codestream::RgbU8Encode {
+                width: info.width,
+                height: info.height,
+                samples: &samples,
+                stride_bytes: usize::try_from(info.width)
+                    .map_err(|_| sample_size_overflow())?
+                    .checked_mul(3)
+                    .ok_or_else(sample_size_overflow)?,
+            })
+            .map_err(map_codestream_error)
+        }
+        ImageView::Interleaved {
+            samples,
+            stride_bytes,
+            ..
+        } => codestream::encode_htj2k_rgb_u8_one_decomp(codestream::RgbU8Encode {
+            width: info.width,
+            height: info.height,
+            samples,
+            stride_bytes,
+        })
+        .map_err(map_codestream_error),
+    }
+}
+
+#[cfg(feature = "std")]
 fn encode_native_rgb_u16_le_no_decomp(image: ImageView<'_>) -> Result<Vec<u8>> {
     let info = image_info(image);
     match image {
@@ -7402,6 +8012,43 @@ fn encode_native_htj2k_rgb_u16_le_no_decomp(image: ImageView<'_>) -> Result<Vec<
             stride_bytes,
             ..
         } => codestream::encode_htj2k_rgb_u16_le_no_decomp_with_precision(
+            codestream::RgbU16LeEncode {
+                width: info.width,
+                height: info.height,
+                samples,
+                stride_bytes,
+            },
+            info.sample_format.bits_per_sample,
+        )
+        .map_err(map_codestream_error),
+    }
+}
+
+#[cfg(feature = "std")]
+fn encode_native_htj2k_rgb_u16_le_one_decomp(image: ImageView<'_>) -> Result<Vec<u8>> {
+    let info = image_info(image);
+    match image {
+        ImageView::Planar { planes, .. } => {
+            let samples = interleaved_rgb_from_planes(info, planes, info.sample_format)?;
+            codestream::encode_htj2k_rgb_u16_le_one_decomp_with_precision(
+                codestream::RgbU16LeEncode {
+                    width: info.width,
+                    height: info.height,
+                    samples: &samples,
+                    stride_bytes: usize::try_from(info.width)
+                        .map_err(|_| sample_size_overflow())?
+                        .checked_mul(6)
+                        .ok_or_else(sample_size_overflow)?,
+                },
+                info.sample_format.bits_per_sample,
+            )
+            .map_err(map_codestream_error)
+        }
+        ImageView::Interleaved {
+            samples,
+            stride_bytes,
+            ..
+        } => codestream::encode_htj2k_rgb_u16_le_one_decomp_with_precision(
             codestream::RgbU16LeEncode {
                 width: info.width,
                 height: info.height,

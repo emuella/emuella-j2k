@@ -76,6 +76,51 @@ and compatibility APIs named after an external codec do not belong in the
 runtime crates. Corpus-specific expectations stay in `emuella-testdata` and its
 harnesses.
 
+### Raw reversible HTJ2K encode qualification
+
+The public one-level qualification is algorithmic and self-contained. It uses
+project-authored 257 × 193 odd-sized inputs for the eight greyscale/RGB ×
+`U8`/`U16_LE` × planar/interleaved cells. Every cell is encoded twice and must
+produce identical bytes. Structural parsing must identify an HTJ2K codestream,
+the Part 15 SIZ and CAP signalling, HT-only COD block style, exactly one
+decomposition level, the reversible 5/3 transform and no multiple-component
+transform. Ordinary public component decode must reproduce each native plane
+byte-for-byte. The U16 generator spans the complete unsigned native range.
+
+Full-range U16 boundary qualification covers constant zero and maximum planes,
+both checkerboard polarities, alternating rows and columns, and isolated
+minimum or maximum samples at the first, middle and last positions. It runs at
+1–4, 23, 53 and 63–65 pixels, across 64-sample code-block boundaries, cropped
+63 × 65, 65 × 63 and 129 × 65 blocks, and odd 257 × 193 geometry. A codestream
+test proves that the two 2 × 2 checkerboards transform to HH −131070 and 131070
+and signal exponent 17. The scalar MagSgn fallback, empty-small-image
+subbands, byte-aligned MEL termination and delayed VLC initial-nibble
+consumption are therefore exercised by ordinary encode/decode rather than a
+payload classifier. The exact low-level MEL regression is a 23 × 1 block with
+coefficients `[1, 0 × 22]` at depth 2; the public regression is a 53 × 2 U8
+image whose two rows contain values 0 through 52.
+
+The same tests compare the public zero-level output with the pre-existing
+codestream encoder for an algorithmic input, so dispatch widening cannot alter
+that byte path. Negative cases cover decomposition counts above one, component
+counts outside greyscale/RGB, signed or wrong-endian input, one-level stored
+precision outside `U8`/`U16_LE`, and checked geometry overflow. These cases
+must return structured errors rather than emit a partially supported stream.
+Zero-level bytes are compared directly with the established encoder path, and
+the canonical suite retains the existing U8, classic Part 1 and non-HT
+behaviour checks. JPH writing is not exercised or claimed.
+
+The standards and provenance basis is the bounded route recorded under
+“Bounded raw reversible HTJ2K encode” in `architecture.md`. All fixtures,
+patterns and assertions are project-authored. The ordinary suite neither
+invokes an external codec nor retains external payloads or diagnostics.
+Private authorised black-box qualification under registered campaign scratch
+passed the project-authored U8 PGM in both directions (2/2 aggregate) and the
+full-range U16 PGM/PPM greyscale/RGB cases in both directions (4/4 aggregate)
+between raw internal codestreams and installed OpenJPH tools. Only these
+aggregate results are public; external payloads and diagnostics remain outside
+the repository.
+
 ### HTJ2K DS0 qualification
 
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
