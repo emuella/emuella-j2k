@@ -59,7 +59,9 @@ predicate. Actual multiple sets, RGN use, heterogeneous component or
 tile-header state, irreversible coding, HTMIX/HT-declared population modes and
 a cleanup magnitude bound above 18 fail closed. A later zero-byte Cleanup-set
 announcement counts as an actual second set once the first non-empty set has
-appeared; leading zero-byte placeholders do not. Packet contradictions are
+appeared; leading zero-byte placeholders do not. Native admission walks the
+complete packet source but retains only the first and latest set once this
+unsupported multiplicity is known. Packet contradictions are
 still validity errors before unsupported-mechanism admission.
 
 This boundary follows ISO/IEC 15444-15:2019, clauses 6.1 and 8.3, normative

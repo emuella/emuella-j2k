@@ -180,7 +180,9 @@ admission, including when the sets span tile parts. With multiple sets
 permitted, the same actual mechanism is structurally valid but remains an
 unsupported native mechanism and cannot modify caller-owned output. This
 includes a later zero-byte second Cleanup-set announcement after the first
-non-empty set; leading zero-byte placeholders remain excluded. Actual RGN use,
+non-empty set; leading zero-byte placeholders remain excluded. A maximum
+checked-pass-count sequence proves native admission consumes every packet but
+retains only two set records before rejecting multiplicity. Actual RGN use,
 heterogeneous tile-header coding, irreversible coding, HTMIX/HT-declared
 population modes and excessive cleanup magnitude bounds remain fail closed.
 These tests qualify only admission to the existing bounded lossless HT decode;

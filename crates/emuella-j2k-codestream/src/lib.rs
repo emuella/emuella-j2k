@@ -9622,6 +9622,14 @@ fn repeated_cleanup_second_ht_set_packet(cleanup: &[u8]) -> Result<Vec<u8>> {
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_two_layer_empty_second_set_test_fixture() -> Result<Vec<u8>> {
+    encode_htj2k_empty_later_sets_test_fixture(2)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn encode_htj2k_empty_later_sets_test_fixture(layers: u16) -> Result<Vec<u8>> {
+    if layers < 2 {
+        return Err(CodestreamError::SizeOverflow);
+    }
     let samples = (0_u8..64).collect::<Vec<_>>();
     let mut codestream = encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
         width: 8,
@@ -9636,19 +9644,29 @@ pub fn encode_htj2k_two_layer_empty_second_set_test_fixture() -> Result<Vec<u8>>
     writer.write_bit(0)?;
     writer.write_bits(0, 4)?;
     writer.align();
-    let second_layer = writer.bytes();
+    let empty_later_packet = writer.bytes();
+    let empty_packet_count = usize::from(layers - 1);
+    let added_len = empty_later_packet
+        .len()
+        .checked_mul(empty_packet_count)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut empty_later_packets = Vec::new();
+    empty_later_packets
+        .try_reserve_exact(added_len)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    for _ in 0..empty_packet_count {
+        empty_later_packets.extend_from_slice(empty_later_packet);
+    }
 
     let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
-    codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+    codestream[cod + 6..cod + 8].copy_from_slice(&layers.to_be_bytes());
     let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
     let psot = read_u32(&codestream, sot + 6)?;
     let eoc = find_marker(&codestream, sot, Marker::Eoc).ok_or(CodestreamError::SizeOverflow)?;
-    codestream.splice(eoc..eoc, second_layer.iter().copied());
+    codestream.splice(eoc..eoc, empty_later_packets);
     codestream[sot + 6..sot + 10].copy_from_slice(
         &psot
-            .checked_add(
-                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
-            )
+            .checked_add(u32::try_from(added_len).map_err(|_| CodestreamError::SizeOverflow)?)
             .ok_or(CodestreamError::SizeOverflow)?
             .to_be_bytes(),
     );
@@ -30988,6 +31006,42 @@ fn parse_default_precinct_packets_from_source(
     packet_organisation: PacketOrganisationConfig,
     physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
+    parse_default_precinct_packets_from_source_with_ht_retention(
+        input,
+        codestream,
+        tile_rect,
+        payload,
+        max_layers,
+        max_resolution,
+        selected_components,
+        packet_organisation,
+        physical_tile_part_order,
+        HtCodingSetRetention::Complete,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtCodingSetRetention {
+    /// Preserve every set for the general packet API and reconstruction paths.
+    Complete,
+    /// Preserve the first and latest sets. Native admission only needs to know
+    /// that a second set exists, but still walks and validates every packet.
+    NativeAdmission,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_default_precinct_packets_from_source_with_ht_retention(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_rect: TileRect,
+    payload: &dyn PacketByteSource,
+    max_layers: Option<u16>,
+    max_resolution: Option<u8>,
+    selected_components: Option<&[u16]>,
+    packet_organisation: PacketOrganisationConfig,
+    physical_tile_part_order: Option<&[TilePartOrderEntry]>,
+    ht_coding_set_retention: HtCodingSetRetention,
+) -> Result<ParsedPacketContributions> {
     let part15_single_ht_declared = codestream
         .capability
         .as_ref()
@@ -31525,8 +31579,7 @@ fn parse_default_precinct_packets_from_source(
                                         / 3
                                         * 3;
                                     let actual_start = first_coding_pass.max(final_set_start);
-                                    let actual_set_index = u8::try_from(actual_start / 3)
-                                        .map_err(|_| CodestreamError::SizeOverflow)?;
+                                    let actual_set_index = actual_start / 3;
                                     let first_non_empty_set =
                                         subband.first_non_empty_ht_set[code_block_index];
                                     if part15_single_ht_declared
@@ -31543,14 +31596,22 @@ fn parse_default_precinct_packets_from_source(
                                         subband.first_non_empty_ht_set[code_block_index] =
                                             Some(actual_set_index);
                                     }
+                                    let starts_non_empty_ht_set = cleanup_set
+                                        .is_some_and(|(_, cleanup_len)| cleanup_len != 0);
                                     let starts_effective_ht_set = actual_start.is_multiple_of(3)
-                                        && (cleanup_set
-                                            .is_some_and(|(_, cleanup_len)| cleanup_len != 0)
+                                        && (starts_non_empty_ht_set
                                             || first_non_empty_set.is_some());
-                                    let ht_missing_bitplanes = if starts_effective_ht_set {
+                                    let ht_missing_bitplanes = if starts_effective_ht_set
+                                        && starts_non_empty_ht_set
+                                    {
                                         subband.missing_most_significant_bitplanes[code_block_index]
-                                            .checked_add(actual_set_index)
+                                            .checked_add(
+                                                u8::try_from(actual_set_index)
+                                                    .map_err(|_| CodestreamError::SizeOverflow)?,
+                                            )
                                             .ok_or(CodestreamError::SizeOverflow)?
+                                    } else if starts_effective_ht_set {
+                                        subband.missing_most_significant_bitplanes[code_block_index]
                                     } else {
                                         cleanup_set.map_or_else(
                                             || {
@@ -31713,6 +31774,7 @@ fn parse_default_precinct_packets_from_source(
                             &mut contribution_indices,
                             pending,
                             segment_offset,
+                            ht_coding_set_retention,
                         )?;
                     } else {
                         push_default_precinct_contribution(
@@ -34504,6 +34566,7 @@ fn append_default_precinct_contribution(
     contribution_indices: &mut BTreeMap<PacketCodeBlockKey, usize>,
     mut pending: PendingPacketContribution,
     segment_offset: usize,
+    ht_coding_set_retention: HtCodingSetRetention,
 ) -> Result<()> {
     let key = PacketCodeBlockKey {
         component_index: pending.component_index,
@@ -34593,6 +34656,16 @@ fn append_default_precinct_contribution(
                         .ok_or(CodestreamError::SizeOverflow)?;
                     contribution.expanded_ht_coding_sets =
                         Some(alloc::vec![first, coding_set].into_boxed_slice());
+                } else if ht_coding_set_retention == HtCodingSetRetention::NativeAdmission {
+                    // Multiplicity is already represented by the two retained
+                    // entries. Keep the latest set for subsequent refinement
+                    // validation without growing state for an unsupported path.
+                    let latest = contribution
+                        .expanded_ht_coding_sets
+                        .as_deref_mut()
+                        .and_then(<[HtCodeBlockCodingSet]>::last_mut)
+                        .ok_or(CodestreamError::SizeOverflow)?;
+                    *latest = coding_set;
                 } else {
                     let mut coding_sets = Vec::from(
                         contribution
@@ -37875,7 +37948,7 @@ struct DefaultPrecinctSubband {
     included: Vec<bool>,
     l_block: Vec<u8>,
     coding_passes: Vec<u16>,
-    first_non_empty_ht_set: Vec<Option<u8>>,
+    first_non_empty_ht_set: Vec<Option<u16>>,
     missing_most_significant_bitplanes: Vec<u8>,
 }
 
@@ -46502,7 +46575,7 @@ fn classify_htj2k_lossless_profile(
                 "native HTJ2K lossless decode requires retained payload state for every tile",
             )
         })?;
-        let contributions = parse_default_precinct_packets_from_source(
+        let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
             input,
             codestream,
             tile_rect,
@@ -46512,6 +46585,7 @@ fn classify_htj2k_lossless_profile(
             None,
             PacketOrganisationConfig::DEFAULT,
             None,
+            HtCodingSetRetention::NativeAdmission,
         )
         .map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
@@ -49586,7 +49660,7 @@ fn validate_htonly_permission_effective_packet_mechanisms(
     }
     for tile_rect in tile_rects(codestream)? {
         let payload = tile_payload_spans_for_rect(input, codestream, tile_rect)?;
-        let contributions = parse_default_precinct_packets_from_source(
+        let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
             input,
             codestream,
             tile_rect,
@@ -49596,6 +49670,7 @@ fn validate_htonly_permission_effective_packet_mechanisms(
             None,
             PacketOrganisationConfig::DEFAULT,
             None,
+            HtCodingSetRetention::NativeAdmission,
         )?
         .contributions;
         classify_htonly_native_packet_mechanisms(&contributions).map_err(|diagnostic| {
@@ -52681,6 +52756,58 @@ mod part15_signalling_tests {
         ));
         assert!(matches!(
             decode_htj2k_lossless_owned(&multiht_empty_second),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn native_admission_bounds_the_maximum_empty_ht_set_sequence() {
+        // The first packet announces one pass and every later packet announces
+        // three; one more layer would exceed the u16 coding-pass domain.
+        const LAYERS: u16 = 21_845;
+
+        let mut codestream = encode_htj2k_empty_later_sets_test_fixture(LAYERS).unwrap();
+        set_ccap15(&mut codestream, 0x2000);
+        let parsed = parse(&codestream).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let payload = tile_payload_spans_for_rect(&codestream, &parsed, tile_rect).unwrap();
+        let parsed_packets = parse_default_precinct_packets_from_source_with_ht_retention(
+            &codestream,
+            &parsed,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+            HtCodingSetRetention::NativeAdmission,
+        )
+        .unwrap();
+
+        assert_eq!(parsed_packets.packet_count, u64::from(LAYERS));
+        assert_eq!(parsed_packets.contributions.len(), 1);
+        let contribution = &parsed_packets.contributions[0];
+        assert_eq!(contribution.ht_coding_set_count(), 2);
+        assert_eq!(
+            contribution
+                .expanded_ht_coding_sets
+                .as_deref()
+                .map(<[HtCodeBlockCodingSet]>::len),
+            Some(2)
+        );
+        assert!(matches!(
+            classify_htonly_native_packet_mechanisms(&parsed_packets.contributions),
+            Err(Htj2kLosslessProfileDiagnostic {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&codestream),
             Err(CodestreamError::Unsupported {
                 construct: UnsupportedConstruct::HtBlockDecode,
                 ..
