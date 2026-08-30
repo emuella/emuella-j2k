@@ -87,6 +87,94 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ht_roi_singleht_invalidity_precedes_native_bounds_and_window_admission() {
+        // Project-authored multiple-set packets, with the bounded ROI marker
+        // topology. The SINGLEHT declaration deliberately contradicts them.
+        let mut bytes =
+            codestream::encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
+        let at = |input: &[u8], marker| {
+            codestream::parse(input)
+                .unwrap()
+                .markers
+                .iter()
+                .find(|m| m.marker == marker)
+                .unwrap()
+                .offset
+        };
+        let cap = at(&bytes, codestream::Marker::Cap);
+        bytes[cap + 8] = 0x18;
+        let siz = at(&bytes, codestream::Marker::Siz);
+        bytes[siz + 22..siz + 26].copy_from_slice(&128_u32.to_be_bytes());
+        bytes[siz + 26..siz + 30].copy_from_slice(&128_u32.to_be_bytes());
+        let cod = at(&bytes, codestream::Marker::Cod);
+        bytes[cod + 2..cod + 4].copy_from_slice(&14_u16.to_be_bytes());
+        bytes[cod + 4] = 1;
+        bytes[cod + 5] = 3;
+        bytes.splice(cod + 14..cod + 14, [0x77, 0x88]);
+        let sot = at(&bytes, codestream::Marker::Sot);
+        bytes.splice(sot..sot, [0xff, 0x5f, 0, 9, 0, 0, 0, 2, 33, 255, 0]);
+        let sot = at(&bytes, codestream::Marker::Sot);
+        let len = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
+        bytes[sot + 6..sot + 10].copy_from_slice(&(len + 7).to_be_bytes());
+        bytes.splice(sot + 12..sot + 12, [0xff, 0x5e, 0, 5, 0, 0, 7]);
+        let format = SampleFormat::with_byte_order(8, false, None).unwrap();
+        let info = ImageInfo::new(
+            8,
+            8,
+            1,
+            format,
+            ColorModel::Unknown,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        for bound in [10, 11] {
+            bytes[cap + 9] = bound; // Cleanup magnitude bounds eighteen/nineteen.
+            for x in [0, 127] {
+                let request = PartialDecodeOptions {
+                    region: Some(Region {
+                        x,
+                        y: 0,
+                        width: 8,
+                        height: 8,
+                    }),
+                    components: ComponentSelection::Indices(vec![0]),
+                    target_layout: ComponentLayout::Planar,
+                    ..PartialDecodeOptions::default()
+                };
+                assert!(matches!(
+                    inspect(&bytes, &InspectOptions::default()),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode_partial_info(&bytes, &request),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode_partial_component_info(&bytes, &request),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode_partial(&bytes, &request),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                let mut caller = vec![0xa6; 64];
+                {
+                    let mut planes = [PlaneMut::new(&mut caller, 8, 8, 8, format).unwrap()];
+                    let mut target = ImageViewMut::Planar {
+                        info: &info,
+                        planes: &mut planes,
+                    };
+                    assert!(matches!(
+                        decode_partial_into(&bytes, &mut target, &request),
+                        Err(J2kError::InvalidInput { .. })
+                    ));
+                }
+                assert!(caller.iter().all(|b| *b == 0xa6));
+            }
+        }
+    }
+
+    #[test]
     fn ht_roi_public_metadata_executor_container_and_atomicity_agree() {
         let bytes =
             codestream::encode_htj2k_roi_window_test_fixture(259, 263, 4, true, 7, 4).unwrap();

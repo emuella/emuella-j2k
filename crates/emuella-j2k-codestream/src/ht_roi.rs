@@ -201,6 +201,10 @@ pub fn prepare_htj2k_roi_window_decode(
     {
         return Ok(None);
     }
+    // Packet-level contradictions of SINGLEHT are input invalidity, even when
+    // the requested window or native coefficient bounds are unsupported. This
+    // uses the same bounded structural walk as inspection before admission.
+    validate_part15_packet_signalling(input, &codestream)?;
     let roi = resolve_maxshift(input, &codestream)?;
     let part15 = codestream
         .capability
