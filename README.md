@@ -45,9 +45,26 @@ parsing and packet-signalling validity run before support admission. A broader
 effective codestream still uses the implemented single-set, ROI-free,
 homogeneous, reversible HT path. Actual multiple HT sets, ROI, heterogeneous
 state, irreversible HT coding in the full-image path, HTMIX and cleanup
-magnitude bounds above 18 remain unsupported. Supported full inputs continue
+magnitude bounds above 18 remain unsupported in that full-image path. Supported
+full inputs continue
 through the existing HT packet, entropy, reconstruction and public image path;
 this is not general Part 15 or JPEG 2000 conformance.
+
+A separate raw native ROI window route admits one unit-sampled component with
+1–16-bit signed or unsigned precision, zero origins, one reversible 5/3 level,
+32/64-sample block axes, 128×128/256×256 precincts and one through eight layers.
+Main POC must resolve the PCRL COD to one complete LRCP volume. One tile-zero,
+component-zero Maxshift assignment of 1–15 is restored before synthesis;
+effective QCD/QCC must be reversible and the ROI-extended magnitude width must
+fit 30 bits. Tiles have 32/64/128-sample axes, at most 64 tiles, and one payload
+part followed by at most three empty parts. TLM and informational CRG are
+validated; inline SOP/EPH is supported. Explicitly select planar component zero
+with a full-resolution region inside tile zero. All tiles' packets are checked,
+but only tile zero is reconstructed and cropped without resampling. This
+qualifies both locked P0.03 and P0.15 full-resolution window alternatives.
+Full-image decode, reduced alternatives, other ROI assignments, functional
+tile-header overrides, packet relocation, HTMIX and JPH/rendered output remain
+outside this route.
 
 A separate native-grid full decode route admits one unsigned 8-bit subsampled
 component, one tile/part, three effective reversible 5/3 levels, one through

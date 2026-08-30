@@ -308,7 +308,22 @@ MULTIHT. Public metadata, descriptors, owned and padded caller routes agree;
 neighbouring requests, JPH, ROI, tile overrides, malformed quantisers and
 selected entropy failures preserve caller storage. Locked P0.05 uses its
 unchanged component-zero reduction-three and error-bound contract. P0.06,
-ROI, tile-header heterogeneity and HTMIX still need separate admission evidence.
+other ROI shapes, tile-header heterogeneity and HTMIX still need separate admission evidence.
+
+HT ROI window tests construct coefficients and native packet schedules without
+external imagery. Signed/unsigned 1/4/8/12/16-bit outputs and shifts 1/3/7/15
+exercise background and ROI coefficients, signs, threshold neighbours, guard
+alignment, clipping and cropped native output. Odd grids, 32/64 blocks,
+one/eight layers, inline SOP/EPH, QCC precedence and empty trailing parts with
+TLM exercise complete packet traversal. A maximum 64-tile grid counts exactly
+1,024 packets with bounded HT-set retention. Malformed RGN/POC/CRG, quantisation,
+oversized grids, late unselected packets, SINGLEHT contradictions and actual
+permitted multiplicity fail closed. Public metadata, descriptors, owned and
+padded caller output agree; entropy failures leave caller storage unchanged.
+JPH, full decode, reduced output and neighbouring requests remain unsupported.
+The locked P0.03 and P0.15 full-resolution windows each compare 16,384 samples
+at peak/MSE 0/0 within unchanged 0/0 bounds. Their alternative reduced outputs
+are not claimed by this route.
 
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
 and the capability claim in `testdata.lock.toml`:

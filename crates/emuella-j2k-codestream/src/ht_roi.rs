@@ -354,3 +354,496 @@ pub fn decode_prepared_htj2k_roi_window_owned(
         components: alloc::vec![DecodedComponent { samples }],
     })
 }
+
+/// Generate coefficient-domain ROI evidence without external source samples.
+/// This is synthetic test support, not an application encoder profile.
+#[doc(hidden)]
+pub fn encode_htj2k_roi_window_test_fixture(
+    width: u32,
+    height: u32,
+    bits: u8,
+    signed: bool,
+    shift: u8,
+    parts: u8,
+) -> Result<Vec<u8>> {
+    fixture(width, height, bits, signed, shift, parts, 8, 64, true, true).map(|(bytes, _)| bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture(
+    width: u32,
+    height: u32,
+    bits: u8,
+    signed: bool,
+    shift: u8,
+    parts: u8,
+    layers: u16,
+    block_size: u32,
+    sop: bool,
+    eph: bool,
+) -> Result<(Vec<u8>, Vec<i32>)> {
+    if width == 0
+        || height == 0
+        || width > 1024
+        || height > 1024
+        || !(1..=16).contains(&bits)
+        || !(1..=15).contains(&shift)
+        || !(1..=4).contains(&parts)
+        || !(1..=8).contains(&layers)
+        || !matches!(block_size, 32 | 64)
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let mut output = Vec::new();
+    // Coefficient values need four magnitude bits independent of native sample
+    // precision. Guard two exercises the non-default HT transfer alignment.
+    write_native_main_header(
+        &mut output,
+        width,
+        height,
+        128,
+        128,
+        bits,
+        1,
+        false,
+        1,
+        &[5, 5, 5, 5],
+        true,
+        0,
+        layers,
+    )?;
+    output[42] |= if signed { 0x80 } else { 0 };
+    let cap = find_marker(&output, 0, Marker::Cap).ok_or(CodestreamError::SizeOverflow)?;
+    output[cap + 8..cap + 10].copy_from_slice(&0x180a_u16.to_be_bytes());
+    let cod = find_marker(&output, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    output[cod + 2..cod + 4].copy_from_slice(&14_u16.to_be_bytes());
+    output[cod + 4] = 1 | (u8::from(sop) << 1) | (u8::from(eph) << 2);
+    output[cod + 5] = 3;
+    output[cod + 10] = if block_size == 32 { 3 } else { 4 };
+    output[cod + 11] = output[cod + 10];
+    output.splice(cod + 14..cod + 14, [0x77, 0x88]);
+    let qcd = find_marker(&output, 0, Marker::Qcd).ok_or(CodestreamError::SizeOverflow)?;
+    output[qcd + 4] = 0x40;
+    // Effective QCC differs from the unused QCD default.
+    output.extend_from_slice(&[0xff, 0x5d, 0, 8, 0, 0x40, 0x20, 0x20, 0x20, 0x20]);
+    output.extend_from_slice(&[0xff, 0x5f, 0, 9, 0, 0]);
+    output.extend_from_slice(&layers.to_be_bytes());
+    output.extend_from_slice(&[33, 255, 0]);
+    output.extend_from_slice(&[0xff, 0x63, 0, 6, 0, 11, 0, 17]);
+    let mut expected = Vec::new();
+    for ty in 0..height.div_ceil(128) {
+        for tx in 0..width.div_ceil(128) {
+            let tile = (ty * width.div_ceil(128) + tx) as u16;
+            let w = (width - tx * 128).min(128);
+            let h = (height - ty * 128).min(128);
+            let original = (0..w * h)
+                .map(|i| {
+                    let value = (i.wrapping_mul(17).wrapping_add(i / 7) % 9) as i32 - 4;
+                    if i % 3 == 0 { value } else { value.signum() }
+                })
+                .collect::<Vec<_>>();
+            let encoded = original
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    if tile == 0 && i % 3 == 0 {
+                        *v * (1_i32 << shift)
+                    } else {
+                        *v
+                    }
+                })
+                .collect::<Vec<_>>();
+            if tile == 0 {
+                expected = original;
+            }
+            let mut segments = Vec::new();
+            let subbands = decomp_subband_specs(w, h, 1)?
+                .into_iter()
+                .map(|spec| {
+                    encode_ht_decomp_subband_with_block_size(
+                        w,
+                        &encoded,
+                        spec,
+                        5 + if tile == 0 { shift } else { 0 },
+                        &mut segments,
+                        block_size,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut packet = Vec::new();
+            for layer in 0..layers {
+                for resolution in 0..=1_u8 {
+                    if sop {
+                        packet.extend_from_slice(&[0xff, 0x91, 0, 4]);
+                        packet
+                            .extend_from_slice(&(2 * layer + u16::from(resolution)).to_be_bytes());
+                    }
+                    let contributes = layer == u16::from(resolution) % layers;
+                    let active = subbands
+                        .iter()
+                        .filter(|s| s.resolution == resolution && !s.code_blocks.is_empty())
+                        .collect::<Vec<_>>();
+                    let mut writer = PacketBitWriter::new();
+                    writer.write_bit(u32::from(contributes))?;
+                    if contributes {
+                        for subband in &active {
+                            write_component_packet_header(
+                                &mut writer,
+                                subband.code_block_cols,
+                                subband.code_block_rows,
+                                &subband.code_blocks,
+                            )?;
+                        }
+                    }
+                    writer.align();
+                    packet.extend_from_slice(writer.bytes());
+                    if eph {
+                        packet.extend_from_slice(&[0xff, 0x92]);
+                    }
+                    if contributes {
+                        for subband in &active {
+                            for b in subband.code_blocks.iter().filter(|b| b.included) {
+                                packet.extend_from_slice(
+                                    &segments[b.segment_offset..b.segment_offset + b.segment_len],
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            for part in 0..parts {
+                let start = output.len();
+                output.extend_from_slice(&[0xff, 0x90, 0, 10]);
+                output.extend_from_slice(&tile.to_be_bytes());
+                output.extend_from_slice(&[0; 4]);
+                output.extend_from_slice(&[part, parts]);
+                if tile == 0 && part == 0 {
+                    output.extend_from_slice(&[0xff, 0x5e, 0, 5, 0, 0, shift]);
+                }
+                output.extend_from_slice(&[0xff, 0x93]);
+                if part == 0 {
+                    output.extend_from_slice(&packet);
+                }
+                let len = (output.len() - start) as u32;
+                output[start + 6..start + 10].copy_from_slice(&len.to_be_bytes());
+            }
+        }
+    }
+    output.extend_from_slice(&[0xff, 0xd9]);
+    if parts > 1 {
+        let parsed = parse(&output)?;
+        let first = parsed
+            .markers
+            .iter()
+            .find(|m| m.marker == Marker::Sot)
+            .ok_or(CodestreamError::SizeOverflow)?
+            .offset;
+        let mut tlm = alloc::vec![0xff, 0x55];
+        tlm.extend_from_slice(&(4_u16 + 5 * parsed.tiles.len() as u16).to_be_bytes());
+        tlm.extend_from_slice(&[0, 0x50]);
+        for part in &parsed.tiles {
+            tlm.push(part.tile_index as u8);
+            tlm.extend_from_slice(
+                &part
+                    .tile_part_length
+                    .ok_or(CodestreamError::SizeOverflow)?
+                    .to_be_bytes(),
+            );
+        }
+        output.splice(first..first, tlm);
+    }
+    Ok((output, expected))
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    fn region(w: u32, h: u32) -> TileRegionRequest {
+        TileRegionRequest {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        }
+    }
+
+    #[test]
+    fn ht_roi_restores_signed_thresholds_and_native_windows() {
+        for shift in [1, 3, 7, 15] {
+            for bits in [1, 4, 8, 12, 16] {
+                for signed in [false, true] {
+                    for (w, h, parts, layers, block, sop, eph) in [
+                        (17, 29, 1, 1, 32, false, false),
+                        (129, 135, 4, 8, 64, true, true),
+                    ] {
+                        let (bytes, mut expected) =
+                            fixture(w, h, bits, signed, shift, parts, layers, block, sop, eph)
+                                .unwrap_or_else(|error| panic!("fixture {w}x{h} bits={bits} signed={signed} shift={shift}: {error:?}"));
+                        let tw = w.min(128);
+                        let th = h.min(128);
+                        let prepared = prepare_htj2k_roi_window_decode(&bytes, region(tw, th))
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(prepared.maxshift, shift);
+                        if bits < 8 {
+                            let mut state = ht_marker_state(&prepared.codestream).unwrap();
+                            state.precincts_declared = false;
+                            assert_eq!(
+                                ht::plan_decode_candidate(state).unwrap_err().reason,
+                                ht::HtUnsupportedReason::SamplePrecision
+                            );
+                        }
+                        assert_eq!(
+                            prepared.candidate.marker_candidate.sample_precision_bits(),
+                            bits
+                        );
+                        inverse_reversible_5_3_levels_with_scratch(
+                            &mut expected,
+                            tw as usize,
+                            tw,
+                            th,
+                            1,
+                            &mut vec![0; tw.max(th) as usize * 3],
+                        )
+                        .unwrap();
+                        let expected =
+                            component_sample_slice_to_bytes(bits, signed, &expected).unwrap();
+                        let decoded = decode_prepared_htj2k_roi_window_owned(&prepared).unwrap();
+                        assert_eq!(
+                            decoded.components[0].samples, expected,
+                            "shift={shift} bits={bits} signed={signed}"
+                        );
+                        let cropped = prepare_htj2k_roi_window_decode(
+                            &bytes,
+                            TileRegionRequest {
+                                x: 3,
+                                y: 5,
+                                width: 7,
+                                height: 9,
+                            },
+                        )
+                        .unwrap()
+                        .unwrap();
+                        let decoded = decode_prepared_htj2k_roi_window_owned(&cropped).unwrap();
+                        let b = usize::from(bits.div_ceil(8));
+                        let oracle = (5..14)
+                            .flat_map(|y| {
+                                expected[(y * tw as usize + 3) * b..(y * tw as usize + 10) * b]
+                                    .iter()
+                                    .copied()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(decoded.components[0].samples, oracle);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ht_roi_transfer_threshold_is_in_the_extended_magnitude_domain() {
+        for shift in [1, 3, 7, 15] {
+            let threshold = 1_i32 << shift;
+            let input = [
+                -threshold - 1,
+                -threshold,
+                -threshold + 1,
+                -1,
+                0,
+                1,
+                threshold - 1,
+                threshold,
+                threshold + 1,
+            ];
+            let mut restored = input;
+            realign_bounded_maxshift_coefficients(&mut restored, shift).unwrap();
+            assert_eq!(
+                restored,
+                [-1, -1, -threshold + 1, -1, 0, 1, threshold - 1, 1, 1]
+            );
+        }
+    }
+
+    #[test]
+    fn ht_roi_resolves_guard_alignment_and_small_native_tile_axes() {
+        let (bytes, _) = fixture(17, 29, 12, true, 7, 1, 3, 32, true, false).unwrap();
+        let original = decode_prepared_htj2k_roi_window_owned(
+            &prepare_htj2k_roi_window_decode(&bytes, region(17, 29))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        let qcc = find_marker(&bytes, 0, Marker::Qcc).unwrap();
+        let siz = find_marker(&bytes, 0, Marker::Siz).unwrap();
+        for guard in [1, 2, 3] {
+            for (width, height) in [(32_u32, 64_u32), (64, 32), (128, 128)] {
+                let mut changed = bytes.clone();
+                changed[qcc + 5] = guard << 5;
+                changed[qcc + 6..qcc + 10].fill((6 - guard) << 3);
+                changed[siz + 22..siz + 26].copy_from_slice(&width.to_be_bytes());
+                changed[siz + 26..siz + 30].copy_from_slice(&height.to_be_bytes());
+                let prepared = prepare_htj2k_roi_window_decode(&changed, region(17, 29))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    decode_prepared_htj2k_roi_window_owned(&prepared).unwrap(),
+                    original
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ht_roi_singleht_contradictions_remain_invalid_before_admission() {
+        let mut bytes = encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
+        let siz = find_marker(&bytes, 0, Marker::Siz).unwrap();
+        bytes[siz + 22..siz + 26].copy_from_slice(&128_u32.to_be_bytes());
+        bytes[siz + 26..siz + 30].copy_from_slice(&128_u32.to_be_bytes());
+        let cod = find_marker(&bytes, 0, Marker::Cod).unwrap();
+        bytes[cod + 2..cod + 4].copy_from_slice(&14_u16.to_be_bytes());
+        bytes[cod + 4] = 1;
+        bytes[cod + 5] = 3;
+        bytes.splice(cod + 14..cod + 14, [0x77, 0x88]);
+        let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
+        bytes.splice(sot..sot, [0xff, 0x5f, 0, 9, 0, 0, 0, 2, 33, 255, 0]);
+        let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
+        let len = read_u32(&bytes, sot + 6).unwrap();
+        bytes[sot + 6..sot + 10].copy_from_slice(&(len + 7).to_be_bytes());
+        bytes.splice(sot + 12..sot + 12, [0xff, 0x5e, 0, 5, 0, 0, 7]);
+        let cap = find_marker(&bytes, 0, Marker::Cap).unwrap();
+        bytes[cap + 8] = 0x18;
+        let parsed = parse(&bytes).unwrap();
+        assert!(envelope(&parsed));
+        assert!(matches!(
+            validate_part15_packet_signalling(&bytes, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            prepare_htj2k_roi_window_decode(&bytes, region(8, 8)),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        bytes[cap + 8] = 0x38;
+        assert!(validate_part15_packet_signalling(&bytes, &parse(&bytes).unwrap()).is_ok());
+        assert!(matches!(
+            prepare_htj2k_roi_window_decode(&bytes, region(8, 8)),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn ht_roi_validates_all_packets_headers_and_resource_boundaries() {
+        let (bytes, _) = fixture(259, 263, 4, true, 7, 4, 8, 32, true, true).unwrap();
+        let c = parse(&bytes).unwrap();
+        let at = |kind| c.markers.iter().find(|m| m.marker == kind).unwrap().offset;
+        let mut rejected = Vec::new();
+        for (offset, value) in [
+            (at(Marker::Rgn) + 4, 1),
+            (at(Marker::Rgn) + 5, 1),
+            (at(Marker::Rgn) + 6, 0),
+            (at(Marker::Rgn) + 6, 16),
+            (at(Marker::Rgn) + 6, 38),
+            (at(Marker::Cod) + 5, 4),
+            (at(Marker::Cod) + 9, 2),
+            (at(Marker::Cod) + 13, 0),
+            (at(Marker::Cod) + 14, 0x66),
+            (at(Marker::Poc) + 10, 1),
+            (at(Marker::Poc) + 8, 1),
+            (at(Marker::Qcc) + 6, 31 << 3),
+            (at(Marker::Cap) + 8, 0x08),
+            (at(Marker::Cap) + 9, 11),
+            (at(Marker::Siz) + 41, 2),
+            (at(Marker::Crg) + 3, 5),
+        ] {
+            let mut changed = bytes.clone();
+            changed[offset] = value;
+            rejected.push(changed);
+        }
+        // Late unselected packet syntax must be validated before output geometry.
+        let last = c
+            .tiles
+            .iter()
+            .rfind(|part| part.tile_part_index == 0)
+            .unwrap();
+        let mut late = bytes.clone();
+        let end = last.payload_offset.unwrap() + last.payload_len.unwrap();
+        late[end - 1] = 0xff;
+        rejected.push(late);
+        // Non-empty trailing payload does not silently become a supported part.
+        let trailing = c.tiles[1];
+        let start = trailing.payload_offset.unwrap();
+        let sot = c
+            .markers
+            .iter()
+            .filter(|m| m.marker == Marker::Sot)
+            .nth(1)
+            .unwrap()
+            .offset;
+        let mut part = bytes.clone();
+        part.splice(start..start, [0]);
+        part[sot + 6..sot + 10].copy_from_slice(&15_u32.to_be_bytes());
+        rejected.push(part);
+        let mut oversized = bytes.clone();
+        oversized[at(Marker::Siz) + 6..at(Marker::Siz) + 10]
+            .copy_from_slice(&u32::MAX.to_be_bytes());
+        rejected.push(oversized);
+        for input in rejected {
+            assert!(prepare_htj2k_roi_window_decode(&input, region(128, 128)).is_err());
+        }
+        for r in [
+            region(0, 1),
+            region(129, 1),
+            TileRegionRequest {
+                x: u32::MAX,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+        ] {
+            assert!(prepare_htj2k_roi_window_decode(&bytes, r).is_err());
+        }
+        // The entire largest admitted grid is still one visit per packet.
+        let (many, _) = fixture(1024, 1024, 4, true, 7, 4, 8, 64, true, true).unwrap();
+        let c = parse(&many).unwrap();
+        let mut packets = 0;
+        for rect in tile_rects(&c).unwrap() {
+            let p = c
+                .tiles
+                .iter()
+                .find(|p| p.tile_index == rect.tile_index)
+                .unwrap();
+            let payload = tile_payload(&many, p).unwrap();
+            let parsed = parse_default_precinct_packets_from_source_with_ht_retention(
+                &many,
+                &c,
+                rect,
+                &ContiguousPacketSource { bytes: payload },
+                None,
+                None,
+                None,
+                PacketOrganisationConfig::HT_ROI_WINDOW,
+                None,
+                HtCodingSetRetention::NativeAdmission,
+            )
+            .unwrap();
+            packets += parsed.packet_count;
+            assert!(
+                parsed
+                    .contributions
+                    .iter()
+                    .all(|c| c.ht_coding_set_count() <= 1)
+            );
+        }
+        assert_eq!(packets, 64 * 2 * 8);
+        assert!(prepare_htj2k_roi_window_decode(&many, region(128, 128)).is_ok());
+    }
+}

@@ -26,6 +26,8 @@ pub use emuella_j2k_transform as transform;
 #[doc(hidden)]
 pub mod geometry;
 mod ht_roi;
+#[doc(hidden)]
+pub use ht_roi::encode_htj2k_roi_window_test_fixture;
 #[cfg(feature = "std")]
 pub use ht_roi::{
     PreparedHtj2kRoiWindowDecode, decode_prepared_htj2k_roi_window_owned,
