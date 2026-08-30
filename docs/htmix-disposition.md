@@ -112,7 +112,7 @@ expression, protected payload or external implementation is reproduced.
 
 The codestream mixed-admission tests cover legal mixed style flags, effective
 COC, unsupported-before-payload handling and homogeneous declaration-only
-neighbours. The public route matrix covers raw/JPH, full/partial/shape,
+neighbours. The public route matrix covers raw/JPH/JP2 neighbours, full/partial/shape,
 workspaces/probes, incremental input, rendered/best-effort requests and padded
 caller-buffer atomicity; structural mode contradictions retain invalidity
 precedence. Existing HTONLY and SINGLEHT/MULTIHT tests remain regression gates.
