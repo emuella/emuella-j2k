@@ -76,7 +76,7 @@ and compatibility APIs named after an external codec do not belong in the
 runtime crates. Corpus-specific expectations stay in `emuella-testdata` and its
 harnesses.
 
-### Raw reversible HTJ2K encode qualification
+### Reversible HTJ2K encode and JPH qualification
 
 The public one-level qualification is algorithmic and self-contained. It uses
 project-authored 257 × 193 odd-sized inputs for the eight greyscale/RGB ×
@@ -108,10 +108,20 @@ precision outside `U8`/`U16_LE`, and checked geometry overflow. These cases
 must return structured errors rather than emit a partially supported stream.
 Zero-level bytes are compared directly with the established encoder path, and
 the canonical suite retains the existing U8, classic Part 1 and non-HT
-behaviour checks. JPH writing is not exercised or claimed.
+behaviour checks.
+
+The JPH writer repeats the complete greyscale/RGB × `U8`/`U16_LE` ×
+planar/interleaved matrix at decomposition levels zero and one. Each cell is
+written twice, parsed as one JPH container carrying one complete HTJ2K
+codestream, and decoded through the ordinary public component route. The
+extracted container payload must equal the corresponding `encode_htj2k`
+output byte-for-byte. These deterministic Layer 1 checks establish container
+structure, repeatability, exact native reconstruction and single ownership of
+the codestream bytes; external decoder interoperability remains a separate
+authorised black-box qualification.
 
 The standards and provenance basis is the bounded route recorded under
-“Bounded raw reversible HTJ2K encode” in `architecture.md`. All fixtures,
+"Bounded reversible HTJ2K encode and JPH output" in `architecture.md`. All fixtures,
 patterns and assertions are project-authored. The ordinary suite neither
 invokes an external codec nor retains external payloads or diagnostics.
 Private authorised black-box qualification under registered campaign scratch

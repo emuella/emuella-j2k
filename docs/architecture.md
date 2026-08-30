@@ -30,14 +30,17 @@ implementations. The test-support crate creates deterministic inputs through
 project-owned algorithms. External reference codecs and corpora are never
 runtime dependencies.
 
-## Bounded raw reversible HTJ2K encode
+## Bounded reversible HTJ2K encode and JPH output
 
 `encode_htj2k` writes raw HTJ2K codestreams only. Its
 `Htj2kEncodeOptions::decomposition_levels` field admits zero or one: zero keeps
 the established cleanup-only byte path, while one applies one reversible 5/3
 level before the same repo-owned HT cleanup block boundary. Two or more levels
-fail explicitly. This surface does not write JPH boxes and makes no JPH
-container claim.
+fail explicitly. The additive `encode_htj2k_jph` entry point accepts the same
+options and input matrix. It calls the raw encoder once, then places those exact
+bytes in one contiguous codestream box behind deterministic JPH file-type,
+image-header and enumerated greyscale or sRGB colour boxes. Container writing
+does not introduce a second HT encoding route.
 
 The one-level matrix is one tile, one layer, LRCP, default precincts, 64 × 64
 code-blocks, HT-only cleanup coding, zero origins, no component subsampling and
@@ -77,7 +80,7 @@ one-layer packet model; it does not rely on a post-2019 Part 1 feature or use
 the later edition to reinterpret Part 15.
 
 The decomposition orchestration, transform use, packet construction, scalar
-fallback, termination repair, tests and this description are project-authored
+fallback, termination repair, JPH composition, tests and this description are project-authored
 from those standards routes. The closed OpenJPH-derived file set, pinned source
 revision, headers, attribution, tables and provenance inputs are unchanged.
 The independently designed termination repair is contained in the already

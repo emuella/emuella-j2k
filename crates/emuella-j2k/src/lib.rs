@@ -17,5 +17,7 @@ mod tests {
         let _ = InspectOptions::default();
         let _ = DecodeOptions::default();
         let _ = EncodeOptions::default();
+        let _jph_encoder: fn(ImageView<'_>, &Htj2kEncodeOptions) -> Result<Vec<u8>> =
+            encode_htj2k_jph;
     }
 }
