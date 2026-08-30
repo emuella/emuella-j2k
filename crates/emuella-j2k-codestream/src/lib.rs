@@ -25,6 +25,14 @@ pub use emuella_j2k_transform as transform;
 
 #[doc(hidden)]
 pub mod geometry;
+mod ht_roi;
+#[doc(hidden)]
+pub use ht_roi::encode_htj2k_roi_window_test_fixture;
+#[cfg(feature = "std")]
+pub use ht_roi::{
+    PreparedHtj2kRoiWindowDecode, decode_prepared_htj2k_roi_window_owned,
+    prepare_htj2k_roi_window_decode,
+};
 #[cfg(feature = "std")]
 mod openjph_transfer;
 pub mod source;
@@ -29532,6 +29540,7 @@ enum ExplicitPrecinctPermission {
     HtSixLevelReduced,
     HtHeterogeneousReversibleReduced,
     HtScalarDerivedReduced,
+    HtRoiWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29566,6 +29575,10 @@ struct PacketOrganisationConfig {
 
 impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    const HT_ROI_WINDOW: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtRoiWindow,
+        ..Self::DEFAULT
+    };
     const HT_SIX_LEVEL_REDUCED: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtSixLevelReduced,
         ..Self::DEFAULT
@@ -32080,6 +32093,10 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
+    if packet_organisation.explicit_precinct_permission == ExplicitPrecinctPermission::HtRoiWindow {
+        return ht_roi::envelope(codestream)
+            && coding_style_has_single_precinct(coding_style, tile_rect.width, tile_rect.height);
+    }
     if packet_organisation.explicit_precinct_permission
         == ExplicitPrecinctPermission::HtScalarDerivedReduced
     {
@@ -32378,7 +32395,12 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
             ) * 3,
         selected_components,
     )?;
-    let tile_maxshift = if packet_organisation
+    let tile_maxshift = if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtRoiWindow
+    {
+        Some(ht_roi::resolve_maxshift(input, codestream)?)
+            .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index)
+    } else if packet_organisation
         .validator_granted_effective_maxshift
         .is_some()
     {
@@ -49665,6 +49687,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             coding_style,
             tile_rect,
             None,
+            None,
             workspace,
         )?;
         let first_component = codestream
@@ -49934,6 +49957,7 @@ pub fn decode_prepared_htj2k_native_component_grid_owned_with_workspace(
                 component_index: 0,
                 discard_levels: 0,
             }),
+            None,
             workspace,
         )?;
         stitch_tile_sample_plane(
@@ -51185,6 +51209,7 @@ pub fn decode_prepared_htj2k_reduced_component_owned_with_workspace(
                 prepared.coding_style,
                 prepared.tile_rect,
                 Some(prepared.request),
+                None,
                 workspace,
             )?
         }
@@ -53039,6 +53064,7 @@ fn decode_htj2k_lossless_decomp_components(
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     reduced_request: Option<Htj2kReducedComponentDecodeRequest>,
+    maxshift: Option<u8>,
     workspace: &mut HtCodestreamDecodeWorkspace,
 ) -> Result<(u32, u32, Vec<DecodedComponent>)> {
     let (retained_resolution, output_width, output_height, plane_len) =
@@ -53227,6 +53253,12 @@ fn decode_htj2k_lossless_decomp_components(
         })?;
     transform_scratch.resize(transform_scratch_len, 0_i32);
     for plane in planes.iter_mut() {
+        if let Some(shift) = maxshift {
+            // HT placement has restored the ROI-extended integer magnitude
+            // domain. Realign ROI magnitudes before inverse wavelet synthesis;
+            // background magnitudes and coefficient signs remain unchanged.
+            realign_bounded_maxshift_coefficients(plane, shift)?;
+        }
         inverse_reversible_5_3_levels_with_scratch(
             plane,
             stride,
@@ -53999,7 +54031,9 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
             None,
             None,
             None,
-            if ht_six_level_reduced_envelope(codestream) {
+            if ht_roi::envelope(codestream) {
+                PacketOrganisationConfig::HT_ROI_WINDOW
+            } else if ht_six_level_reduced_envelope(codestream) {
                 PacketOrganisationConfig::HT_SIX_LEVEL_REDUCED
             } else if ht_heterogeneous_reversible_reduced_envelope(codestream) {
                 PacketOrganisationConfig::HT_HETEROGENEOUS_REVERSIBLE_REDUCED

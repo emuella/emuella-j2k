@@ -55,7 +55,8 @@ ROI, heterogeneous state or irreversible coding can therefore retain the
 existing native route when the effective mechanisms are still one HT coding
 set per code-block, no RGN use, one supported coding style and reversible 5/3.
 The decoder and support classification share the effective packet-mechanism
-predicate. Actual multiple sets, RGN use, heterogeneous component or
+predicate. Actual multiple sets, RGN use outside the native ROI window below,
+heterogeneous component or
 tile-header state, irreversible coding outside the bounded reduced route below,
 HTMIX/HT-declared population modes and a cleanup magnitude bound above 18 fail
 closed. A later zero-byte Cleanup-set
@@ -112,6 +113,36 @@ tests are project-authored and reproduce no protected standards text or
 payload.
 
 ## Native HTONLY component grids
+
+### Native ROI window
+
+The HT-owned prepared ROI plan is independent of the Part 1 selective planner.
+It validates the one-component, one-level, unit-grid envelope documented in the
+README, resolves main QCC over QCD and the tile-zero Maxshift, and checks one
+full-domain main POC LRCP schedule. TLM reconciliation remains structural;
+empty trailing parts do not become new packet sources. Every tile's complete
+packets are validated with first/latest-set retention before output geometry
+is exposed. Actual multiple sets still fail closed, with SINGLEHT
+contradictions remaining invalid. The maximum grid is 64 tiles of at most
+128×128 samples; that bound precedes packet topology and retained allocation.
+
+The block-local ROI candidate admits native precision below eight without
+changing the ordinary HT candidate classifier. HT placement first normalises
+decoded coefficients to the ROI-extended integer magnitude domain using the
+resolved subband exponent and guard bits. Maxshift restores above-threshold
+ROI magnitudes while preserving signs and background values, before the
+existing checked reversible synthesis and native clipping/byte conversion.
+Only tile zero reaches entropy decoding; a region within that tile is cropped
+from private storage. Metadata, descriptors and caller-owned publication use
+the same prepared route. Full-image support classification remains unsupported.
+
+The basis is Part 1:2024 A.6.3/A.6.6, A.7.1, B.12.3 and H.1, physical pages
+51–52, 54–57, 99 and 156, retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`; Part 15:2019 A.5, page 38,
+retrieval `10baf9472429d52f5d6b5f9b7a892dbed395b1db`; and Part 4:2024
+B.2.3/B.2.5, pages 25–26, retrieval
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. This independently authored
+mechanism contains no standards expression or protected payload/pixels.
 
 ### Six-level irreversible reduced component
 
