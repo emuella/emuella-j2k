@@ -634,13 +634,14 @@ mod tests {
     #[test]
     fn tile_windows_bound_global_work_and_reject_large_grids_before_packets() {
         for tiles in [1, 16, 256] {
-            let bytes = encode_htj2k_tile_window_test_fixture(tiles, false).unwrap();
+            let layers = if tiles == 256 { 8 } else { 2 };
+            let bytes = fixture(tiles, 32, 12, true, layers, 2, true, true, false).unwrap();
             PACKETS.with(|n| n.set(0));
             MARKERS.with(|n| n.set(0));
             prepare_htj2k_tile_window_decode(&bytes, region())
                 .unwrap()
                 .unwrap();
-            PACKETS.with(|n| assert_eq!(n.get(), u64::from(tiles) * 24));
+            PACKETS.with(|n| assert_eq!(n.get(), u64::from(tiles) * 12 * u64::from(layers)));
             MARKERS.with(|n| assert!(n.get() <= usize::from(tiles) * 10 + 10));
             let mut c = parse(&bytes).unwrap();
             c.siz.reference_grid_width = 32 * 257;
