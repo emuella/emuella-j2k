@@ -56,6 +56,13 @@ remains inspectable; packet-dependent mixed classic/HT block interpretation
 does not fall back to either homogeneous decoder. Locked HTMIX points are not
 applicable to the HTONLY qualification claim, not decoded-pixel passes.
 
+The [bounded DS0 qualification summary](docs/testing.md#bounded-ds0-result)
+records all sixteen selected HTONLY points and their distinct output routes.
+Those points do not imply general full-image, rendered or JPH decode support.
+Structural inspection also does not prove complete packet validity: the
+bounded SINGLEHT validator skips every CAP Mixed declaration, including
+homogeneous-effective HT neighbours.
+
 A separate raw native ROI window route admits one unit-sampled component with
 1–16-bit signed or unsigned precision, zero origins, one reversible 5/3 level,
 32/64-sample block axes, 128×128/256×256 precincts and one through eight layers.

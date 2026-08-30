@@ -164,6 +164,48 @@ the repository.
 
 ### HTJ2K DS0 qualification
 
+#### Bounded DS0 result
+
+The locked `layer2/conformance-jpeg-2000` suite revision 20 and
+`jpeg-2000/conformance@15444-4-2024-ed4` pack qualify all sixteen selected
+Profile-0/Class-0 `M_MAGB=18` HTONLY points. The report-all aggregate is
+16 qualified, 0 rejected and 2 HTMIX not applicable. This is the selected
+derived-set claim, not general Part 15 or JPEG 2000 conformance.
+
+| Selected HTONLY point | Qualified native output |
+|---|---|
+| P0.01, P0.11, P0.12, P0.16 | Existing bounded lossless component output |
+| P0.02 | Single subsampled component grid |
+| P0.03, P0.15 | Full-resolution component-zero ROI window; the required choice alternative, not both alternatives |
+| P0.04 | Irreversible RLCP component zero, reduction three |
+| P0.05 | Sampled scalar-derived PCRL component zero, reduction three |
+| P0.06 | Heterogeneous sampled-RPCL ROI component zero, reduction three |
+| P0.07 | Tile-zero/component-zero native window with effective tile progression |
+| P0.08 | Heterogeneous reversible CPRL component zero, reduction five |
+| P0.09 | Irreversible component zero, reduction two |
+| P0.10 | Subsampled multi-tile component zero before inverse RCT |
+| P0.13 | High-component native component zero before inverse RCT |
+| P0.14 | Reversible component zero, reduction two, before inverse RCT |
+
+Each row retains the independently documented admission, resource, selection,
+precision and presentation limits below and in the README. Passing a selected
+component request does not make all-component inspection, full-image decode,
+rendered output or a JPH wrapper supported. The runner selects the locked
+variant and compares logical samples with the catalogue's normalisation and
+inclusive limits; it does not classify support by corpus identity.
+
+Structural regression evidence is separate: 40 derived-profile HTJ2K, 20 JPH,
+24 Part 1 and 9 JP2 inspection cases have zero unexpected results. These
+93 cases exclude the unrelated Annex H Part 2 cohort and the separate
+HT class1hf-profile1 point. Inspection proves neither pixels nor complete
+mixed-packet validity. In particular, the existing bounded packet validator
+skips CAP Mixed declarations even when effective COD/COC is homogeneous HT.
+The two selected HTMIX points have the deliberate unsupported disposition
+documented in [the architecture decision](htmix-disposition.md); no HTMIX
+comparison worker executes and neither point is a pixel pass.
+
+#### Admission and route evidence
+
 The native HTONLY admission foundation is qualified separately from structural
 syntax and packet validity. Project-authored 8 × 8 inputs mutate only the
 structured `Ccap^15` value and decode through the ordinary public native API.
