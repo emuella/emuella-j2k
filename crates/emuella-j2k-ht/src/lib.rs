@@ -174,12 +174,13 @@ impl HtUnsupportedReason {
 
 /// Classify the marker-level HTJ2K subset without attempting pixel decode.
 pub fn classify_decode_subset(state: HtMarkerState) -> HtClassification {
-    classify_decode_subset_with_component_grid(state, false)
+    classify_decode_subset_with_component_grid(state, false, 8)
 }
 
 fn classify_decode_subset_with_component_grid(
     state: HtMarkerState,
     caller_owns_component_grid: bool,
+    minimum_precision: u8,
 ) -> HtClassification {
     let unsupported = |reason| HtClassification {
         class: HtSupportClass::Unsupported,
@@ -195,7 +196,8 @@ fn classify_decode_subset_with_component_grid(
     if !matches!(state.components, 1 | 3) {
         return unsupported(HtUnsupportedReason::ComponentCount);
     }
-    if !(8..=16).contains(&state.sample_precision_bits) || !state.all_components_same_sample_format
+    if !(minimum_precision..=16).contains(&state.sample_precision_bits)
+        || !state.all_components_same_sample_format
     {
         return unsupported(HtUnsupportedReason::SamplePrecision);
     }
@@ -240,7 +242,7 @@ fn classify_decode_subset_with_component_grid(
 /// decode plumbing can consume, while returning the same structured
 /// classification for unsupported states.
 pub fn plan_decode_candidate(state: HtMarkerState) -> Result<HtDecodeCandidate, HtClassification> {
-    plan_decode_candidate_with_component_grid(state, false)
+    plan_decode_candidate_with_component_grid(state, false, 8)
 }
 
 /// Plan a block-local candidate after the caller has independently admitted
@@ -252,15 +254,29 @@ pub fn plan_decode_candidate(state: HtMarkerState) -> Result<HtDecodeCandidate, 
 pub fn plan_decode_candidate_for_native_component_grid(
     state: HtMarkerState,
 ) -> Result<HtDecodeCandidate, HtClassification> {
-    plan_decode_candidate_with_component_grid(state, true)
+    plan_decode_candidate_with_component_grid(state, true, 8)
+}
+
+/// Plan block-local coefficients after the codestream owner has admitted ROI
+/// restoration, quantisation and native sample conversion. Unlike the ordinary
+/// image route this accepts one through sixteen native precision bits; block
+/// magnitudes are independently bounded by the packet and transfer metadata.
+pub fn plan_decode_candidate_for_native_roi(
+    state: HtMarkerState,
+) -> Result<HtDecodeCandidate, HtClassification> {
+    plan_decode_candidate_with_component_grid(state, false, 1)
 }
 
 fn plan_decode_candidate_with_component_grid(
     state: HtMarkerState,
     caller_owns_component_grid: bool,
+    minimum_precision: u8,
 ) -> Result<HtDecodeCandidate, HtClassification> {
-    let classification =
-        classify_decode_subset_with_component_grid(state, caller_owns_component_grid);
+    let classification = classify_decode_subset_with_component_grid(
+        state,
+        caller_owns_component_grid,
+        minimum_precision,
+    );
     if classification.class != HtSupportClass::Candidate {
         return Err(classification);
     }

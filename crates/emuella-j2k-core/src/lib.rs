@@ -23,6 +23,8 @@ use core::fmt;
 
 pub use emuella_j2k_codestream as codestream;
 pub use emuella_j2k_container as container;
+#[cfg(feature = "std")]
+mod ht_roi;
 
 pub const PROJECT_NAME: &str = "emuella-j2k";
 
@@ -7473,6 +7475,10 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
     }
 
     #[cfg(feature = "std")]
+    if let Some(image) = ht_roi::decode(input, options)? {
+        return Ok(image);
+    }
+    #[cfg(feature = "std")]
     if let Some(image) = decode_owned_htj2k_reduced_component(input, options)? {
         return Ok(image);
     }
@@ -7876,6 +7882,9 @@ pub fn decode_partial_component_info(
     }
     #[cfg(feature = "std")]
     {
+        if let Some((_, _, component_info)) = ht_roi::prepare(input, options)? {
+            return Ok(component_info);
+        }
         if let Some((_, _, component_info)) =
             prepare_htj2k_reduced_component_target(input, options)?
         {
@@ -12119,6 +12128,10 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
         });
     }
 
+    #[cfg(feature = "std")]
+    if let Some((_, info, _)) = ht_roi::prepare(input, options)? {
+        return Ok(info);
+    }
     #[cfg(feature = "std")]
     if let Some((_, info, _)) = prepare_htj2k_reduced_component_target(input, options)? {
         return Ok(info);
