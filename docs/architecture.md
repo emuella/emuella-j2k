@@ -42,6 +42,42 @@ bytes in one contiguous codestream box behind deterministic JPH file-type,
 image-header and enumerated greyscale or sRGB colour boxes. Container writing
 does not introduce a second HT encoding route.
 
+The JPH reader and writer share one bounded Annex D container contract. A JPH
+file has exactly one JPEG 2000 signature, followed immediately by exactly one
+file-type box, and exactly one `jp2h` after that file type and before the first
+`jp2c`. The file-type brand is `jph `, its minor version is zero, and its
+compatibility list contains both `jph ` and inherited `jp2 ` membership;
+repeated compatible-brand membership is harmless. The inherited `jp2h`
+boundary requires `ihdr` first, conditionally admits one `bpcc`, keeps `colr`
+boxes contiguous, and validates the cardinality and payload structure of
+`pclr`, `cmap`, `cdef` and `res `. Palette and component-mapping dependencies,
+component and palette selectors, channel-definition domains, and resolution
+children are checked before optional presentation is classified. For
+enumerated greyscale, sRGB and sYCC, an explicit channel definition must cover
+every channel and required colour; the default ordered colour channels must
+omit that box. Unsupported ICC and vendor methods do not acquire an inferred
+colour count. When both resolution children occur, capture resolution precedes
+default display resolution. JP2 still
+requires `colr`; JPH may omit it only for an `ihdr` whose colourspace is
+unknown, and such a header cannot describe a type-0 colour channel. The JPH
+single-alpha and application-specified channel rules are applied without
+changing JP2 rules. At least one `jp2c` is required, every `jp2c` must contain a
+structurally parsed HTJ2K codestream with EOC at the end of the box payload,
+and the first codestream SIZ dimensions, component count, precision and
+signedness must agree with `ihdr` and `bpcc`. Checked box arithmetic, field
+domains and exact containing-box bounds precede metadata allocation. Legal
+unknown boxes remain byte-preserved.
+
+This validation is container and codestream admission, not presentation or
+decode expansion. Palette, component mapping, channel definition, alpha, ICC,
+unrecognised colour interpretation, multiple-codestream composition, HTMIX and
+codec profiles outside the existing decoder remain unsupported. A structurally
+valid file can therefore inspect as unsupported; structural contradictions are
+rejected first. Caller-owned decode routes inspect and size the complete input
+before publication, so invalid JPH input cannot partially change output. The
+deterministic writer emits one codestream and preserves the raw
+`encode_htj2k` payload byte-for-byte.
+
 The one-level matrix is one tile, one layer, LRCP, default precincts, 64 × 64
 code-blocks, HT-only cleanup coding, zero origins, no component subsampling and
 no multiple-component transform. It accepts greyscale or RGB, planar or
@@ -78,6 +114,14 @@ This bounded profile relies only on the established COD decomposition count,
 reversible-transform signalling, resolution/sub-band organisation and
 one-layer packet model; it does not rely on a post-2019 Part 1 feature or use
 the later edition to reinterpret Part 15.
+
+The JPH container calibration additionally follows ISO/IEC 15444-15:2019,
+normative Annex D, PDF pages 62–64, at retrieval revision
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db`, together with its mapped inherited
+ISO/IEC 15444-1:2024 Annex I structure, PDF pages 160–181, at retrieval
+revision `34e5d1639b9f121807e620c001893ca9d2c8f977`. The implementation and
+synthetic tests are project-authored and reproduce no protected standards
+text, table or payload.
 
 The decomposition orchestration, transform use, packet construction, scalar
 fallback, termination repair, JPH composition, tests and this description are project-authored
