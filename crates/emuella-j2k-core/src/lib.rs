@@ -4499,6 +4499,227 @@ mod jp2_header_validation_tests {
     }
 
     #[test]
+    fn htmix_disposition_is_fail_closed_across_public_routes() {
+        fn unsupported<T>(result: Result<T>) {
+            assert!(matches!(result, Err(J2kError::Unsupported { .. })));
+        }
+        let samples = (0_u8..64).collect::<Vec<_>>();
+        let base = codestream::encode_htj2k_grayscale_u8_no_decomp(codestream::GrayscaleU8Encode {
+            width: 8,
+            height: 8,
+            samples: &samples,
+            stride_bytes: 8,
+        })
+        .unwrap();
+        let options = DecodeOptions {
+            mode: DecodeMode::Components,
+            ..DecodeOptions::default()
+        };
+        let info = decode_shape(&base, &options).unwrap().image_info().unwrap();
+        let mut workspace = Htj2kDecodeWorkspace::new();
+        // Include declaration-only neighbours: neither broader population
+        // permission nor the mixed style may acquire a classic/HT fallback.
+        for (capability, style) in [
+            (0x8000_u16, 0x00),
+            (0x8000, 0x40),
+            (0xc000, 0x00),
+            (0xc000, 0x40),
+            (0xc000, 0xc0),
+            (0xe000, 0xfa),
+            (0x0000, 0xc0),
+        ] {
+            let mut raw = base.clone();
+            let cap = marker_offset(&raw, [0xff, 0x50]);
+            raw[cap + 8..cap + 10].copy_from_slice(&capability.to_be_bytes());
+            let cod = marker_offset(&raw, [0xff, 0x52]);
+            raw[cod + 12] = style;
+            for input in [
+                raw.clone(),
+                wrap_jph(&raw, 8, 8, 1, 7, None),
+                wrap_jp2(&raw, 8, 8, 1, 7, None),
+            ] {
+                let metadata = inspect(&input, &InspectOptions::default()).unwrap();
+                assert!(matches!(
+                    metadata.support,
+                    SupportStatus::Unsupported { .. }
+                ));
+                unsupported(decode(&input, &options));
+                unsupported(decode_shape(&input, &options));
+                for mode in [DecodeMode::Components, DecodeMode::Rendered] {
+                    unsupported(decode(
+                        &input,
+                        &DecodeOptions {
+                            mode,
+                            ..options.clone()
+                        },
+                    ));
+                    unsupported(decode(
+                        &input,
+                        &DecodeOptions {
+                            mode,
+                            allow_best_effort_backend_decode: true,
+                            ..options.clone()
+                        },
+                    ));
+                }
+                assert!(
+                    decode_htj2k_with_workspace(&input, &options, &mut workspace)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    decode_htj2k_cleanup_vlc_output_probe_with_workspace(
+                        &input,
+                        &options,
+                        &mut workspace
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                let mut incremental = IncrementalDecoder::new();
+                for chunk in input.chunks(13) {
+                    incremental.feed(chunk);
+                }
+                assert!(matches!(
+                    incremental
+                        .inspect(&InspectOptions::default())
+                        .unwrap()
+                        .support,
+                    SupportStatus::Unsupported { .. }
+                ));
+                unsupported(incremental.decode(&options));
+
+                for partial in [
+                    PartialDecodeOptions::default(),
+                    PartialDecodeOptions {
+                        components: ComponentSelection::Indices(vec![0]),
+                        region: Some(Region {
+                            x: 1,
+                            y: 1,
+                            width: 4,
+                            height: 4,
+                        }),
+                        ..PartialDecodeOptions::default()
+                    },
+                    PartialDecodeOptions {
+                        components: ComponentSelection::Indices(vec![0]),
+                        resolution: ResolutionLevel::Reduced { discard_levels: 2 },
+                        ..PartialDecodeOptions::default()
+                    },
+                ] {
+                    unsupported(decode_partial(&input, &partial));
+                    unsupported(decode_partial_info(&input, &partial));
+                    unsupported(decode_partial_component_info(&input, &partial));
+                    unsupported(incremental.decode_partial(&partial));
+                    unsupported(prepare_part1_decode(&input, &partial));
+                    unsupported(decode_rendered_partial(&input, &partial));
+                    unsupported(decode_rendered_partial_info(&input, &partial));
+                    let mut storage = vec![0xa7; 10 * 8];
+                    {
+                        let mut planes =
+                            [PlaneMut::new(&mut storage, 8, 8, 10, SampleFormat::U8).unwrap()];
+                        let mut target = ImageViewMut::Planar {
+                            info: &info,
+                            planes: &mut planes,
+                        };
+                        unsupported(decode_into(&input, &mut target, &options));
+                        unsupported(decode_into_with_workspace(
+                            &input,
+                            &mut target,
+                            &options,
+                            &mut Part1DecodeWorkspace::new(),
+                        ));
+                        unsupported(decode_partial_into(&input, &mut target, &partial));
+                        unsupported(decode_partial_into_with_workspace(
+                            &input,
+                            &mut target,
+                            &partial,
+                            &mut Part1DecodeWorkspace::new(),
+                        ));
+                        unsupported(decode_rendered_partial_into(&input, &mut target, &partial));
+                    }
+                    assert!(storage.iter().all(|sample| *sample == 0xa7));
+                }
+            }
+        }
+        // Reuse after declines must leave the admitted HTONLY route intact.
+        assert_eq!(
+            planar_bytes(
+                &decode_htj2k_with_workspace(&base, &options, &mut workspace)
+                    .unwrap()
+                    .unwrap()
+            )[0],
+            samples
+        );
+    }
+
+    #[test]
+    fn invalid_mixed_signalling_precedes_unsupported_disposition() {
+        let base = ht_codestream(1);
+        for (capability, style) in [
+            (0x8000_u16, 0xc0),
+            (0xc000, 0xc1),
+            (0xc000, 0xc4),
+            (0x4000, 0x40),
+        ] {
+            let mut raw = base.clone();
+            let cap = marker_offset(&raw, [0xff, 0x50]);
+            raw[cap + 8..cap + 10].copy_from_slice(&capability.to_be_bytes());
+            let cod = marker_offset(&raw, [0xff, 0x52]);
+            raw[cod + 12] = style;
+            for input in [
+                raw.clone(),
+                wrap_jph(&raw, 5, 3, 1, 7, None),
+                wrap_jp2(&raw, 5, 3, 1, 7, None),
+            ] {
+                assert!(matches!(
+                    inspect(&input, &InspectOptions::default()),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode(&input, &DecodeOptions::default()),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode_shape(&input, &DecodeOptions::default()),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode_partial(&input, &PartialDecodeOptions::default()),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                assert!(matches!(
+                    decode_htj2k_with_workspace(
+                        &input,
+                        &DecodeOptions::default(),
+                        &mut Htj2kDecodeWorkspace::new()
+                    ),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+                let info = decode(&base, &DecodeOptions::default()).unwrap().info;
+                let mut storage = vec![0x5d; 7 * 3];
+                {
+                    let mut planes =
+                        [PlaneMut::new(&mut storage, 5, 3, 7, SampleFormat::U8).unwrap()];
+                    let mut target = ImageViewMut::Planar {
+                        info: &info,
+                        planes: &mut planes,
+                    };
+                    assert!(matches!(
+                        decode_into(&input, &mut target, &DecodeOptions::default()),
+                        Err(J2kError::InvalidInput { .. })
+                    ));
+                    assert!(matches!(
+                        decode_partial_into(&input, &mut target, &PartialDecodeOptions::default()),
+                        Err(J2kError::InvalidInput { .. })
+                    ));
+                }
+                assert!(storage.iter().all(|sample| *sample == 0x5d));
+            }
+        }
+    }
+
+    #[test]
     fn jph_validates_every_complete_htj2k_codestream() {
         let raw = ht_codestream(1);
         let mut multiple = valid_jph(1);
