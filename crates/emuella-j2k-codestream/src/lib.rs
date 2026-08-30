@@ -31793,7 +31793,9 @@ fn validate_part15_single_ht_packet_sets(
         .capability
         .as_ref()
         .and_then(|capability| capability.part15)
-        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
+        .is_some_and(|part15| {
+            !part15.multiple_ht_sets_allowed && part15.code_block_mode != Part15CodeBlockMode::Mixed
+        });
     if single_ht_declared
         && contributions
             .iter()
@@ -52563,6 +52565,18 @@ mod part15_signalling_tests {
         structurally_mixed[cod + 12] = 0xc0;
         let mixed = parse(&structurally_mixed).unwrap();
         assert!(validate_part15_packet_signalling(&structurally_mixed, &mixed).is_ok());
+        let mixed_contributions = parse_default_precinct_lrcp_packets(
+            &structurally_mixed,
+            &mixed,
+            tile_rects(&mixed).unwrap()[0],
+            tile_payload(&structurally_mixed, &mixed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            mixed_contributions
+                .iter()
+                .any(|contribution| contribution.ht_coding_set_count() > 1)
+        );
         assert!(matches!(
             htj2k_lossless_profile_unsupported_construct(&structurally_mixed, &mixed),
             Some((UnsupportedConstruct::HtBlockDecode, _))
