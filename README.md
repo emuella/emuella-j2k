@@ -39,7 +39,8 @@ a deterministic JPH container with `encode_htj2k_jph`. Both entry points use
 planar/interleaved, zero-or-one-decomposition profile; the JPH payload is the
 unchanged raw encoder output.
 
-JPH inspection enforces the bounded Annex D signature, `jph ` file type,
+JPH inspection enforces the bounded Annex D signature, `jph ` file type and
+`jph ` compatibility membership,
 inherited `jp2h` structure including optional-box dependencies, complete HTJ2K
 `jp2c`, and first-codestream header-consistency boundary before decode
 admission. The JPH unknown-colour/no-`colr` form is structurally accepted but

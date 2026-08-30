@@ -123,9 +123,10 @@ authorised black-box qualification.
 The JPH admission tests also cover the Annex D boundary independently of
 decoder success. Positive cases exercise the required signature, file type,
 header and one-or-more codestream ordering; exact `jph ` brand, zero minor
-version, `jph `/`jp2 ` compatibility membership including harmless duplicate
-membership; inherited uniform and varying `ihdr`/`bpcc` forms; legal unknown
-box preservation; the JPH unknown-colour form without `colr`; structurally
+version, required `jph ` compatibility membership, optional additional brands
+and harmless duplicate membership; inherited uniform and varying `ihdr`/`bpcc`
+forms; legal unknown box preservation; the JPH unknown-colour form without
+`colr`; structurally
 valid palette/mapping, channel-definition and resolution metadata; multiple
 complete HTJ2K codestreams; and writer payload identity. Negative cases cover
 missing, misplaced and duplicate structural boxes; conflicting file-type
@@ -449,6 +450,12 @@ and HT code-blocks. The parser retains both forms, while the current native HT
 decoder continues to admit only the homogeneous HT form without additional
 style flags. The canonical transcription consulted for this boundary was
 retrieval revision `10baf9472429d52f5d6b5f9b7a892dbed395b1db`.
+
+Part 15 signalling tests independently retain CPF values that identify a
+corresponding Part 1 profile, distinguish initial placeholder passes from the
+first HT set, and reject later zero-length as well as non-empty sets under a
+SINGLEHT declaration. HTMIX remains a structurally retained, unsupported
+boundary rather than being passed through the homogeneous HT packet validator.
 
 ### Profile-0 component quantization overrides
 

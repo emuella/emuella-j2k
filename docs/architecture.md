@@ -30,6 +30,23 @@ implementations. The test-support crate creates deterministic inputs through
 project-owned algorithms. External reference codecs and corpora are never
 runtime dependencies.
 
+## Part 15 signalling and admission
+
+The codestream parser retains SIZ, CAP, PRF and CPF as separate structural
+state. CPF identifies the profile of the corresponding Part 1 codestream used
+for reversible transcoding; it is not required to equal the profile field of
+the current HTJ2K codestream. Part 15 kind identification requires the mapped
+Rsiz and Pcap declaration, while native decode admission remains a later,
+narrower decision.
+
+Packet-level SINGLEHT checking is applied only where the retained coding mode
+establishes homogeneous HT code-block grammar. Placeholder passes before the
+first non-empty cleanup are not HT sets; once that first set has appeared, a
+later empty or non-empty set contradicts SINGLEHT. HTMIX syntax remains
+structurally inspectable but outside native decode and packet-semantic
+admission, because a mixed code-block must first be distinguished from a
+classic Part 1 code-block.
+
 ## Bounded reversible HTJ2K encode and JPH output
 
 `encode_htj2k` writes raw HTJ2K codestreams only. Its
@@ -46,8 +63,8 @@ The JPH reader and writer share one bounded Annex D container contract. A JPH
 file has exactly one JPEG 2000 signature, followed immediately by exactly one
 file-type box, and exactly one `jp2h` after that file type and before the first
 `jp2c`. The file-type brand is `jph `, its minor version is zero, and its
-compatibility list contains both `jph ` and inherited `jp2 ` membership;
-repeated compatible-brand membership is harmless. The inherited `jp2h`
+compatibility list contains `jph ` membership; repeated compatible-brand
+membership is harmless. The inherited `jp2h`
 boundary requires `ihdr` first, conditionally admits one `bpcc`, keeps `colr`
 boxes contiguous, and validates the cardinality and payload structure of
 `pclr`, `cmap`, `cdef` and `res `. Palette and component-mapping dependencies,
