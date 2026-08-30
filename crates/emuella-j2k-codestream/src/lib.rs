@@ -46197,14 +46197,17 @@ fn classify_htj2k_lossless_profile_markers(
             "native HTJ2K decode supports only an HTONLY Part 15 declaration",
         ));
     }
-    if part15.multiple_ht_sets_allowed
-        || part15.roi_allowed
-        || part15.heterogeneous_allowed
-        || part15.irreversible_allowed
+    // Permission bits describe mechanisms that may occur. Native admission is
+    // based on the effective marker and packet state below, after structural
+    // Part 15 validation has already retained the declarations.
+    if codestream
+        .markers
+        .iter()
+        .any(|segment| segment.marker == Marker::Rgn)
     {
         return Err(Htj2kLosslessProfileDiagnostic::new(
             UnsupportedConstruct::HtBlockDecode,
-            "native HTJ2K decode does not admit broader Ccap^15 capability declarations",
+            "native HTJ2K decode does not implement the ROI mechanism declared by an RGN marker",
         ));
     }
     if part15.cleanup_magnitude_bound > 18 {
@@ -46229,7 +46232,35 @@ fn classify_htj2k_lossless_profile_markers(
             "native HTJ2K decode does not admit packet-dependent mixed SPcod/SPcoc signalling",
         ));
     }
-
+    let first_tile_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Sot)
+        .map_or(usize::MAX, |segment| segment.offset);
+    if codestream.markers.iter().any(|segment| {
+        segment.offset > first_tile_offset
+            && matches!(
+                segment.marker,
+                Marker::Coc | Marker::Qcd | Marker::Qcc | Marker::Poc | Marker::Ppt
+            )
+    }) {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K decode does not implement heterogeneous tile-header coding, quantisation, progression, or packet-header state",
+        ));
+    }
+    let effective_style = codestream.uniform_effective_coding_style().ok_or_else(|| {
+        Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K decode does not implement heterogeneous effective COD/COC state",
+        )
+    })?;
+    if effective_style.transform != WaveletTransform::Reversible53 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::WaveletTransform,
+            "native HTJ2K lossless decode does not implement the effective irreversible transform mechanism",
+        ));
+    }
     match ht_decode_candidate(codestream) {
         Some(Ok(_candidate)) => {}
         Some(Err(classification)) => {
@@ -46337,6 +46368,16 @@ fn classify_htj2k_lossless_profile(
             "native HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides",
         ));
     }
+    if codestream
+        .markers
+        .iter()
+        .any(|segment| segment.marker == Marker::Qcc)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native HTJ2K decode does not implement component-specific quantisation",
+        ));
+    }
 
     match ht_reversible_code_block_transfer(input, codestream) {
         Ok(Some(_transfer)) => {}
@@ -46374,39 +46415,40 @@ fn classify_htj2k_lossless_profile(
             ));
         }
     }
+    let single_tile = tile_rects.len() == 1;
 
     for tile_rect in tile_rects {
-        let Some(tile_part) = codestream
-            .tiles
-            .iter()
-            .find(|tile| tile.tile_index == tile_rect.tile_index)
-        else {
-            return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::MarkerSegment,
-                "native HTJ2K lossless decode requires retained payload state for every tile",
-            ));
-        };
-        let payload = tile_payload(input, tile_part).map_err(|_| {
+        let payload = tile_payload_spans_for_rect(input, codestream, tile_rect).map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
                 UnsupportedConstruct::MarkerSegment,
                 "native HTJ2K lossless decode requires retained payload state for every tile",
             )
         })?;
-        let contributions = parse_default_precinct_lrcp_packets(
-            input, codestream, tile_rect, payload,
+        let contributions = parse_default_precinct_packets_from_source(
+            input,
+            codestream,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
         )
         .map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
                 UnsupportedConstruct::PacketDecode,
                 "native HTJ2K lossless packet parsing failed for the admitted marker profile",
             )
-        })?;
-        if !ht_contributions_have_supported_final_sets(&contributions) {
-            return Err(Htj2kLosslessProfileDiagnostic::new(
-                UnsupportedConstruct::HtBlockDecode,
-                "native HTJ2K lossless decode requires an HT final coding set of one through three passes for every contribution",
-            ));
-        }
+        })?
+        .contributions;
+        classify_htonly_native_packet_mechanisms(&contributions)?;
+    }
+    if single_tile && codestream.tiles.len() != 1 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::MarkerSegment,
+            "native single-tile HTJ2K lossless decode requires one tile-part payload",
+        ));
     }
 
     Ok(())
@@ -47834,6 +47876,7 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
             "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
         ));
     }
+    validate_htonly_permission_effective_packet_mechanisms(input, &codestream)?;
 
     let candidate = match ht_decode_candidate(&codestream) {
         Some(Ok(candidate)) => candidate,
@@ -47964,6 +48007,8 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
     let contributions =
         parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
 
     let stride = usize::try_from(tile_rect.width).map_err(|_| CodestreamError::SizeOverflow)?;
     let height = usize::try_from(tile_rect.height).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -48272,6 +48317,8 @@ fn decode_htj2k_multitile_tile_components(
         .ok_or(CodestreamError::SizeOverflow)?;
     let payload = tile_payload(input, &tile_part)?;
     let contributions = parse_default_precinct_lrcp_packets(input, codestream, tile_rect, payload)?;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
     let stride = usize::try_from(tile_rect.width).map_err(|_| CodestreamError::SizeOverflow)?;
     let height = usize::try_from(tile_rect.height).map_err(|_| CodestreamError::SizeOverflow)?;
     let plane_len = stride
@@ -49419,6 +49466,65 @@ fn ht_contributions_have_supported_final_sets(
                     }),
             )
     })
+}
+
+#[cfg(feature = "std")]
+fn classify_htonly_native_packet_mechanisms(
+    contributions: &[PacketCodeBlockContribution],
+) -> core::result::Result<(), Htj2kLosslessProfileDiagnostic> {
+    if contributions
+        .iter()
+        .any(|contribution| contribution.ht_coding_set_count() > 1)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K decode does not implement multiple effective HT coding sets for one code-block",
+        ));
+    }
+    if !ht_contributions_have_supported_final_sets(contributions) {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K lossless decode requires an HT final coding set of one through three passes for every contribution",
+        ));
+    }
+    Ok(())
+}
+
+/// Recheck packet mechanisms when Ccap^15 permits multiple sets. SINGLEHT
+/// declarations have already taken the validity path; this path distinguishes
+/// a declaration-only permission from an actual unsupported mechanism.
+#[cfg(feature = "std")]
+fn validate_htonly_permission_effective_packet_mechanisms(
+    input: &[u8],
+    codestream: &Codestream,
+) -> Result<()> {
+    let multiple_sets_declared = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .is_some_and(|part15| part15.multiple_ht_sets_allowed);
+    if !multiple_sets_declared {
+        return Ok(());
+    }
+    for tile_rect in tile_rects(codestream)? {
+        let payload = tile_payload_spans_for_rect(input, codestream, tile_rect)?;
+        let contributions = parse_default_precinct_packets_from_source(
+            input,
+            codestream,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+        )?
+        .contributions;
+        classify_htonly_native_packet_mechanisms(&contributions).map_err(|diagnostic| {
+            unsupported(None, None, diagnostic.construct, diagnostic.detail)
+        })?;
+    }
+    Ok(())
 }
 
 /// Decode the zero-decomposition subset with caller-retained workspace.
@@ -52059,30 +52165,33 @@ mod part15_signalling_tests {
     }
 
     #[test]
-    fn legal_broader_part15_declarations_parse_but_are_not_natively_admitted() {
-        for ccap in [0x8000, 0x2000, 0x1000, 0x0800, 0x0020, 0x000b] {
+    fn declaration_only_part15_permissions_use_the_effective_htonly_mechanisms() {
+        let expected = (0_u8..64).collect::<Vec<_>>();
+        for ccap in [0x2000, 0x1000, 0x0800, 0x0020] {
             let mut codestream = ht_fixture();
             set_ccap15(&mut codestream, ccap);
             let parsed = parse(&codestream).unwrap();
             assert_eq!(parsed.kind, CodestreamKind::Htj2k);
+            assert_eq!(
+                htj2k_lossless_profile_unsupported_construct(&codestream, &parsed),
+                None
+            );
+            let decoded = decode_htj2k_lossless_owned(&codestream).unwrap().unwrap();
+            assert_eq!(decoded.components[0].samples, expected);
+            let mut workspace = HtCodestreamDecodeWorkspace::new();
+            let decoded = decode_htj2k_lossless_owned_with_workspace(&codestream, &mut workspace)
+                .unwrap()
+                .unwrap();
+            assert_eq!(decoded.components[0].samples, expected);
+        }
+
+        for ccap in [0x8000, 0x000b] {
+            let mut codestream = ht_fixture();
+            set_ccap15(&mut codestream, ccap);
+            let parsed = parse(&codestream).unwrap();
             assert!(matches!(
                 htj2k_lossless_profile_unsupported_construct(&codestream, &parsed),
                 Some((UnsupportedConstruct::HtBlockDecode, _))
-            ));
-            assert!(matches!(
-                decode_htj2k_lossless_owned(&codestream),
-                Err(CodestreamError::Unsupported {
-                    construct: UnsupportedConstruct::HtBlockDecode,
-                    ..
-                })
-            ));
-            let mut workspace = HtCodestreamDecodeWorkspace::new();
-            assert!(matches!(
-                decode_htj2k_lossless_owned_with_workspace(&codestream, &mut workspace),
-                Err(CodestreamError::Unsupported {
-                    construct: UnsupportedConstruct::HtBlockDecode,
-                    ..
-                })
             ));
         }
 
@@ -52094,6 +52203,34 @@ mod part15_signalling_tests {
         assert!(matches!(
             htj2k_lossless_profile_unsupported_construct(&mixed, &parsed),
             Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
+    }
+
+    #[test]
+    fn actual_permission_gated_mechanisms_remain_fail_closed() {
+        let mut irreversible = ht_fixture();
+        set_ccap15(&mut irreversible, 0x0020);
+        let cod = find_marker(&irreversible, 0, Marker::Cod).unwrap();
+        irreversible[cod + 13] = 0;
+        let parsed = parse(&irreversible).unwrap();
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&irreversible, &parsed),
+            Some((UnsupportedConstruct::WaveletTransform, detail))
+                if detail.contains("effective irreversible transform")
+        ));
+
+        let mut heterogeneous = ht_fixture();
+        set_ccap15(&mut heterogeneous, 0x0800);
+        let cod = find_marker(&heterogeneous, 0, Marker::Cod).unwrap();
+        let lcod = usize::from(read_u16(&heterogeneous, cod + 2).unwrap());
+        let mut tile_cod = heterogeneous[cod..cod + 2 + lcod].to_vec();
+        tile_cod[6..8].copy_from_slice(&2_u16.to_be_bytes());
+        let heterogeneous = insert_tile_header(heterogeneous, &tile_cod);
+        let parsed = parse(&heterogeneous).unwrap();
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&heterogeneous, &parsed),
+            Some((UnsupportedConstruct::MarkerSegment, detail))
+                if detail.contains("tile-header COD")
         ));
     }
 
@@ -52528,17 +52665,15 @@ mod part15_signalling_tests {
     }
 
     #[test]
-    fn support_diagnostic_requires_separate_part15_validity() {
-        let mut legal_but_unsupported = ht_fixture();
-        set_ccap15(&mut legal_but_unsupported, 0x1000);
-        let legal = parse(&legal_but_unsupported).unwrap();
-        assert!(validate_part15_packet_signalling(&legal_but_unsupported, &legal).is_ok());
-        let legal_diagnostic =
-            htj2k_lossless_profile_unsupported_construct(&legal_but_unsupported, &legal);
-        assert!(matches!(
-            legal_diagnostic,
-            Some((UnsupportedConstruct::HtBlockDecode, _))
-        ));
+    fn part15_validity_precedes_effective_mechanism_admission() {
+        let mut legal_declaration_only = ht_fixture();
+        set_ccap15(&mut legal_declaration_only, 0x1000);
+        let legal = parse(&legal_declaration_only).unwrap();
+        assert!(validate_part15_packet_signalling(&legal_declaration_only, &legal).is_ok());
+        assert_eq!(
+            htj2k_lossless_profile_unsupported_construct(&legal_declaration_only, &legal),
+            None
+        );
 
         let mut invalid_and_unsupported = multiple_ht_set_fixture();
         set_ccap15(&mut invalid_and_unsupported, 0x1000);
@@ -52554,9 +52689,9 @@ mod part15_signalling_tests {
             &invalid_and_unsupported,
             &invalid
         ));
-        assert_eq!(
-            htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid),
-            legal_diagnostic
+        assert!(
+            htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid)
+                .is_some()
         );
 
         let mut structurally_mixed = multiple_ht_set_fixture();

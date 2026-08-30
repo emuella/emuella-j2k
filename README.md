@@ -39,6 +39,16 @@ a deterministic JPH container with `encode_htj2k_jph`. Both entry points use
 planar/interleaved, zero-or-one-decomposition profile; the JPH payload is the
 unchanged raw encoder output.
 
+Native HTJ2K decode has a separate staged HTONLY boundary. Structural Part 15
+parsing and packet-signalling validity run before support admission. A broader
+`Ccap^15` permission does not by itself make a codestream unsupported when the
+effective codestream still uses the implemented single-set, ROI-free,
+homogeneous, reversible HT path. Actual multiple HT sets, ROI, heterogeneous
+state, irreversible HT coding, HTMIX and cleanup magnitude bounds above 18
+remain unsupported. Supported inputs continue through the existing HT packet,
+entropy, reconstruction and public image path; this is not general Part 15 or
+JPEG 2000 conformance.
+
 JPH inspection enforces the bounded Annex D signature, `jph ` file type and
 `jph ` compatibility membership,
 inherited `jp2h` structure including optional-box dependencies, complete HTJ2K
