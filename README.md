@@ -44,20 +44,24 @@ parsing and packet-signalling validity run before support admission. A broader
 `Ccap^15` permission does not by itself make a codestream unsupported when the
 effective codestream still uses the implemented single-set, ROI-free,
 homogeneous, reversible HT path. Actual multiple HT sets, ROI, heterogeneous
-state, irreversible HT coding, HTMIX and cleanup magnitude bounds above 18
-remain unsupported. Supported inputs continue through the existing HT packet,
-entropy, reconstruction and public image path; this is not general Part 15 or
-JPEG 2000 conformance.
+state, irreversible HT coding in the full-image path, HTMIX and cleanup
+magnitude bounds above 18 remain unsupported. Supported full inputs continue
+through the existing HT packet, entropy, reconstruction and public image path;
+this is not general Part 15 or JPEG 2000 conformance.
 
-Native partial component output adds one bounded reversible HTONLY shape. A raw
+Native partial component output adds two bounded HTONLY reconstruction branches
+behind one request shape. A raw
 single-tile codestream with three matching unsigned 8-bit components,
-reversible MCT, five reversible 5/3 decomposition levels and one-layer LRCP
-packets on the existing single-effective-precinct inline-header route may
-select transformed component 0 at two discarded resolution levels.
-The planar output is reconstructed at its exact reduced geometry before inverse
-RCT. JPH, rendered output, other selections or reductions, regions, tile
-requests, quality-layer limits, heterogeneous state, ROI, irreversible coding
-and HTMIX remain unsupported by this route.
+MCT, five decomposition levels and one-layer LRCP packets on the existing
+single-effective-precinct inline-header route may select transformed component
+0 at two discarded resolution levels. The transform is either reversible 5/3
+with the existing no-quantisation QCD contract or irreversible 9/7 with exactly
+one main-header scalar-derived QCD and no component or tile overrides. The
+planar output is reconstructed at its exact reduced geometry before inverse
+colour transformation. JPH, rendered output, other selections or reductions,
+regions, tile requests, quality-layer limits, heterogeneous coding or
+quantisation, ROI, HTMIX and other irreversible HT shapes remain unsupported by
+this route.
 
 JPH inspection enforces the bounded Annex D signature, `jph ` file type and
 `jph ` compatibility membership,

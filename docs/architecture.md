@@ -56,36 +56,48 @@ existing native route when the effective mechanisms are still one HT coding
 set per code-block, no RGN use, one supported coding style and reversible 5/3.
 The decoder and support classification share the effective packet-mechanism
 predicate. Actual multiple sets, RGN use, heterogeneous component or
-tile-header state, irreversible coding, HTMIX/HT-declared population modes and
-a cleanup magnitude bound above 18 fail closed. A later zero-byte Cleanup-set
+tile-header state, irreversible coding outside the bounded reduced route below,
+HTMIX/HT-declared population modes and a cleanup magnitude bound above 18 fail
+closed. A later zero-byte Cleanup-set
 announcement counts as an actual second set once the first non-empty set has
 appeared; leading zero-byte placeholders do not. Native admission walks the
 complete packet source but retains only the first and latest set once this
 unsupported multiplicity is known. Packet contradictions are
 still validity errors before unsupported-mechanism admission.
 
-The native partial API has one HT-owned reduced transformed-component route.
+The native partial API has one HT-owned reduced transformed-component request
+with reversible and irreversible reconstruction branches.
 After the same structural and effective-mechanism stages, it admits a raw,
 origin-aligned single tile containing three matching unsigned 8-bit,
-unit-sampled components, reversible MCT, one-layer LRCP packets and five
-reversible 5/3 decomposition levels. A request must select component 0, discard
-exactly two levels and use planar output without a region, tile or layer limit.
+unit-sampled components, MCT, one-layer LRCP packets and five decomposition
+levels. The reversible branch requires 5/3 and the established no-quantisation
+QCD contract. The irreversible branch requires 9/7 and exactly one main-header
+scalar-derived QCD; QCC and tile-header quantisation state remain excluded. A
+request must select component 0, discard exactly two levels and use planar
+output without a region, tile or layer limit.
 Packet walking reuses the existing single-effective-precinct inline-header
 route, including signalled SOP and EPH; packed headers remain excluded. Packet
 parsing still validates the complete source, while entropy and
 coefficient work is retained only through resolution 3 for component 0. Three
-inverse-DWT levels reconstruct the checked reduced geometry, and publication
-occurs before inverse RCT. Ordinary full HT decode retains its existing inverse
-DWT and inverse RCT behaviour. One HT-owned prepared plan supplies the checked
-geometry to the public metadata and component-descriptor APIs and retains the
-same packet contributions for owned decode; no geometry is published before
-complete structural and effective-mechanism admission. This mechanism is owned
-by the HT decomposed path and does not reuse the raw Part 1 selective planner.
+inverse-DWT levels reconstruct the checked reduced geometry. Reversible HT
+coefficients retain the existing transfer and 5/3 synthesis. Irreversible HT
+coefficients remain raw signed `i32` values, are placed into a reduced `f32`
+plane with the resolved subband gain and `0.5 × Delta_b`, then use the existing
+9/7 synthesis and finite, ties-to-even, level-shift and clamp conversion.
+Publication occurs before inverse colour transformation. Ordinary full HT
+decode retains its existing inverse-DWT and inverse-RCT behaviour. One HT-owned
+prepared plan supplies the checked geometry to the public metadata and
+component-descriptor APIs and retains the same packet contributions for owned
+decode; no geometry is published before complete structural and
+effective-mechanism admission. Full-image support classification remains
+unsupported for the irreversible profile; only the exact partial request owns
+this admission. This mechanism is owned by the HT decomposed path and does not
+reuse the raw Part 1 selective planner.
 Before packet-state construction, checked reduced geometry is limited to 16 Mi
 component samples, matching the native profile component bound. The retained
-`i32` plane and transform scratch use fallible reservation, so oversized SIZ
-declarations and allocation failure remain structured decoder errors rather
-than process-aborting allocation attempts.
+`i32` or `f32` plane and transform scratch use fallible reservation, so
+oversized SIZ declarations and allocation failure remain structured decoder
+errors rather than process-aborting allocation attempts.
 
 This boundary follows ISO/IEC 15444-15:2019, clauses 6.1 and 8.3, normative
 Annex A, A.1–A.4, and Annex B, B.3, PDF pages 10, 31 and 35–41, at retrieval

@@ -766,6 +766,10 @@ mod htj2k_reduced_component_tests {
         .unwrap()
     }
 
+    fn irreversible_fixture() -> Vec<u8> {
+        codestream::encode_htj2k_irreversible_reduced_component_test_fixture().unwrap()
+    }
+
     fn options() -> PartialDecodeOptions {
         PartialDecodeOptions {
             resolution: ResolutionLevel::Reduced { discard_levels: 2 },
@@ -803,6 +807,81 @@ mod htj2k_reduced_component_tests {
         decode_partial_into(&input, &mut target, &options).unwrap();
         assert_eq!(caller, owned_planes[0]);
         assert!(caller.iter().any(|sample| *sample != caller[0]));
+    }
+
+    #[test]
+    fn public_irreversible_owned_metadata_component_and_caller_routes_agree() {
+        let input = irreversible_fixture();
+        let options = options();
+        let inspected = inspect(&input, &InspectOptions::default()).unwrap();
+        assert_eq!(inspected.format, InputFormat::Htj2kCodestream);
+        assert_eq!(
+            inspected.codestream.as_ref().unwrap().transform,
+            Some(WaveletTransform::Irreversible97)
+        );
+        assert!(matches!(
+            inspected.support,
+            SupportStatus::Unsupported {
+                feature: UnsupportedFeature::WaveletTransform,
+                ..
+            }
+        ));
+        let info = decode_partial_info(&input, &options).unwrap();
+        assert_eq!((info.width, info.height, info.components), (5, 10, 1));
+        assert_eq!(info.sample_format, SampleFormat::U8);
+        assert_eq!(info.color_model, ColorModel::Unknown);
+        let component_info = decode_partial_component_info(&input, &options).unwrap();
+        assert_eq!(component_info.len(), 1);
+        assert_eq!(component_info[0].source_component, Some(0));
+        assert_eq!((component_info[0].width, component_info[0].height), (5, 10));
+
+        let owned = decode_partial(&input, &options).unwrap();
+        let ImageData::Planes(owned_planes) = &owned.data else {
+            panic!("bounded reduced irreversible HT output was not planar")
+        };
+        assert_eq!(
+            owned_planes[0],
+            [
+                109, 133, 138, 138, 111, 161, 105, 122, 134, 120, 126, 124, 137, 130, 132, 130,
+                118, 143, 138, 98, 127, 130, 125, 124, 131, 169, 113, 114, 153, 118, 129, 119, 122,
+                135, 134, 120, 119, 142, 139, 95, 124, 130, 129, 123, 126, 144, 115, 119, 143, 118,
+            ]
+        );
+        let mut caller = vec![0x5a_u8; 5 * 10];
+        let mut planes = [PlaneMut::new(&mut caller, 5, 10, 5, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &info,
+            planes: &mut planes,
+        };
+        decode_partial_into(&input, &mut target, &options).unwrap();
+        assert_eq!(caller, owned_planes[0]);
+    }
+
+    #[test]
+    fn public_irreversible_malformed_qcd_preserves_caller_plane() {
+        let mut input = irreversible_fixture();
+        let options = options();
+        let valid_info = decode_partial_info(&input, &options).unwrap();
+        let qcd = codestream::parse(&input)
+            .unwrap()
+            .markers
+            .iter()
+            .find(|segment| segment.marker == codestream::Marker::Qcd)
+            .unwrap()
+            .offset;
+        input[qcd + 4] = (input[qcd + 4] & !0x1f) | 2;
+        assert!(decode_partial_info(&input, &options).is_err());
+        assert!(decode_partial_component_info(&input, &options).is_err());
+        assert!(decode_partial(&input, &options).is_err());
+
+        let mut caller = vec![0x6d_u8; 5 * 10];
+        let mut planes = [PlaneMut::new(&mut caller, 5, 10, 5, SampleFormat::U8).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info: &valid_info,
+            planes: &mut planes,
+        };
+        assert!(decode_partial_into(&input, &mut target, &options).is_err());
+        assert!(caller.iter().all(|sample| *sample == 0x6d));
     }
 
     #[test]
@@ -4423,8 +4502,9 @@ pub enum ComponentSelection {
 /// Scoped partial decode request. Unsupported combinations must fail explicitly.
 ///
 /// Native HTJ2K currently admits one reduced transformed-component shape:
-/// planar component 0 at two discarded levels from the documented reversible
-/// five-level HTONLY profile. It returns the plane before inverse RCT.
+/// planar component 0 at two discarded levels from either documented
+/// five-level HTONLY transform branch. It returns the plane before inverse
+/// colour transformation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialDecodeOptions {
     /// Non-empty full-resolution image-relative reference-grid rectangle.
