@@ -60,6 +60,16 @@ sampling. No resampling is performed. JPH, rendered/interleaved output, MCT,
 other transform phases, regions, reductions and layer limits are outside this
 route.
 
+The same native-grid preparation also admits three matching unsigned 8-bit
+sampled components with reversible MCT across one to 64 tiles, one part per
+tile. Each native tile-component origin must be aligned to eight samples;
+the three-level, one-to-six-layer LRCP and single-precinct limits above still
+apply. Explicitly select component zero in planar component mode to obtain
+the transformed codestream component before inverse RCT. All-component output,
+other selections, RGB presentation and JPH remain unsupported for this branch.
+Native tile bounds are assembled without resampling. The aggregate native
+component sample count is limited to 16 Mi samples before packet preparation.
+
 Native partial component output adds two bounded HTONLY reconstruction branches
 behind one request shape. A raw origin-aligned single-tile codestream with five
 decomposition levels and one-layer LRCP packets on the existing

@@ -138,6 +138,31 @@ No rendered resampling, JPH projection, MCT, multi-tile composition, ROI,
 tile-header overrides, reductions or layer limits are admitted. The existing
 unit-sampled lossless and reduced classifiers retain their boundaries.
 
+A second shape uses this prepared grid mechanism for three matching unsigned
+8-bit sampled components with reversible MCT and one to 64 tiles. It admits
+exactly one complete part per tile, the same homogeneous three-level coding
+style and effective reversible quantisation, and one native precinct per
+component/resolution/tile. Every absolute tile-component origin must align to
+eight samples; image-edge clipping may produce smaller final tiles. Aggregate
+native component samples are bounded to 16 Mi before packet preparation.
+Tile payloads and admitted contributions remain paired in the prepared plan.
+Only component zero undergoes HT entropy decoding and inverse DWT; the checked
+native tile rectangles place its samples into a privately allocated image
+plane. The other components' packet grammar is still validated.
+
+This branch requires explicit planar component-zero selection and publishes
+the transformed codestream component before inverse RCT. It does not decode
+display RGB and then attempt to recover luminance after clipping. All-component
+output, other selectors, rendered resampling, JPH, ROI, heterogeneous tile
+state, reductions and layer limits remain excluded. The original one-component
+shape is still single-tile and permits either all or component-zero selection.
+Geometry follows ISO/IEC 15444-1:2024, B.2/B.3 and F.1–F.3 (physical pages
+80–82 and 132–133); the matching-grid RCT requirements are in G.2 (page 154),
+retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`. The native transformed
+component comparison is distinct from full image reconstruction, as described
+by ISO/IEC 15444-4:2024, B.2.3.1.2 and B.2.5 (pages 25–26), retrieval
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
+
 Leading placeholder-only layered HT contributions consume a complete
 zero-length field covering their announced passes before the next block's
 header. This repairs packet alignment without treating placeholders as actual
