@@ -70,7 +70,7 @@ other selections, RGB presentation and JPH remain unsupported for this branch.
 Native tile bounds are assembled without resampling. The aggregate native
 component sample count is limited to 16 Mi samples before packet preparation.
 
-Native partial component output adds two bounded HTONLY reconstruction branches
+Native partial component output adds bounded HTONLY reconstruction branches
 behind one request shape. A raw origin-aligned single-tile codestream with five
 decomposition levels and one-layer LRCP packets on the existing
 single-effective-precinct inline-header route may select transformed component
@@ -84,6 +84,18 @@ colour transformation. JPH, rendered output, other selections or reductions,
 regions, tile requests, quality-layer limits, heterogeneous coding or
 quantisation, ROI, HTMIX and other irreversible HT shapes remain unsupported by
 this route.
+
+A separate reduction-three request selects transformed component zero from a
+raw zero-origin single tile/part with three matching unsigned 8-bit unit-sampled
+components, MCT, six 9/7 levels, twenty RLCP layers, 64×64 HTONLY blocks and
+explicit 128×128 precincts at every resolution. Main QCD and optional QCC
+resolve to scalar-expounded quantisation for every component. The shared packet
+walker validates all layers, components and precincts; reconstruction retains
+component zero through resolution three, before inverse ICT. The reference
+image is bounded to 16 Mi samples per component before packet preparation.
+Only planar component-zero output without a region, tile or layer limit is
+admitted. JPH, rendered output, other reductions, COC, tile-header overrides,
+ROI, packed/inline packet markers and HTMIX remain outside this branch.
 
 JPH inspection enforces the bounded Annex D signature, `jph ` file type and
 `jph ` compatibility membership,

@@ -10952,16 +10952,32 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
     component_count: u16,
     multiple_component_transform: bool,
 ) -> Result<Vec<u8>> {
-    const WIDTH: u32 = 17;
-    const HEIGHT: u32 = 37;
-    const LEVELS: u8 = 5;
+    encode_ht_irreversible_reduced_fixture(component_count, multiple_component_transform, 17, 37, 5)
+}
+
+/// Project-authored six-level RLCP fixture; not an application encode profile.
+#[doc(hidden)]
+pub fn encode_htj2k_six_level_reduced_component_test_fixture(
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>> {
+    encode_ht_irreversible_reduced_fixture(3, true, width, height, 6)
+}
+
+fn encode_ht_irreversible_reduced_fixture(
+    component_count: u16,
+    multiple_component_transform: bool,
+    width: u32,
+    height: u32,
+    levels: u8,
+) -> Result<Vec<u8>> {
     const QCD_GUARD_BITS: u8 = 2;
     const QCD_BASE_EXPONENT: u8 = 8;
 
-    let specs = decomp_subband_specs(WIDTH, HEIGHT, LEVELS)?;
-    let plane_len = checked_component_sample_count(WIDTH, HEIGHT)?;
+    let specs = decomp_subband_specs(width, height, levels)?;
+    let plane_len = checked_component_sample_count(width, height)?;
     let mut component_zero = alloc::vec![0_i32; plane_len];
-    let stride = usize::try_from(WIDTH).map_err(|_| CodestreamError::SizeOverflow)?;
+    let stride = usize::try_from(width).map_err(|_| CodestreamError::SizeOverflow)?;
     for spec in specs.iter().filter(|spec| spec.resolution <= 3) {
         let start_x = usize::try_from(spec.x).map_err(|_| CodestreamError::SizeOverflow)?;
         let start_y = usize::try_from(spec.y).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -10989,7 +11005,7 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
             }
         }
     }
-    let empty = alloc::vec![0_i32; plane_len];
+    let empty = alloc::vec![if levels == 6 { 2_i32 } else { 0_i32 }; plane_len];
     let qcd_steps = specs
         .iter()
         .enumerate()
@@ -11028,7 +11044,7 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
         let mut subbands = Vec::with_capacity(specs.len());
         for (spec, available_bitplanes) in specs.iter().zip(&available_bitplanes) {
             subbands.push(encode_ht_decomp_subband(
-                WIDTH,
+                width,
                 plane,
                 *spec,
                 *available_bitplanes,
@@ -11038,19 +11054,96 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
         component_subbands.push(subbands);
     }
     let mut packet = Vec::new();
-    write_native_decomp_packets(&mut packet, LEVELS, &component_subbands, &segments)?;
+    if levels == 6 {
+        // RLCP: each resolution carries all twenty layers, then each
+        // component and spatial precinct. Delayed first contributions prove
+        // that an empty earlier packet does not discard later block state.
+        for resolution in 0..=levels {
+            let (width, height) = resolution_dimensions(width, height, levels, resolution)?;
+            for layer in 0..20 {
+                for subbands in &component_subbands {
+                    for py in 0..ceil_div(height, 128)? {
+                        for px in 0..ceil_div(width, 128)? {
+                            if layer != u16::from(resolution) * 3 {
+                                packet.push(0);
+                                continue;
+                            }
+                            let blocks_per_axis = if resolution == 0 { 2 } else { 1 };
+                            let mut precinct_subbands = Vec::new();
+                            for subband in subbands
+                                .iter()
+                                .filter(|subband| subband.resolution == resolution)
+                            {
+                                let mut precinct = subband.clone();
+                                precinct.code_blocks.retain(|block| {
+                                    u32::from(block.x) / blocks_per_axis == px
+                                        && u32::from(block.y) / blocks_per_axis == py
+                                });
+                                if precinct.code_blocks.is_empty() {
+                                    continue;
+                                }
+                                let x0 = precinct
+                                    .code_blocks
+                                    .iter()
+                                    .map(|block| block.x)
+                                    .min()
+                                    .unwrap();
+                                let y0 = precinct
+                                    .code_blocks
+                                    .iter()
+                                    .map(|block| block.y)
+                                    .min()
+                                    .unwrap();
+                                for block in &mut precinct.code_blocks {
+                                    block.x -= x0;
+                                    block.y -= y0;
+                                }
+                                precinct.code_block_cols = precinct
+                                    .code_blocks
+                                    .iter()
+                                    .map(|block| block.x)
+                                    .max()
+                                    .unwrap()
+                                    + 1;
+                                precinct.code_block_rows = precinct
+                                    .code_blocks
+                                    .iter()
+                                    .map(|block| block.y)
+                                    .max()
+                                    .unwrap()
+                                    + 1;
+                                precinct_subbands.push(precinct);
+                            }
+                            // The ordinary writer emits exactly one packet
+                            // when given only this resolution's subbands.
+                            let mut one = Vec::new();
+                            write_native_decomp_packets(
+                                &mut one,
+                                resolution,
+                                &[precinct_subbands],
+                                &segments,
+                            )?;
+                            packet.extend_from_slice(&one[usize::from(resolution)..]);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        write_native_decomp_packets(&mut packet, levels, &component_subbands, &segments)?;
+    }
 
     let mut codestream = Vec::new();
     write_native_main_header(
         &mut codestream,
-        WIDTH,
-        HEIGHT,
-        WIDTH,
-        HEIGHT,
+        width,
+        height,
+        width,
+        height,
         8,
         component_count,
         multiple_component_transform,
-        LEVELS,
+        levels,
         &available_bitplanes,
         true,
         0,
@@ -11090,10 +11183,30 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
         replacement.extend_from_slice(&packed_step.to_be_bytes());
     }
     codestream.splice(qcd..qcd + 2 + old_qcd_len, replacement);
+    if levels == 6 {
+        let qcd = find_marker(&codestream, 0, Marker::Qcd).ok_or(CodestreamError::SizeOverflow)?;
+        let qcd_len = usize::from(read_u16(&codestream, qcd + 2)?);
+        let body = codestream[qcd + 4..qcd + 2 + qcd_len].to_vec();
+        for component in 0..3 {
+            codestream.extend_from_slice(&[0xff, 0x5d]);
+            codestream.extend_from_slice(
+                &u16::try_from(qcd_len + 1)
+                    .map_err(|_| CodestreamError::SizeOverflow)?
+                    .to_be_bytes(),
+            );
+            codestream.push(component);
+            codestream.extend_from_slice(&body);
+        }
+        let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+        codestream[cod + 2..cod + 4].copy_from_slice(&19_u16.to_be_bytes());
+        codestream[cod + 4] = 1;
+        codestream[cod + 5] = 1;
+        codestream[cod + 6..cod + 8].copy_from_slice(&20_u16.to_be_bytes());
+        codestream.splice(cod + 14..cod + 14, [0x77; 7]);
+    }
     write_tile_part(&mut codestream, 0, &packet, true)?;
     Ok(codestream)
 }
-
 /// Build a header-complete five-level reversible-MCT HTJ2K fixture whose
 /// declared SIZ geometry is paired with empty LRCP packets.
 ///
@@ -13297,12 +13410,12 @@ fn decomp_subband_specs(
     height: u32,
     decomposition_levels: u8,
 ) -> Result<Vec<DecompSubbandSpec>> {
-    if !(1..=5).contains(&decomposition_levels) {
+    if !(1..=6).contains(&decomposition_levels) {
         return Err(unsupported(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::PacketDecode,
-            "native decomposition subband helper supports one through five levels",
+            "native decomposition subband helper supports one through six levels",
         ));
     }
     let expected = 1usize
@@ -28999,6 +29112,7 @@ enum ComponentPacketProfile {
 enum ExplicitPrecinctPermission {
     None,
     ValidatedProfile0P004,
+    HtSixLevelReduced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29033,6 +29147,10 @@ struct PacketOrganisationConfig {
 
 impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    const HT_SIX_LEVEL_REDUCED: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtSixLevelReduced,
+        ..Self::DEFAULT
+    };
     // The exact public-route validator is the only production caller that
     // grants this permission. The shared parser independently rechecks the
     // selected grid before constructing packet topology.
@@ -31529,6 +31647,11 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
+    if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtSixLevelReduced
+    {
+        return ht_six_level_reduced_envelope(codestream);
+    }
     let bounded_heterogeneous_single_precincts = (packet_organisation
         .heterogeneous_single_precinct_permission
         != HeterogeneousSinglePrecinctPermission::None
@@ -48237,6 +48360,11 @@ fn ht_decode_candidate_with_permissions(
     caller_owns_component_grid: bool,
 ) -> Option<core::result::Result<HtCodestreamDecodeCandidate, ht::HtClassification>> {
     let mut marker_state = ht_marker_state(codestream)?;
+    if allow_irreversible_transform && ht_six_level_reduced_envelope(codestream) {
+        // This HT-owned envelope proves the packet grid independently. The
+        // block coder only receives already placed, bounded code-blocks.
+        marker_state.precincts_declared = false;
+    }
     if caller_owns_component_grid {
         marker_state.precincts_declared =
             !uniform_effective_coding_style(codestream).is_ok_and(|style| {
@@ -49775,8 +49903,152 @@ mod htj2k_native_component_grid_tests {
     }
 }
 
-/// Prepare transformed component zero from the bounded five-level reversible
-/// or irreversible HTONLY profile at two discarded resolution levels.
+// A separate HT-owned envelope: it grants neither Part 1 selective admission
+// nor full-image HT decode. The full-grid bound also caps packet topology work
+// before reduced allocation; it is project policy, not a standards limit.
+fn ht_six_level_reduced_envelope(codestream: &Codestream) -> bool {
+    let Some(style) = codestream.uniform_effective_coding_style() else {
+        return false;
+    };
+    codestream.kind == CodestreamKind::Htj2k
+        && codestream.siz.components.len() == 3
+        && codestream.siz.components.iter().all(|component| {
+            component.bits_per_sample == 8
+                && !component.signed
+                && component.horizontal_separation == 1
+                && component.vertical_separation == 1
+        })
+        && codestream.siz.image_origin_x == 0
+        && codestream.siz.image_origin_y == 0
+        && codestream.siz.tile_origin_x == 0
+        && codestream.siz.tile_origin_y == 0
+        && codestream.siz.tile_count_x() == Ok(1)
+        && codestream.siz.tile_count_y() == Ok(1)
+        && u64::from(codestream.image_width()) * u64::from(codestream.image_height())
+            <= MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES
+        && codestream.tiles.len() == 1
+        && codestream.component_coding_styles.is_empty()
+        && style.entropy_coder == EntropyCoder::HtBlockCoding
+        && style.transform == WaveletTransform::Irreversible97
+        && style.decomposition_levels == 6
+        && style.multiple_component_transform
+        && style.progression_order == ProgressionOrder::Rlcp
+        && style.layers == 20
+        && style.code_block_style == 0x40
+        && style.code_block_width_exponent == 6
+        && style.code_block_height_exponent == 6
+        && style.precincts_declared
+        && style.precinct_exponents[..=6]
+            .iter()
+            .all(|&value| value == 0x77)
+        && !style.sop_markers
+        && !style.eph_markers
+        && ht_six_level_reduced_markers(codestream.markers.iter())
+}
+
+// Consume marker state once. In particular, comments are unbounded in count;
+// locating SOT afresh for each comment would make admission quadratic.
+fn ht_six_level_reduced_markers<'a>(markers: impl Iterator<Item = &'a MarkerSegment>) -> bool {
+    let mut in_tile = false;
+    let mut qcd_count = 0;
+    for segment in markers {
+        match segment.marker {
+            Marker::Sot => in_tile = true,
+            Marker::Cod | Marker::Qcc if !in_tile => {}
+            Marker::Qcd if !in_tile => qcd_count += 1,
+            Marker::Soc
+            | Marker::Siz
+            | Marker::Cap
+            | Marker::Cpf
+            | Marker::Com
+            | Marker::Sod
+            | Marker::Eoc => {}
+            _ => return false,
+        }
+    }
+    in_tile && qcd_count == 1
+}
+
+#[cfg(feature = "std")]
+fn prepare_ht_six_level_reduced_component(
+    input: &[u8],
+    codestream: Codestream,
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<PreparedHtj2kReducedComponentDecode<'_>> {
+    if !ht_six_level_reduced_envelope(&codestream) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "HT reduction three requires the bounded six-level, twenty-layer RLCP irreversible MCT envelope",
+        ));
+    }
+    validate_part15_packet_signalling(input, &codestream)?;
+    classify_htj2k_reduced_component_profile_markers(&codestream)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    let coding_style = uniform_effective_coding_style(&codestream)?;
+    let quantization = parse_component_quantization(input, &codestream, 19)?;
+    if quantization
+        .iter()
+        .any(|component| component.style != transform::QuantizationStyle::ScalarExpounded)
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcd),
+            UnsupportedConstruct::MarkerSegment,
+            "HT reduction three requires effective scalar-expounded quantisation for every component",
+        ));
+    }
+    let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
+    let (_, output_width, output_height, _) =
+        htj2k_reduced_component_output_geometry(tile_rect.width, tile_rect.height, 6, request)?;
+    let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
+        input,
+        &codestream,
+        tile_rect,
+        &ContiguousPacketSource { bytes: payload },
+        None,
+        None,
+        None,
+        PacketOrganisationConfig::HT_SIX_LEVEL_REDUCED,
+        None,
+        HtCodingSetRetention::NativeAdmission,
+    )?
+    .contributions;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    let candidate = ht_decode_candidate_with_transform_permission(&codestream, true)
+        .ok_or(CodestreamError::SizeOverflow)?
+        .map_err(|classification| {
+            unsupported(
+                None,
+                None,
+                ht_construct_from_reason(classification.reason),
+                classification.reason.message(),
+            )
+        })?;
+    Ok(PreparedHtj2kReducedComponentDecode {
+        input,
+        codestream,
+        candidate,
+        coding_style,
+        reconstruction: Htj2kReducedComponentReconstruction::Irreversible,
+        tile_rect,
+        contributions: contributions
+            .into_iter()
+            .filter(|contribution| {
+                contribution.component_index == 0 && contribution.resolution <= 3
+            })
+            .collect(),
+        request,
+        output_width,
+        output_height,
+    })
+}
+
+/// Prepare transformed component zero from the bounded five-level profiles
+/// at reduction two, or the six-level irreversible RLCP profile at reduction
+/// three. Neither request performs an inverse colour transform.
 ///
 /// Preparation validates structural Part 15 signalling, effective packet
 /// mechanisms and all profile declarations, then retains the admitted packet
@@ -49790,6 +50062,9 @@ pub fn prepare_htj2k_reduced_component_decode(
     let codestream = parse(input)?;
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
+    }
+    if request.component_index == 0 && request.discard_levels == 3 {
+        return prepare_ht_six_level_reduced_component(input, codestream, request).map(Some);
     }
     if request.component_index != 0 || request.discard_levels != 2 {
         return Err(unsupported(
@@ -50261,8 +50536,8 @@ fn decode_htj2k_reduced_irreversible_component(
     ))
 }
 
-/// Decode transformed component zero from the bounded five-level reversible
-/// or irreversible HTONLY profile at two discarded resolution levels.
+/// Decode transformed component zero from the bounded five-level profiles
+/// at reduction two or six-level irreversible RLCP profile at reduction three.
 ///
 /// The selected plane is returned before inverse colour transformation.
 /// Structural Part 15
@@ -50461,6 +50736,161 @@ mod htj2k_reduced_component_tests {
                 158, 95, 98, 159, 155, 56, 97, 124, 133, 113, 112, 143, 88, 111, 158, 91,
             ]
         );
+    }
+
+    #[test]
+    fn six_level_reduced_rlcp_precincts_match_independent_coefficient_oracle() {
+        for (width, height) in [(17, 37), (529, 401), (1025, 769)] {
+            let input =
+                encode_htj2k_six_level_reduced_component_test_fixture(width, height).unwrap();
+            let request = Htj2kReducedComponentDecodeRequest {
+                component_index: 0,
+                discard_levels: 3,
+            };
+            let prepared = prepare_htj2k_reduced_component_decode(&input, request)
+                .unwrap()
+                .unwrap();
+            let quantization =
+                parse_component_quantization(&input, &prepared.codestream, 19).unwrap();
+            assert!(
+                prepared
+                    .contributions
+                    .iter()
+                    .all(|block| block.component_index == 0 && block.resolution <= 3)
+            );
+            let (ow, oh) = (width.div_ceil(8), height.div_ceil(8));
+            assert_eq!(
+                (prepared.output_width(), prepared.output_height()),
+                (ow, oh)
+            );
+            let mut oracle = vec![0.0_f32; (ow * oh) as usize];
+            // Independent coefficient-domain oracle: no entropy decoder,
+            // parsed contribution placement or HT normalisation helper.
+            for spec in decomp_subband_specs(width, height, 6)
+                .unwrap()
+                .iter()
+                .filter(|spec| spec.resolution <= 3)
+            {
+                let gain = match spec.kind {
+                    PacketSubbandKind::LowLow => 0,
+                    PacketSubbandKind::HighHigh => 2,
+                    _ => 1,
+                };
+                let step = quantization[0].steps[usize::from(spec.index)];
+                let delta = step.delta(8, gain).unwrap();
+                for y in 0..spec.height {
+                    for x in 0..spec.width {
+                        let ordinal = (y * spec.width + x) as usize + usize::from(spec.index);
+                        let sign = if ordinal.is_multiple_of(2) { 1.0 } else { -1.0 };
+                        oracle[((spec.y + y) * ow + spec.x + x) as usize] =
+                            sign * ((ordinal % 5 + 1) as f32 + 0.5) * delta;
+                    }
+                }
+            }
+            let mut scratch = vec![0.0; ow.max(oh) as usize * 2];
+            inverse_irreversible_9_7_levels_with_scratch(
+                &mut oracle,
+                ow as usize,
+                ow,
+                oh,
+                3,
+                &mut scratch,
+            )
+            .unwrap();
+            let expected = irreversible_component_samples_to_bytes(
+                &prepared.codestream.siz.components[0],
+                &oracle,
+            )
+            .unwrap();
+            let decoded = decode_htj2k_reduced_component_owned(&input, request)
+                .unwrap()
+                .unwrap();
+            assert_eq!(decoded.components[0].samples, expected, "{width}x{height}");
+            assert!(
+                decoded.components[0]
+                    .samples
+                    .windows(2)
+                    .any(|pair| pair[0] != pair[1])
+            );
+        }
+    }
+
+    #[test]
+    fn six_level_reduced_quantisation_precedence_and_unselected_components() {
+        let input = encode_htj2k_six_level_reduced_component_test_fixture(145, 137).unwrap();
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 3,
+        };
+        let decode = |bytes: &[u8]| {
+            decode_htj2k_reduced_component_owned(bytes, request)
+                .unwrap()
+                .unwrap()
+        };
+        let original = decode(&input);
+        let parsed = parse(&input).unwrap();
+        let qcd = parsed
+            .markers
+            .iter()
+            .find(|marker| marker.marker == Marker::Qcd)
+            .unwrap()
+            .offset;
+        let qccs = parsed
+            .markers
+            .iter()
+            .filter(|marker| marker.marker == Marker::Qcc)
+            .map(|marker| marker.offset)
+            .collect::<Vec<_>>();
+        let mut unused = input.clone();
+        unused[qcd + 6] ^= 0x7f;
+        unused[qccs[1] + 7] ^= 0x7f;
+        unused[qccs[2] + 7] ^= 0x7f;
+        assert_eq!(
+            decode(&unused),
+            original,
+            "neither unused default nor chroma changes component zero"
+        );
+        let mut selected = input.clone();
+        for offset in (qccs[0] + 7..qccs[0] + 43).step_by(2) {
+            selected[offset] ^= 0xff;
+        }
+        assert_ne!(
+            decode(&selected),
+            original,
+            "selected effective QCC affects the numerical seam"
+        );
+        let mut malformed_unselected = input.clone();
+        malformed_unselected[qccs[2] + 5] |= 3;
+        assert!(prepare_htj2k_reduced_component_decode(&malformed_unselected, request).is_err());
+        let mut late_packet = input.clone();
+        let tile = parsed.tiles[0];
+        late_packet[tile.payload_offset.unwrap() + tile.payload_len.unwrap() - 1] = 0xff;
+        assert!(prepare_htj2k_reduced_component_decode(&late_packet, request).is_err());
+    }
+
+    #[test]
+    fn six_level_reduced_marker_inventory_has_linear_counted_work() {
+        let original = encode_htj2k_six_level_reduced_component_test_fixture(17, 37).unwrap();
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 3,
+        };
+        let expected = decode_htj2k_reduced_component_owned(&original, request).unwrap();
+        for comments in [1_000, 2_000, 4_000, 8_000] {
+            let mut input = original.clone();
+            let sot = find_marker(&input, 0, Marker::Sot).unwrap();
+            input.splice(sot..sot, [0xff, 0x64, 0, 4, 0, 1].repeat(comments));
+            let parsed = parse(&input).unwrap();
+            let mut visited = 0;
+            assert!(ht_six_level_reduced_markers(
+                parsed.markers.iter().inspect(|_| visited += 1)
+            ));
+            assert_eq!(visited, parsed.markers.len());
+            assert_eq!(
+                decode_htj2k_reduced_component_owned(&input, request).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -52258,7 +52688,11 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
             None,
             None,
             None,
-            PacketOrganisationConfig::DEFAULT,
+            if ht_six_level_reduced_envelope(codestream) {
+                PacketOrganisationConfig::HT_SIX_LEVEL_REDUCED
+            } else {
+                PacketOrganisationConfig::DEFAULT
+            },
             None,
         ) && matches!(
             &error,

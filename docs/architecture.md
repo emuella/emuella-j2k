@@ -65,8 +65,8 @@ complete packet source but retains only the first and latest set once this
 unsupported multiplicity is known. Packet contradictions are
 still validity errors before unsupported-mechanism admission.
 
-The native partial API has one HT-owned reduced transformed-component request
-with reversible and irreversible reconstruction branches.
+The native partial API has an HT-owned reduction-two transformed-component
+request with reversible and irreversible reconstruction branches.
 After the same structural and effective-mechanism stages, it admits a raw,
 origin-aligned single tile with one-layer LRCP packets and five decomposition
 levels. The reversible branch requires three matching unsigned 8-bit,
@@ -112,6 +112,40 @@ tests are project-authored and reproduce no protected standards text or
 payload.
 
 ## Native HTONLY component grids
+
+### Six-level irreversible reduced component
+
+The additional reduction-three branch owns its admission independently of the
+Part 1 selective profiles and the five-level HT branch. It requires one
+zero-origin tile/part, three matching unsigned 8-bit unit-sampled components,
+MCT, six 9/7 levels, twenty RLCP layers, 64×64 HTONLY blocks, and explicit
+128×128 precincts at all resolutions. Only main-header scalar-expounded QCD
+and optional QCC are admitted; quantisation resolves for every component,
+including unselected components. COC, tile overrides, ROI, progression changes,
+packet markers/relocation and registration remain excluded.
+
+An HT-owned packet permission is independently rechecked by the shared walker;
+it does not grant the classic P0.04 capability or broaden full-image HT support.
+The block coder is precinct-neutral only after that envelope is established.
+All packets are validated, with at most the first and latest HT sets retained
+during admission; actual multiple sets remain unsupported. Reconstruction
+retains only component zero through resolution three and reuses the existing
+half-step dequantisation and three-level 9/7 seam. No inverse ICT is performed.
+Metadata and caller-owned routes share the prepared plan, with owned
+reconstruction completing before caller publication. The full reference plane
+is limited to 16 Mi samples before packet topology; the existing packet-count,
+precinct-state, reduced-plane and fallible-allocation limits also apply.
+
+The changed packet and quantisation envelope follows ISO/IEC 15444-1:2024,
+A.6.1/A.6.4/A.6.5 and B.12.1.2 (physical pages 46–47, 52–53 and 96), at
+retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`. Matching-grid ICT
+conditions are in G.3 (pages 154–155). Transformed component-zero qualification
+is distinct from display RGB, following ISO/IEC 15444-4:2024 B.2.3.1.2 and
+B.2.5 (pages 25–26), retrieval
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. All implementation and synthetic
+fixtures are project-authored; no protected payload or pixels are embedded.
+
+### Full native grids
 
 The full native component-grid route has its own prepared admission plan. It
 requires one unsigned 8-bit non-unit-sampled component, one tile and tile-part,

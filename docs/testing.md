@@ -265,6 +265,21 @@ A, A.6.1 and Table A.15, PDF pages 46–48, at retrieval revision
 `34e5d1639b9f121807e620c001893ca9d2c8f977`. All mutations, samples and
 assertions are project-authored.
 
+The six-level irreversible HT branch has independent synthetic probes at
+17×37, 529×401 and 1025×769, including clipped precinct edges and a retained
+output wider than one precinct. Varied signed LL/HL/LH/HH coefficients are
+compared with an independently assembled coefficient-domain oracle through
+three 9/7 synthesis levels. Twenty-layer RLCP packets delay first non-empty
+contributions by resolution; other components carry non-zero coefficients.
+Main QCC overrides component zero as well as the two unselected components.
+Changing overridden QCD or unselected QCC mantissas must not change the selected
+output; changing component-zero QCC must change it. Malformed unselected
+quantisation and a malformed final packet fail before metadata publication.
+Public tests cover exact geometry, descriptors, padded caller rows, full-image
+classifier separation, JPH, neighbouring requests/styles, and oversized SIZ
+rejection without caller mutation. The five-level numerical and atomicity
+regressions remain unchanged.
+
 The codec-owned derived-set runner consumes the pinned catalogue DS0 contract
 and the capability claim in `testdata.lock.toml`:
 
