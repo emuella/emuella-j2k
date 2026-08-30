@@ -121,7 +121,7 @@ the codestream bytes; external decoder interoperability remains a separate
 authorised black-box qualification.
 
 The standards and provenance basis is the bounded route recorded under
-“Bounded raw reversible HTJ2K encode” in `architecture.md`. All fixtures,
+"Bounded reversible HTJ2K encode and JPH output" in `architecture.md`. All fixtures,
 patterns and assertions are project-authored. The ordinary suite neither
 invokes an external codec nor retains external payloads or diagnostics.
 Private authorised black-box qualification under registered campaign scratch
