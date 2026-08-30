@@ -24,6 +24,8 @@ use core::fmt;
 pub use emuella_j2k_codestream as codestream;
 pub use emuella_j2k_container as container;
 #[cfg(feature = "std")]
+mod ht_high_component;
+#[cfg(feature = "std")]
 mod ht_roi;
 
 pub const PROJECT_NAME: &str = "emuella-j2k";
@@ -5874,6 +5876,9 @@ pub fn decode_htj2k_with_workspace(
     let metadata = inspect(input, &InspectOptions::default())?;
     let native_component_grid =
         validate_htj2k_native_component_grid_request(input, &metadata, options)?;
+    if let Some(image) = ht_high_component::decode(input, options, workspace)? {
+        return Ok(Some(image));
+    }
     if native_component_grid.is_none()
         && !matches!(options.requested_components, ComponentSelection::All)
     {
@@ -5975,6 +5980,10 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
         });
     }
 
+    #[cfg(feature = "std")]
+    if let Some(shape) = ht_high_component::shape(input, &metadata, options)? {
+        return Ok(shape);
+    }
     if let Some(shape) = p0_13_high_component_progression_decode_shape(input, &metadata, options)? {
         return Ok(shape);
     }
@@ -11659,6 +11668,9 @@ fn decode_algorithmic_htj2k_with_workspace(
     options: &DecodeOptions,
     workspace: &mut Htj2kDecodeWorkspace,
 ) -> Result<Option<Image>> {
+    if let Some(image) = ht_high_component::decode(input, options, workspace)? {
+        return Ok(Some(image));
+    }
     if !matches!(metadata.support, SupportStatus::Supported) {
         return Ok(None);
     }

@@ -25,7 +25,10 @@ pub use emuella_j2k_transform as transform;
 
 #[doc(hidden)]
 pub mod geometry;
+mod ht_high_component;
 mod ht_reduced_roi;
+#[cfg(feature = "std")]
+pub use ht_high_component::prepare_htj2k_high_component_decode;
 mod ht_roi;
 #[cfg(feature = "std")]
 #[doc(hidden)]
@@ -29549,6 +29552,7 @@ enum ExplicitPrecinctPermission {
     HtScalarDerivedReduced,
     HtRoiWindow,
     HtReducedRoi,
+    HtHighComponent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29583,6 +29587,10 @@ struct PacketOrganisationConfig {
 
 impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
+    const HT_HIGH_COMPONENT: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtHighComponent,
+        ..Self::DEFAULT
+    };
     const HT_REDUCED_ROI: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtReducedRoi,
         ..Self::DEFAULT
@@ -31885,7 +31893,10 @@ fn packet_component_styles(
             && ht_scalar_derived_reduced_envelope(codestream))
         || (packet_organisation.explicit_precinct_permission
             == ExplicitPrecinctPermission::HtReducedRoi
-            && ht_reduced_roi::envelope(codestream));
+            && ht_reduced_roi::envelope(codestream))
+        || (packet_organisation.explicit_precinct_permission
+            == ExplicitPrecinctPermission::HtHighComponent
+            && ht_high_component::envelope(codestream));
     if !heterogeneous_styles_granted {
         let uniform = uniform_effective_coding_style(codestream)?;
         return Ok(alloc::vec![uniform; component_count]);
@@ -32108,6 +32119,11 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
+    if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtHighComponent
+    {
+        return ht_high_component::envelope(codestream);
+    }
     if packet_organisation.explicit_precinct_permission == ExplicitPrecinctPermission::HtReducedRoi
     {
         return ht_reduced_roi::envelope(codestream);
@@ -32338,6 +32354,11 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         coding_style.layers,
         max_resolution_end,
     )?;
+    if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtHighComponent
+    {
+        ht_high_component::validate_schedule(codestream, &progression_volumes)?;
+    }
     if packet_organisation.two_volume_single_precinct_permission
         != TwoVolumeSinglePrecinctPermission::None
     {
@@ -32416,6 +32437,10 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         selected_components,
     )?;
     let tile_maxshift = if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtHighComponent
+    {
+        Some(ht_high_component::resolve_maxshift(input, codestream)?)
+    } else if packet_organisation.explicit_precinct_permission
         == ExplicitPrecinctPermission::HtReducedRoi
     {
         Some(ht_reduced_roi::resolve_maxshift(input, codestream)?)
@@ -54071,7 +54096,9 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
             None,
             None,
             None,
-            if ht_reduced_roi::envelope(codestream) {
+            if ht_high_component::envelope(codestream) {
+                PacketOrganisationConfig::HT_HIGH_COMPONENT
+            } else if ht_reduced_roi::envelope(codestream) {
                 PacketOrganisationConfig::HT_REDUCED_ROI
             } else if ht_roi::envelope(codestream) {
                 PacketOrganisationConfig::HT_ROI_WINDOW
