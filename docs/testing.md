@@ -340,7 +340,10 @@ zero. Corrupt discarded entropy and changed discarded formats cannot alter
 selected output. Malformed unselected quantisers/packets, counted linear marker
 visits and zero structural calls for oversized grids guard failure behaviour.
 Two-layer contradictory SINGLEHT fixtures remain invalid before unsupported
-native layer, cleanup-bound or ROI-selection/shift declines. Public inspection,
+native layer, cleanup-bound or ROI-selection/shift declines, including shifts
+21/22 across the header width thirty boundary, the legal maximum shift 37 and
+maximum reversible exponent 31. The same packets with MULTIHT signalling are
+structurally valid but still fail native admission. Public inspection,
 shape, owned/workspace decode and padded caller output agree; bad packets,
 selected entropy failures, excluded requests and JPH preserve caller storage.
 The locked P0.13 full native component-zero comparison remains exact at 0/0.

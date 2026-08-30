@@ -563,16 +563,25 @@ mod tests {
         let bytes = encode_htj2k_high_component_multiple_set_test_fixture().unwrap();
         let cap = offset(&bytes, Marker::Cap, false);
         let rgn = offset(&bytes, Marker::Rgn, false);
-        for (ccap, shift, roi) in [
-            (0x100a_u16, 3, 256_u16),
-            (0x100b, 3, 256),
-            (0x100a, 16, 256),
-            (0x100a, 3, 0),
+        let qcc = offset(&bytes, Marker::Qcc, true);
+        for (ccap, shift, roi, exponent) in [
+            (0x100a_u16, 3, 256_u16, 8),
+            (0x100b, 3, 256, 8),
+            (0x100a, 0, 256, 8),
+            (0x100a, 16, 256, 8),
+            (0x100a, 21, 256, 8), // LL header width exactly thirty.
+            (0x100a, 22, 256, 8), // First width beyond the coefficient store.
+            (0x100a, 30, 256, 8),
+            (0x100a, 37, 256, 8),  // Largest legal Part 15 shift.
+            (0x100a, 3, 256, 31),  // Quantiser alone crosses the native bound.
+            (0x100a, 37, 256, 31), // Largest reversible header width: 69.
+            (0x100a, 3, 0, 8),
         ] {
             let mut bad = bytes.clone();
             bad[cap + 4..cap + 6].copy_from_slice(&ccap.to_be_bytes());
             bad[rgn..rgn + 2].copy_from_slice(&roi.to_be_bytes());
             bad[rgn + 3] = shift;
+            bad[qcc + 3] = exponent << 3;
             assert!(matches!(
                 prepare_htj2k_high_component_decode(&bad),
                 Err(CodestreamError::InvalidMarker {
@@ -586,6 +595,14 @@ mod tests {
                     marker: Some(Marker::Cap),
                     ..
                 })
+            ));
+            // Clearing only SINGLEHT makes the same complete packet headers
+            // structurally valid, but cannot admit native two-layer decoding.
+            bad[cap + 4..cap + 6].copy_from_slice(&(ccap | 0x2000).to_be_bytes());
+            validate_part15_packet_signalling(&bad, &parse(&bad).unwrap()).unwrap();
+            assert!(matches!(
+                prepare_htj2k_high_component_decode(&bad),
+                Err(CodestreamError::Unsupported { .. })
             ));
         }
         let mut permitted = bytes.clone();

@@ -32494,6 +32494,13 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                 tile_maxshift
                     .filter(|maxshift| usize::from(maxshift.component_index) == component_index)
                     .map(|maxshift| maxshift.shift),
+                if packet_organisation.explicit_precinct_permission
+                    == ExplicitPrecinctPermission::HtHighComponent
+                {
+                    PacketBitplaneDomain::HtHighComponentHeaders
+                } else {
+                    PacketBitplaneDomain::ClassicCoefficientStore
+                },
             )
             .and_then(|subbands| {
                 Ok(DefaultPrecinctComponentState {
@@ -34927,6 +34934,7 @@ mod inline_packet_marker_tests {
             topology_style(1, &[0x00, 0x11]),
             &quantization,
             None,
+            PacketBitplaneDomain::ClassicCoefficientStore,
         )
         .unwrap();
         assert!(states.iter().all(|subband| subband.resolution == 0));
@@ -40241,11 +40249,18 @@ mod qcc_marker_tests {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PacketBitplaneDomain {
+    ClassicCoefficientStore,
+    HtHighComponentHeaders,
+}
+
 fn default_precinct_subbands(
     topology: &Part1PrecinctTopology,
     coding_style: CodingStyleMarker,
     quantization: &ComponentQuantization,
     maxshift: Option<u8>,
+    bitplane_domain: PacketBitplaneDomain,
 ) -> Result<Vec<DefaultPrecinctSubband>> {
     let expected = 1usize
         .checked_add(
@@ -40289,10 +40304,26 @@ fn default_precinct_subbands(
                 *resolution_topology,
                 subband_topology,
                 coding_style,
-                bounded_maxshift_available_bitplanes(
-                    quantization.available_bitplanes(exponent_index, coding_style.entropy_coder)?,
-                    maxshift,
-                )?,
+                match bitplane_domain {
+                    PacketBitplaneDomain::HtHighComponentHeaders
+                        if coding_style.entropy_coder == EntropyCoder::HtBlockCoding =>
+                    {
+                        // Header metadata is not an i32 coefficient store. The
+                        // independently bounded HT route must walk every packet
+                        // before its narrower native magnitude/ROI admission.
+                        // Part 15's legal shift (at most 37) and quantiser fields
+                        // fit u8 here without coefficient allocation or shifts.
+                        quantization
+                            .available_bitplanes(exponent_index, coding_style.entropy_coder)?
+                            .checked_add(maxshift.unwrap_or(0))
+                            .ok_or(CodestreamError::SizeOverflow)?
+                    }
+                    _ => bounded_maxshift_available_bitplanes(
+                        quantization
+                            .available_bitplanes(exponent_index, coding_style.entropy_coder)?,
+                        maxshift,
+                    )?,
+                },
                 quantization.irreversible_step(exponent_index),
             )?;
         }

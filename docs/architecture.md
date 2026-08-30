@@ -127,7 +127,11 @@ lookups are bounded by 257, geometry by 64×64 and packet scheduling by 1,028
 packets before the native one-layer limit reduces that to 514.
 
 The ROI's extended quantiser width applies to its unselected component during
-packet validation. All packet headers, lengths, magnitude declarations and
+packet validation. This permission retains header magnitude metadata beyond
+the classic coefficient-store limit, so every legal shift through 37 remains
+structurally checkable. Native shift and coefficient-width limits still apply
+afterwards; other packet permissions keep their existing bounds.
+All packet headers, lengths, magnitude declarations and
 HT-set signalling are validated before selected-plane retention. Discarded
 components are not entropy-decoded or reconstructed. Component zero reuses
 the prepared reversible executor with zero discarded levels and no inverse

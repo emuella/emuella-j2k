@@ -199,9 +199,36 @@ mod tests {
             .find(|m| m.marker == codestream::Marker::Cap)
             .unwrap()
             .data_offset;
-        for ccap in [0x100a_u16, 0x100b] {
+        let rgn = p
+            .markers
+            .iter()
+            .find(|m| m.marker == codestream::Marker::Rgn)
+            .unwrap()
+            .data_offset;
+        let qcc = p
+            .markers
+            .iter()
+            .rfind(|m| m.marker == codestream::Marker::Qcc)
+            .unwrap()
+            .data_offset;
+        let valid = codestream::encode_htj2k_high_component_test_fixture(1, 1, 257).unwrap();
+        let info = decode_shape(&valid, &request())
+            .unwrap()
+            .image_info()
+            .unwrap();
+        for (ccap, shift, exponent) in [
+            (0x100a_u16, 3, 8),
+            (0x100b, 3, 8),
+            (0x100a, 21, 8),
+            (0x100a, 22, 8),
+            (0x100a, 37, 8),
+            (0x100a, 3, 31),
+            (0x100a, 37, 31),
+        ] {
             let mut bad = bytes.clone();
             bad[cap + 4..cap + 6].copy_from_slice(&ccap.to_be_bytes());
+            bad[rgn + 3] = shift;
+            bad[qcc + 3] = exponent << 3;
             for result in [
                 inspect(&bad, &InspectOptions::default()).map(|_| ()),
                 decode_shape(&bad, &request()).map(|_| ()),
@@ -214,6 +241,20 @@ mod tests {
                     "{result:?}"
                 );
             }
+            let mut untouched = [0xa6; 3];
+            {
+                let mut planes =
+                    [PlaneMut::new(&mut untouched, 1, 1, 3, info.sample_format).unwrap()];
+                let mut target = ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                };
+                assert!(matches!(
+                    decode_into(&bad, &mut target, &request()),
+                    Err(J2kError::InvalidInput { .. })
+                ));
+            }
+            assert_eq!(untouched, [0xa6; 3]);
         }
     }
 }
