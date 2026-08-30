@@ -11122,6 +11122,12 @@ fn reversible_5_3_region_config(
 const IRREVERSIBLE_QCD_GUARD_BITS: u8 = 2;
 const IRREVERSIBLE_COARSENESS_MIN: u32 = 2 * 2048;
 const IRREVERSIBLE_COARSENESS_MAX: u32 = 30 * 2048 - 1;
+const CLASSIC_COMPONENT_MAX_MAGNITUDE_BITPLANES: u8 = 30;
+
+enum IrreversibleCandidate {
+    Eligible(Vec<u8>),
+    ExceedsClassicMagnitudePlanes,
+}
 
 fn encode_irreversible_target_rate(
     width: u32,
@@ -11200,6 +11206,14 @@ fn encode_irreversible_target_rate(
         &specs,
         upper,
     )?;
+    let IrreversibleCandidate::Eligible(coarsest) = coarsest else {
+        return Err(unsupported(
+            None,
+            Some(Marker::Sot),
+            UnsupportedConstruct::PacketDecode,
+            "no target-rate candidate is representable by the classic component decoder",
+        ));
+    };
     if coarsest.len() > target.codestream_byte_budget {
         return Err(unsupported(
             None,
@@ -11221,6 +11235,10 @@ fn encode_irreversible_target_rate(
             &specs,
             midpoint,
         )?;
+        let IrreversibleCandidate::Eligible(candidate) = candidate else {
+            lower = midpoint + 1;
+            continue;
+        };
         if candidate.len() <= target.codestream_byte_budget {
             if candidate.len() > best.len() {
                 best = candidate;
@@ -11255,7 +11273,7 @@ fn encode_irreversible_candidate(
     multiple_component_transform: bool,
     specs: &[DecompSubbandSpec],
     coarseness: u32,
-) -> Result<Vec<u8>> {
+) -> Result<IrreversibleCandidate> {
     let octave = coarseness / 2048;
     let mantissa = u16::try_from(coarseness % 2048).map_err(|_| CodestreamError::SizeOverflow)?;
     let base_exponent = 31_u8
@@ -11278,6 +11296,15 @@ fn encode_irreversible_candidate(
             .map_err(|_| CodestreamError::SizeOverflow)
         })
         .collect::<Result<Vec<_>>>()?;
+    for step in &qcd_steps {
+        let decoder_available_bitplanes = IRREVERSIBLE_QCD_GUARD_BITS
+            .checked_add(step.exponent)
+            .and_then(|value| value.checked_sub(1))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        if decoder_available_bitplanes > CLASSIC_COMPONENT_MAX_MAGNITUDE_BITPLANES {
+            return Ok(IrreversibleCandidate::ExceedsClassicMagnitudePlanes);
+        }
+    }
     let available_bitplanes = qcd_steps
         .iter()
         .map(|step| {
@@ -11364,7 +11391,7 @@ fn encode_irreversible_candidate(
         &qcd_steps,
     )?;
     write_tile_part(&mut codestream, 0, &packet, true)?;
-    Ok(codestream)
+    Ok(IrreversibleCandidate::Eligible(codestream))
 }
 
 fn encode_native_decomp_transformed(

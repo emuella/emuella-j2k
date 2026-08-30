@@ -9,6 +9,10 @@ component geometry, or release publication.
 
 - Codec base revision:
   `ebf3d7011df968b6d4f897f5e2944862682783f1`.
+- Review-blocked candidate revision:
+  `a7dc10c9194769c83101e9f0ae3278225e2ba9e0`. Its scalar-step search could
+  select a quantisation declaration wider than the preserved classic
+  component decoder's 30-magnitude-plane representation.
 - Candidate identity: the exact reviewed pull-request head recorded in the
   owning pull request and private campaign plan. The tracked record cannot
   contain its own future commit identity without becoming self-referential.
@@ -18,6 +22,11 @@ component geometry, or release publication.
   code value from its x coordinate, y coordinate, component index, products,
   an xor term, and two bounded block terms. No fixture, corpus, external codec,
   or third-party output is used.
+- Boundary input: one independently project-authored 65 by 65 greyscale
+  U16_LE pattern. For each coordinate, indices 1, 2, 4, and 5 are classified
+  negative and every other index positive; a pixel is `u16::MAX` when its x
+  and y classifications match and zero otherwise. It is generated in memory
+  with a 130-byte interleaved stride.
 - Normative route: ISO/IEC 15444-1:2024, Annex A, A.6.1–A.6.5; Annex B, B.5
   and B.8; Annex E, E.1; and Annex F, F.2.2. Annex J, J.13 is informative.
   Retrieval revision:
@@ -51,6 +60,14 @@ quantised and fully classic Tier-1 coded with one packet per LRCP
 layer-resolution-component position. The largest sampled complete codestream
 that does not exceed the internal byte budget is retained. No payload is
 padded and no codestream is truncated after packet construction.
+
+Before coding a candidate, the encoder resolves every scalar step to the same
+guard-bit-plus-exponent magnitude-plane width consumed by ordinary component
+decode. A declaration wider than the preserved 30-plane classic coefficient
+representation is ineligible, and the ordered search continues towards
+coarser quantisation. If the remaining decoder-safe candidates cannot meet the
+qualified undershoot tolerance, encoding fails explicitly instead of emitting
+a codestream that its ordinary public component path cannot decode.
 
 Invalid non-finite or non-positive rates, a zero-byte conversion, an
 irreducible budget, a budget not attainable within the qualified tolerance,
@@ -95,6 +112,26 @@ planar-input matrix at 2 bpp covers both accepted layouts. The original 64 by
 48 lossless matrix remains byte-repeatable, decodes exactly, and has zero
 source-domain distortion.
 
+The 65 by 65 U16_LE boundary probe explores the review transition and requires
+every successful raw and JP2 encode to decode through ordinary public
+component mode. The repaired results were:
+
+| Target bpp | Budget | Raw bytes | Undershoot | JP2 bytes | Outcome |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 1.58 | 834 | 833 | 1 | 918 | decoded |
+| 1.59 | 839 | 835 | 4 | 920 | decoded |
+| 1.60 | 845 | 835 | 10 | 920 | decoded |
+| 1.65 | 871 | 857 | 14 | 942 | decoded |
+| 1.70 | 897 | 896 | 1 | 981 | decoded |
+| 1.71 | 903 | 898 | 5 | 983 | decoded |
+| 8.00 | 4,225 | - | - | - | rejected as unattainable |
+
+The 1.58 bpp lower boundary remains attainable at the same 833 raw bytes. At
+1.59 through 1.71 bpp, the repaired search selects close decoder-safe
+candidates rather than the finer ineligible declaration. The 8 bpp probe
+proves fail-closed behaviour when no safe candidate is attainable within the
+retained tolerance. Every successful wrapper still adds exactly 85 bytes.
+
 The focused evidence command was:
 
 ```sh
@@ -104,9 +141,10 @@ CARGO_TARGET_DIR="$task_build_root" \
   cargo test -p emuella-j2k-test-support --test encoder_calibration -- --nocapture
 ```
 
-It passed all four tests, including the 12 rate cells, lossless baselines,
-planar inputs, invalid rates, infeasible rate, and transform/profile mismatch
-cases. The canonical repository check was:
+It passed all five tests, including the 12 rate cells, the extreme U16_LE
+decoder boundary, lossless baselines, planar inputs, invalid rates, infeasible
+rates, and transform/profile mismatch cases. The canonical repository check
+was:
 
 ```sh
 task_build_root=/path/to/assigned-build-root
@@ -127,9 +165,10 @@ no-default-features checks, and the locked fuzz workspace check.
 
 Retain the existing raw bits-per-reference-grid-pixel API, two decomposition
 levels, scalar-step search, the 0.2%/32-byte tolerance, and the empirical NMSE
-ceilings. Reject padding, silent rate excess, automatic profile widening,
-multiple tiles, multiple layers, reversible target-rate coding, lossy
-`Lossless`, and zero- or one-level irreversible output for this increment.
+ceilings. Retain the decoder-equivalent 30-plane candidate eligibility bound.
+Reject padding, silent rate excess, automatic profile widening, multiple
+tiles, multiple layers, reversible target-rate coding, lossy `Lossless`, and
+zero- or one-level irreversible output for this increment.
 
 The qualification is deliberately synthetic and bounded. It does not prove
 visual quality, interoperability with an external encoder, optimal

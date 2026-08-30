@@ -11,6 +11,8 @@ const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
 const QUALIFICATION_WIDTH: u32 = 257;
 const QUALIFICATION_HEIGHT: u32 = 193;
+const EXTREME_WIDTH: u32 = 65;
+const EXTREME_HEIGHT: u32 = 65;
 
 #[derive(Clone, Copy)]
 struct Case {
@@ -68,6 +70,22 @@ fn qualification_source(case: Case) -> Vec<u8> {
                     _ => unreachable!(),
                 }
             }
+        }
+    }
+    output
+}
+
+fn extreme_u16_source() -> Vec<u8> {
+    let mut output = Vec::with_capacity((EXTREME_WIDTH * EXTREME_HEIGHT * 2) as usize);
+    let positive = |index| !matches!(index, 1 | 2 | 4 | 5);
+    for y in 0..EXTREME_HEIGHT {
+        for x in 0..EXTREME_WIDTH {
+            let value = if positive(x) == positive(y) {
+                u16::MAX
+            } else {
+                0
+            };
+            output.extend_from_slice(&value.to_le_bytes());
         }
     }
     output
@@ -411,6 +429,118 @@ fn irreversible_target_rate_fails_closed_outside_profile() {
             }
         )
         .is_err()
+    );
+}
+
+#[test]
+fn extreme_u16_target_rate_only_returns_classic_decodable_outputs() {
+    let source = extreme_u16_source();
+    let info = ImageInfo::new(
+        EXTREME_WIDTH,
+        EXTREME_HEIGHT,
+        1,
+        SampleFormat::U16_LE,
+        ColorModel::Grayscale,
+        ComponentLayout::Interleaved,
+    )
+    .unwrap();
+    let image = ImageView::Interleaved {
+        info: &info,
+        samples: &source,
+        stride_bytes: EXTREME_WIDTH as usize * 2,
+    };
+    let mut lower_boundary_succeeded = false;
+    let mut unattainable_target_rejected = false;
+
+    for bits_per_pixel in [1.58, 1.59, 1.60, 1.65, 1.70, 1.71, 8.00] {
+        let raw_options = EncodeOptions {
+            format: OutputFormat::J2kCodestream,
+            transform: WaveletTransform::Irreversible97,
+            quality: EncodeQuality::TargetRate { bits_per_pixel },
+            decomposition_levels: 2,
+            ..EncodeOptions::default()
+        };
+        let raw = encode(image, &raw_options);
+        let jp2 = encode(
+            image,
+            &EncodeOptions {
+                format: OutputFormat::Jp2,
+                ..raw_options.clone()
+            },
+        );
+
+        match (raw, jp2) {
+            (Ok(raw), Ok(jp2)) => {
+                lower_boundary_succeeded |= bits_per_pixel == 1.58;
+                let budget = ((f64::from(bits_per_pixel)
+                    * f64::from(EXTREME_WIDTH * EXTREME_HEIGHT))
+                .floor() as usize)
+                    / 8;
+                assert!(
+                    raw.len() <= budget,
+                    "{bits_per_pixel} bpp exceeded its budget"
+                );
+                assert_eq!(
+                    jp2.len() - raw.len(),
+                    85,
+                    "{bits_per_pixel} bpp JP2 overhead"
+                );
+                for (label, encoded) in [("raw", raw.as_slice()), ("JP2", jp2.as_slice())] {
+                    let decoded = decode(
+                        encoded,
+                        &DecodeOptions {
+                            mode: DecodeMode::Components,
+                            target_layout: ComponentLayout::Interleaved,
+                            ..DecodeOptions::default()
+                        },
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("{label} {bits_per_pixel} bpp did not component-decode: {error}")
+                    });
+                    assert_eq!(
+                        decoded.info.width, EXTREME_WIDTH,
+                        "{label} {bits_per_pixel} bpp width"
+                    );
+                    assert_eq!(
+                        decoded.info.height, EXTREME_HEIGHT,
+                        "{label} {bits_per_pixel} bpp height"
+                    );
+                }
+                println!(
+                    "encoder-rate-control-extreme target-bpp={bits_per_pixel:.2} budget={budget} raw-bytes={} jp2-bytes={} outcome=decoded",
+                    raw.len(),
+                    jp2.len(),
+                );
+            }
+            (Err(raw_error), Err(jp2_error)) => {
+                unattainable_target_rejected |= bits_per_pixel == 8.00;
+                if bits_per_pixel == 8.00 {
+                    for (label, error) in [("raw", raw_error), ("JP2", jp2_error)] {
+                        assert!(
+                            error.to_string().contains(
+                                "not attainable within the qualified non-padding tolerance"
+                            ),
+                            "{label} failed for an unexpected reason: {error}"
+                        );
+                    }
+                }
+                println!(
+                    "encoder-rate-control-extreme target-bpp={bits_per_pixel:.2} outcome=rejected"
+                );
+            }
+            (raw, jp2) => panic!(
+                "raw and JP2 target-rate results diverged at {bits_per_pixel} bpp: raw={raw:?}, jp2={jp2:?}"
+            ),
+        }
+    }
+
+    assert!(
+        lower_boundary_succeeded,
+        "the 1.58 bpp lower boundary must remain attainable and decodable"
+    );
+    assert!(
+        unattainable_target_rejected,
+        "an unattainable safe-candidate target must be rejected explicitly"
     );
 }
 
