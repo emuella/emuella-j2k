@@ -26,6 +26,12 @@ pub use emuella_j2k_transform as transform;
 #[doc(hidden)]
 pub mod geometry;
 mod ht_high_component;
+#[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
+#[doc(hidden)]
+pub use ht_high_component::encode_htj2k_high_component_entropy_failure_test_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub use ht_high_component::encode_htj2k_high_component_multiple_set_test_fixture;
 #[doc(hidden)]
 pub use ht_high_component::encode_htj2k_high_component_test_fixture;
 mod ht_reduced_roi;
@@ -5100,7 +5106,8 @@ enum Htj2kReducedComponentReconstruction {
 }
 
 /// Prepared admission and packet plan for the bounded reversible or
-/// irreversible reduced transformed-component HTJ2K decode profile.
+/// irreversible transformed-component HTJ2K decode profiles. The independent
+/// high-component constructor also uses this plan at full resolution.
 ///
 /// Preparation validates the complete structural and effective packet
 /// mechanism contract before exposing output geometry. The plan borrows the

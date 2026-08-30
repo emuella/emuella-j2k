@@ -22,7 +22,7 @@ fn style_supported(s: CodingStyleMarker) -> bool {
         && s.code_block_style == 0x40
         && s.decomposition_levels == 1
         && s.transform == WaveletTransform::Reversible53
-        && s.layers == 1
+        && (1..=2).contains(&s.layers)
         && s.progression_order == ProgressionOrder::Rlcp
         && s.multiple_component_transform
         && !s.sop_markers
@@ -110,7 +110,7 @@ pub(super) fn validate_schedule(c: &Codestream, volumes: &[ProgressionVolume]) -
     if !matches!(volumes, [a, b] if
         a.resolution_start == 0 && b.resolution_start == 0
         && a.resolution_end >= 2 && b.resolution_end >= 2
-        && a.layer_end == 1 && b.layer_end == 1
+        && a.layer_end == c.coding_style.map_or(0, |s| s.layers) && b.layer_end == a.layer_end
         && a.component_start == 0 && a.component_end == b.component_start
         && b.component_end == c.siz.component_count()
         && a.progression_order == ProgressionOrder::Rlcp
@@ -169,6 +169,7 @@ pub fn prepare_htj2k_high_component_decode(
         .ok_or(CodestreamError::SizeOverflow)?;
     if cap.code_block_mode != Part15CodeBlockMode::HtOnly
         || cap.cleanup_magnitude_bound > 18
+        || styles[0].layers != 1
         || roi.component_index == 0
         || !(1..=15).contains(&roi.shift)
     {
@@ -262,7 +263,34 @@ pub fn encode_htj2k_high_component_test_fixture(
         components - 1,
         3,
         components / 2,
+        false,
     )
+}
+
+/// Project-authored contradiction for structural/admission parity tests.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_high_component_multiple_set_test_fixture() -> Result<Vec<u8>> {
+    fixture(1, 1, 257, 8, false, 256, 3, 128, true)
+}
+
+/// Project-authored selected entropy failure after complete packet admission.
+#[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
+#[doc(hidden)]
+pub fn encode_htj2k_high_component_entropy_failure_test_fixture() -> Result<Vec<u8>> {
+    let mut bytes = encode_htj2k_high_component_test_fixture(1, 1, 257)?;
+    let p = prepare_htj2k_high_component_decode(&bytes)?.ok_or(CodestreamError::SizeOverflow)?;
+    let first = p
+        .contributions
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let end = p.codestream.tiles[0]
+        .payload_offset
+        .ok_or(CodestreamError::SizeOverflow)?
+        + first.payload_offset
+        + first.codeword_len;
+    bytes[end - 2..end].copy_from_slice(&[0xff, 0xff]);
+    Ok(bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -275,7 +303,9 @@ fn fixture(
     roi: u16,
     shift: u8,
     split: u16,
+    multiple: bool,
 ) -> Result<Vec<u8>> {
+    let layers = if multiple { 2 } else { 1 };
     let mut output = Vec::new();
     write_native_main_header(
         &mut output,
@@ -290,7 +320,7 @@ fn fixture(
         &[8, 9, 10, 11],
         true,
         0,
-        1,
+        layers,
     )?;
     let siz = find_marker(&output, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
     for c in 0..usize::from(components) {
@@ -324,7 +354,7 @@ fn fixture(
     for (start, end, order) in [(0, split, 1), (split, components, 4)] {
         poc.push(0);
         poc.extend(selector(start));
-        poc.extend_from_slice(&[0, 1, 33]);
+        poc.extend_from_slice(&[0, layers as u8, 33]);
         poc.extend(selector(end));
         poc.push(order);
     }
@@ -385,10 +415,30 @@ fn fixture(
     // Independently enumerate the two volumes; never call the production
     // progression planner when constructing this oracle's packet order.
     let schedule = (0..=1)
-        .flat_map(|r| (0..split).map(move |c| (c, r)))
-        .chain((split..components).flat_map(|c| (0..=1).map(move |r| (c, r))));
+        .flat_map(|r| (0..layers).flat_map(move |l| (0..split).map(move |c| (c, r, l))))
+        .chain(
+            (split..components)
+                .flat_map(|c| (0..=1).flat_map(move |r| (0..layers).map(move |l| (c, r, l)))),
+        );
     let mut packets = Vec::new();
-    for (c, r) in schedule {
+    for (c, r, l) in schedule {
+        if l != 0 {
+            let mut writer = PacketBitWriter::new();
+            if c == 0 && r == 0 {
+                writer.write_bit(1)?;
+                writer.write_bit(1)?;
+                write_coding_pass_count(&mut writer, 3)?;
+                writer.write_bit(0)?;
+                let len = bands[0][0].code_blocks[0].segment_len;
+                let lblock = (usize::BITS - len.leading_zeros()).max(3) as u8;
+                writer.write_bits(0, lblock + 1)?;
+            } else {
+                writer.write_bit(0)?;
+            }
+            writer.align();
+            packets.extend_from_slice(writer.bytes());
+            continue;
+        }
         let active = bands[usize::from(c)]
             .iter()
             .filter(|b| b.resolution == r && !b.code_blocks.is_empty())
@@ -427,6 +477,126 @@ mod tests {
         prepare_htj2k_high_component_decode(bytes).unwrap().unwrap()
     }
 
+    fn offset(bytes: &[u8], marker: Marker, last: bool) -> usize {
+        let c = parse(bytes).unwrap();
+        let mut matches = c.markers.iter().filter(|m| m.marker == marker);
+        if last {
+            matches.next_back().unwrap().data_offset
+        } else {
+            matches.next().unwrap().data_offset
+        }
+    }
+
+    #[test]
+    fn high_component_checks_discarded_state_and_preflights_resources() {
+        let bytes = encode_htj2k_high_component_test_fixture(3, 5, 257).unwrap();
+        let p = prepared(&bytes);
+        let qcc = offset(&bytes, Marker::Qcc, true);
+        let rgn = offset(&bytes, Marker::Rgn, false);
+        let coc = offset(&bytes, Marker::Coc, true);
+        let poc = offset(&bytes, Marker::Poc, false);
+        let qcd = offset(&bytes, Marker::Qcd, false);
+        for (at, value) in [
+            (qcc + 2, 3),
+            (qcc + 3, 0),
+            (qcc + 3, 31 << 3),
+            (rgn + 2, 1),
+            (rgn + 3, 38),
+            (coc + 2, 2),
+            (poc + 8, 0),
+            (poc + 15, 0),
+            (qcd, 3),
+        ] {
+            let mut bad = bytes.clone();
+            bad[at] = value;
+            assert!(
+                prepare_htj2k_high_component_decode(&bad).is_err(),
+                "at={at} value={value}"
+            );
+        }
+        // Syntactically legal unsupported effective transforms stay closed.
+        let mut irreversible = bytes.clone();
+        irreversible[coc + 7] = 0;
+        let cap = offset(&bytes, Marker::Cap, false);
+        irreversible[cap + 4..cap + 6].copy_from_slice(&0x182a_u16.to_be_bytes());
+        assert!(
+            prepare_htj2k_high_component_decode(&irreversible)
+                .unwrap()
+                .is_none()
+        );
+        // The final unselected packet must be parsed even after zero is ready.
+        let mut late = bytes.clone();
+        let end = p.codestream.tiles[0].payload_offset.unwrap()
+            + p.codestream.tiles[0].payload_len.unwrap();
+        late.remove(end - 1);
+        let sot = offset(&bytes, Marker::Sot, false);
+        let length = read_u32(&bytes, sot + 2).unwrap() - 1;
+        late[sot + 2..sot + 6].copy_from_slice(&length.to_be_bytes());
+        assert!(prepare_htj2k_high_component_decode(&late).is_err());
+        for size in [65, 32768, u32::MAX] {
+            let mut big = bytes.clone();
+            let siz = offset(&bytes, Marker::Siz, false);
+            big[siz + 2..siz + 6].copy_from_slice(&size.to_be_bytes());
+            big[siz + 18..siz + 22].copy_from_slice(&size.to_be_bytes());
+            STRUCTURAL_CALLS.with(|n| n.set(0));
+            assert!(prepare_htj2k_high_component_decode(&big).unwrap().is_none());
+            assert_eq!(STRUCTURAL_CALLS.with(|n| n.get()), 0);
+        }
+        // One pass over marker headers; no component-by-marker scanning here.
+        for extra in [0, 257, 4096] {
+            let mut c = p.codestream.clone();
+            let com = MarkerSegment {
+                marker: Marker::Com,
+                offset: 0,
+                data_offset: 0,
+                data_len: 0,
+            };
+            c.markers.extend(core::iter::repeat_n(com, extra));
+            let mut visits = 0;
+            assert!(markers_supported(c.markers.iter().inspect(|_| visits += 1)));
+            assert_eq!(visits, c.markers.len());
+        }
+    }
+
+    #[test]
+    fn high_component_structural_contradictions_precede_native_declines() {
+        let bytes = encode_htj2k_high_component_multiple_set_test_fixture().unwrap();
+        let cap = offset(&bytes, Marker::Cap, false);
+        let rgn = offset(&bytes, Marker::Rgn, false);
+        for (ccap, shift, roi) in [
+            (0x100a_u16, 3, 256_u16),
+            (0x100b, 3, 256),
+            (0x100a, 16, 256),
+            (0x100a, 3, 0),
+        ] {
+            let mut bad = bytes.clone();
+            bad[cap + 4..cap + 6].copy_from_slice(&ccap.to_be_bytes());
+            bad[rgn..rgn + 2].copy_from_slice(&roi.to_be_bytes());
+            bad[rgn + 3] = shift;
+            assert!(matches!(
+                prepare_htj2k_high_component_decode(&bad),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cap),
+                    ..
+                })
+            ));
+            assert!(matches!(
+                validate_part15_packet_signalling(&bad, &parse(&bad).unwrap()),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cap),
+                    ..
+                })
+            ));
+        }
+        let mut permitted = bytes.clone();
+        permitted[cap + 4..cap + 6].copy_from_slice(&0x300a_u16.to_be_bytes());
+        validate_part15_packet_signalling(&permitted, &parse(&permitted).unwrap()).unwrap();
+        assert!(matches!(
+            prepare_htj2k_high_component_decode(&permitted),
+            Err(CodestreamError::Unsupported { .. })
+        ));
+    }
+
     #[test]
     fn high_component_index_widths_progression_and_native_output() {
         for (count, split, roi, shift, width, height, bits, signed) in [
@@ -437,7 +607,8 @@ mod tests {
             (257, 128, 3, 11, 1, 1, 8, false),
             (9, 4, 8, 7, 64, 64, 8, true),
         ] {
-            let bytes = fixture(width, height, count, bits, signed, roi, shift, split).unwrap();
+            let bytes =
+                fixture(width, height, count, bits, signed, roi, shift, split, false).unwrap();
             let p = prepared(&bytes);
             assert_eq!(
                 component_selector_len(&p.codestream.siz),
@@ -466,6 +637,15 @@ mod tests {
                     .any(|c| c.component_index == count - 1)
             );
             assert!(p.contributions.iter().all(|c| c.component_index == 0));
+            for contribution in &packets.contributions {
+                let component = contribution.component_index;
+                assert_eq!(
+                    contribution.available_bitplanes,
+                    // Reversible HT packets retain exponent+1; guard bits
+                    // are resolved later by the selected transfer.
+                    9 + contribution.subband_index + if component == roi { shift } else { 0 }
+                );
+            }
             let mut expected = vec![0_i32; (width * height) as usize];
             for s in decomp_subband_specs(width, height, 1).unwrap() {
                 for y in 0..s.height {
@@ -496,6 +676,89 @@ mod tests {
                 decoded.components[0].samples, expected,
                 "count={count} roi={roi} shift={shift}"
             );
+        }
+    }
+
+    #[test]
+    fn high_component_discarded_entropy_and_formats_do_not_leak_into_output() {
+        let bytes = fixture(3, 5, 257, 8, false, 256, 11, 128, false).unwrap();
+        let p = prepared(&bytes);
+        let expected = decode_prepared_htj2k_reduced_component_owned_with_workspace(
+            &p,
+            &mut HtCodestreamDecodeWorkspace::new(),
+        )
+        .unwrap();
+        let payload = single_part1_profile_tile(&bytes, &p.codestream).unwrap().1;
+        let packets = parse_default_precinct_packets_from_source_with_ht_retention(
+            &bytes,
+            &p.codestream,
+            p.tile_rect,
+            &ContiguousPacketSource { bytes: payload },
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::HT_HIGH_COMPONENT,
+            None,
+            HtCodingSetRetention::NativeAdmission,
+        )
+        .unwrap();
+        let last = packets
+            .contributions
+            .iter()
+            .rev()
+            .find(|c| c.component_index == 256)
+            .unwrap();
+        let end =
+            p.codestream.tiles[0].payload_offset.unwrap() + last.payload_offset + last.codeword_len;
+        let mut changed = bytes.clone();
+        changed[end - 2..end].copy_from_slice(&[0xff, 0xff]);
+        let siz = offset(&bytes, Marker::Siz, false);
+        changed[siz + 36 + 256 * 3] = 0x8f; // Unselected signed 16-bit format.
+        let changed = prepared(&changed);
+        let actual = decode_prepared_htj2k_reduced_component_owned_with_workspace(
+            &changed,
+            &mut HtCodestreamDecodeWorkspace::new(),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        let mut inherited = bytes.clone();
+        for m in p
+            .codestream
+            .markers
+            .iter()
+            .rev()
+            .filter(|m| matches!(m.marker, Marker::Coc | Marker::Qcc))
+        {
+            let component = read_u16(&bytes, m.data_offset).unwrap();
+            if matches!(component, 0 | 1 | 255) {
+                inherited.drain(m.offset..m.data_offset + m.data_len);
+            }
+        }
+        let inherited = prepared(&inherited);
+        assert_eq!(
+            decode_prepared_htj2k_reduced_component_owned_with_workspace(
+                &inherited,
+                &mut HtCodestreamDecodeWorkspace::new()
+            )
+            .unwrap(),
+            expected
+        );
+        let oversized = fixture(1, 1, 258, 8, false, 257, 3, 128, false).unwrap();
+        STRUCTURAL_CALLS.with(|n| n.set(0));
+        assert!(
+            prepare_htj2k_high_component_decode(&oversized)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(STRUCTURAL_CALLS.with(|n| n.get()), 0);
+        // Packet magnitude accounting uses the ROI-extended quantiser, not
+        // sample precision. The existing sign/threshold restoration is not
+        // applied to selected zero by this independently admitted route.
+        for shift in [1, 3, 11, 15] {
+            let t = 1_i32 << shift;
+            let mut values = [-t - 1, -t, -t + 1, -1, 0, 1, t - 1, t, t + 1];
+            realign_bounded_maxshift_coefficients(&mut values, shift).unwrap();
+            assert_eq!(values, [-1, -1, -t + 1, -1, 0, 1, t - 1, 1, 1]);
         }
     }
 }

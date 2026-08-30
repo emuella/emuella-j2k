@@ -327,6 +327,24 @@ comparison keeps its unsigned 12-bit native plane until the established
 Class-0 arithmetic scale to the 65×17 unsigned 8-bit reference; limits remain
 109/743. No protected sample enters the ordinary tests.
 
+High-component HT fixtures independently enumerate adjacent RLCP/CPRL volumes
+for 4/9/255/256/257 components, including the one-byte end-256 POC sentinel and
+two-byte component-256 COC/QCC/RGN selectors. Every component contributes
+nonzero data. Per-component blocks, guards and exponents, empty high subbands,
+odd grids through 64×64, signed and unsigned 8/12/16-bit output and unselected
+ROI shifts 1/3/7/11/15 exercise complete packet validation. A separately
+assembled coefficient plane and 5/3 oracle prove selected native output.
+ROI-extended magnitude widths are checked on every contribution; existing
+sign/threshold restoration is checked separately, not applied to component
+zero. Corrupt discarded entropy and changed discarded formats cannot alter
+selected output. Malformed unselected quantisers/packets, counted linear marker
+visits and zero structural calls for oversized grids guard failure behaviour.
+Two-layer contradictory SINGLEHT fixtures remain invalid before unsupported
+native layer, cleanup-bound or ROI-selection/shift declines. Public inspection,
+shape, owned/workspace decode and padded caller output agree; bad packets,
+selected entropy failures, excluded requests and JPH preserve caller storage.
+The locked P0.13 full native component-zero comparison remains exact at 0/0.
+
 HT ROI window tests construct coefficients and native packet schedules without
 external imagery. Signed/unsigned 1/4/8/12/16-bit outputs and shifts 1/3/7/15
 exercise background and ROI coefficients, signs, threshold neighbours, guard

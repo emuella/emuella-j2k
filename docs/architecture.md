@@ -114,6 +114,35 @@ payload.
 
 ## Native HTONLY component grids
 
+### High-component native output
+
+The independently granted HT high-component permission checks the README's
+component, geometry, coding and header envelope before packet topology. Its
+structural envelope allows up to two layers so SINGLEHT contradictions can be
+reported before the one-layer native decline. It resolves the two complete
+adjacent RLCP/CPRL volumes, every effective COD/COC and QCD/QCC, and one main
+RGN with normal one/two-byte selectors. No Part 1 permission is granted and no
+functional tile override is admitted. Marker scanning is linear; component
+lookups are bounded by 257, geometry by 64×64 and packet scheduling by 1,028
+packets before the native one-layer limit reduces that to 514.
+
+The ROI's extended quantiser width applies to its unselected component during
+packet validation. All packet headers, lengths, magnitude declarations and
+HT-set signalling are validated before selected-plane retention. Discarded
+components are not entropy-decoded or reconstructed. Component zero reuses
+the prepared reversible executor with zero discarded levels and no inverse
+RCT. The full planar component-zero request and metadata shape share that
+plan; reconstruction completes in private storage before caller publication.
+General all-component inspection remains unsupported for this shape.
+
+This follows Part 1:2024 A.6.1–A.6.6 and B.12 (physical pages 46, 49–55,
+96 and 98–99), retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`;
+Part 15:2019 A.5 (page 38), retrieval
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db`; and Part 4:2024 B.2.3/B.2.5
+(pages 25–26), retrieval `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
+The code and synthetic fixtures are project-authored; no external payload,
+pixels or standards expression enters the public tree.
+
 ### Native ROI window
 
 The HT-owned prepared ROI plan is independent of the Part 1 selective planner.
