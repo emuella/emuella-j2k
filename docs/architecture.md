@@ -241,6 +241,36 @@ Class-0 component-zero reduced comparison follows Part 4:2024 B.2.3/B.2.5
 All implementation and synthetic evidence is project-authored; no standards
 expression, protected payload or decoded pixels enter public artefacts.
 
+### Heterogeneous reduced ROI component
+
+The independent sampled-RPCL HT permission resolves the four native sampling
+grids and main coding/quantisation overrides documented in the README. A
+linear marker scan admits one main and one tile component-zero RGN; the tile
+assignment overrides the main without applying both shifts. No Part 1 profile
+permission is granted. Geometry, tile/component counts and six-level topology
+are bounded before structural packet validation. Within that envelope,
+SINGLEHT contradictions precede native cleanup-bound, effective-shift and
+request declines. Every component and packet is validated before retaining
+component zero through resolution three.
+
+Irreversible HT transfer first tests the ROI threshold in the ROI-extended
+coefficient domain. It restores the doubled ROI coefficient using integer
+alignment before floating-point conversion, with zero ROI reconstruction bias;
+background values retain the existing HT half-step. Each contribution keeps
+its original full-component subband quantiser and magnitude width. Existing
+three-level 9/7 synthesis and native precision/sign conversion then execute
+the prepared plan. This is not WP-09's reversible integer restoration, although
+the sign and threshold ownership are shared. Metadata, descriptors and owned
+or caller-planar output share admission; caller publication remains atomic.
+
+The basis is Part 1:2024 A.6.3–A.6.5, B.12.1.3, E.1 and H.1 (physical
+pages 51–54, 97, 129–130 and 156), retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`, Part 15:2019 A.5 (page 38),
+retrieval `10baf9472429d52f5d6b5f9b7a892dbed395b1db`, and Part 4:2024
+B.2.3/B.2.5 (pages 25–26), retrieval
+`725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`. Public code and synthetic
+fixtures are project-authored without protected payloads or standards expression.
+
 ### Full native grids
 
 The full native component-grid route has its own prepared admission plan. It

@@ -152,6 +152,23 @@ are preserved, while optional presentation, alpha, multiple-codestream
 composition, HTMIX and codec profiles outside the documented subset remain
 unsupported.
 
+A separate heterogeneous reduced ROI route qualifies locked P0.06 HTONLY.
+It selects planar native component zero at reduction three, from a zero-origin
+single tile/part with four independently signed or unsigned 8–16-bit components
+sampled 1×1, 2×1, 1×2 and 2×2. Effective main COD/COC has six levels, 9/7
+for components zero through two and 5/3 for three, 64×64 HTONLY blocks, one
+through four RPCL layers, no MCT or inline SOP/EPH, and explicit square
+128/256 precincts. Main QCD/QCC resolves scalar-expounded zero through two
+and reversible three, with positive exponents and at most 30 ROI-extended
+magnitude bits. Exactly one component-zero main RGN and one tile RGN have
+shifts 1–15; the tile overrides the main and its effective shift must be 1–9.
+Every component's packets are validated; only zero through resolution three
+is reconstructed. ROI magnitudes are restored before dequantisation and 9/7
+synthesis, preserving the native precision and signedness. The 16 Mi-sample
+reference-plane preflight applies before packet preparation. Full-image decode,
+other selections/reductions, region/tile/layer requests, additional tile
+overrides, POC, relocation, HTMIX and JPH/rendered output remain unsupported.
+
 The command-line adapter installs the `emuella-j2k` executable:
 
 ```sh
