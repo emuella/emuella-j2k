@@ -314,6 +314,10 @@ pub struct Codestream {
     /// Main-header component coding-style overrides, resolved over COD.
     pub component_coding_styles: Vec<ComponentCodingStyleMarker>,
     pub capability: Option<CapabilityMarker>,
+    /// Part 1 profile declaration retained for CPF correspondence checks.
+    pub profile: Option<ProfileMarker>,
+    /// Optional Part 15 corresponding-profile declaration.
+    pub corresponding_profile: Option<CorrespondingProfileMarker>,
     /// Main-header TLM entries reconciled with observed tile parts.
     pub tile_part_lengths: Option<TilePartLengthTable>,
     pub markers: Vec<MarkerSegment>,
@@ -481,7 +485,55 @@ pub enum EntropyCoder {
 /// Extended capabilities marker (`CAP`) contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityMarker {
+    /// Compatibility view of the raw `Pcap` field retained by the previous
+    /// public model. A structurally valid CAP marker always contributes one
+    /// entry; new code should prefer [`Self::pcap`].
     pub pcaps: Vec<u32>,
+    /// Part 1 capability presence bitmap. Bit 31 is `Pcap^1`.
+    pub pcap: u32,
+    /// One value for every set `Pcap` bit, ordered by capability index.
+    pub parameters: Vec<CapabilityParameter>,
+    /// Structured Part 15 capability when `Pcap^15` is set.
+    pub part15: Option<Part15Capability>,
+}
+
+/// One `Ccap^i` value selected by the corresponding `Pcap^i` bit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityParameter {
+    pub index: u8,
+    pub value: u16,
+}
+
+/// Part 15 code-block population declared by bits 14–15 of `Ccap^15`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part15CodeBlockMode {
+    HtOnly,
+    HtDeclared,
+    Mixed,
+}
+
+/// Semantic `Ccap^15` fields used for validity and native admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Part15Capability {
+    pub raw: u16,
+    pub code_block_mode: Part15CodeBlockMode,
+    pub multiple_ht_sets_allowed: bool,
+    pub roi_allowed: bool,
+    pub heterogeneous_allowed: bool,
+    pub irreversible_allowed: bool,
+    pub cleanup_magnitude_bound: u8,
+}
+
+/// Part 1 profile (`PRF`) words, least-significant word first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileMarker {
+    pub words: Vec<u16>,
+}
+
+/// Part 15 corresponding-profile (`CPF`) words, least-significant word first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrespondingProfileMarker {
+    pub words: Vec<u16>,
 }
 
 /// Parsed tile-part header state. Packet payload remains opaque at this stage.
@@ -2448,6 +2500,7 @@ impl HtCodestreamDecodeWorkspace {
         self.clear_last_vlc_cleanup_progress();
 
         let codestream = parse(input)?;
+        validate_part15_packet_signalling(input, &codestream)?;
         let Some(decode_input) = ht_decode_input_from_codestream(input, &codestream) else {
             return Ok(None);
         };
@@ -7076,7 +7129,19 @@ fn prepared_part1_plan_memory(
     }
     if let Some(capability) = &prepared.codestream.capability {
         retained_heap_bytes =
+            retained_heap_bytes.saturating_add(capacity_bytes::<CapabilityParameter>(
+                capability.parameters.capacity(),
+            ));
+        retained_heap_bytes =
             retained_heap_bytes.saturating_add(capacity_bytes::<u32>(capability.pcaps.capacity()));
+    }
+    if let Some(profile) = &prepared.codestream.profile {
+        retained_heap_bytes =
+            retained_heap_bytes.saturating_add(capacity_bytes::<u16>(profile.words.capacity()));
+    }
+    if let Some(profile) = &prepared.codestream.corresponding_profile {
+        retained_heap_bytes =
+            retained_heap_bytes.saturating_add(capacity_bytes::<u16>(profile.words.capacity()));
     }
 
     let mut prepared_code_block_count = 0_u64;
@@ -7253,6 +7318,8 @@ pub enum Marker {
     Ppm,
     Ppt,
     Crg,
+    Prf,
+    Cpf,
     Sop,
     Eph,
     Cap,
@@ -7280,6 +7347,8 @@ impl Marker {
             Self::Ppm => 0xff60,
             Self::Ppt => 0xff61,
             Self::Crg => 0xff63,
+            Self::Prf => 0xff56,
+            Self::Cpf => 0xff59,
             Self::Sop => 0xff91,
             Self::Eph => 0xff92,
             Self::Cap => 0xff50,
@@ -7307,6 +7376,8 @@ impl Marker {
             0xff60 => Self::Ppm,
             0xff61 => Self::Ppt,
             0xff63 => Self::Crg,
+            0xff56 => Self::Prf,
+            0xff59 => Self::Cpf,
             0xff91 => Self::Sop,
             0xff92 => Self::Eph,
             0xff50 => Self::Cap,
@@ -7322,6 +7393,10 @@ impl Marker {
 
     fn is_reserved_parameterless(self) -> bool {
         matches!(self, Self::Unknown(0xff30..=0xff3f))
+    }
+
+    fn is_part1_defined(self) -> bool {
+        !matches!(self, Self::Cpf | Self::Unknown(_))
     }
 }
 
@@ -7539,6 +7614,8 @@ fn scan_part1_source_headers(
     let mut siz = None;
     let mut coding_style = None;
     let mut capability = None;
+    let mut profile = None;
+    let mut corresponding_profile = None;
     let mut markers = Vec::new();
     let first_sot_source_offset = loop {
         let source_offset = cursor.position();
@@ -7597,7 +7674,27 @@ fn scan_part1_source_headers(
         match marker {
             Marker::Siz => siz = Some(parse_siz(segment, marker_offset)?),
             Marker::Cod => coding_style = Some(parse_cod(segment, marker_offset)?),
-            Marker::Cap => capability = Some(parse_cap(segment, marker_offset)?),
+            Marker::Cap => set_once(
+                &mut capability,
+                parse_cap(segment, marker_offset)?,
+                marker_offset,
+                Marker::Cap,
+                "codestream main header contains more than one CAP marker",
+            )?,
+            Marker::Prf => set_once(
+                &mut profile,
+                parse_profile_words(segment, marker_offset, Marker::Prf)?,
+                marker_offset,
+                Marker::Prf,
+                "codestream main header contains more than one PRF marker",
+            )?,
+            Marker::Cpf => set_once(
+                &mut corresponding_profile,
+                parse_corresponding_profile(segment, marker_offset)?,
+                marker_offset,
+                Marker::Cpf,
+                "codestream main header contains more than one CPF marker",
+            )?,
             _ => {}
         }
     };
@@ -7800,17 +7897,26 @@ fn scan_part1_source_headers(
         data_offset: eoc_offset + 2,
         data_len: 0,
     });
-    let kind = if capability.is_some() {
-        CodestreamKind::Htj2k
-    } else {
-        CodestreamKind::J2k
-    };
+    let kind = validate_main_header_signalling(
+        &siz,
+        capability.as_ref(),
+        profile.as_ref(),
+        corresponding_profile.as_ref(),
+        &markers,
+    )?;
     if kind == CodestreamKind::Htj2k
         && let Some(style) = &mut coding_style
     {
         style.entropy_coder = EntropyCoder::HtBlockCoding;
     }
-    let _header_state = resolve_effective_header_state(&marker_bytes, &siz, kind, &markers)?;
+    let header_state = resolve_effective_header_state(&marker_bytes, &siz, kind, &markers)?;
+    validate_part15_capability_constraints(
+        &marker_bytes,
+        &markers,
+        &siz,
+        capability.as_ref(),
+        &header_state,
+    )?;
     let component_coding_styles = parse_main_component_coding_styles(
         &marker_bytes,
         &siz,
@@ -7846,6 +7952,8 @@ fn scan_part1_source_headers(
             coding_style,
             component_coding_styles,
             capability,
+            profile,
+            corresponding_profile,
             tile_part_lengths,
             markers,
             tiles: selected_tile_states,
@@ -8000,6 +8108,8 @@ fn parse_with_selected_region(
     let mut siz = None;
     let mut coding_style = None;
     let mut capability = None;
+    let mut profile = None;
+    let mut corresponding_profile = None;
     let mut markers = Vec::new();
     let mut tiles = Vec::new();
     let mut saw_payload_boundary = false;
@@ -8060,7 +8170,27 @@ fn parse_with_selected_region(
         match marker {
             Marker::Siz => siz = Some(parse_siz(segment, marker_offset)?),
             Marker::Cod => coding_style = Some(parse_cod(segment, marker_offset)?),
-            Marker::Cap => capability = Some(parse_cap(segment, marker_offset)?),
+            Marker::Cap => set_once(
+                &mut capability,
+                parse_cap(segment, marker_offset)?,
+                marker_offset,
+                Marker::Cap,
+                "codestream main header contains more than one CAP marker",
+            )?,
+            Marker::Prf => set_once(
+                &mut profile,
+                parse_profile_words(segment, marker_offset, Marker::Prf)?,
+                marker_offset,
+                Marker::Prf,
+                "codestream main header contains more than one PRF marker",
+            )?,
+            Marker::Cpf => set_once(
+                &mut corresponding_profile,
+                parse_corresponding_profile(segment, marker_offset)?,
+                marker_offset,
+                Marker::Cpf,
+                "codestream main header contains more than one CPF marker",
+            )?,
             Marker::Sot => {
                 let mut tile = parse_sot(segment, marker_offset)?;
                 offset = data_offset
@@ -8115,17 +8245,26 @@ fn parse_with_selected_region(
         .iter()
         .find(|segment| segment.marker == Marker::Sot)
         .map_or(input.len(), |segment| segment.offset);
-    let kind = if capability.is_some() {
-        CodestreamKind::Htj2k
-    } else {
-        CodestreamKind::J2k
-    };
+    let kind = validate_main_header_signalling(
+        &siz,
+        capability.as_ref(),
+        profile.as_ref(),
+        corresponding_profile.as_ref(),
+        &markers,
+    )?;
     if kind == CodestreamKind::Htj2k
         && let Some(coding_style) = &mut coding_style
     {
         coding_style.entropy_coder = EntropyCoder::HtBlockCoding;
     }
-    let _header_state = resolve_effective_header_state(input, &siz, kind, &markers)?;
+    let header_state = resolve_effective_header_state(input, &siz, kind, &markers)?;
+    validate_part15_capability_constraints(
+        input,
+        &markers,
+        &siz,
+        capability.as_ref(),
+        &header_state,
+    )?;
     let component_coding_styles =
         parse_main_component_coding_styles(input, &siz, coding_style, &markers, main_header_end)?;
     let progression = ProgressionState {
@@ -8149,6 +8288,8 @@ fn parse_with_selected_region(
             coding_style,
             component_coding_styles,
             capability,
+            profile,
+            corresponding_profile,
             tile_part_lengths,
             markers,
             tiles,
@@ -9344,6 +9485,206 @@ pub fn encode_htj2k_grayscale_u8_no_decomp(input: GrayscaleU8Encode<'_>) -> Resu
         components: &[component],
         multiple_component_transform: false,
     })
+}
+
+/// Build a deterministic two-layer HT fixture in which the second layer adds
+/// a second Cleanup set for the same code-block.
+///
+/// This is project test infrastructure for Part 15 packet-signalling
+/// validation, not a supported general-purpose multi-set encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_two_layer_multiple_set_test_fixture(
+    split_across_tile_parts: bool,
+) -> Result<Vec<u8>> {
+    let samples = (0_u8..64).collect::<Vec<_>>();
+    let mut codestream = encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+        width: 8,
+        height: 8,
+        samples: &samples,
+        stride_bytes: 8,
+    })?;
+    let parsed = parse(&codestream)?;
+    let tile_rect = *tile_rects(&parsed)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part = *parsed.tiles.first().ok_or(CodestreamError::SizeOverflow)?;
+    let payload = tile_payload(&codestream, &tile_part)?;
+    let first_packet_len = payload.len();
+    let contributions =
+        parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)?;
+    let [contribution] = contributions.as_slice() else {
+        return Err(CodestreamError::SizeOverflow);
+    };
+    if !contribution.ht_coded || contribution.coding_passes != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let cleanup = checked_slice(
+        payload,
+        contribution.payload_offset,
+        contribution.codeword_len,
+    )?
+    .to_vec();
+
+    let second_layer = repeated_cleanup_second_ht_set_packet(&cleanup)?;
+
+    let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+    let eoc = find_marker(
+        &codestream,
+        tile_part
+            .payload_offset
+            .ok_or(CodestreamError::SizeOverflow)?,
+        Marker::Eoc,
+    )
+    .ok_or(CodestreamError::SizeOverflow)?;
+    codestream.splice(eoc..eoc, second_layer.iter().copied());
+    let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
+    let psot = read_u32(&codestream, sot + 6)?;
+    codestream[sot + 6..sot + 10].copy_from_slice(
+        &psot
+            .checked_add(
+                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?
+            .to_be_bytes(),
+    );
+
+    if split_across_tile_parts {
+        let second_psot = 14_u32
+            .checked_add(
+                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let mut second_header = Marker::Sot.code().to_be_bytes().to_vec();
+        second_header.extend_from_slice(&10_u16.to_be_bytes());
+        second_header.extend_from_slice(&0_u16.to_be_bytes());
+        second_header.extend_from_slice(&second_psot.to_be_bytes());
+        second_header.extend_from_slice(&[1, 2]);
+        second_header.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        let split_offset = tile_part
+            .payload_offset
+            .and_then(|offset| offset.checked_add(first_packet_len))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        codestream.splice(split_offset..split_offset, second_header);
+        let first_psot = 14_u32
+            .checked_add(
+                u32::try_from(first_packet_len).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?;
+        codestream[sot + 6..sot + 10].copy_from_slice(&first_psot.to_be_bytes());
+        codestream[sot + 11] = 2;
+    }
+    Ok(codestream)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn repeated_cleanup_second_ht_set_packet(cleanup: &[u8]) -> Result<Vec<u8>> {
+    let mut l_block = 3_u8;
+    while cleanup.len() >= (1_usize << u32::from(l_block)) {
+        l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    let mut writer = PacketBitWriter::new();
+    writer.write_bit(1)?;
+    writer.write_bit(1)?;
+    write_coding_pass_count(&mut writer, 3)?;
+    while cleanup.len() >= (1_usize << u32::from(l_block + 1)) {
+        writer.write_bit(1)?;
+        l_block = l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?;
+    }
+    writer.write_bit(0)?;
+    writer.write_bits(
+        u32::try_from(cleanup.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        l_block
+            .checked_add(1)
+            .ok_or(CodestreamError::SizeOverflow)?,
+    )?;
+    writer.align();
+    let mut packet = writer.bytes().to_vec();
+    packet.extend_from_slice(cleanup);
+    Ok(packet)
+}
+
+/// Build a deterministic one-decomposition, two-layer HT fixture in which
+/// the second layer adds another Cleanup set to the low-resolution block.
+///
+/// This is project test infrastructure for validity-before-support admission,
+/// not a supported general-purpose multi-set encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture() -> Result<Vec<u8>> {
+    let samples = (0_u16..64)
+        .map(|sample| {
+            u8::try_from((sample * 17 + 3) % 251).map_err(|_| CodestreamError::SizeOverflow)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut codestream = encode_htj2k_grayscale_u8_one_decomp(GrayscaleU8Encode {
+        width: 8,
+        height: 8,
+        samples: &samples,
+        stride_bytes: 8,
+    })?;
+    let parsed = parse(&codestream)?;
+    let coding_style = uniform_effective_coding_style(&parsed)?;
+    if coding_style.decomposition_levels != 1 || coding_style.layers != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let tile_rect = *tile_rects(&parsed)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part = *parsed.tiles.first().ok_or(CodestreamError::SizeOverflow)?;
+    let payload = tile_payload(&codestream, &tile_part)?;
+    let contributions =
+        parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)?;
+    let contribution = contributions
+        .iter()
+        .find(|contribution| {
+            contribution.resolution == 0
+                && contribution.subband == PacketSubbandKind::LowLow
+                && contribution.code_block_x == 0
+                && contribution.code_block_y == 0
+        })
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if !contribution.ht_coded || contribution.coding_passes != 1 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let cleanup = checked_slice(
+        payload,
+        contribution.payload_offset,
+        contribution.codeword_len,
+    )?;
+    let mut second_layer = repeated_cleanup_second_ht_set_packet(cleanup)?;
+    let mut empty_high_resolution_packet = PacketBitWriter::new();
+    empty_high_resolution_packet.write_bit(0)?;
+    empty_high_resolution_packet.align();
+    second_layer.extend_from_slice(empty_high_resolution_packet.bytes());
+
+    let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    codestream[cod + 6..cod + 8].copy_from_slice(&2_u16.to_be_bytes());
+    let eoc = find_marker(
+        &codestream,
+        tile_part
+            .payload_offset
+            .ok_or(CodestreamError::SizeOverflow)?,
+        Marker::Eoc,
+    )
+    .ok_or(CodestreamError::SizeOverflow)?;
+    codestream.splice(eoc..eoc, second_layer.iter().copied());
+    let sot = find_marker(&codestream, 0, Marker::Sot).ok_or(CodestreamError::SizeOverflow)?;
+    let psot = read_u32(&codestream, sot + 6)?;
+    codestream[sot + 6..sot + 10].copy_from_slice(
+        &psot
+            .checked_add(
+                u32::try_from(second_layer.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?
+            .to_be_bytes(),
+    );
+    Ok(codestream)
 }
 
 /// Encode a single-tile unsigned 8-bit grayscale cleanup-only HTJ2K
@@ -14991,6 +15332,8 @@ fn unsupported_part1_profile_marker_inner(
                 "SOP/EPH packet markers are not consumed by the profile packet walker"
             }
             Marker::Cap => "CAP markers identify HTJ2K/extended capability codestreams outside Part 1 profile decode",
+            Marker::Prf => "PRF profile declarations are outside the admitted native Part 1 profile",
+            Marker::Cpf => "CPF corresponding-profile declarations are outside Part 1 profile decode",
             Marker::Unknown(code) if Marker::Unknown(code).is_reserved_parameterless() => return None,
             Marker::Unknown(_) => "unknown marker segments are outside the admitted native profile",
         };
@@ -15085,23 +15428,8 @@ fn parse_bounded_tile_maxshift(
             "RGN must occur in a retained tile-part header before SOD",
         )
     })?;
-    let data = checked_slice(input, segment.data_offset, segment.data_len)?;
-    if data.len() != 3 {
-        return Err(invalid(
-            Some(segment.offset),
-            Some(Marker::Rgn),
-            "one-byte RGN component syntax requires Lrgn=5",
-        ));
-    }
-    let component_index = u16::from(data[0]);
-    if component_index >= codestream.siz.component_count() {
-        return Err(invalid(
-            Some(segment.offset),
-            Some(Marker::Rgn),
-            "RGN component selector is outside the SIZ component domain",
-        ));
-    }
-    if data[1] != 0 {
+    let declaration = parse_rgn_declaration(input, segment, &codestream.siz)?;
+    if declaration.style != 0 {
         return Err(unsupported(
             Some(segment.offset),
             Some(Marker::Rgn),
@@ -15109,7 +15437,8 @@ fn parse_bounded_tile_maxshift(
             "only the Maxshift implicit ROI style Srgn=0 is admitted",
         ));
     }
-    let shift = data[2];
+    let component_index = declaration.component_index;
+    let shift = declaration.shift;
     if shift > 37 {
         return Err(invalid(
             Some(segment.offset),
@@ -17076,14 +17405,13 @@ mod reduced_heterogeneous_irreversible_component_profile_tests {
         let siz_segment = codestream[siz..siz + 2 + lsiz].to_vec();
         let duplicate_main_siz =
             insert_before_marker(codestream.clone(), Marker::Sot, &siz_segment);
-        let parsed = parse(&duplicate_main_siz).unwrap();
-        assert!(
-            !is_supported_part1_reduced_heterogeneous_irreversible_component_profile(
-                &duplicate_main_siz,
-                &parsed,
-                3,
-            )
-        );
+        assert!(matches!(
+            parse(&duplicate_main_siz),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Siz),
+                ..
+            })
+        ));
 
         let tile_siz = insert_tile_header_segment(codestream.clone(), &siz_segment);
         if let Ok(parsed) = parse(&tile_siz) {
@@ -30614,6 +30942,11 @@ fn parse_default_precinct_packets_from_source(
     packet_organisation: PacketOrganisationConfig,
     physical_tile_part_order: Option<&[TilePartOrderEntry]>,
 ) -> Result<ParsedPacketContributions> {
+    let part15_single_ht_declared = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
     let packet_profile = packet_organisation.component_profile;
     let heterogeneous_single_precinct_permission =
         packet_organisation.heterogeneous_single_precinct_permission;
@@ -31149,6 +31482,13 @@ fn parse_default_precinct_packets_from_source(
                                                 .ok_or(CodestreamError::SizeOverflow)
                                         },
                                     )?;
+                                    if part15_single_ht_declared
+                                        && cleanup_set.is_some_and(|(set_index, cleanup_len)| {
+                                            set_index != 0 && cleanup_len != 0
+                                        })
+                                    {
+                                        return Err(part15_single_ht_error(codestream));
+                                    }
                                     let ht_coding_set = cleanup_set.map(|(_, cleanup_byte_len)| {
                                         HtCodeBlockCodingSet {
                                             byte_offset: 0,
@@ -31414,6 +31754,8 @@ fn parse_default_precinct_packets_from_source(
         ));
     }
 
+    validate_part15_single_ht_packet_sets(codestream, &contributions)?;
+
     Ok(ParsedPacketContributions {
         contributions,
         excluded_body_bytes,
@@ -31421,6 +31763,38 @@ fn parse_default_precinct_packets_from_source(
         packets_skipped_via_plt,
         packet_bytes_skipped_via_plt,
     })
+}
+
+fn validate_part15_single_ht_packet_sets(
+    codestream: &Codestream,
+    contributions: &[PacketCodeBlockContribution],
+) -> Result<()> {
+    let single_ht_declared = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
+    if single_ht_declared
+        && contributions
+            .iter()
+            .any(|contribution| contribution.ht_coding_set_count() > 1)
+    {
+        return Err(part15_single_ht_error(codestream));
+    }
+    Ok(())
+}
+
+fn part15_single_ht_error(codestream: &Codestream) -> CodestreamError {
+    let cap_offset = codestream
+        .markers
+        .iter()
+        .find(|segment| segment.marker == Marker::Cap)
+        .map(|segment| segment.offset);
+    invalid(
+        cap_offset,
+        Some(Marker::Cap),
+        "Ccap^15 declares SINGLEHT but packet data contains multiple HT coding sets for one code-block",
+    )
 }
 
 fn validate_packet_tile_part_boundary(
@@ -45783,6 +46157,54 @@ fn classify_htj2k_lossless_profile_markers(
             "native HTJ2K lossless decode does not accept tile-header COD overrides",
         ));
     }
+    let part15 = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .ok_or_else(|| {
+            Htj2kLosslessProfileDiagnostic::new(
+                UnsupportedConstruct::MarkerSegment,
+                "native HTJ2K decode requires structured Pcap^15/Ccap^15 signalling",
+            )
+        })?;
+    if part15.code_block_mode != Part15CodeBlockMode::HtOnly {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K decode supports only an HTONLY Part 15 declaration",
+        ));
+    }
+    if part15.multiple_ht_sets_allowed
+        || part15.roi_allowed
+        || part15.heterogeneous_allowed
+        || part15.irreversible_allowed
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K decode does not admit broader Ccap^15 capability declarations",
+        ));
+    }
+    if part15.cleanup_magnitude_bound > 18 {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K decode admits a Ccap^15 cleanup magnitude bound of at most 18",
+        ));
+    }
+    if codestream
+        .coding_style
+        .into_iter()
+        .chain(
+            codestream
+                .component_coding_styles
+                .iter()
+                .map(|style| style.coding_style),
+        )
+        .any(|style| style.code_block_style & 0x80 != 0)
+    {
+        return Err(Htj2kLosslessProfileDiagnostic::new(
+            UnsupportedConstruct::HtBlockDecode,
+            "native HTJ2K decode does not admit packet-dependent mixed SPcod/SPcoc signalling",
+        ));
+    }
 
     match ht_decode_candidate(codestream) {
         Some(Ok(_candidate)) => {}
@@ -46064,13 +46486,20 @@ mod htj2k_lossless_profile_classifier_tests {
         let multitile_decomposition = multitile_fixture(1, 1);
         let unspecified_tile_part_count = multitile_fixture(0, 0);
 
+        assert!(matches!(
+            parse(&classic_final_set),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
         for rejected in [
             too_many_decompositions,
             invalid_mct_format,
             extra_ht_style,
             invalid_qcd,
             invalid_packet,
-            classic_final_set,
             multitile_decomposition,
             unspecified_tile_part_count,
         ] {
@@ -46164,13 +46593,15 @@ mod htj2k_lossless_profile_classifier_tests {
                 if detail.contains("packet parsing failed")
         ));
 
-        let mut unsupported_final_set = fixture();
-        let cod = find_marker(&unsupported_final_set, 0, Marker::Cod).unwrap();
-        unsupported_final_set[cod + 12] = 0;
+        let mut contradictory_classic_style = fixture();
+        let cod = find_marker(&contradictory_classic_style, 0, Marker::Cod).unwrap();
+        contradictory_classic_style[cod + 12] = 0;
         assert!(matches!(
-            diagnostic(&unsupported_final_set),
-            Some((UnsupportedConstruct::HtBlockDecode, detail))
-                if detail.contains("HT final coding set")
+            parse(&contradictory_classic_style),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
         ));
     }
 
@@ -46296,28 +46727,13 @@ mod htj2k_lossless_profile_classifier_tests {
     }
 
     fn assert_tile_cod_rejected(codestream: &[u8]) {
-        let parsed = parse(codestream).unwrap();
-        assert_eq!(
-            diagnostic_for(codestream, &parsed),
-            Some((
-                UnsupportedConstruct::MarkerSegment,
-                "native HTJ2K lossless decode does not accept tile-header COD overrides".into(),
-            ))
-        );
-        assert!(!is_htj2k_lossless_profile(codestream, &parsed));
         assert!(matches!(
-            decode_htj2k_lossless_owned(codestream),
-            Err(CodestreamError::Unsupported {
-                marker: Some(Marker::Cod),
-                construct: UnsupportedConstruct::MarkerSegment,
-                message: "benchmark-oriented HTJ2K decode does not accept tile-header COD overrides",
+            parse(codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
                 ..
             })
         ));
-        assert_eq!(
-            htj2k_lossless_no_decomp_workload_profile(codestream).unwrap(),
-            None
-        );
     }
 
     fn ht_marker_fixture(levels: u8, sop: bool, eph: bool) -> (Vec<u8>, Vec<u8>) {
@@ -46443,7 +46859,6 @@ mod htj2k_lossless_profile_classifier_tests {
         for codestream in [
             inline.clone(),
             relocate_single_packet_header(inline.clone(), PacketHeaderSourceKind::Ppm),
-            relocate_single_packet_header(inline, PacketHeaderSourceKind::Ppt),
         ] {
             let codestream = with_tile_cod_scod(codestream, tile_scod);
             assert_tile_cod_rejected(&codestream);
@@ -46458,7 +46873,6 @@ mod htj2k_lossless_profile_classifier_tests {
         for codestream in [
             inline.clone(),
             relocate_single_packet_header(inline.clone(), PacketHeaderSourceKind::Ppm),
-            relocate_single_packet_header(inline, PacketHeaderSourceKind::Ppt),
         ] {
             let codestream = with_tile_cod_scod(codestream, tile_scod);
             assert_tile_cod_rejected(&codestream);
@@ -46641,38 +47055,33 @@ mod htj2k_lossless_profile_classifier_tests {
         let lqcd = usize::from(read_u16(&fixture, qcd + 2).unwrap());
         let qcd_segment = fixture[qcd..qcd + 2 + lqcd].to_vec();
         let qcc_segment = matching_qcc_segment(&fixture);
-        let variants = [
-            (
-                insert_main_header_segment(fixture.clone(), &qcc_segment),
-                Marker::Qcc,
-            ),
-            (
-                insert_tile_header_segment(fixture.clone(), &qcd_segment),
-                Marker::Qcd,
-            ),
-            (
-                insert_tile_header_segment(fixture, &qcc_segment),
-                Marker::Qcc,
-            ),
-        ];
+        let main_qcc = insert_main_header_segment(fixture.clone(), &qcc_segment);
+        assert_eq!(
+            diagnostic(&main_qcc),
+            Some((
+                UnsupportedConstruct::MarkerSegment,
+                "native HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides".into(),
+            ))
+        );
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&main_qcc),
+            Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Qcc),
+                construct: UnsupportedConstruct::MarkerSegment,
+                ..
+            })
+        ));
 
-        for (codestream, expected_marker) in variants {
-            assert_eq!(
-                diagnostic(&codestream),
-                Some((
-                    UnsupportedConstruct::MarkerSegment,
-                    "native HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides".into(),
-                ))
-            );
+        for codestream in [
+            insert_tile_header_segment(fixture.clone(), &qcd_segment),
+            insert_tile_header_segment(fixture, &qcc_segment),
+        ] {
             assert!(matches!(
-                decode_htj2k_lossless_owned(&codestream),
-                Err(CodestreamError::Unsupported {
-                    marker: Some(marker),
-                    construct: UnsupportedConstruct::MarkerSegment,
-                    message,
+                parse(&codestream),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cap),
                     ..
-                }) if marker == expected_marker
-                    && message == "benchmark-oriented HTJ2K multi-level lossless decode does not accept QCC or tile-header QCD/QCC quantisation overrides"
+                })
             ));
         }
     }
@@ -47162,6 +47571,7 @@ pub fn htj2k_lossless_no_decomp_workload_profile(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    validate_part15_packet_signalling(input, &codestream)?;
     if htj2k_tile_header_cod(&codestream).is_some() {
         return Ok(None);
     }
@@ -47370,9 +47780,8 @@ fn byte_stuffing_profile(bytes: &[u8]) -> (usize, usize) {
 /// three-level profile is restricted to one unsigned 8-bit, unit-sampled
 /// component with zero origins, no MCT, and no component or tile quantisation
 /// overrides. All profiles use one or
-/// more HT sets of Cleanup plus optional SigProp/MagRef passes per included
-/// code-block. The final independently decodable set supplies the requested
-/// full-quality block. Three-component streams with three matching signed or
+/// HT set of Cleanup plus optional SigProp/MagRef passes per included
+/// code-block. Three-component streams with three matching signed or
 /// unsigned 8- to 16-bit components may use the reversible multiple-component
 /// transform; decoded RGB samples are returned after inverse DWT and RCT.
 /// Multi-tile decode currently requires zero decomposition levels and exactly
@@ -47390,6 +47799,9 @@ pub fn decode_htj2k_lossless_owned_with_workspace(
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
     }
+    validate_part15_packet_signalling(input, &codestream)?;
+    classify_htj2k_lossless_profile_markers(&codestream)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
     if let Some(segment) = htj2k_tile_header_cod(&codestream) {
         return Err(unsupported(
             Some(segment.offset),
@@ -48890,18 +49302,25 @@ pub fn decode_htj2k_lossless_owned(input: &[u8]) -> Result<Option<DecodedImage>>
     decode_htj2k_lossless_owned_with_workspace(input, &mut workspace)
 }
 
-/// Return whether marker and packet state fits the algorithmic lossless HTJ2K
-/// profile accepted by [`decode_htj2k_lossless_owned`].
+/// Return whether marker and packet state fits the supported algorithmic
+/// lossless HTJ2K profile.
+///
+/// This is a support classifier, not a codestream-validity result. Call
+/// [`validate_part15_packet_signalling`] first when validity and support must
+/// remain distinct, as they are in [`decode_htj2k_lossless_owned`].
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_profile(input: &[u8], codestream: &Codestream) -> bool {
     classify_htj2k_lossless_profile(input, codestream).is_ok()
 }
 
-/// Return the first native lossless-profile gate that rejects an HTJ2K
-/// codestream, or `None` when the complete current admission predicate passes.
+/// Return the first native lossless-profile support gate that rejects an
+/// HTJ2K codestream, or `None` when the current support predicate passes.
 ///
-/// Diagnostics follow decoder gate order and are derived from parsed structure
-/// and packet grammar rather than fixture identity or exact payload matching.
+/// This function classifies support only and cannot represent structural
+/// invalidity in its return type. Call [`validate_part15_packet_signalling`]
+/// first before presenting this diagnostic as a decoder-admission result.
+/// Diagnostics are derived from parsed structure and packet grammar rather
+/// than fixture identity or exact payload matching.
 #[cfg(feature = "std")]
 pub fn htj2k_lossless_profile_unsupported_construct(
     input: &[u8],
@@ -48910,6 +49329,52 @@ pub fn htj2k_lossless_profile_unsupported_construct(
     classify_htj2k_lossless_profile(input, codestream)
         .err()
         .map(|diagnostic| (diagnostic.construct, diagnostic.detail.into()))
+}
+
+/// Validate packet-level declarations whose truth cannot be established from
+/// marker segments alone.
+///
+/// This deliberately reports only contradictions of retained Part 15
+/// signalling. Other packet-parser failures remain native-admission
+/// diagnostics until packet decode is requested.
+#[cfg(feature = "std")]
+pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) -> Result<()> {
+    let single_ht_declared = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .is_some_and(|part15| !part15.multiple_ht_sets_allowed);
+    if !single_ht_declared {
+        return Ok(());
+    }
+    let Ok(tile_rects) = tile_rects(codestream) else {
+        return Ok(());
+    };
+    for tile_rect in tile_rects {
+        let Ok(payload) = tile_payload_spans_for_rect(input, codestream, tile_rect) else {
+            continue;
+        };
+        if let Err(error) = parse_default_precinct_packets_from_source(
+            input,
+            codestream,
+            tile_rect,
+            &payload,
+            None,
+            None,
+            None,
+            PacketOrganisationConfig::DEFAULT,
+            None,
+        ) && matches!(
+            &error,
+            CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            }
+        ) {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "std")]
@@ -48940,16 +49405,18 @@ pub fn decode_htj2k_lossless_no_decomp_owned_with_workspace(
     workspace: &mut HtCodestreamDecodeWorkspace,
 ) -> Result<Option<DecodedImage>> {
     let codestream = parse(input)?;
-    if codestream.kind == CodestreamKind::Htj2k
-        && uniform_effective_coding_style(&codestream)
+    if codestream.kind == CodestreamKind::Htj2k {
+        validate_part15_packet_signalling(input, &codestream)?;
+        if uniform_effective_coding_style(&codestream)
             .is_ok_and(|style| style.decomposition_levels != 0)
-    {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::WaveletTransform,
-            "zero-decomposition HTJ2K compatibility decode does not accept wavelet decomposition",
-        ));
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::WaveletTransform,
+                "zero-decomposition HTJ2K compatibility decode does not accept wavelet decomposition",
+            ));
+        }
     }
     decode_htj2k_lossless_owned_with_workspace(input, workspace)
 }
@@ -48962,8 +49429,12 @@ pub fn decode_htj2k_lossless_no_decomp_owned(input: &[u8]) -> Result<Option<Deco
     decode_htj2k_lossless_no_decomp_owned_with_workspace(input, &mut workspace)
 }
 
-/// Return whether marker and packet state fits the zero-decomposition
-/// compatibility profile.
+/// Return whether marker and packet state fits the supported
+/// zero-decomposition compatibility profile.
+///
+/// This support predicate does not replace
+/// [`validate_part15_packet_signalling`] when validity and support must remain
+/// distinct.
 #[cfg(feature = "std")]
 pub fn is_htj2k_lossless_no_decomp_profile(input: &[u8], codestream: &Codestream) -> bool {
     uniform_effective_coding_style(codestream).is_ok_and(|style| style.decomposition_levels == 0)
@@ -49357,12 +49828,20 @@ fn parse_coc(
         _ => unreachable!(),
     };
     if !method_specific_style_is_valid {
-        return Err(unsupported(
-            Some(marker_offset),
-            Some(Marker::Coc),
-            UnsupportedConstruct::Tier1Decode,
-            "COC code-block style uses reserved bits for its coding method",
-        ));
+        return Err(if default.entropy_coder == EntropyCoder::HtBlockCoding {
+            invalid(
+                Some(marker_offset),
+                Some(Marker::Coc),
+                "COC code-block style uses bits reserved by Part 15",
+            )
+        } else {
+            unsupported(
+                Some(marker_offset),
+                Some(Marker::Coc),
+                UnsupportedConstruct::Tier1Decode,
+                "COC code-block style uses reserved bits for its coding method",
+            )
+        });
     }
     let transform = match parameters[4] {
         0 => WaveletTransform::Irreversible97,
@@ -50726,33 +51205,1360 @@ mod effective_header_state_tests {
     }
 }
 
+const PART15_PCAP_MASK: u32 = 1 << (32 - 15);
+const PART15_RSIZ_MASK: u16 = 1 << 14;
+const PART15_CCAP_RESERVED_MASK: u16 = 0x07c0;
+
+// Signalling validation follows ISO/IEC 15444-15:2019 Annex A, PDF pages
+// 35–39, retrieval `10baf9472429d52f5d6b5f9b7a892dbed395b1db`, and the
+// inherited CAP/PRF/SIZ syntax in ISO/IEC 15444-1:2024 Annex A, PDF pages
+// 41–45, retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`.
+
+fn set_once<T>(
+    target: &mut Option<T>,
+    value: T,
+    marker_offset: usize,
+    marker: Marker,
+    message: &'static str,
+) -> Result<()> {
+    if target.replace(value).is_some() {
+        return Err(invalid(Some(marker_offset), Some(marker), message));
+    }
+    Ok(())
+}
+
 fn parse_cap(segment: &[u8], marker_offset: usize) -> Result<CapabilityMarker> {
-    if segment.len() < 4 {
+    if segment.len() < 6 {
         return Err(invalid(
             Some(marker_offset),
             Some(Marker::Cap),
-            "CAP marker payload must contain one or more four-byte capability words",
+            "CAP marker payload must contain Pcap and at least one Ccap value",
+        ));
+    }
+    let pcap = read_u32(segment, 0)?;
+    let parameter_count = pcap.count_ones() as usize;
+    let expected_len = 4_usize
+        .checked_add(
+            parameter_count
+                .checked_mul(2)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if parameter_count == 0 || segment.len() != expected_len {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(Marker::Cap),
+            "CAP length must equal Pcap plus one Ccap value per set Pcap bit",
         ));
     }
 
-    let mut pcaps = Vec::new();
-    let mut offset = if segment.len().is_multiple_of(4) {
-        0
-    } else if segment.len() >= 6 && (segment.len() - 2).is_multiple_of(4) {
-        2
-    } else {
+    let mut parameters = Vec::with_capacity(parameter_count);
+    let mut value_offset = 4;
+    for index in 1_u8..=32 {
+        let mask = 1_u32 << (32 - u32::from(index));
+        if pcap & mask == 0 {
+            continue;
+        }
+        parameters.push(CapabilityParameter {
+            index,
+            value: read_u16(segment, value_offset)?,
+        });
+        value_offset += 2;
+    }
+    let part15 = parameters
+        .iter()
+        .find(|parameter| parameter.index == 15)
+        .map(|parameter| parse_part15_capability(parameter.value, marker_offset))
+        .transpose()?;
+    Ok(CapabilityMarker {
+        pcaps: alloc::vec![pcap],
+        pcap,
+        parameters,
+        part15,
+    })
+}
+
+fn parse_part15_capability(raw: u16, marker_offset: usize) -> Result<Part15Capability> {
+    if raw & PART15_CCAP_RESERVED_MASK != 0 {
         return Err(invalid(
             Some(marker_offset),
             Some(Marker::Cap),
-            "CAP marker payload must contain one or more four-byte capability words",
+            "Ccap^15 sets bits reserved by Part 15",
         ));
+    }
+    let code_block_mode = match raw >> 14 {
+        0b00 => Part15CodeBlockMode::HtOnly,
+        0b10 => Part15CodeBlockMode::HtDeclared,
+        0b11 => Part15CodeBlockMode::Mixed,
+        _ => {
+            return Err(invalid(
+                Some(marker_offset),
+                Some(Marker::Cap),
+                "Ccap^15 uses the reserved code-block population value",
+            ));
+        }
     };
-    while offset < segment.len() {
-        pcaps.push(read_u32(segment, offset)?);
-        offset += 4;
+    let magnitude_parameter = (raw & 0x1f) as u8;
+    let cleanup_magnitude_bound = match magnitude_parameter {
+        0 => 8,
+        1..=19 => magnitude_parameter + 8,
+        20..=30 => 4 * (magnitude_parameter - 19) + 27,
+        31 => 74,
+        _ => unreachable!(),
+    };
+    Ok(Part15Capability {
+        raw,
+        code_block_mode,
+        multiple_ht_sets_allowed: raw & (1 << 13) != 0,
+        roi_allowed: raw & (1 << 12) != 0,
+        heterogeneous_allowed: raw & (1 << 11) != 0,
+        irreversible_allowed: raw & (1 << 5) != 0,
+        cleanup_magnitude_bound,
+    })
+}
+
+fn parse_profile_words(
+    segment: &[u8],
+    marker_offset: usize,
+    marker: Marker,
+) -> Result<ProfileMarker> {
+    if segment.len() < 2 || !segment.len().is_multiple_of(2) {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(marker),
+            "profile marker must contain one or more complete 16-bit words",
+        ));
+    }
+    let mut words = Vec::with_capacity(segment.len() / 2);
+    for offset in (0..segment.len()).step_by(2) {
+        words.push(read_u16(segment, offset)?);
+    }
+    if words.last() == Some(&0) {
+        return Err(invalid(
+            Some(marker_offset),
+            Some(marker),
+            "profile marker must use a non-zero final word",
+        ));
+    }
+    Ok(ProfileMarker { words })
+}
+
+fn parse_corresponding_profile(
+    segment: &[u8],
+    marker_offset: usize,
+) -> Result<CorrespondingProfileMarker> {
+    Ok(CorrespondingProfileMarker {
+        words: parse_profile_words(segment, marker_offset, Marker::Cpf)?.words,
+    })
+}
+
+fn validate_main_header_signalling(
+    siz: &SizMarker,
+    capability: Option<&CapabilityMarker>,
+    profile: Option<&ProfileMarker>,
+    corresponding_profile: Option<&CorrespondingProfileMarker>,
+    markers: &[MarkerSegment],
+) -> Result<CodestreamKind> {
+    let main_end = markers
+        .iter()
+        .position(|segment| segment.marker == Marker::Sot)
+        .unwrap_or(markers.len());
+    let main = &markers[..main_end];
+    if main.first().map(|segment| segment.marker) != Some(Marker::Siz)
+        || markers
+            .iter()
+            .filter(|segment| segment.marker == Marker::Siz)
+            .count()
+            != 1
+    {
+        return Err(invalid(
+            main.first().map(|segment| segment.offset),
+            Some(Marker::Siz),
+            "SIZ must occur exactly once immediately after SOC",
+        ));
     }
 
-    Ok(CapabilityMarker { pcaps })
+    for (marker, retained) in [
+        (Marker::Cap, capability.is_some()),
+        (Marker::Prf, profile.is_some()),
+        (Marker::Cpf, corresponding_profile.is_some()),
+    ] {
+        let count = markers
+            .iter()
+            .filter(|segment| segment.marker == marker)
+            .count();
+        if count != usize::from(retained) {
+            return Err(invalid(
+                markers
+                    .iter()
+                    .find(|segment| segment.marker == marker)
+                    .map(|segment| segment.offset),
+                Some(marker),
+                "CAP, PRF and CPF are confined to one declaration in the main header",
+            ));
+        }
+    }
+
+    let position = |marker| {
+        main.iter()
+            .position(|segment| segment.marker == marker)
+            .ok_or(CodestreamError::SizeOverflow)
+    };
+    let cap_position = capability
+        .is_some()
+        .then(|| position(Marker::Cap))
+        .transpose()?;
+    let prf_position = profile
+        .is_some()
+        .then(|| position(Marker::Prf))
+        .transpose()?;
+    let cpf_position = corresponding_profile
+        .is_some()
+        .then(|| position(Marker::Cpf))
+        .transpose()?;
+    let first_other_part1 = main.iter().enumerate().find_map(|(index, segment)| {
+        (segment.marker.is_part1_defined()
+            && !matches!(segment.marker, Marker::Siz | Marker::Cap | Marker::Prf))
+        .then_some(index)
+    });
+    for (marker, marker_position, preceding_position, ordering_message) in [
+        (
+            Marker::Cap,
+            cap_position,
+            Some(0),
+            "CAP must follow SIZ and precede every other Part 1 main-header marker",
+        ),
+        (
+            Marker::Prf,
+            prf_position,
+            cap_position.or(Some(0)),
+            "PRF must follow SIZ/CAP and precede every other Part 1 main-header marker",
+        ),
+        (
+            Marker::Cpf,
+            cpf_position,
+            prf_position.or(cap_position).or(Some(0)),
+            "CPF must follow SIZ/CAP/PRF and precede every other Part 1 main-header marker",
+        ),
+    ] {
+        if let Some(marker_position) = marker_position
+            && (preceding_position.is_some_and(|preceding| marker_position <= preceding)
+                || first_other_part1.is_some_and(|other| marker_position >= other))
+        {
+            return Err(invalid(
+                main.get(marker_position).map(|segment| segment.offset),
+                Some(marker),
+                ordering_message,
+            ));
+        }
+    }
+
+    let rsiz_declares_cap = siz.capabilities & PART15_RSIZ_MASK != 0;
+    if rsiz_declares_cap && capability.is_none() {
+        return Err(invalid(
+            None,
+            Some(Marker::Cap),
+            "Rsiz bit 14 requires a CAP marker",
+        ));
+    }
+    let part15 = capability.and_then(|capability| capability.part15.as_ref());
+    if part15.is_some() && !rsiz_declares_cap {
+        return Err(invalid(
+            None,
+            Some(Marker::Siz),
+            "Pcap^15 requires Rsiz bit 14 to identify the Part 15 capability",
+        ));
+    }
+    if capability.is_some_and(|capability| capability.pcap & PART15_PCAP_MASK != 0)
+        != part15.is_some()
+    {
+        return Err(CodestreamError::SizeOverflow);
+    }
+
+    let rsiz_profile = siz.capabilities & 0x0fff;
+    if profile.is_some() != (rsiz_profile == 0x0fff) {
+        return Err(invalid(
+            None,
+            Some(Marker::Prf),
+            "PRF must be present exactly when the Rsiz profile field is 4095",
+        ));
+    }
+    if corresponding_profile.is_some() && part15.is_none() {
+        return Err(invalid(
+            None,
+            Some(Marker::Cpf),
+            "CPF is valid only with a declared Part 15 capability",
+        ));
+    }
+    if let Some(cpf) = corresponding_profile {
+        let expected = if rsiz_profile == 0x0fff {
+            add_small_to_words(&profile.ok_or(CodestreamError::SizeOverflow)?.words, 4096)?
+        } else {
+            alloc::vec![rsiz_profile + 1]
+        };
+        if cpf.words != expected {
+            return Err(invalid(
+                None,
+                Some(Marker::Cpf),
+                "CPFnum does not correspond to the profile declared by SIZ/PRF",
+            ));
+        }
+    }
+
+    Ok(if part15.is_some() {
+        CodestreamKind::Htj2k
+    } else {
+        CodestreamKind::J2k
+    })
+}
+
+fn add_small_to_words(words: &[u16], addend: u16) -> Result<Vec<u16>> {
+    let mut sum = Vec::with_capacity(words.len().saturating_add(1));
+    let mut carry = u32::from(addend);
+    for &word in words {
+        let value = u32::from(word) + carry;
+        sum.push(value as u16);
+        carry = value >> 16;
+    }
+    if carry != 0 {
+        sum.push(u16::try_from(carry).map_err(|_| CodestreamError::SizeOverflow)?);
+    }
+    Ok(sum)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RgnDeclaration {
+    component_index: u16,
+    style: u8,
+    shift: u8,
+}
+
+fn parse_rgn_declaration(
+    input: &[u8],
+    segment: &MarkerSegment,
+    siz: &SizMarker,
+) -> Result<RgnDeclaration> {
+    let payload = checked_slice(input, segment.data_offset, segment.data_len)?;
+    let selector_len = component_selector_len(siz);
+    let expected_len = selector_len
+        .checked_add(2)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if payload.len() != expected_len {
+        return Err(invalid(
+            Some(segment.offset),
+            Some(Marker::Rgn),
+            if selector_len == 1 {
+                "one-byte RGN component syntax requires Lrgn=5"
+            } else {
+                "two-byte RGN component syntax requires Lrgn=6"
+            },
+        ));
+    }
+    let (component_index, selector_len) =
+        component_selector(payload, segment.offset, Marker::Rgn, siz)?;
+    Ok(RgnDeclaration {
+        component_index,
+        style: payload[selector_len],
+        shift: payload[selector_len + 1],
+    })
+}
+
+fn validate_part15_rgn_markers(
+    input: &[u8],
+    markers: &[MarkerSegment],
+    siz: &SizMarker,
+    capability: Part15Capability,
+) -> Result<()> {
+    let mut main_seen = BTreeMap::<u16, usize>::new();
+    let mut tile_seen = BTreeMap::<(u16, u16), usize>::new();
+    let mut tile_part = None;
+    for segment in markers {
+        match segment.marker {
+            Marker::Sot => {
+                tile_part = Some(parse_sot(
+                    checked_slice(input, segment.data_offset, segment.data_len)?,
+                    segment.offset,
+                )?);
+            }
+            Marker::Sod | Marker::Eoc => tile_part = None,
+            Marker::Rgn => {
+                if !capability.roi_allowed {
+                    return Err(invalid(
+                        Some(segment.offset),
+                        Some(Marker::Rgn),
+                        "Ccap^15 declares an RGN-free codestream",
+                    ));
+                }
+                let declaration = parse_rgn_declaration(input, segment, siz)?;
+                if declaration.style != 0 {
+                    return Err(invalid(
+                        Some(segment.offset),
+                        Some(Marker::Rgn),
+                        "Part 15 inherits only the Part 1 Maxshift ROI style Srgn=0",
+                    ));
+                }
+                if declaration.shift > 37 {
+                    return Err(invalid(
+                        Some(segment.offset),
+                        Some(Marker::Rgn),
+                        "Part 15 requires SPrgn to be at most 37",
+                    ));
+                }
+                if let Some(tile_part) = tile_part {
+                    if tile_part.tile_part_index != 0 {
+                        return Err(invalid(
+                            Some(segment.offset),
+                            Some(Marker::Rgn),
+                            "tile-header RGN declarations are confined to the first tile part",
+                        ));
+                    }
+                    if tile_seen
+                        .insert(
+                            (tile_part.tile_index, declaration.component_index),
+                            segment.offset,
+                        )
+                        .is_some()
+                    {
+                        return Err(invalid(
+                            Some(segment.offset),
+                            Some(Marker::Rgn),
+                            "the first tile-part header repeats an RGN declaration for one component",
+                        ));
+                    }
+                } else if main_seen
+                    .insert(declaration.component_index, segment.offset)
+                    .is_some()
+                {
+                    return Err(invalid(
+                        Some(segment.offset),
+                        Some(Marker::Rgn),
+                        "the main header repeats an RGN declaration for one component",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_part15_capability_constraints(
+    input: &[u8],
+    markers: &[MarkerSegment],
+    siz: &SizMarker,
+    capability: Option<&CapabilityMarker>,
+    header_state: &EffectiveHeaderState,
+) -> Result<()> {
+    let Some(part15) = capability.and_then(|capability| capability.part15) else {
+        return Ok(());
+    };
+
+    validate_part15_rgn_markers(input, markers, siz, part15)?;
+    if !part15.heterogeneous_allowed {
+        let first_sot = markers
+            .iter()
+            .position(|segment| segment.marker == Marker::Sot)
+            .unwrap_or(markers.len());
+        if let Some(segment) = markers[first_sot..].iter().find(|segment| {
+            matches!(
+                segment.marker,
+                Marker::Cod
+                    | Marker::Coc
+                    | Marker::Rgn
+                    | Marker::Qcd
+                    | Marker::Qcc
+                    | Marker::Poc
+                    | Marker::Ppt
+            )
+        }) {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Cap),
+                "Ccap^15 declares a homogeneous codestream but tile-header state is heterogeneous",
+            ));
+        }
+    }
+
+    validate_part15_coding_style(header_state.main.cod, Marker::Cod, part15)?;
+    for style in &header_state.main.coc {
+        validate_part15_coding_style(style.coding_style, Marker::Coc, part15)?;
+    }
+    for tile in header_state.tiles.values() {
+        if let Some(style) = tile.cod {
+            validate_part15_coding_style(style, Marker::Cod, part15)?;
+        }
+        for style in &tile.coc {
+            validate_part15_coding_style(style.coding_style, Marker::Coc, part15)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_part15_coding_style(
+    style: CodingStyleMarker,
+    marker: Marker,
+    capability: Part15Capability,
+) -> Result<()> {
+    let method = style.code_block_style & 0xc0;
+    let reserved_style_bits = match method {
+        0x00 => false,
+        0x40 => style.code_block_style & !(0x40 | 0x08) != 0,
+        0x80 => true,
+        0xc0 => style.code_block_style & !(0xc0 | 0x3a) != 0,
+        _ => unreachable!(),
+    };
+    if reserved_style_bits {
+        return Err(invalid(
+            None,
+            Some(marker),
+            "SPcod/SPcoc uses bits reserved for its Part 15 coding method",
+        ));
+    }
+    match capability.code_block_mode {
+        Part15CodeBlockMode::HtOnly if method == 0x00 => {
+            return Err(invalid(
+                None,
+                Some(Marker::Cap),
+                "Ccap^15 declares HT-only code-blocks but SPcod/SPcoc declares classic coding",
+            ));
+        }
+        Part15CodeBlockMode::HtDeclared if style.code_block_style & 0x80 != 0 => {
+            return Err(invalid(
+                None,
+                Some(Marker::Cap),
+                "Ccap^15 declares tile-component-homogeneous coding but SPcod/SPcoc enables mixed coding",
+            ));
+        }
+        _ => {}
+    }
+    if !capability.irreversible_allowed
+        && style.transform == WaveletTransform::Irreversible97
+        && style.code_block_style & 0x40 != 0
+    {
+        return Err(invalid(
+            None,
+            Some(Marker::Cap),
+            "Ccap^15 declares HT reversible coding but an HT SPcod/SPcoc uses an irreversible transform",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "std"))]
+mod part15_signalling_tests {
+    use super::*;
+
+    fn ht_fixture() -> Vec<u8> {
+        let samples = (0_u8..64).collect::<Vec<_>>();
+        encode_htj2k_grayscale_u8_no_decomp(GrayscaleU8Encode {
+            width: 8,
+            height: 8,
+            samples: &samples,
+            stride_bytes: 8,
+        })
+        .unwrap()
+    }
+
+    fn marker_segment(codestream: &[u8], marker: Marker) -> Vec<u8> {
+        let offset = find_marker(codestream, 0, marker).unwrap();
+        let length = usize::from(read_u16(codestream, offset + 2).unwrap());
+        codestream[offset..offset + 2 + length].to_vec()
+    }
+
+    fn insert_before(mut codestream: Vec<u8>, marker: Marker, segment: &[u8]) -> Vec<u8> {
+        let offset = find_marker(&codestream, 0, marker).unwrap();
+        codestream.splice(offset..offset, segment.iter().copied());
+        codestream
+    }
+
+    fn insert_tile_header(mut codestream: Vec<u8>, segment: &[u8]) -> Vec<u8> {
+        let sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let sod = find_marker(&codestream, sot, Marker::Sod).unwrap();
+        let psot = read_u32(&codestream, sot + 6).unwrap();
+        codestream[sot + 6..sot + 10].copy_from_slice(
+            &psot
+                .checked_add(u32::try_from(segment.len()).unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream.splice(sod..sod, segment.iter().copied());
+        codestream
+    }
+
+    fn set_ccap15(codestream: &mut [u8], value: u16) {
+        let cap = find_marker(codestream, 0, Marker::Cap).unwrap();
+        codestream[cap + 8..cap + 10].copy_from_slice(&value.to_be_bytes());
+    }
+
+    fn profile_segment(marker: Marker, words: &[u16]) -> Vec<u8> {
+        let mut segment = marker.code().to_be_bytes().to_vec();
+        segment.extend_from_slice(&u16::try_from(2 + words.len() * 2).unwrap().to_be_bytes());
+        for word in words {
+            segment.extend_from_slice(&word.to_be_bytes());
+        }
+        segment
+    }
+
+    fn remove_marker_segment(codestream: &mut Vec<u8>, marker: Marker) -> Vec<u8> {
+        let offset = find_marker(codestream, 0, marker).unwrap();
+        let length = usize::from(read_u16(codestream, offset + 2).unwrap());
+        codestream.drain(offset..offset + 2 + length).collect()
+    }
+
+    fn multiple_ht_set_fixture() -> Vec<u8> {
+        encode_htj2k_two_layer_multiple_set_test_fixture(false).unwrap()
+    }
+
+    fn move_rgn_to_second_tile_part(mut codestream: Vec<u8>, rgn: &[u8]) -> Vec<u8> {
+        let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let empty_first = [0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 14, 0, 2, 0xff, 0x93];
+        codestream.splice(first_sot..first_sot, empty_first);
+        let second_sot = first_sot + empty_first.len();
+        codestream[second_sot + 10] = 1;
+        codestream[second_sot + 11] = 2;
+        let second_sod = find_marker(&codestream, second_sot, Marker::Sod).unwrap();
+        let psot = read_u32(&codestream, second_sot + 6).unwrap();
+        codestream[second_sot + 6..second_sot + 10]
+            .copy_from_slice(&(psot + u32::try_from(rgn.len()).unwrap()).to_be_bytes());
+        codestream.splice(second_sod..second_sod, rgn.iter().copied());
+        codestream
+    }
+
+    #[test]
+    fn retains_structured_part15_capability_and_qualified_writer_state() {
+        let codestream = ht_fixture();
+        let parsed = parse(&codestream).unwrap();
+        assert_eq!(parsed.kind, CodestreamKind::Htj2k);
+        assert_eq!(parsed.siz.capabilities & PART15_RSIZ_MASK, PART15_RSIZ_MASK);
+        let capability = parsed.capability.as_ref().unwrap();
+        assert_eq!(capability.pcap, PART15_PCAP_MASK);
+        assert_eq!(capability.pcaps, [PART15_PCAP_MASK]);
+        assert_eq!(
+            capability.parameters,
+            [CapabilityParameter {
+                index: 15,
+                value: 0,
+            }]
+        );
+        assert_eq!(
+            capability.part15,
+            Some(Part15Capability {
+                raw: 0,
+                code_block_mode: Part15CodeBlockMode::HtOnly,
+                multiple_ht_sets_allowed: false,
+                roi_allowed: false,
+                heterogeneous_allowed: false,
+                irreversible_allowed: false,
+                cleanup_magnitude_bound: 8,
+            })
+        );
+        assert_eq!(parsed.coding_style.unwrap().code_block_style, 0x40);
+        assert!(is_htj2k_lossless_profile(&codestream, &parsed));
+    }
+
+    #[test]
+    fn arbitrary_cap_is_not_an_htj2k_classifier() {
+        let samples = [17_u8; 16];
+        let part1 = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let cap = [0xff, 0x50, 0, 8, 0x80, 0, 0, 0, 0, 0];
+        let with_cap = insert_before(part1, Marker::Cod, &cap);
+        let parsed = parse(&with_cap).unwrap();
+        assert_eq!(parsed.kind, CodestreamKind::J2k);
+        assert_eq!(parsed.capability.unwrap().parameters[0].index, 1);
+
+        let mut ht_without_pcap15 = ht_fixture();
+        let cap_offset = find_marker(&ht_without_pcap15, 0, Marker::Cap).unwrap();
+        ht_without_pcap15[cap_offset + 4..cap_offset + 8]
+            .copy_from_slice(&(1_u32 << (32 - 14)).to_be_bytes());
+        assert_eq!(parse(&ht_without_pcap15).unwrap().kind, CodestreamKind::J2k);
+    }
+
+    #[test]
+    fn enforces_cap_length_cardinality_order_and_cross_signalling() {
+        let fixture = ht_fixture();
+        let cap = marker_segment(&fixture, Marker::Cap);
+
+        let duplicate = insert_before(fixture.clone(), Marker::Cod, &cap);
+        assert!(matches!(
+            parse(&duplicate),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut truncated = fixture.clone();
+        let cap_offset = find_marker(&truncated, 0, Marker::Cap).unwrap();
+        truncated[cap_offset + 2..cap_offset + 4].copy_from_slice(&7_u16.to_be_bytes());
+        assert!(matches!(
+            parse(&truncated),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut missing_rsiz = fixture.clone();
+        let siz = find_marker(&missing_rsiz, 0, Marker::Siz).unwrap();
+        missing_rsiz[siz + 4..siz + 6].copy_from_slice(&0_u16.to_be_bytes());
+        assert!(matches!(
+            parse(&missing_rsiz),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Siz),
+                ..
+            })
+        ));
+
+        let mut missing_cap = fixture;
+        let cap_offset = find_marker(&missing_cap, 0, Marker::Cap).unwrap();
+        let cap_len = usize::from(read_u16(&missing_cap, cap_offset + 2).unwrap());
+        missing_cap.drain(cap_offset..cap_offset + 2 + cap_len);
+        assert!(matches!(
+            parse(&missing_cap),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let tile_cap = insert_tile_header(ht_fixture(), &cap);
+        assert!(matches!(
+            parse(&tile_cap),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_reserved_and_contradictory_coding_declarations() {
+        for ccap in [0x0040, 0x4000] {
+            let mut codestream = ht_fixture();
+            set_ccap15(&mut codestream, ccap);
+            assert!(matches!(
+                parse(&codestream),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Cap),
+                    ..
+                })
+            ));
+        }
+
+        let mut classic = ht_fixture();
+        let cod = find_marker(&classic, 0, Marker::Cod).unwrap();
+        classic[cod + 12] = 0;
+        assert!(matches!(
+            parse(&classic),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut irreversible = ht_fixture();
+        let cod = find_marker(&irreversible, 0, Marker::Cod).unwrap();
+        irreversible[cod + 13] = 0;
+        assert!(matches!(
+            parse(&irreversible),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let reserved_coc = insert_before(
+            ht_fixture(),
+            Marker::Qcd,
+            &[0xff, 0x53, 0, 9, 0, 0, 0, 2, 2, 0x80, 1],
+        );
+        assert!(matches!(
+            parse(&reserved_coc),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Coc),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn legal_broader_part15_declarations_parse_but_are_not_natively_admitted() {
+        for ccap in [0x8000, 0x2000, 0x1000, 0x0800, 0x0020, 0x000b] {
+            let mut codestream = ht_fixture();
+            set_ccap15(&mut codestream, ccap);
+            let parsed = parse(&codestream).unwrap();
+            assert_eq!(parsed.kind, CodestreamKind::Htj2k);
+            assert!(matches!(
+                htj2k_lossless_profile_unsupported_construct(&codestream, &parsed),
+                Some((UnsupportedConstruct::HtBlockDecode, _))
+            ));
+            assert!(matches!(
+                decode_htj2k_lossless_owned(&codestream),
+                Err(CodestreamError::Unsupported {
+                    construct: UnsupportedConstruct::HtBlockDecode,
+                    ..
+                })
+            ));
+            let mut workspace = HtCodestreamDecodeWorkspace::new();
+            assert!(matches!(
+                decode_htj2k_lossless_owned_with_workspace(&codestream, &mut workspace),
+                Err(CodestreamError::Unsupported {
+                    construct: UnsupportedConstruct::HtBlockDecode,
+                    ..
+                })
+            ));
+        }
+
+        let mut mixed = ht_fixture();
+        set_ccap15(&mut mixed, 0xc000);
+        let cod = find_marker(&mixed, 0, Marker::Cod).unwrap();
+        mixed[cod + 12] = 0xc0;
+        let parsed = parse(&mixed).unwrap();
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&mixed, &parsed),
+            Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
+    }
+
+    #[test]
+    fn parses_cpf_and_checks_minimal_profile_correspondence() {
+        let fixture = ht_fixture();
+        let cpf = profile_segment(Marker::Cpf, &[1]);
+        let with_cpf = insert_before(fixture.clone(), Marker::Cod, &cpf);
+        let parsed = parse(&with_cpf).unwrap();
+        assert_eq!(
+            parsed.corresponding_profile,
+            Some(CorrespondingProfileMarker { words: vec![1] })
+        );
+
+        let wrong = insert_before(
+            fixture.clone(),
+            Marker::Cod,
+            &profile_segment(Marker::Cpf, &[2]),
+        );
+        assert!(matches!(
+            parse(&wrong),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cpf),
+                ..
+            })
+        ));
+
+        let non_minimal = insert_before(
+            fixture.clone(),
+            Marker::Cod,
+            &profile_segment(Marker::Cpf, &[1, 0]),
+        );
+        assert!(matches!(
+            parse(&non_minimal),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cpf),
+                ..
+            })
+        ));
+
+        let late = insert_before(fixture, Marker::Qcd, &cpf);
+        assert!(matches!(
+            parse(&late),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cpf),
+                ..
+            })
+        ));
+
+        let duplicate = insert_before(with_cpf, Marker::Cod, &cpf);
+        assert!(matches!(
+            parse(&duplicate),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cpf),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn enforces_roi_declaration_value_and_native_boundary() {
+        let rgn = [0xff, 0x5e, 0, 5, 0, 0, 37];
+        let without_declaration = insert_before(ht_fixture(), Marker::Qcd, &rgn);
+        assert!(matches!(
+            parse(&without_declaration),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Rgn),
+                ..
+            })
+        ));
+
+        let mut declared = ht_fixture();
+        set_ccap15(&mut declared, 0x1000);
+        let declared = insert_before(declared, Marker::Qcd, &rgn);
+        let parsed = parse(&declared).unwrap();
+        assert!(matches!(
+            htj2k_lossless_profile_unsupported_construct(&declared, &parsed),
+            Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
+
+        let mut invalid_value = ht_fixture();
+        set_ccap15(&mut invalid_value, 0x1000);
+        let invalid_value =
+            insert_before(invalid_value, Marker::Qcd, &[0xff, 0x5e, 0, 5, 0, 0, 38]);
+        assert!(matches!(
+            parse(&invalid_value),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Rgn),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn validates_complete_part15_rgn_syntax_scope_and_cardinality() {
+        let rgn = [0xff, 0x5e, 0, 5, 0, 0, 37];
+        let mut declared = ht_fixture();
+        set_ccap15(&mut declared, 0x1000);
+
+        for malformed in [
+            &[0xff, 0x5e, 0, 4, 0, 0][..],
+            &[0xff, 0x5e, 0, 6, 0, 0, 37, 0][..],
+            &[0xff, 0x5e, 0, 5, 1, 0, 37][..],
+            &[0xff, 0x5e, 0, 5, 0, 1, 37][..],
+            &[0xff, 0x5e, 0, 5, 0, 0, 38][..],
+        ] {
+            let malformed = insert_before(declared.clone(), Marker::Qcd, malformed);
+            assert!(matches!(
+                parse(&malformed),
+                Err(CodestreamError::InvalidMarker {
+                    marker: Some(Marker::Rgn),
+                    ..
+                })
+            ));
+        }
+
+        let duplicate_main = insert_before(
+            insert_before(declared.clone(), Marker::Qcd, &rgn),
+            Marker::Qcd,
+            &rgn,
+        );
+        assert!(matches!(
+            parse(&duplicate_main),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Rgn),
+                ..
+            })
+        ));
+
+        let mut tile_declared = declared.clone();
+        set_ccap15(&mut tile_declared, 0x1800);
+        let duplicate_tile = insert_tile_header(insert_tile_header(tile_declared, &rgn), &rgn);
+        assert!(matches!(
+            parse(&duplicate_tile),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Rgn),
+                ..
+            })
+        ));
+
+        let mut late_declared = declared.clone();
+        set_ccap15(&mut late_declared, 0x1800);
+        let late = move_rgn_to_second_tile_part(late_declared, &rgn);
+        assert!(matches!(
+            parse(&late),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Rgn),
+                ..
+            })
+        ));
+
+        let mut legal_override = declared;
+        set_ccap15(&mut legal_override, 0x1800);
+        let legal_override = insert_before(legal_override, Marker::Qcd, &rgn);
+        let legal_override = insert_tile_header(legal_override, &rgn);
+        assert_eq!(parse(&legal_override).unwrap().kind, CodestreamKind::Htj2k);
+    }
+
+    #[test]
+    fn validates_two_byte_part15_rgn_component_selectors() {
+        let mut codestream = ht_fixture();
+        set_ccap15(&mut codestream, 0x1000);
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        let old_length = usize::from(read_u16(&codestream, siz + 2).unwrap());
+        let component_record = codestream[siz + 40..siz + 43].to_vec();
+        let extra_records = component_record.repeat(256);
+        codestream.splice(
+            siz + 2 + old_length..siz + 2 + old_length,
+            extra_records.iter().copied(),
+        );
+        codestream[siz + 2..siz + 4].copy_from_slice(
+            &u16::try_from(old_length + extra_records.len())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        codestream[siz + 38..siz + 40].copy_from_slice(&257_u16.to_be_bytes());
+        let valid = insert_before(
+            codestream.clone(),
+            Marker::Qcd,
+            &[0xff, 0x5e, 0, 6, 1, 0, 0, 37],
+        );
+        assert_eq!(parse(&valid).unwrap().siz.component_count(), 257);
+
+        let truncated_selector =
+            insert_before(codestream, Marker::Qcd, &[0xff, 0x5e, 0, 5, 1, 0, 37]);
+        assert!(matches!(
+            parse(&truncated_selector),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Rgn),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn permits_extension_markers_between_ordered_signalling_markers() {
+        let extension = [0xff, 0x65, 0, 2];
+        let mut codestream = ht_fixture();
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        codestream[siz + 4..siz + 6].copy_from_slice(&0x4fff_u16.to_be_bytes());
+        codestream = insert_before(codestream, Marker::Cap, &extension);
+        codestream = insert_before(codestream, Marker::Cod, &profile_segment(Marker::Prf, &[1]));
+        codestream = insert_before(codestream, Marker::Prf, &extension);
+        codestream = insert_before(
+            codestream,
+            Marker::Cod,
+            &profile_segment(Marker::Cpf, &[0x1001]),
+        );
+        codestream = insert_before(codestream, Marker::Cpf, &extension);
+        codestream = insert_before(codestream, Marker::Cod, &extension);
+        let parsed = parse(&codestream).unwrap();
+        assert_eq!(parsed.profile.unwrap().words, [1]);
+        assert_eq!(parsed.corresponding_profile.unwrap().words, [0x1001]);
+    }
+
+    #[test]
+    fn rejects_signalling_markers_after_any_other_part1_marker() {
+        let mut late_cap = ht_fixture();
+        let cap = remove_marker_segment(&mut late_cap, Marker::Cap);
+        late_cap = insert_before(late_cap, Marker::Qcd, &cap);
+        assert!(matches!(
+            parse(&late_cap),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut late_prf = ht_fixture();
+        let siz = find_marker(&late_prf, 0, Marker::Siz).unwrap();
+        late_prf[siz + 4..siz + 6].copy_from_slice(&0x4fff_u16.to_be_bytes());
+        late_prf = insert_before(late_prf, Marker::Qcd, &profile_segment(Marker::Prf, &[1]));
+        assert!(matches!(
+            parse(&late_prf),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Prf),
+                ..
+            })
+        ));
+
+        let late_cpf = insert_before(
+            ht_fixture(),
+            Marker::Qcd,
+            &profile_segment(Marker::Cpf, &[1]),
+        );
+        assert!(matches!(
+            parse(&late_cpf),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cpf),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn singleht_packet_contradiction_is_invalid_in_direct_decode_routes() {
+        let codestream = multiple_ht_set_fixture();
+        let parsed = parse(&codestream).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let payload = tile_payload(&codestream, &parsed.tiles[0]).unwrap();
+        assert!(matches!(
+            parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            validate_part15_packet_signalling(&codestream, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        let source = ContiguousPacketSource { bytes: payload };
+        assert!(matches!(
+            parse_default_precinct_packets_from_source(
+                &codestream,
+                &parsed,
+                tile_rect,
+                &source,
+                Some(1),
+                None,
+                None,
+                PacketOrganisationConfig::DEFAULT,
+                None,
+            ),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        let mut workspace = HtCodestreamDecodeWorkspace::new();
+        assert!(matches!(
+            decode_htj2k_lossless_owned_with_workspace(&codestream, &mut workspace),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut broader_singleht = codestream.clone();
+        set_ccap15(&mut broader_singleht, 0x1000);
+        let parsed = parse(&broader_singleht).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&broader_singleht, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&broader_singleht),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut broader = codestream;
+        set_ccap15(&mut broader, 0x2000);
+        let parsed = parse(&broader).unwrap();
+        let contributions = parse_default_precinct_lrcp_packets(
+            &broader,
+            &parsed,
+            tile_rects(&parsed).unwrap()[0],
+            tile_payload(&broader, &parsed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(contributions[0].ht_coding_set_count(), 2);
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&broader),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn one_decomp_singleht_contradiction_precedes_compatibility_profile_gates() {
+        let codestream = encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
+        let parsed = parse(&codestream).unwrap();
+        let coding_style = parsed.uniform_effective_coding_style().unwrap();
+        assert_eq!(coding_style.decomposition_levels, 1);
+        assert_eq!(coding_style.layers, 2);
+        assert!(matches!(
+            validate_part15_packet_signalling(&codestream, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_no_decomp_owned(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        let mut workspace = HtCodestreamDecodeWorkspace::new();
+        assert!(matches!(
+            decode_htj2k_lossless_no_decomp_owned_with_workspace(&codestream, &mut workspace),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            htj2k_lossless_no_decomp_workload_profile(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            workspace.decode_cleanup_vlc_output_probe(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut declared_multiht = codestream;
+        set_ccap15(&mut declared_multiht, 0x2000);
+        let parsed = parse(&declared_multiht).unwrap();
+        let tile_rect = tile_rects(&parsed).unwrap()[0];
+        let contributions = parse_default_precinct_lrcp_packets(
+            &declared_multiht,
+            &parsed,
+            tile_rect,
+            tile_payload(&declared_multiht, &parsed.tiles[0]).unwrap(),
+        )
+        .unwrap();
+        assert!(contributions.iter().any(|contribution| {
+            contribution.resolution == 0 && contribution.ht_coding_set_count() == 2
+        }));
+    }
+
+    #[test]
+    fn support_diagnostic_requires_separate_part15_validity() {
+        let mut legal_but_unsupported = ht_fixture();
+        set_ccap15(&mut legal_but_unsupported, 0x1000);
+        let legal = parse(&legal_but_unsupported).unwrap();
+        assert!(validate_part15_packet_signalling(&legal_but_unsupported, &legal).is_ok());
+        let legal_diagnostic =
+            htj2k_lossless_profile_unsupported_construct(&legal_but_unsupported, &legal);
+        assert!(matches!(
+            legal_diagnostic,
+            Some((UnsupportedConstruct::HtBlockDecode, _))
+        ));
+
+        let mut invalid_and_unsupported = multiple_ht_set_fixture();
+        set_ccap15(&mut invalid_and_unsupported, 0x1000);
+        let invalid = parse(&invalid_and_unsupported).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&invalid_and_unsupported, &invalid),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(!is_htj2k_lossless_profile(
+            &invalid_and_unsupported,
+            &invalid
+        ));
+        assert_eq!(
+            htj2k_lossless_profile_unsupported_construct(&invalid_and_unsupported, &invalid),
+            legal_diagnostic
+        );
+    }
+
+    #[test]
+    fn singleht_validation_uses_all_tile_part_payload_spans() {
+        let codestream = encode_htj2k_two_layer_multiple_set_test_fixture(true).unwrap();
+        let parsed = parse(&codestream).unwrap();
+        assert_eq!(parsed.tiles.len(), 2);
+        assert!(matches!(
+            validate_part15_packet_signalling(&codestream, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&codestream),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut broader_singleht = codestream.clone();
+        set_ccap15(&mut broader_singleht, 0x1000);
+        let parsed = parse(&broader_singleht).unwrap();
+        assert!(matches!(
+            validate_part15_packet_signalling(&broader_singleht, &parsed),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            })
+        ));
+
+        let mut multiht = codestream;
+        set_ccap15(&mut multiht, 0x2000);
+        let parsed = parse(&multiht).unwrap();
+        assert!(validate_part15_packet_signalling(&multiht, &parsed).is_ok());
+        assert!(matches!(
+            decode_htj2k_lossless_owned(&multiht),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::HtBlockDecode,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn cpf_word_allocation_is_bounded_by_the_marker_length() {
+        let maximum_payload = vec![0xff; usize::from(u16::MAX - 3)];
+        let parsed = parse_corresponding_profile(&maximum_payload, 0).unwrap();
+        assert_eq!(parsed.words.len(), maximum_payload.len() / 2);
+
+        let mut zero_terminated = maximum_payload;
+        let end = zero_terminated.len();
+        zero_terminated[end - 2..].copy_from_slice(&0_u16.to_be_bytes());
+        assert!(matches!(
+            parse_corresponding_profile(&zero_terminated, 0),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cpf),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reconciles_prf_cpf_with_checked_multiword_carry() {
+        assert_eq!(
+            add_small_to_words(&[0xf000, 0xffff], 4096).unwrap(),
+            [0, 0, 1]
+        );
+
+        let mut fixture = ht_fixture();
+        let siz = find_marker(&fixture, 0, Marker::Siz).unwrap();
+        fixture[siz + 4..siz + 6].copy_from_slice(&0x4fff_u16.to_be_bytes());
+        let prf = profile_segment(Marker::Prf, &[1]);
+        let cpf = profile_segment(Marker::Cpf, &[0x1001]);
+        let fixture = insert_before(fixture, Marker::Cod, &cpf);
+        let fixture = insert_before(fixture, Marker::Cpf, &prf);
+        let parsed = parse(&fixture).unwrap();
+        assert_eq!(parsed.profile.unwrap().words, [1]);
+        assert_eq!(parsed.corresponding_profile.unwrap().words, [0x1001]);
+    }
+
+    #[test]
+    fn bounded_cap_bit_mutation_sweep_never_bypasses_structural_state() {
+        let fixture = ht_fixture();
+        let cap = find_marker(&fixture, 0, Marker::Cap).unwrap();
+        for byte in cap + 2..cap + 10 {
+            for bit in 0..8 {
+                let mut mutated = fixture.clone();
+                mutated[byte] ^= 1 << bit;
+                if let Ok(parsed) = parse(&mutated) {
+                    let capability = parsed.capability.expect("retained CAP state");
+                    assert_eq!(
+                        capability.parameters.len(),
+                        capability.pcap.count_ones() as usize
+                    );
+                    assert_eq!(
+                        parsed.kind == CodestreamKind::Htj2k,
+                        capability.part15.is_some()
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn retain_tile_part_header_markers(

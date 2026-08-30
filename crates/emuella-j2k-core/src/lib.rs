@@ -3921,6 +3921,9 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
 
     if input.starts_with(&[0xff, 0x4f]) {
         let codestream = codestream::parse(input).map_err(map_codestream_error)?;
+        #[cfg(feature = "std")]
+        codestream::validate_part15_packet_signalling(input, &codestream)
+            .map_err(map_codestream_error)?;
         return Ok(metadata_from_codestream(input, codestream, options));
     }
 
@@ -8921,7 +8924,13 @@ fn metadata_from_container(
         .primary_codestream(input)
         .map_err(map_container_error)?;
     let parsed_codestream = match primary_codestream {
-        Some(bytes) => Some(codestream::parse(bytes).map_err(map_codestream_error)?),
+        Some(bytes) => {
+            let codestream = codestream::parse(bytes).map_err(map_codestream_error)?;
+            #[cfg(feature = "std")]
+            codestream::validate_part15_packet_signalling(bytes, &codestream)
+                .map_err(map_codestream_error)?;
+            Some(codestream)
+        }
         None => None,
     };
     if container.kind == container::ContainerKind::Jp2
@@ -12898,22 +12907,22 @@ mod effective_coding_style_tests {
         let siz_segment = fixture[siz..siz + 2 + lsiz].to_vec();
         let mut duplicate_main_siz = fixture.clone();
         duplicate_main_siz.splice(cod..cod, siz_segment.iter().copied());
-        let parsed_duplicate_main_siz = codestream::parse(&duplicate_main_siz).unwrap();
-        assert!(
-            !codestream::is_supported_part1_native_multitile_partial_profile(
-                &duplicate_main_siz,
-                &parsed_duplicate_main_siz,
-            )
-        );
+        assert!(matches!(
+            codestream::parse(&duplicate_main_siz),
+            Err(codestream::CodestreamError::InvalidMarker {
+                marker: Some(codestream::Marker::Siz),
+                ..
+            })
+        ));
         nearby.push(duplicate_main_siz);
         let tile_header_siz = insert_first_tile_header_segment(fixture.clone(), &siz_segment);
-        let parsed_tile_header_siz = codestream::parse(&tile_header_siz).unwrap();
-        assert!(
-            !codestream::is_supported_part1_native_multitile_partial_profile(
-                &tile_header_siz,
-                &parsed_tile_header_siz,
-            )
-        );
+        assert!(matches!(
+            codestream::parse(&tile_header_siz),
+            Err(codestream::CodestreamError::InvalidMarker {
+                marker: Some(codestream::Marker::Siz),
+                ..
+            })
+        ));
         nearby.push(tile_header_siz);
         let mut bytes_after_eoc = fixture.clone();
         bytes_after_eoc.extend_from_slice(&[0, 1]);
@@ -14982,21 +14991,153 @@ mod effective_coding_style_tests {
             } if detail.contains("reversible scalar QCD")
         ));
 
-        let mut unsupported_final_set = fixture();
-        let cod = unsupported_final_set
+        let mut contradictory_classic_style = fixture();
+        let cod = contradictory_classic_style
             .windows(2)
             .position(|bytes| bytes == [0xff, 0x52])
             .unwrap();
-        unsupported_final_set[cod + 12] = 0;
+        contradictory_classic_style[cod + 12] = 0;
         assert!(matches!(
-            inspect(&unsupported_final_set, &InspectOptions::default())
+            inspect(&contradictory_classic_style, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { ref message, .. })
+                if message.contains("HT-only code-blocks")
+        ));
+        let decode_options = DecodeOptions::default();
+        let valid_shape = decode_shape(&fixture(), &decode_options).unwrap();
+        let info = valid_shape.image_info().unwrap();
+        let mut samples = vec![0x6d; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&contradictory_classic_style, &mut target, &decode_options),
+                Err(J2kError::InvalidInput { .. })
+            ));
+        }
+        assert!(samples.iter().all(|sample| *sample == 0x6d));
+
+        let mut broader_capability = fixture();
+        let cap = broader_capability
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0x50])
+            .unwrap();
+        broader_capability[cap + 8..cap + 10].copy_from_slice(&0x2000_u16.to_be_bytes());
+        assert!(matches!(
+            inspect(&broader_capability, &InspectOptions::default())
                 .unwrap()
                 .support,
             SupportStatus::Unsupported {
                 feature: UnsupportedFeature::EntropyCoder,
-                ref detail,
-            } if detail.contains("HT final coding set")
+                ..
+            }
         ));
+        let mut broader_samples = vec![0x7b; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut broader_samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&broader_capability, &mut target, &decode_options),
+                Err(J2kError::Unsupported {
+                    feature: UnsupportedFeature::EntropyCoder,
+                    ..
+                })
+            ));
+        }
+        assert!(broader_samples.iter().all(|sample| *sample == 0x7b));
+
+        for split_across_tile_parts in [false, true] {
+            let mut contradictory_sets =
+                codestream::encode_htj2k_two_layer_multiple_set_test_fixture(
+                    split_across_tile_parts,
+                )
+                .unwrap();
+            let cap = contradictory_sets
+                .windows(2)
+                .position(|bytes| bytes == [0xff, 0x50])
+                .unwrap();
+            contradictory_sets[cap + 8..cap + 10].copy_from_slice(&0x1000_u16.to_be_bytes());
+            assert!(matches!(
+                inspect(&contradictory_sets, &InspectOptions::default()),
+                Err(J2kError::InvalidInput { ref message, .. })
+                    if message.contains("SINGLEHT")
+            ));
+
+            let mut contradiction_samples =
+                vec![0x53; usize::try_from(info.width * info.height).unwrap()];
+            {
+                let plane = PlaneMut::new(
+                    &mut contradiction_samples,
+                    info.width,
+                    info.height,
+                    usize::try_from(info.width).unwrap(),
+                    info.sample_format,
+                )
+                .unwrap();
+                let mut planes = [plane];
+                let mut target = ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                };
+                assert!(matches!(
+                    decode_into(&contradictory_sets, &mut target, &decode_options),
+                    Err(J2kError::InvalidInput { ref message, .. })
+                        if message.contains("SINGLEHT")
+                ));
+            }
+            assert!(contradiction_samples.iter().all(|sample| *sample == 0x53));
+        }
+
+        let one_decomp_contradiction =
+            codestream::encode_htj2k_one_decomp_two_layer_multiple_set_test_fixture().unwrap();
+        assert!(matches!(
+            inspect(&one_decomp_contradiction, &InspectOptions::default()),
+            Err(J2kError::InvalidInput { ref message, .. })
+                if message.contains("SINGLEHT")
+        ));
+        let mut one_decomp_samples = vec![0x39; usize::try_from(info.width * info.height).unwrap()];
+        {
+            let plane = PlaneMut::new(
+                &mut one_decomp_samples,
+                info.width,
+                info.height,
+                usize::try_from(info.width).unwrap(),
+                info.sample_format,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            let mut target = ImageViewMut::Planar {
+                info: &info,
+                planes: &mut planes,
+            };
+            assert!(matches!(
+                decode_into(&one_decomp_contradiction, &mut target, &decode_options),
+                Err(J2kError::InvalidInput { ref message, .. })
+                    if message.contains("SINGLEHT")
+            ));
+        }
+        assert!(one_decomp_samples.iter().all(|sample| *sample == 0x39));
 
         let multitile_decomposition = multitile_fixture(1, 1);
         assert!(matches!(
