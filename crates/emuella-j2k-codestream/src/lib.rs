@@ -29330,6 +29330,7 @@ enum ExplicitPrecinctPermission {
     ValidatedProfile0P004,
     HtSixLevelReduced,
     HtHeterogeneousReversibleReduced,
+    HtScalarDerivedReduced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29370,6 +29371,10 @@ impl PacketOrganisationConfig {
     };
     const HT_HETEROGENEOUS_REVERSIBLE_REDUCED: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced,
+        ..Self::DEFAULT
+    };
+    const HT_SCALAR_DERIVED_REDUCED: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtScalarDerivedReduced,
         ..Self::DEFAULT
     };
     // The exact public-route validator is the only production caller that
@@ -31648,7 +31653,10 @@ fn packet_component_styles(
             != TwoVolumeSinglePrecinctPermission::None
         || (packet_organisation.explicit_precinct_permission
             == ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
-            && ht_heterogeneous_reversible_reduced_envelope(codestream));
+            && ht_heterogeneous_reversible_reduced_envelope(codestream))
+        || (packet_organisation.explicit_precinct_permission
+            == ExplicitPrecinctPermission::HtScalarDerivedReduced
+            && ht_scalar_derived_reduced_envelope(codestream));
     if !heterogeneous_styles_granted {
         let uniform = uniform_effective_coding_style(codestream)?;
         return Ok(alloc::vec![uniform; component_count]);
@@ -31871,6 +31879,11 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
+    if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtScalarDerivedReduced
+    {
+        return ht_scalar_derived_reduced_envelope(codestream);
+    }
     if packet_organisation.explicit_precinct_permission
         == ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
     {
@@ -32147,9 +32160,11 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         &subband_counts,
         1usize
             + usize::from(
-                if packet_organisation.explicit_precinct_permission
-                    == ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
-                {
+                if matches!(
+                    packet_organisation.explicit_precinct_permission,
+                    ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
+                        | ExplicitPrecinctPermission::HtScalarDerivedReduced
+                ) {
                     // With every component overridden, the unused QCD still
                     // describes the COD default, not selected component zero.
                     codestream
@@ -50353,6 +50368,196 @@ fn prepare_ht_heterogeneous_reversible_reduced_component(
     })
 }
 
+fn ht_scalar_derived_reduced_envelope(codestream: &Codestream) -> bool {
+    codestream.kind == CodestreamKind::Htj2k
+        && codestream.siz.components.len() == 4
+        && codestream
+            .siz
+            .components
+            .iter()
+            .enumerate()
+            .all(|(index, component)| {
+                let separation = if index < 2 { 1 } else { 2 };
+                component.bits_per_sample == 8
+                    && !component.signed
+                    && component.horizontal_separation == separation
+                    && component.vertical_separation == separation
+            })
+        && codestream.siz.image_origin_x == 0
+        && codestream.siz.image_origin_y == 0
+        && codestream.siz.tile_origin_x == 0
+        && codestream.siz.tile_origin_y == 0
+        && codestream.siz.tile_count_x() == Ok(1)
+        && codestream.siz.tile_count_y() == Ok(1)
+        && codestream.tiles.len() == 1
+        && u64::from(codestream.image_width()) * u64::from(codestream.image_height())
+            <= MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES
+        && (0..4).all(|component| {
+            codestream
+                .effective_coding_style(component)
+                .is_some_and(|style| {
+                    style.entropy_coder == EntropyCoder::HtBlockCoding
+                        && style.transform
+                            == if component == 3 {
+                                WaveletTransform::Reversible53
+                            } else {
+                                WaveletTransform::Irreversible97
+                            }
+                        && style.decomposition_levels == if component == 1 { 3 } else { 6 }
+                        && !style.multiple_component_transform
+                        && style.progression_order == ProgressionOrder::Pcrl
+                        && (1..=7).contains(&style.layers)
+                        && style.code_block_style == 0x40
+                        && style.code_block_width_exponent == 5
+                        && style.code_block_height_exponent == 5
+                        && !style.sop_markers
+                        && !style.eph_markers
+                        && style.precincts_declared
+                        && style.precinct_exponents[..=usize::from(style.decomposition_levels)]
+                            .iter()
+                            .all(|&precinct| matches!(precinct, 0x77 | 0x88))
+                })
+        })
+        && ht_heterogeneous_reduced_markers(codestream.markers.iter())
+}
+
+#[cfg(feature = "std")]
+fn prepare_ht_scalar_derived_reduced_component(
+    input: &[u8],
+    codestream: Codestream,
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<PreparedHtj2kReducedComponentDecode<'_>> {
+    if !ht_scalar_derived_reduced_envelope(&codestream) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "HT scalar-derived reduction requires the bounded mixed-transform sampled PCRL envelope",
+        ));
+    }
+    let part15 = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if part15.code_block_mode != Part15CodeBlockMode::HtOnly || part15.cleanup_magnitude_bound > 18
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cap),
+            UnsupportedConstruct::HtBlockDecode,
+            "scalar-derived reduced reconstruction requires HTONLY with magnitude bound at most 18",
+        ));
+    }
+    let config = PacketOrganisationConfig::HT_SCALAR_DERIVED_REDUCED;
+    let styles = packet_component_styles(&codestream, config)?;
+    let coding_style = styles[0];
+    let counts = styles
+        .iter()
+        .map(|style| 1 + usize::from(style.decomposition_levels) * 3)
+        .collect::<Vec<_>>();
+    let quantization = parse_component_quantization_for_styles(
+        input,
+        &codestream,
+        &styles,
+        &counts,
+        1 + usize::from(
+            codestream
+                .coding_style
+                .ok_or(CodestreamError::SizeOverflow)?
+                .decomposition_levels,
+        ) * 3,
+        None,
+    )?;
+    for (component, quantizer) in quantization.iter().enumerate() {
+        let expected = match component {
+            0 => transform::QuantizationStyle::ScalarDerived,
+            3 => transform::QuantizationStyle::NoQuantization,
+            _ => transform::QuantizationStyle::ScalarExpounded,
+        };
+        if quantizer.style != expected
+            || quantizer.steps.iter().any(|step| {
+                step.exponent == 0
+                    || step
+                        .exponent
+                        .checked_add(quantizer.guard_bits)
+                        .and_then(|bits| bits.checked_sub(1))
+                        .is_none_or(|bits| bits > 30)
+            })
+        {
+            return Err(unsupported(
+                None,
+                Some(Marker::Qcd),
+                UnsupportedConstruct::MarkerSegment,
+                "scalar-derived reduction requires bounded effective derived, expounded and reversible quantisers",
+            ));
+        }
+    }
+    let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
+    let (retained, output_width, output_height, _) = htj2k_reduced_component_output_geometry(
+        tile_rect.width,
+        tile_rect.height,
+        coding_style.decomposition_levels,
+        request,
+    )?;
+    let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
+        input,
+        &codestream,
+        tile_rect,
+        &ContiguousPacketSource { bytes: payload },
+        None,
+        None,
+        None,
+        config,
+        None,
+        HtCodingSetRetention::NativeAdmission,
+    )?
+    .contributions;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    // Packet admission owns every native grid. The block coder receives only
+    // selected unit-sampled component zero; transform and precinct placement
+    // are handled by this prepared reconstruction, not the entropy decoder.
+    let mut state = ht_marker_state(&codestream).ok_or(CodestreamError::SizeOverflow)?;
+    state.components = 1;
+    state.all_components_same_sample_format = true;
+    state.all_components_unit_sampled = true;
+    state.packet_progression_supported = true;
+    state.reversible_transform = true;
+    state.precincts_declared = false;
+    state.code_block_width =
+        ht_code_block_dimension_from_exponent(coding_style.code_block_width_exponent);
+    state.code_block_height =
+        ht_code_block_dimension_from_exponent(coding_style.code_block_height_exponent);
+    let marker_candidate = ht::plan_decode_candidate(state).map_err(|classification| {
+        unsupported(
+            None,
+            None,
+            ht_construct_from_reason(classification.reason),
+            classification.reason.message(),
+        )
+    })?;
+    let candidate = HtCodestreamDecodeCandidate {
+        marker_candidate,
+        tile_part: codestream.tiles[0],
+    };
+    Ok(PreparedHtj2kReducedComponentDecode {
+        input,
+        codestream,
+        candidate,
+        coding_style,
+        reconstruction: Htj2kReducedComponentReconstruction::Irreversible,
+        tile_rect,
+        contributions: contributions
+            .into_iter()
+            .filter(|part| part.component_index == 0 && part.resolution <= retained)
+            .collect(),
+        request,
+        output_width,
+        output_height,
+    })
+}
+
 fn ht_six_level_reduced_envelope(codestream: &Codestream) -> bool {
     let Some(style) = codestream.uniform_effective_coding_style() else {
         return false;
@@ -50516,6 +50721,10 @@ pub fn prepare_htj2k_reduced_component_decode(
             .map(Some);
     }
     if request.component_index == 0 && request.discard_levels == 3 {
+        if ht_scalar_derived_reduced_envelope(&codestream) {
+            return prepare_ht_scalar_derived_reduced_component(input, codestream, request)
+                .map(Some);
+        }
         return prepare_ht_six_level_reduced_component(input, codestream, request).map(Some);
     }
     if request.component_index != 0 || request.discard_levels != 2 {
@@ -53340,6 +53549,8 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
                 PacketOrganisationConfig::HT_SIX_LEVEL_REDUCED
             } else if ht_heterogeneous_reversible_reduced_envelope(codestream) {
                 PacketOrganisationConfig::HT_HETEROGENEOUS_REVERSIBLE_REDUCED
+            } else if ht_scalar_derived_reduced_envelope(codestream) {
+                PacketOrganisationConfig::HT_SCALAR_DERIVED_REDUCED
             } else {
                 PacketOrganisationConfig::DEFAULT
             },
