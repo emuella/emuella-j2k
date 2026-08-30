@@ -5116,6 +5116,16 @@ impl PreparedHtj2kReducedComponentDecode<'_> {
     pub fn component_index(&self) -> u16 {
         self.request.component_index
     }
+
+    /// Native precision of the selected plane, before comparison scaling.
+    pub fn bits_per_sample(&self) -> u8 {
+        self.codestream.siz.components[usize::from(self.request.component_index)].bits_per_sample
+    }
+
+    /// Native signedness of the selected plane.
+    pub fn signed(&self) -> bool {
+        self.codestream.siz.components[usize::from(self.request.component_index)].signed
+    }
 }
 
 /// Borrowed grayscale sample plane accepted by the first native Part 1 encode
@@ -11207,6 +11217,194 @@ fn encode_ht_irreversible_reduced_fixture(
     write_tile_part(&mut codestream, 0, &packet, true)?;
     Ok(codestream)
 }
+
+/// Synthetic heterogeneous CPRL test support, not an application encode profile.
+#[doc(hidden)]
+pub fn encode_htj2k_heterogeneous_reduced_component_test_fixture(
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>> {
+    encode_ht_heterogeneous_reduced_fixture(width, height, 30)
+}
+
+fn encode_ht_heterogeneous_reduced_fixture(
+    width: u32,
+    height: u32,
+    layers: u16,
+) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    write_native_main_header(
+        &mut output,
+        width,
+        height,
+        width,
+        height,
+        12,
+        3,
+        false,
+        7,
+        &[12; 22],
+        true,
+        0,
+        1,
+    )?;
+    let siz = find_marker(&output, 0, Marker::Siz).ok_or(CodestreamError::SizeOverflow)?;
+    // Selected signed 12-bit, unselected unsigned 8-bit and signed 16-bit.
+    for (component, format) in [0x8b, 7, 0x8f].into_iter().enumerate() {
+        output[siz + 40 + component * 3] = format;
+    }
+    let cap = find_marker(&output, 0, Marker::Cap).ok_or(CodestreamError::SizeOverflow)?;
+    output[cap + 8..cap + 10].copy_from_slice(&10_u16.to_be_bytes());
+    let cod = find_marker(&output, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
+    output[cod + 4] = 6; // Inline SOP/EPH, inherited by every COC.
+    output[cod + 5] = 4;
+    output[cod + 6..cod + 8].copy_from_slice(&layers.to_be_bytes());
+    let qcd = find_marker(&output, 0, Marker::Qcd).ok_or(CodestreamError::SizeOverflow)?;
+    output[qcd + 4] = 3 << 5;
+    let mut component_subbands = Vec::new();
+    let mut segments = Vec::new();
+    for component in 0..3_u8 {
+        let levels = 6 + component;
+        let block = if component == 1 { 32 } else { 64 };
+        let mut parameters = alloc::vec![
+            component,
+            1,
+            levels,
+            if block == 32 { 3 } else { 4 },
+            if block == 32 { 3 } else { 4 },
+            0x40,
+            1
+        ];
+        parameters.extend(core::iter::repeat_n(0x77, usize::from(levels) + 1));
+        output.extend_from_slice(&Marker::Coc.code().to_be_bytes());
+        output.extend_from_slice(&(parameters.len() as u16 + 2).to_be_bytes());
+        output.extend_from_slice(&parameters);
+        let guard = 2 + component;
+        let exponent = 11;
+        output.extend_from_slice(&Marker::Qcc.code().to_be_bytes());
+        output.extend_from_slice(&(5_u16 + 3 * u16::from(levels)).to_be_bytes());
+        output.extend_from_slice(&[component, guard << 5]);
+        output.extend(core::iter::repeat_n(
+            exponent << 3,
+            1 + usize::from(levels) * 3,
+        ));
+        let (base_width, base_height) = resolution_dimensions(width, height, levels, 6)?;
+        let mut specs = decomp_subband_specs(base_width, base_height, 6)?;
+        for resolution in 7..=levels {
+            specs.extend(decomp_resolution_subband_specs(
+                width, height, levels, resolution,
+            )?);
+        }
+        let mut plane = alloc::vec![0_i32; checked_component_sample_count(width, height)?];
+        for spec in &specs {
+            for y in 0..spec.height {
+                for x in 0..spec.width {
+                    plane[((spec.y + y) * width + spec.x + x) as usize] =
+                        ((x + y * 3 + u32::from(spec.index) * 5 + u32::from(component)) % 31)
+                            as i32
+                            - 15;
+                }
+            }
+        }
+        let mut subbands = Vec::new();
+        for spec in specs {
+            subbands.push(encode_ht_decomp_subband_with_block_size(
+                width,
+                &plane,
+                spec,
+                exponent + guard - 1,
+                &mut segments,
+                block,
+            )?);
+        }
+        component_subbands.push(subbands);
+    }
+    let mut packets = Vec::new();
+    let mut sequence = 0_u16;
+    for (component, subbands) in component_subbands.iter().enumerate() {
+        let levels = 6 + component as u8;
+        let block = if component == 1 { 32 } else { 64 };
+        // Independent lattice enumeration: sort only actual precinct origins,
+        // never scan every reference-grid pixel to discover packet positions.
+        let mut positions = BTreeMap::<(u32, u32), Vec<(u8, u32, u32)>>::new();
+        for resolution in 0..=levels {
+            let (rw, rh) = resolution_dimensions(width, height, levels, resolution)?;
+            for py in 0..ceil_div(rh, 128)? {
+                for px in 0..ceil_div(rw, 128)? {
+                    positions
+                        .entry((
+                            py * (128 << (levels - resolution)),
+                            px * (128 << (levels - resolution)),
+                        ))
+                        .or_default()
+                        .push((resolution, px, py));
+                }
+            }
+        }
+        for resolutions in positions.values() {
+            for &(resolution, px, py) in resolutions {
+                let blocks_per_axis = (if resolution == 0 { 128 } else { 64 }) / block;
+                let mut precinct = Vec::new();
+                for subband in subbands
+                    .iter()
+                    .filter(|subband| subband.resolution == resolution)
+                {
+                    let mut part = subband.clone();
+                    part.code_blocks.retain(|block| {
+                        u32::from(block.x) / blocks_per_axis == px
+                            && u32::from(block.y) / blocks_per_axis == py
+                    });
+                    if part.code_blocks.is_empty() {
+                        continue;
+                    }
+                    for block in &mut part.code_blocks {
+                        block.x -= (px * blocks_per_axis) as u16;
+                        block.y -= (py * blocks_per_axis) as u16;
+                    }
+                    part.code_block_cols =
+                        part.code_blocks.iter().map(|block| block.x).max().unwrap() + 1;
+                    part.code_block_rows =
+                        part.code_blocks.iter().map(|block| block.y).max().unwrap() + 1;
+                    precinct.push(part);
+                }
+                for layer in 0..layers {
+                    packets.extend_from_slice(&[0xff, 0x91, 0, 4]);
+                    packets.extend_from_slice(&sequence.to_be_bytes());
+                    sequence = sequence.wrapping_add(1);
+                    let contributes = layer == (u16::from(resolution) * 3) % layers;
+                    let mut writer = PacketBitWriter::new();
+                    writer.write_bit(u32::from(contributes))?;
+                    if contributes {
+                        for subband in &precinct {
+                            write_component_packet_header(
+                                &mut writer,
+                                subband.code_block_cols,
+                                subband.code_block_rows,
+                                &subband.code_blocks,
+                            )?;
+                        }
+                    }
+                    writer.align();
+                    packets.extend_from_slice(writer.bytes());
+                    packets.extend_from_slice(&[0xff, 0x92]);
+                    if contributes {
+                        for subband in &precinct {
+                            for block in subband.code_blocks.iter().filter(|block| block.included) {
+                                packets.extend_from_slice(checked_slice(
+                                    &segments,
+                                    block.segment_offset,
+                                    block.segment_len,
+                                )?);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    write_tile_part(&mut output, 0, &packets, true)?;
+    Ok(output)
+}
 /// Build a header-complete five-level reversible-MCT HTJ2K fixture whose
 /// declared SIZ geometry is paired with empty LRCP packets.
 ///
@@ -13926,10 +14124,28 @@ fn encode_ht_decomp_subband(
     available_bitplanes: u8,
     segments: &mut Vec<u8>,
 ) -> Result<NativeDecompSubband> {
-    let code_block_cols =
-        u16::try_from(ceil_div(spec.width, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
-    let code_block_rows =
-        u16::try_from(ceil_div(spec.height, 64)?).map_err(|_| CodestreamError::SizeOverflow)?;
+    encode_ht_decomp_subband_with_block_size(
+        image_width,
+        plane,
+        spec,
+        available_bitplanes,
+        segments,
+        64,
+    )
+}
+
+fn encode_ht_decomp_subband_with_block_size(
+    image_width: u32,
+    plane: &[i32],
+    spec: DecompSubbandSpec,
+    available_bitplanes: u8,
+    segments: &mut Vec<u8>,
+    block_size: u32,
+) -> Result<NativeDecompSubband> {
+    let code_block_cols = u16::try_from(ceil_div(spec.width, block_size)?)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    let code_block_rows = u16::try_from(ceil_div(spec.height, block_size)?)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
     let mut code_blocks = Vec::with_capacity(
         usize::from(code_block_cols)
             .checked_mul(usize::from(code_block_rows))
@@ -13943,14 +14159,14 @@ fn encode_ht_decomp_subband(
     for block_y in 0..code_block_rows {
         for block_x in 0..code_block_cols {
             let local_x = u32::from(block_x)
-                .checked_mul(64)
+                .checked_mul(block_size)
                 .ok_or(CodestreamError::SizeOverflow)?;
             let local_y = u32::from(block_y)
-                .checked_mul(64)
+                .checked_mul(block_size)
                 .ok_or(CodestreamError::SizeOverflow)?;
-            let width = u16::try_from((spec.width - local_x).min(64))
+            let width = u16::try_from((spec.width - local_x).min(block_size))
                 .map_err(|_| CodestreamError::SizeOverflow)?;
-            let height = u16::try_from((spec.height - local_y).min(64))
+            let height = u16::try_from((spec.height - local_y).min(block_size))
                 .map_err(|_| CodestreamError::SizeOverflow)?;
             let source_offset = subband_y
                 .checked_add(usize::try_from(local_y).map_err(|_| CodestreamError::SizeOverflow)?)
@@ -29113,6 +29329,7 @@ enum ExplicitPrecinctPermission {
     None,
     ValidatedProfile0P004,
     HtSixLevelReduced,
+    HtHeterogeneousReversibleReduced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29149,6 +29366,10 @@ impl PacketOrganisationConfig {
     const DEFAULT: Self = Self::for_component_profile(ComponentPacketProfile::Default);
     const HT_SIX_LEVEL_REDUCED: Self = Self {
         explicit_precinct_permission: ExplicitPrecinctPermission::HtSixLevelReduced,
+        ..Self::DEFAULT
+    };
+    const HT_HETEROGENEOUS_REVERSIBLE_REDUCED: Self = Self {
+        explicit_precinct_permission: ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced,
         ..Self::DEFAULT
     };
     // The exact public-route validator is the only production caller that
@@ -31424,7 +31645,10 @@ fn packet_component_styles(
     let heterogeneous_styles_granted = packet_organisation.heterogeneous_single_precinct_permission
         != HeterogeneousSinglePrecinctPermission::None
         || packet_organisation.two_volume_single_precinct_permission
-            != TwoVolumeSinglePrecinctPermission::None;
+            != TwoVolumeSinglePrecinctPermission::None
+        || (packet_organisation.explicit_precinct_permission
+            == ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
+            && ht_heterogeneous_reversible_reduced_envelope(codestream));
     if !heterogeneous_styles_granted {
         let uniform = uniform_effective_coding_style(codestream)?;
         return Ok(alloc::vec![uniform; component_count]);
@@ -31647,6 +31871,11 @@ fn packet_precinct_grid_supported(
     coding_style: CodingStyleMarker,
     packet_organisation: PacketOrganisationConfig,
 ) -> bool {
+    if packet_organisation.explicit_precinct_permission
+        == ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
+    {
+        return ht_heterogeneous_reversible_reduced_envelope(codestream);
+    }
     if packet_organisation.explicit_precinct_permission
         == ExplicitPrecinctPermission::HtSixLevelReduced
     {
@@ -31916,7 +32145,21 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         codestream,
         &component_styles,
         &subband_counts,
-        1usize + usize::from(coding_style.decomposition_levels) * 3,
+        1usize
+            + usize::from(
+                if packet_organisation.explicit_precinct_permission
+                    == ExplicitPrecinctPermission::HtHeterogeneousReversibleReduced
+                {
+                    // With every component overridden, the unused QCD still
+                    // describes the COD default, not selected component zero.
+                    codestream
+                        .coding_style
+                        .ok_or(CodestreamError::SizeOverflow)?
+                        .decomposition_levels
+                } else {
+                    coding_style.decomposition_levels
+                },
+            ) * 3,
         selected_components,
     )?;
     let tile_maxshift = if packet_organisation
@@ -49906,6 +50149,210 @@ mod htj2k_native_component_grid_tests {
 // A separate HT-owned envelope: it grants neither Part 1 selective admission
 // nor full-image HT decode. The full-grid bound also caps packet topology work
 // before reduced allocation; it is project policy, not a standards limit.
+fn ht_heterogeneous_reversible_reduced_envelope(codestream: &Codestream) -> bool {
+    codestream.kind == CodestreamKind::Htj2k
+        && codestream.siz.components.len() == 3
+        && codestream.siz.components.iter().all(|component| {
+            (8..=16).contains(&component.bits_per_sample)
+                && component.horizontal_separation == 1
+                && component.vertical_separation == 1
+        })
+        && codestream.siz.image_origin_x == 0
+        && codestream.siz.image_origin_y == 0
+        && codestream.siz.tile_origin_x == 0
+        && codestream.siz.tile_origin_y == 0
+        && codestream.siz.tile_count_x() == Ok(1)
+        && codestream.siz.tile_count_y() == Ok(1)
+        && codestream.tiles.len() == 1
+        && u64::from(codestream.image_width()) * u64::from(codestream.image_height())
+            <= MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES
+        && codestream
+            .effective_coding_style(0)
+            .is_some_and(|style| style.decomposition_levels == 6)
+        && (0..3).all(|component| {
+            codestream
+                .effective_coding_style(component)
+                .is_some_and(|style| {
+                    style.entropy_coder == EntropyCoder::HtBlockCoding
+                        && style.transform == WaveletTransform::Reversible53
+                        && (6..=8).contains(&style.decomposition_levels)
+                        && !style.multiple_component_transform
+                        && style.progression_order == ProgressionOrder::Cprl
+                        && (1..=30).contains(&style.layers)
+                        && style.code_block_style == 0x40
+                        && (5..=6).contains(&style.code_block_width_exponent)
+                        && (5..=6).contains(&style.code_block_height_exponent)
+                        && style.precincts_declared
+                        && style.precinct_exponents[..=usize::from(style.decomposition_levels)]
+                            .iter()
+                            .all(|&precinct| matches!(precinct, 0x77 | 0x88))
+                })
+        })
+        && ht_heterogeneous_reduced_markers(codestream.markers.iter())
+}
+
+fn ht_heterogeneous_reduced_markers<'a>(markers: impl Iterator<Item = &'a MarkerSegment>) -> bool {
+    let mut in_tile = false;
+    let mut qcd_count = 0;
+    for segment in markers {
+        match segment.marker {
+            Marker::Sot => in_tile = true,
+            Marker::Cod | Marker::Coc | Marker::Qcc if !in_tile => {}
+            Marker::Qcd if !in_tile => qcd_count += 1,
+            Marker::Soc
+            | Marker::Siz
+            | Marker::Cap
+            | Marker::Cpf
+            | Marker::Com
+            | Marker::Sod
+            | Marker::Eoc => {}
+            _ => return false,
+        }
+    }
+    in_tile && qcd_count == 1
+}
+
+#[cfg(feature = "std")]
+fn prepare_ht_heterogeneous_reversible_reduced_component(
+    input: &[u8],
+    codestream: Codestream,
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<PreparedHtj2kReducedComponentDecode<'_>> {
+    if !ht_heterogeneous_reversible_reduced_envelope(&codestream) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "HT reduction five requires the bounded heterogeneous reversible CPRL envelope",
+        ));
+    }
+    let part15 = codestream
+        .capability
+        .as_ref()
+        .and_then(|capability| capability.part15)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if part15.code_block_mode != Part15CodeBlockMode::HtOnly || part15.cleanup_magnitude_bound > 18
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cap),
+            UnsupportedConstruct::HtBlockDecode,
+            "heterogeneous reduced reconstruction requires HTONLY with magnitude bound at most 18",
+        ));
+    }
+    let config = PacketOrganisationConfig::HT_HETEROGENEOUS_REVERSIBLE_REDUCED;
+    let styles = packet_component_styles(&codestream, config)?;
+    let coding_style = styles[0];
+    let counts = styles
+        .iter()
+        .map(|style| 1 + usize::from(style.decomposition_levels) * 3)
+        .collect::<Vec<_>>();
+    let quantization = parse_component_quantization_for_styles(
+        input,
+        &codestream,
+        &styles,
+        &counts,
+        1 + usize::from(
+            codestream
+                .coding_style
+                .ok_or(CodestreamError::SizeOverflow)?
+                .decomposition_levels,
+        ) * 3,
+        None,
+    )?;
+    if quantization.iter().any(|quantizer| {
+        quantizer.style != transform::QuantizationStyle::NoQuantization
+            || quantizer.steps.iter().any(|step| {
+                step.exponent == 0
+                    || step
+                        .exponent
+                        .checked_add(quantizer.guard_bits)
+                        .and_then(|bits| bits.checked_sub(1))
+                        .is_none_or(|bits| bits > 31)
+            })
+    }) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Qcd),
+            UnsupportedConstruct::MarkerSegment,
+            "heterogeneous reversible reduction requires bounded effective no-quantisation exponents",
+        ));
+    }
+    let (tile_rect, payload) = single_part1_profile_tile(input, &codestream)?;
+    let (retained, output_width, output_height, _) = htj2k_reduced_component_output_geometry(
+        tile_rect.width,
+        tile_rect.height,
+        coding_style.decomposition_levels,
+        request,
+    )?;
+    let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
+        input,
+        &codestream,
+        tile_rect,
+        &ContiguousPacketSource { bytes: payload },
+        None,
+        None,
+        None,
+        config,
+        None,
+        HtCodingSetRetention::NativeAdmission,
+    )?
+    .contributions;
+    classify_htonly_native_packet_mechanisms(&contributions)
+        .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
+    // All component packet grids and quantisers were independently admitted.
+    // The entropy candidate describes only selected-component block work;
+    // it does not claim homogeneous source state or full-image support.
+    let mut marker_state = ht_marker_state(&codestream).ok_or(CodestreamError::SizeOverflow)?;
+    marker_state.components = 1;
+    marker_state.all_components_same_sample_format = true;
+    marker_state.packet_progression_supported = true;
+    marker_state.reversible_transform = true;
+    marker_state.precincts_declared = false;
+    marker_state.code_block_width =
+        ht_code_block_dimension_from_exponent(coding_style.code_block_width_exponent);
+    marker_state.code_block_height =
+        ht_code_block_dimension_from_exponent(coding_style.code_block_height_exponent);
+    let marker_candidate = ht::plan_decode_candidate(marker_state).map_err(|classification| {
+        unsupported(
+            None,
+            None,
+            ht_construct_from_reason(classification.reason),
+            classification.reason.message(),
+        )
+    })?;
+    let candidate = HtCodestreamDecodeCandidate {
+        marker_candidate,
+        tile_part: codestream.tiles[0],
+    };
+    let quantizer = &quantization[0];
+    let exponent = quantizer.steps[0].exponent;
+    let k_max = exponent + quantizer.guard_bits - 1;
+    let transfer = HtReversibleCodeBlockTransfer {
+        qcd_guard_bits: quantizer.guard_bits,
+        qcd_exponent: exponent,
+        k_max,
+        shift: 31 - k_max,
+    };
+    Ok(PreparedHtj2kReducedComponentDecode {
+        input,
+        codestream,
+        candidate,
+        coding_style,
+        reconstruction: Htj2kReducedComponentReconstruction::Reversible(transfer),
+        tile_rect,
+        contributions: contributions
+            .into_iter()
+            .filter(|contribution| {
+                contribution.component_index == 0 && contribution.resolution <= retained
+            })
+            .collect(),
+        request,
+        output_width,
+        output_height,
+    })
+}
+
 fn ht_six_level_reduced_envelope(codestream: &Codestream) -> bool {
     let Some(style) = codestream.uniform_effective_coding_style() else {
         return false;
@@ -50046,9 +50493,10 @@ fn prepare_ht_six_level_reduced_component(
     })
 }
 
-/// Prepare transformed component zero from the bounded five-level profiles
-/// at reduction two, or the six-level irreversible RLCP profile at reduction
-/// three. Neither request performs an inverse colour transform.
+/// Prepare component zero from the bounded five-level profiles at reduction
+/// two, six-level irreversible RLCP at reduction three, or heterogeneous
+/// reversible CPRL at reduction five. No request performs an inverse colour
+/// transform; output retains the selected component's precision and signedness.
 ///
 /// Preparation validates structural Part 15 signalling, effective packet
 /// mechanisms and all profile declarations, then retains the admitted packet
@@ -50062,6 +50510,10 @@ pub fn prepare_htj2k_reduced_component_decode(
     let codestream = parse(input)?;
     if codestream.kind != CodestreamKind::Htj2k {
         return Ok(None);
+    }
+    if request.component_index == 0 && request.discard_levels == 5 {
+        return prepare_ht_heterogeneous_reversible_reduced_component(input, codestream, request)
+            .map(Some);
     }
     if request.component_index == 0 && request.discard_levels == 3 {
         return prepare_ht_six_level_reduced_component(input, codestream, request).map(Some);
@@ -50336,8 +50788,8 @@ pub fn decode_prepared_htj2k_reduced_component_owned_with_workspace(
     Ok(DecodedImage {
         width,
         height,
-        bits_per_sample: 8,
-        signed: false,
+        bits_per_sample: prepared.bits_per_sample(),
+        signed: prepared.signed(),
         components,
     })
 }
@@ -50736,6 +51188,202 @@ mod htj2k_reduced_component_tests {
                 158, 95, 98, 159, 155, 56, 97, 124, 133, 113, 112, 143, 88, 111, 158, 91,
             ]
         );
+    }
+
+    #[test]
+    fn heterogeneous_reduced_cprl_matches_coefficient_oracle() {
+        for (width, height) in [(65, 97), (513, 257), (4129, 65)] {
+            let input =
+                encode_htj2k_heterogeneous_reduced_component_test_fixture(width, height).unwrap();
+            let request = Htj2kReducedComponentDecodeRequest {
+                component_index: 0,
+                discard_levels: 5,
+            };
+            let prepared = prepare_htj2k_reduced_component_decode(&input, request)
+                .unwrap()
+                .unwrap();
+            assert_eq!(prepared.bits_per_sample(), 12);
+            assert!(prepared.signed());
+            assert!(
+                prepared
+                    .contributions
+                    .iter()
+                    .all(|part| part.component_index == 0 && part.resolution <= 1)
+            );
+            let rw = width.div_ceil(32);
+            let rh = height.div_ceil(32);
+            let mut oracle = vec![0_i32; (rw * rh) as usize];
+            for spec in decomp_subband_specs(rw, rh, 1).unwrap() {
+                for y in 0..spec.height {
+                    for x in 0..spec.width {
+                        oracle[((spec.y + y) * rw + spec.x + x) as usize] =
+                            ((x + y * 3 + u32::from(spec.index) * 5) % 31) as i32 - 15;
+                    }
+                }
+            }
+            let mut scratch = vec![0_i32; rw.max(rh) as usize * 3];
+            inverse_reversible_5_3_levels_with_scratch(
+                &mut oracle,
+                rw as usize,
+                rw,
+                rh,
+                1,
+                &mut scratch,
+            )
+            .unwrap();
+            let expected = oracle
+                .iter()
+                .flat_map(|&value| (value.clamp(-2048, 2047) as i16).to_le_bytes())
+                .collect::<Vec<_>>();
+            let decoded = decode_htj2k_reduced_component_owned(&input, request)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (
+                    decoded.width,
+                    decoded.height,
+                    decoded.bits_per_sample,
+                    decoded.signed
+                ),
+                (rw, rh, 12, true)
+            );
+            assert_eq!(decoded.components[0].samples, expected);
+        }
+    }
+
+    #[test]
+    fn heterogeneous_reduced_precision_signedness_and_layer_matrix() {
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 5,
+        };
+        let baseline = encode_ht_heterogeneous_reduced_fixture(65, 97, 30).unwrap();
+        let signed = decode_htj2k_reduced_component_owned(&baseline, request)
+            .unwrap()
+            .unwrap();
+        let coefficients = signed.components[0]
+            .samples
+            .chunks_exact(2)
+            .map(|pair| i32::from(i16::from_le_bytes([pair[0], pair[1]])))
+            .collect::<Vec<_>>();
+        for layers in [1, 7, 30] {
+            for bits in [8, 12, 16] {
+                for is_signed in [false, true] {
+                    let mut input =
+                        encode_ht_heterogeneous_reduced_fixture(65, 97, layers).unwrap();
+                    let siz = find_marker(&input, 0, Marker::Siz).unwrap();
+                    input[siz + 40] = (bits - 1) | if is_signed { 0x80 } else { 0 };
+                    let decoded = decode_htj2k_reduced_component_owned(&input, request)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!((decoded.bits_per_sample, decoded.signed), (bits, is_signed));
+                    let expected = coefficients
+                        .iter()
+                        .flat_map(|&value| {
+                            let shifted = value + if is_signed { 0 } else { 1 << (bits - 1) };
+                            if bits == 8 {
+                                vec![shifted as u8]
+                            } else {
+                                (shifted as u16).to_le_bytes().to_vec()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(decoded.components[0].samples, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn heterogeneous_reduced_quantisers_and_marker_work_are_bounded() {
+        let input = encode_htj2k_heterogeneous_reduced_component_test_fixture(65, 97).unwrap();
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 5,
+        };
+        let parsed = parse(&input).unwrap();
+        let expected = decode_htj2k_reduced_component_owned(&input, request)
+            .unwrap()
+            .unwrap();
+        let qcd = parsed
+            .markers
+            .iter()
+            .find(|marker| marker.marker == Marker::Qcd)
+            .unwrap();
+        let mut overridden = input.clone();
+        overridden[qcd.data_offset + 1] = 10 << 3;
+        assert_eq!(
+            decode_htj2k_reduced_component_owned(&overridden, request)
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+        let qccs = parsed
+            .markers
+            .iter()
+            .filter(|marker| marker.marker == Marker::Qcc)
+            .collect::<Vec<_>>();
+        let mut unselected = input.clone();
+        unselected[qccs[1].data_offset + 2] = 10 << 3;
+        assert_eq!(
+            decode_htj2k_reduced_component_owned(&unselected, request)
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+        let mut selected = input.clone();
+        selected[qccs[0].data_offset + 1] = 3 << 5;
+        assert_ne!(
+            decode_htj2k_reduced_component_owned(&selected, request)
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+        for (offset, value) in [
+            (qccs[2].data_offset + 1, 0x43),
+            (qccs[2].data_offset + 2, 31 << 3),
+        ] {
+            let mut invalid = input.clone();
+            invalid[offset] = value;
+            assert!(prepare_htj2k_reduced_component_decode(&invalid, request).is_err());
+        }
+        for count in [1000, 2000, 4000, 8000] {
+            let mut markers = parsed.markers.clone();
+            let comment = *markers
+                .iter()
+                .find(|marker| marker.marker == Marker::Siz)
+                .unwrap();
+            let index = markers
+                .iter()
+                .position(|marker| marker.marker == Marker::Sot)
+                .unwrap();
+            markers.splice(
+                index..index,
+                core::iter::repeat_n(
+                    MarkerSegment {
+                        marker: Marker::Com,
+                        ..comment
+                    },
+                    count,
+                ),
+            );
+            let mut visited = 0;
+            assert!(ht_heterogeneous_reduced_markers(
+                markers.iter().inspect(|_| visited += 1)
+            ));
+            assert_eq!(visited, markers.len());
+        }
+        let mut oversized = input;
+        let siz = parsed
+            .markers
+            .iter()
+            .find(|marker| marker.marker == Marker::Siz)
+            .unwrap()
+            .offset;
+        for offset in [siz + 6, siz + 10, siz + 22, siz + 26] {
+            oversized[offset..offset + 4].copy_from_slice(&32768_u32.to_be_bytes());
+        }
+        assert!(prepare_htj2k_reduced_component_decode(&oversized, request).is_err());
     }
 
     #[test]
@@ -52690,6 +53338,8 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
             None,
             if ht_six_level_reduced_envelope(codestream) {
                 PacketOrganisationConfig::HT_SIX_LEVEL_REDUCED
+            } else if ht_heterogeneous_reversible_reduced_envelope(codestream) {
+                PacketOrganisationConfig::HT_HETEROGENEOUS_REVERSIBLE_REDUCED
             } else {
                 PacketOrganisationConfig::DEFAULT
             },
