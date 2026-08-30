@@ -24510,11 +24510,27 @@ fn decode_vlc_cleanup_quad_direct_scalar(
         top_left + 1,
         top_left + width + 1,
     ];
+    if (0..4_u8).any(|slot| {
+        present_mask & (1_u8 << slot) != 0 && coefficient_indices[usize::from(slot)] >= output.len()
+    }) {
+        return Err(HtLayoutError::SizeOverflow);
+    }
+    let predictor_end = quad_column
+        .checked_add(2)
+        .ok_or(HtLayoutError::SizeOverflow)?;
+    if predictor_end > next_south_predictors.len() {
+        return Err(HtLayoutError::SizeOverflow);
+    }
+    let cleanup_shift = cleanup_bitplane
+        .checked_sub(1)
+        .ok_or(HtLayoutError::SizeOverflow)?;
 
     let significance_bits = codeword.significance_bits();
     let embedded_bits = codeword.embedded_magnitude_bits();
     let exponent_reduction_bits = codeword.magnitude_exponent_reduction_bits();
     let mut count = 0;
+    let mut decoded_coefficients = [0_i32; 4];
+    let mut south_predictors = [0_u32; 2];
 
     for slot in 0..4_u8 {
         let slot_mask = 1_u8 << slot;
@@ -24547,32 +24563,24 @@ fn decode_vlc_cleanup_quad_direct_scalar(
             magnitude_code |= 1;
 
             if matches!(slot, 1 | 3) {
-                let boundary = quad_column + usize::from(slot == 3);
-                let predictor = next_south_predictors
-                    .get_mut(boundary)
-                    .ok_or(HtLayoutError::SizeOverflow)?;
-                *predictor |= magnitude_code;
+                south_predictors[usize::from(slot == 3)] |= magnitude_code;
             }
 
-            let centered_magnitude = magnitude_code
+            let centered_magnitude = u64::from(magnitude_code)
                 .checked_add(2)
                 .ok_or(HtLayoutError::SizeOverflow)?;
             let scaled = centered_magnitude
-                .checked_shl(u32::from(cleanup_bitplane - 1))
+                .checked_shl(u32::from(cleanup_shift))
                 .ok_or(HtLayoutError::SizeOverflow)?;
-            let sign = if magnitude_sign_value & 1 != 0 {
-                1_u32 << 31
+            if scaled > i32::MAX as u64 {
+                return Err(HtLayoutError::SizeOverflow);
+            }
+            let magnitude = i32::try_from(scaled).map_err(|_| HtLayoutError::SizeOverflow)?;
+            if magnitude_sign_value & 1 != 0 {
+                magnitude.checked_neg().ok_or(HtLayoutError::SizeOverflow)?
             } else {
-                0
-            };
-            let sign_magnitude = sign | scaled;
-            let magnitude = sign_magnitude & 0x7fff_ffff;
-            let signed = if sign_magnitude & (1_u32 << 31) != 0 {
-                -i64::from(magnitude)
-            } else {
-                i64::from(magnitude)
-            };
-            i32::try_from(signed).map_err(|_| HtLayoutError::SizeOverflow)?
+                magnitude
+            }
         } else {
             if embedded_magnitude_bit || magnitude_exponent_reduction {
                 return Err(HtLayoutError::InvalidVlcCleanupOutput {
@@ -24582,11 +24590,59 @@ fn decode_vlc_cleanup_quad_direct_scalar(
             0
         };
 
-        output[coefficient_indices[usize::from(slot)]] = coefficient;
+        decoded_coefficients[usize::from(slot)] = coefficient;
         count += 1;
     }
 
+    for slot in 0..4_u8 {
+        if present_mask & (1_u8 << slot) != 0 {
+            output[coefficient_indices[usize::from(slot)]] =
+                decoded_coefficients[usize::from(slot)];
+        }
+    }
+    for (target, predictor) in next_south_predictors[quad_column..predictor_end]
+        .iter_mut()
+        .zip(south_predictors)
+    {
+        *target |= predictor;
+    }
+
     Ok(Some(count))
+}
+
+#[cfg(all(test, feature = "std"))]
+mod direct_scalar_reconstruction_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_high_uvlc_magnitude_fails_without_materialising_the_quad() {
+        let mut prepared = fast_cleanup::PreparedHtCleanupBlock::new(HtCleanupPassSegmentViews {
+            magnitude_sign: &[0xff, 0xff, 0xff],
+            mel_vlc: &[0, 0],
+        })
+        .unwrap();
+        let codeword = HtVlcQuadCodeword::from_table_word(0x0110);
+        let mut output = [0x0123_4567_i32];
+        let mut south_predictors = [0x89ab_cdef_u32, 0x7654_3210];
+
+        assert_eq!(
+            decode_vlc_cleanup_quad_direct_scalar(
+                &mut prepared.magnitude_sign,
+                codeword,
+                18,
+                1,
+                1,
+                0,
+                0,
+                13,
+                &mut output,
+                &mut south_predictors,
+            ),
+            Err(HtLayoutError::SizeOverflow)
+        );
+        assert_eq!(output, [0x0123_4567]);
+        assert_eq!(south_predictors, [0x89ab_cdef, 0x7654_3210]);
+    }
 }
 
 /// Bit and coefficient counts consumed by scalar HT refinement passes.

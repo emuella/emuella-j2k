@@ -297,6 +297,73 @@ mod htj2k_encode_tests {
     }
 
     #[test]
+    fn one_decomp_nonconstant_single_axis_images_round_trip() {
+        let cases = [
+            (1_u32, 2_u32, SampleFormat::U8, vec![0, 255]),
+            (2, 1, SampleFormat::U8, vec![0, 255]),
+            (
+                1,
+                2,
+                SampleFormat::U16_LE,
+                [0_u16, u16::MAX]
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            ),
+            (
+                2,
+                1,
+                SampleFormat::U16_LE,
+                [0_u16, u16::MAX]
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            ),
+        ];
+
+        for (width, height, sample_format, samples) in cases {
+            let info = ImageInfo::new(
+                width,
+                height,
+                1,
+                sample_format,
+                ColorModel::Grayscale,
+                ComponentLayout::Interleaved,
+            )
+            .unwrap();
+            let image = ImageView::Interleaved {
+                info: &info,
+                samples: &samples,
+                stride_bytes: usize::try_from(width).unwrap()
+                    * usize::from(sample_format.bits_per_sample).div_ceil(8),
+            };
+            let options = Htj2kEncodeOptions {
+                decomposition_levels: 1,
+            };
+            let first = encode_htj2k(image, &options).unwrap();
+            let second = encode_htj2k(image, &options).unwrap();
+            assert_eq!(first, second);
+
+            let parsed = codestream::parse(&first).unwrap();
+            assert_eq!(parsed.kind, codestream::CodestreamKind::Htj2k);
+            let style = parsed.uniform_effective_coding_style().unwrap();
+            assert_eq!(style.decomposition_levels, 1);
+            assert_eq!(style.transform, codestream::WaveletTransform::Reversible53);
+            assert_eq!(style.entropy_coder, codestream::EntropyCoder::HtBlockCoding);
+
+            let decoded = decode(
+                &first,
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    ..DecodeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(decoded.data, ImageData::Planes(vec![samples]));
+        }
+    }
+
+    #[test]
     fn one_decomp_full_range_u16_boundary_patterns_round_trip() {
         for (width, height) in [
             (1_u32, 1_u32),

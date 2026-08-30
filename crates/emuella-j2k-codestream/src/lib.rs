@@ -14414,7 +14414,10 @@ fn write_native_decomp_packets(
                 .any(|subband| subband.code_blocks.iter().any(|block| block.included));
             writer.write_bit(u32::from(has_contribution))?;
             if has_contribution {
-                for subband in &packet_subbands {
+                for subband in packet_subbands
+                    .iter()
+                    .filter(|subband| !subband.code_blocks.is_empty())
+                {
                     write_component_packet_header(
                         &mut writer,
                         subband.code_block_cols,
