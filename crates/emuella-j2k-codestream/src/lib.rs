@@ -10802,7 +10802,8 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
                         u8::try_from(level_delta).map_err(|_| CodestreamError::SizeOverflow)?,
                     )
                     .ok_or(CodestreamError::SizeOverflow)?,
-                0,
+                u16::try_from(subband_index * 37 + 11)
+                    .map_err(|_| CodestreamError::SizeOverflow)?,
             )
             .map_err(|_| CodestreamError::SizeOverflow)
         })
@@ -10862,19 +10863,34 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
     codestream[cod + 13] = 0;
     let qcd = find_marker(&codestream, 0, Marker::Qcd).ok_or(CodestreamError::SizeOverflow)?;
     let old_qcd_len = usize::from(read_u16(&codestream, qcd + 2)?);
-    let packed_step = u16::from(QCD_BASE_EXPONENT) << 11;
-    codestream.splice(
-        qcd..qcd + 2 + old_qcd_len,
-        [
-            0xff,
-            0x5c,
-            0,
-            5,
-            (QCD_GUARD_BITS << 5) | 1,
-            (packed_step >> 8) as u8,
-            packed_step as u8,
-        ],
+    let qcd_len = 3usize
+        .checked_add(
+            qcd_steps
+                .len()
+                .checked_mul(2)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut replacement = Vec::new();
+    replacement
+        .try_reserve_exact(
+            2usize
+                .checked_add(qcd_len)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    replacement.extend_from_slice(&[0xff, 0x5c]);
+    replacement.extend_from_slice(
+        &u16::try_from(qcd_len)
+            .map_err(|_| CodestreamError::SizeOverflow)?
+            .to_be_bytes(),
     );
+    replacement.push((QCD_GUARD_BITS << 5) | 2);
+    for step in &qcd_steps {
+        let packed_step = (u16::from(step.exponent) << 11) | step.mantissa;
+        replacement.extend_from_slice(&packed_step.to_be_bytes());
+    }
+    codestream.splice(qcd..qcd + 2 + old_qcd_len, replacement);
     write_tile_part(&mut codestream, 0, &packet, true)?;
     Ok(codestream)
 }
@@ -48804,13 +48820,13 @@ pub fn prepare_htj2k_reduced_component_decode(
             let quantization = parse_component_quantization(input, &codestream, expected_subbands)?;
             if quantization
                 .iter()
-                .any(|component| component.style != transform::QuantizationStyle::ScalarDerived)
+                .any(|component| component.style != transform::QuantizationStyle::ScalarExpounded)
             {
                 return Err(unsupported(
                     None,
                     Some(Marker::Qcd),
                     UnsupportedConstruct::MarkerSegment,
-                    "bounded reduced irreversible HTJ2K component decode requires one main-header scalar-derived QCD value",
+                    "bounded reduced irreversible HTJ2K component decode requires one main-header scalar-expounded QCD value",
                 ));
             }
             Htj2kReducedComponentReconstruction::Irreversible
@@ -49218,27 +49234,54 @@ mod htj2k_reduced_component_tests {
         let quantization = parse_component_quantization(&codestream, &parsed, 16).unwrap();
         assert!(
             quantization.iter().all(|component| {
-                component.style == transform::QuantizationStyle::ScalarDerived
+                component.style == transform::QuantizationStyle::ScalarExpounded
             })
         );
+        assert_eq!(quantization[0].steps.len(), 16);
+        assert!(
+            quantization[0]
+                .steps
+                .windows(2)
+                .all(|steps| steps[0] != steps[1])
+        );
+        let request = Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 2,
+        };
+        let prepared = prepare_htj2k_reduced_component_decode(&codestream, request)
+            .unwrap()
+            .unwrap();
+        for contribution in &prepared.contributions {
+            assert_eq!(
+                contribution.irreversible_quantization_step,
+                Some(quantization[0].steps[usize::from(contribution.subband_index)])
+            );
+        }
+        for subband in [
+            PacketSubbandKind::LowLow,
+            PacketSubbandKind::HighLow,
+            PacketSubbandKind::LowHigh,
+            PacketSubbandKind::HighHigh,
+        ] {
+            assert!(
+                prepared
+                    .contributions
+                    .iter()
+                    .any(|contribution| contribution.subband == subband)
+            );
+        }
 
-        let decoded = decode_htj2k_reduced_component_owned(
-            &codestream,
-            Htj2kReducedComponentDecodeRequest {
-                component_index: 0,
-                discard_levels: 2,
-            },
-        )
-        .unwrap()
-        .unwrap();
+        let decoded = decode_htj2k_reduced_component_owned(&codestream, request)
+            .unwrap()
+            .unwrap();
         assert_eq!((decoded.width, decoded.height), (5, 10));
         assert_eq!(decoded.components.len(), 1);
         assert_eq!(
             decoded.components[0].samples,
             [
-                109, 133, 138, 138, 111, 161, 105, 122, 134, 120, 126, 124, 137, 130, 132, 130,
-                118, 143, 138, 98, 127, 130, 125, 124, 131, 169, 113, 114, 153, 118, 129, 119, 122,
-                135, 134, 120, 119, 142, 139, 95, 124, 130, 129, 123, 126, 144, 115, 119, 143, 118,
+                106, 135, 139, 140, 110, 166, 102, 121, 135, 119, 125, 123, 138, 130, 133, 131,
+                116, 145, 140, 94, 126, 130, 124, 123, 132, 175, 111, 112, 157, 116, 129, 118, 121,
+                135, 135, 119, 118, 144, 141, 91, 123, 131, 129, 123, 126, 147, 113, 117, 146, 117,
             ]
         );
     }
@@ -49354,23 +49397,55 @@ mod htj2k_reduced_component_tests {
             })
         ));
 
-        let mut expounded = input.clone();
-        let qcd = find_marker(&expounded, 0, Marker::Qcd).unwrap();
-        let old_len = usize::from(read_u16(&expounded, qcd + 2).unwrap());
-        let mut replacement = alloc::vec![0xff, 0x5c, 0, 35, 0x42];
-        for subband_index in 0_usize..16 {
-            let exponent = 20_u16.saturating_sub(subband_index.saturating_sub(1) as u16 / 3);
-            replacement.extend_from_slice(&(exponent << 11).to_be_bytes());
-        }
-        expounded.splice(qcd..qcd + 2 + old_len, replacement);
+        let mut derived = input.clone();
+        let qcd = find_marker(&derived, 0, Marker::Qcd).unwrap();
+        let old_len = usize::from(read_u16(&derived, qcd + 2).unwrap());
+        let packed_step = 20_u16 << 11;
+        derived.splice(
+            qcd..qcd + 2 + old_len,
+            [
+                0xff,
+                0x5c,
+                0,
+                5,
+                (2 << 5) | 1,
+                (packed_step >> 8) as u8,
+                packed_step as u8,
+            ],
+        );
         assert_eq!(
-            parse_component_quantization(&expounded, &parse(&expounded).unwrap(), 16).unwrap()[0]
-                .style,
-            transform::QuantizationStyle::ScalarExpounded
+            parse_component_quantization(&derived, &parse(&derived).unwrap(), 16).unwrap()[0].style,
+            transform::QuantizationStyle::ScalarDerived
         );
         assert!(matches!(
-            decode_htj2k_reduced_component_owned(&expounded, request),
+            decode_htj2k_reduced_component_owned(&derived, request),
             Err(CodestreamError::Unsupported {
+                marker: Some(Marker::Qcd),
+                ..
+            })
+        ));
+
+        let mut reserved = input.clone();
+        let qcd = find_marker(&reserved, 0, Marker::Qcd).unwrap();
+        reserved[qcd + 4] = (reserved[qcd + 4] & !0x1f) | 3;
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&reserved, request),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Qcd),
+                ..
+            })
+        ));
+
+        let mut short_steps = input.clone();
+        let qcd = find_marker(&short_steps, 0, Marker::Qcd).unwrap();
+        let qcd_len = usize::from(read_u16(&short_steps, qcd + 2).unwrap());
+        let qcd_end = qcd + 2 + qcd_len;
+        short_steps.drain(qcd_end - 2..qcd_end);
+        short_steps[qcd + 2..qcd + 4]
+            .copy_from_slice(&u16::try_from(qcd_len - 2).unwrap().to_be_bytes());
+        assert!(matches!(
+            decode_htj2k_reduced_component_owned(&short_steps, request),
+            Err(CodestreamError::InvalidMarker {
                 marker: Some(Marker::Qcd),
                 ..
             })

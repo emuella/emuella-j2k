@@ -57,7 +57,7 @@ single-effective-precinct inline-header route may select transformed component
 matching unsigned 8-bit unit-sampled components, MCT and the existing
 no-quantisation QCD contract. The irreversible 9/7 branch instead requires
 exactly one unsigned 8-bit unit-sampled component, no MCT, exactly one
-main-header scalar-derived QCD and no component or tile overrides. The
+main-header scalar-expounded QCD and no component or tile overrides. The
 planar output is reconstructed at its exact reduced geometry before inverse
 colour transformation. JPH, rendered output, other selections or reductions,
 regions, tile requests, quality-layer limits, heterogeneous coding or

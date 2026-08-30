@@ -843,9 +843,9 @@ mod htj2k_reduced_component_tests {
         assert_eq!(
             owned_planes[0],
             [
-                109, 133, 138, 138, 111, 161, 105, 122, 134, 120, 126, 124, 137, 130, 132, 130,
-                118, 143, 138, 98, 127, 130, 125, 124, 131, 169, 113, 114, 153, 118, 129, 119, 122,
-                135, 134, 120, 119, 142, 139, 95, 124, 130, 129, 123, 126, 144, 115, 119, 143, 118,
+                106, 135, 139, 140, 110, 166, 102, 121, 135, 119, 125, 123, 138, 130, 133, 131,
+                116, 145, 140, 94, 126, 130, 124, 123, 132, 175, 111, 112, 157, 116, 129, 118, 121,
+                135, 135, 119, 118, 144, 141, 91, 123, 131, 129, 123, 126, 147, 113, 117, 146, 117,
             ]
         );
         let mut caller = vec![0x5a_u8; 5 * 10];
@@ -897,7 +897,7 @@ mod htj2k_reduced_component_tests {
             .find(|segment| segment.marker == codestream::Marker::Qcd)
             .unwrap()
             .offset;
-        input[qcd + 4] = (input[qcd + 4] & !0x1f) | 2;
+        input[qcd + 4] = (input[qcd + 4] & !0x1f) | 3;
         assert!(decode_partial_info(&input, &options).is_err());
         assert!(decode_partial_component_info(&input, &options).is_err());
         assert!(decode_partial(&input, &options).is_err());

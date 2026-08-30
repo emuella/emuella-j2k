@@ -72,7 +72,7 @@ origin-aligned single tile with one-layer LRCP packets and five decomposition
 levels. The reversible branch requires three matching unsigned 8-bit,
 unit-sampled components, MCT, 5/3 and the established no-quantisation QCD
 contract. The irreversible branch instead requires exactly one unsigned 8-bit,
-unit-sampled component, no MCT, 9/7 and exactly one main-header scalar-derived
+unit-sampled component, no MCT, 9/7 and exactly one main-header scalar-expounded
 QCD; QCC and tile-header quantisation state remain excluded. A
 request must select component 0, discard exactly two levels and use planar
 output without a region, tile or layer limit.
