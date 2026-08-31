@@ -5,8 +5,11 @@ It is not a public encoder support claim or final qualification. At the pinned
 source below, only a test-only probe changed; production encoding, admission
 and lossless behaviour were unchanged. The probe now reuses the production
 [internal foundation](ht-lossy-foundations.md), while the CSV and original
-source identities remain the historical evidence. Independent reconstruction uses
-the existing authorised installed OpenJPH 0.30.1 black box; no external source or output is included here.
+source identities remain the historical evidence. The subsequent
+[public API qualification](ht-lossy-public-api.md) records the current adapter
+and finite native matrix without replacing these historical measurements.
+Independent reconstruction uses the existing authorised installed OpenJPH
+0.30.1 black box; no external source or output is included here.
 
 ## Source and authority
 
@@ -203,18 +206,18 @@ attainability, visual quality and optimal subband allocation are unproved.
 
 ## Implementation boundary and verification
 
-The next coherent foundation is internal irreversible HT analysis/quantisation,
-header/packet construction and one narrowly admitted full-image native decoder
-plan, including core shape/inspection/owned/caller paths for raw and existing
-JPH composition. Reuse the existing full-resolution execution of irreversible
-component reconstruction with explicit profile admission. Do not widen the
-existing general reduced/full-image classifiers to accept arbitrary 9/7 HT.
-Keep lossless option structs and output bytes unchanged.
+The selected follow-on foundation now implements irreversible HT analysis and
+quantisation, header/packet construction and one narrowly admitted full-image
+native decoder plan, including core shape/inspection/owned/caller paths for raw
+and existing JPH composition. It reuses full-resolution irreversible component
+reconstruction with explicit profile admission, without widening the general
+reduced/full-image classifiers to accept arbitrary 9/7 HT. Lossless option
+structs and output bytes remain unchanged.
 
-Then add an additive lossy HT options type and raw/JPH entry points around the
-bounded rate selector and existing image-view adapters. No fixed-step public
-API is required merely to land the internal foundation. The final package must
-run the entire matrix through public APIs at final merged source, independently
+The additive `Htj2kLossyEncodeOptions`, `encode_htj2k_lossy` and
+`encode_htj2k_lossy_jph` now wrap the bounded rate selector with checked
+image-view adapters. No fixed-step public API is introduced. The final package
+must run the entire matrix through public APIs at final merged source, independently
 decode it, and rerun the locked sixteen Part 1 and sixteen HTONLY selections,
 preserving both explicit HTMIX dispositions. This calibration does not replace
 those delivery or regression gates.
@@ -231,6 +234,7 @@ CARGO_TARGET_DIR=/assigned/build cargo test -p emuella-j2k-codestream \
 At the selected source, ordinary codestream tests passed 215 tests with this
 calibration test ignored. Every explicitly invoked calibration group passed.
 Detailed external invocation records, binary identities, output/diagnostic
-files and an artefact manifest remain private. Canonical committed-tree
-verification, independent exact-head review, public API qualification and
-landing are required after selecting and implementing the deliverable.
+files and an artefact manifest remain private. These historical observations
+do not substitute for canonical committed-tree verification, independent review,
+public API qualification or final merged
+independent and corpus qualification of the deliverable.

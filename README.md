@@ -55,6 +55,17 @@ a deterministic JPH container with `encode_htj2k_jph`. Both entry points use
 planar/interleaved, zero-or-one-decomposition profile; the JPH payload is the
 unchanged raw encoder output.
 
+Lossy callers use the additive `Htj2kLossyEncodeOptions { bits_per_pixel }`,
+`encode_htj2k_lossy` and `encode_htj2k_lossy_jph`. They accept explicit greyscale
+or RGB, unsigned `U8`/`U16_LE`, planar or interleaved input and exactly two
+irreversible 9/7 levels with no MCT. Rate counts complete raw-codestream bits
+per reference pixel, excluding the 85-byte JPH wrapper. Successful output fits
+the floored byte budget within `max(32 bytes, ceil(budget / 500))`; invalid or
+unattainable rates fail, without padding or truncating a stream. Each axis is
+4–8192 samples and the image has at most 1,048,576 pixels. See the
+[public lossy HT contract and qualification](docs/ht-lossy-public-api.md) for
+resource bounds, exact error metrics, measured limits and the export recipe.
+
 Native HTJ2K decode has a separate staged HTONLY boundary. Structural Part 15
 parsing and packet-signalling validity run before support admission. A broader
 `Ccap^15` permission does not by itself make a codestream unsupported when the
@@ -63,8 +74,9 @@ homogeneous, reversible HT path. Actual multiple HT sets, ROI, heterogeneous
 state, HTMIX and cleanup magnitude bounds above 18 remain unsupported in
 that full-image path. A separate [irreversible HT foundation](docs/ht-lossy-foundations.md)
 admits the selected two-level, no-MCT, unsigned grey/RGB U8/U16_LE profile
-for full native component output from raw HT and JPH. Its target-rate encoder
-is an implementation-facing boundary; public HT encoder options remain lossless.
+for full native component output from raw HT and JPH, including the additive
+lossy encoder outputs. Use `DecodeMode::Components`, all components, full
+resolution and either output layout; the default rendered mode is excluded.
 Other irreversible full-image profiles remain unsupported, as does rendered
 projection of the new irreversible profile. Supported full inputs continue
 through the existing HT packet, entropy, reconstruction and public image path;

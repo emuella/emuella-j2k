@@ -19,5 +19,9 @@ mod tests {
         let _ = EncodeOptions::default();
         let _jph_encoder: fn(ImageView<'_>, &Htj2kEncodeOptions) -> Result<Vec<u8>> =
             encode_htj2k_jph;
+        let _lossy: fn(ImageView<'_>, &Htj2kLossyEncodeOptions) -> Result<Vec<u8>> =
+            encode_htj2k_lossy;
+        let _lossy_jph: fn(ImageView<'_>, &Htj2kLossyEncodeOptions) -> Result<Vec<u8>> =
+            encode_htj2k_lossy_jph;
     }
 }

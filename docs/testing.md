@@ -1131,10 +1131,30 @@ pixels or every other feature in that conformance input.
 
 ## Irreversible HT foundation checks
 
-The [foundation contract](ht-lossy-foundations.md) distinguishes the low-level
-encoder and full native decoder from the not-yet-public lossy HT encoder API.
+The [foundation contract](ht-lossy-foundations.md) describes the shared low-level
+encoder and full native decoder behind the additive public lossy HT API.
 Ordinary codestream and core tests cover the selected rate and resource bounds,
 strict neighbours, all four sample families, raw/JPH, both output layouts and
 atomic padded caller output, including a final-component entropy failure.
 The lossless HT matrix and locked DS0 qualification remain separate gates.
 Historical calibration measurements retain their exact original source pins.
+
+## Public irreversible HT qualification
+
+The [public API contract and recipe](ht-lossy-public-api.md) cover the complete
+preselected 264-cell matrix through `ImageView`: 96 main, 120 pattern boundary,
+12 U16 extreme, 12 maximum-resource and 24 minimum-budget cells. All successful
+cells repeat raw and JPH encoding, agree across input layouts, expose identical
+raw container payloads and decode natively in both output layouts. Shape,
+workspace and padded caller routes agree with owned decoding. Truncation leaves
+caller storage unchanged, and the foundation's separate late entropy failures
+still exercise atomic publication after component reconstruction has begun.
+
+The ordinary tests enforce exact rational NMSE ceilings for main cells,
+non-increasing distortion across every successful rate sequence, rate budgets
+and the complete expected success/failure dispositions. They share the
+calibration pattern generator rather than storing fixtures. An ignored export
+test reproduces that same matrix as project-authored source, Emuella raw/JPH,
+and canonical native bytes outside the source tree. It never executes another
+codec. Independent full-matrix decoding and locked-corpus qualification remain
+separate authorised gates; native self-decoding does not prove interoperability.

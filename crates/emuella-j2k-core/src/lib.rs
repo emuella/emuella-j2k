@@ -5816,6 +5816,23 @@ pub struct Htj2kEncodeOptions {
     pub decomposition_levels: u8,
 }
 
+/// Target rate for the bounded irreversible HTJ2K encoder.
+///
+/// Use [`encode_htj2k_lossy`] for raw output or [`encode_htj2k_lossy_jph`] for
+/// JPH. This additive type leaves [`Htj2kEncodeOptions`] lossless and unchanged.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Htj2kLossyEncodeOptions {
+    /// Complete raw-codestream bits per reference-grid pixel, excluding JPH.
+    ///
+    /// The exact finite positive `f32` is widened to `f64`, multiplied by the
+    /// pixel count, then floored to whole bits and whole bytes. A successful
+    /// stream never exceeds that budget and undershoots by at most
+    /// `max(32 bytes, ceil(budget / 500))`. Invalid, zero, unrepresentable or
+    /// unattainable budgets return an error; output is never padded or truncated.
+    /// Search visits at most seventeen scalar candidates and is not exhaustive.
+    pub bits_per_pixel: f32,
+}
+
 /// Optional tile dimensions for the narrow native multi-tile encode surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileSize {
@@ -9590,6 +9607,183 @@ pub fn encode_htj2k_jph(image: ImageView<'_>, options: &Htj2kEncodeOptions) -> R
     #[cfg(not(feature = "std"))]
     {
         encode_htj2k(image, options)
+    }
+}
+
+/// Encode a bounded lossy raw HTJ2K codestream.
+///
+/// Accepts explicit greyscale or RGB, unsigned `U8` or `U16_LE`, in planar or
+/// interleaved views with matching plane metadata and checked byte strides.
+/// Padding is ignored; storage through the last active row byte is required.
+/// The fixed profile uses exactly two irreversible 9/7 levels, no MCT, one
+/// tile/part/layer, LRCP, default precincts, 64×64 blocks and zero origins.
+/// Each axis is 4–8192 samples, with at most 1,048,576 reference pixels and
+/// 3,145,728 component samples. Format, geometry, rate and extents are checked
+/// before image-sized conversion; conversion and analysis reserve fallibly.
+/// Generated raw streams are bounded to 32 MiB. This does not guarantee recovery
+/// from every allocator failure in bounded per-block entropy scratch.
+///
+/// Decode successful output with [`DecodeMode::Components`], all components,
+/// full resolution, and either output layout. Rendered, partial and selected
+/// component requests are not part of this profile. Rate/distortion monotonicity
+/// is measured on the finite qualification matrix, not guaranteed for all images.
+pub fn encode_htj2k_lossy(
+    image: ImageView<'_>,
+    options: &Htj2kLossyEncodeOptions,
+) -> Result<Vec<u8>> {
+    #[cfg(feature = "std")]
+    {
+        let info = image_info(image);
+        if !matches!(
+            (info.components, info.color_model),
+            (1, ColorModel::Grayscale) | (3, ColorModel::Rgb)
+        ) || !matches!(info.sample_format, SampleFormat::U8 | SampleFormat::U16_LE)
+        {
+            return Err(unsupported(
+                UnsupportedFeature::ComponentLayout,
+                "lossy HT requires explicit greyscale/RGB with unsigned U8 or U16_LE samples",
+            ));
+        }
+        let count = usize::from(info.components);
+        let bits = info.sample_format.bits_per_sample;
+        codestream::ht_lossy::encode_byte_budget(
+            info.width,
+            info.height,
+            bits,
+            count,
+            options.bits_per_pixel,
+        )
+        .map_err(map_codestream_error)?;
+        let bytes = usize::from(bits / 8);
+        let row = checked_row_bytes(info.width, 1, bytes)?;
+        let mut refs: [&[u8]; 3] = [&[]; 3];
+        let mut strides = [0; 3];
+        let mut converted: [Vec<u8>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        match image {
+            ImageView::Planar { planes, .. } => {
+                if info.layout != ComponentLayout::Planar || planes.len() != count {
+                    return Err(J2kError::InvalidParameter {
+                        parameter: "planes",
+                        message: "lossy HT plane count and layout must match image info",
+                    });
+                }
+                for (c, plane) in planes.iter().enumerate() {
+                    if plane.width != info.width
+                        || plane.height != info.height
+                        || plane.sample_format != info.sample_format
+                    {
+                        return Err(J2kError::InvalidParameter {
+                            parameter: "planes",
+                            message: "lossy HT plane metadata must match image info",
+                        });
+                    }
+                    validate_ht_lossy_extent(plane.samples, plane.stride_bytes, row, info.height)?;
+                    refs[c] = plane.samples;
+                    strides[c] = plane.stride_bytes;
+                }
+            }
+            ImageView::Interleaved {
+                samples,
+                stride_bytes,
+                ..
+            } => {
+                if info.layout != ComponentLayout::Interleaved {
+                    return Err(J2kError::InvalidParameter {
+                        parameter: "info.layout",
+                        message: "interleaved view requires interleaved image info",
+                    });
+                }
+                let packed_row = checked_row_bytes(info.width, info.components, bytes)?;
+                validate_ht_lossy_extent(samples, stride_bytes, packed_row, info.height)?;
+                if count == 1 {
+                    refs[0] = samples;
+                    strides[0] = stride_bytes;
+                } else {
+                    let plane_len = row
+                        .checked_mul(info.height as usize)
+                        .ok_or_else(sample_size_overflow)?;
+                    for plane in &mut converted[..count] {
+                        plane
+                            .try_reserve_exact(plane_len)
+                            .map_err(|_| sample_size_overflow())?;
+                    }
+                    for y in 0..info.height as usize {
+                        for pixel in samples[y * stride_bytes..y * stride_bytes + packed_row]
+                            .chunks_exact(count * bytes)
+                        {
+                            for (c, plane) in converted[..count].iter_mut().enumerate() {
+                                plane.extend_from_slice(&pixel[c * bytes..(c + 1) * bytes]);
+                            }
+                        }
+                    }
+                    for (c, plane) in converted[..count].iter().enumerate() {
+                        refs[c] = plane;
+                        strides[c] = row;
+                    }
+                }
+            }
+        }
+        codestream::ht_lossy::encode_planar(
+            info.width,
+            info.height,
+            bits,
+            &refs[..count],
+            &strides[..count],
+            options.bits_per_pixel,
+        )
+        .map_err(map_codestream_error)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        let _ = (image, options);
+        Err(unsupported(
+            UnsupportedFeature::EntropyCoder,
+            "lossy HT encode requires the std feature",
+        ))
+    }
+}
+
+#[cfg(feature = "std")]
+fn validate_ht_lossy_extent(samples: &[u8], stride: usize, row: usize, height: u32) -> Result<()> {
+    if stride < row {
+        return Err(J2kError::InvalidParameter {
+            parameter: "stride_bytes",
+            message: "lossy HT stride must contain one active row",
+        });
+    }
+    let required = stride
+        .checked_mul(height as usize - 1)
+        .and_then(|n| n.checked_add(row))
+        .ok_or_else(sample_size_overflow)?;
+    if samples.len() < required {
+        return Err(J2kError::BufferTooSmall {
+            required,
+            provided: samples.len(),
+        });
+    }
+    Ok(())
+}
+
+/// Encode the exact [`encode_htj2k_lossy`] output in a deterministic JPH container.
+/// The rate budget excludes the 85-byte container header; native decoding uses
+/// the same full-component profile as raw output, without JPH rendering.
+pub fn encode_htj2k_lossy_jph(
+    image: ImageView<'_>,
+    options: &Htj2kLossyEncodeOptions,
+) -> Result<Vec<u8>> {
+    #[cfg(feature = "std")]
+    {
+        let raw = encode_htj2k_lossy(image, options)?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(raw.len().checked_add(85).ok_or_else(sample_size_overflow)?)
+            .map_err(|_| sample_size_overflow())?;
+        write_jph_encode_output(image_info(image), &raw, &mut output)?;
+        Ok(output)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        encode_htj2k_lossy(image, options)
     }
 }
 
@@ -18053,5 +18247,7 @@ mod effective_coding_style_tests {
     }
 }
 
+#[cfg(all(test, feature = "std"))]
+mod ht_lossy_public_tests;
 #[cfg(all(test, feature = "std"))]
 mod ht_lossy_tests;

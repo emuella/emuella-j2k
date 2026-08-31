@@ -1,6 +1,6 @@
 //! Implementation-facing bounded irreversible HT orchestration.
-//! The high-level public encoder API remains lossless. This module owns the
-//! selected two-level target-rate contract documented in ht-lossy-calibration.md.
+//! This module owns the selected two-level target-rate contract documented in
+//! ht-lossy-calibration.md, shared with the additive high-level lossy API.
 use super::*;
 
 const IRREVERSIBLE_QCD_GUARD_BITS: u8 = 3;
@@ -39,6 +39,27 @@ fn dimensions(width: u32, height: u32, components: usize) -> Result<usize> {
     Ok(pixels)
 }
 
+/// Validate the shared format, geometry, resources and rate before layout conversion.
+/// Returns the floored raw byte budget without allocating image-sized storage.
+pub fn encode_byte_budget(
+    width: u32,
+    height: u32,
+    bits: u8,
+    components: usize,
+    bits_per_pixel: f32,
+) -> Result<usize> {
+    let pixels = dimensions(width, height, components)?;
+    if !matches!(bits, 8 | 16) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::SamplePrecision,
+            "irreversible HT requires matching unsigned U8 or U16_LE planes",
+        ));
+    }
+    byte_budget(pixels, bits_per_pixel)
+}
+
 /// Encode the selected internal HT profile from unsigned planar byte views.
 /// Strides are bytes, U16 samples are little-endian, and all planes have the
 /// same 8- or 16-bit precision. No MCT or layout conversion is performed.
@@ -62,7 +83,7 @@ pub fn encode_planar(
             "irreversible HT requires matching unsigned U8 or U16_LE planes",
         ));
     }
-    let budget = byte_budget(pixels, bits_per_pixel)?;
+    let budget = encode_byte_budget(width, height, bits, planes.len(), bits_per_pixel)?;
     let row_bytes = width as usize * usize::from(bits / 8);
     for (plane, &stride) in planes.iter().zip(strides) {
         let extent = stride
@@ -531,7 +552,7 @@ mod tests {
     use super::*;
 
     fn encoded() -> Vec<u8> {
-        let source = super::super::ht_lossy_calibration::source(257, 193, 8, 3, 0);
+        let source = crate::ht_lossy_test_support::source(257, 193, 8, 3, 0);
         let planes = source
             .iter()
             .map(|p| p.iter().map(|&v| v as u8).collect::<Vec<_>>())
@@ -560,7 +581,7 @@ mod tests {
     fn large_noise_packets_exceed_capacity_hint_without_changing_calibrated_bytes() {
         use sha2::{Digest, Sha256};
 
-        let source = super::super::ht_lossy_calibration::source(1024, 1024, 16, 3, 1);
+        let source = crate::ht_lossy_test_support::source(1024, 1024, 16, 3, 1);
         let mut planes = source
             .iter()
             .map(|plane| {

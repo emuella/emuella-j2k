@@ -44,7 +44,21 @@ planes.
 The [irreversible HT foundation](ht-lossy-foundations.md) shares the established
 analysis, HT cleanup, packet writing and irreversible reconstruction machinery.
 Its full-image native admission is a separate exact two-level profile; existing
-lossless and reduced-component boundaries remain independent.
+lossless and reduced-component boundaries remain independent. The additive
+`Htj2kLossyEncodeOptions`, `encode_htj2k_lossy` and `encode_htj2k_lossy_jph`
+expose that same selected profile through checked `ImageView` adapters. The
+codestream owner supplies the shared format, geometry and rate preflight
+before core converts interleaved RGB to planar storage. Greyscale and planar
+input borrow their original rows; RGB conversion reserves each plane fallibly.
+Checked final-row extents allow padding without requiring padding after the
+last active byte. All plane metadata must agree with `ImageInfo`.
+
+The [public lossy contract](ht-lossy-public-api.md) records the fixed two-level,
+no-MCT, single-tile/layer profile, rate tolerance and resource envelope. Its
+JPH writer reserves the complete output fallibly, calls the raw encoder once
+and wraps its bytes with the existing container writer. Native decoding requires
+full `DecodeMode::Components` with all components, through either output layout;
+it does not add rendering, partial or selected-component admission.
 
 The [HTMIX architecture decision](htmix-disposition.md) records the accepted
 unsupported boundary, the mixed-packet admission correction and the distinct
@@ -449,7 +463,9 @@ valid file can therefore inspect as unsupported; structural contradictions are
 rejected first. Caller-owned decode routes inspect and size the complete input
 before publication, so invalid JPH input cannot partially change output. The
 deterministic writer emits one codestream and preserves the raw
-`encode_htj2k` payload byte-for-byte.
+`encode_htj2k` payload byte-for-byte. The additive lossy JPH route uses the
+same container contract and preserves `encode_htj2k_lossy` output; it does not
+widen optional presentation support.
 
 The one-level matrix is one tile, one layer, LRCP, default precincts, 64 × 64
 code-blocks, HT-only cleanup coding, zero origins, no component subsampling and
