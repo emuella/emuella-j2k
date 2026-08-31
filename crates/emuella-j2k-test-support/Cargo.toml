@@ -11,6 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 emuella-j2k-core = { workspace = true, features = ["std"] }
+emuella-j2k-tier1 = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

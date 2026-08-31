@@ -4,7 +4,7 @@
 
 Distribution target: `python` (`emuella-j2k-python`)
 
-Locked graph: repository `Cargo.lock` SHA-256 `30142d2c1446c62b7e1a5a4cfad7ee312c3d16508b4b19326c2bd6414e5ecea1`.
+Locked graph: repository `Cargo.lock` SHA-256 `273fde905fd36639f7b271868e88089b844ec842e0fa4dd49f36e78717c22253`.
 
 This inventory is derived from `cargo metadata --locked --format-version 1`
 without a platform filter, so `runtime` is the conservative union of normal,

@@ -30,6 +30,15 @@ implementations. The test-support crate creates deterministic inputs through
 project-owned algorithms. External reference codecs and corpora are never
 runtime dependencies.
 
+The [independent U8 native-plane contract](native-planes.md) selects a bounded
+subset of existing Part 1 component decode for atomic full-image publication.
+Core uses a crate-private predicate to keep those caller requests on the owned
+staging adapter, avoiding partial publication by parallel component jobs.
+Codestream admission, prepared/partial execution and encoder APIs are unchanged.
+The independently authored native fixture builder belongs to test support and
+is reusable by JP2 presentation tests without assigning display roles to native
+planes.
+
 ## Part 15 signalling and admission
 
 The [HTMIX architecture decision](htmix-disposition.md) records the accepted

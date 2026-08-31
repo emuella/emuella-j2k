@@ -22,6 +22,12 @@ The ordinary test suite is self-contained. It generates its inputs
 algorithmically and does not download or invoke OpenJPEG, OpenJPH, Kakadu, or
 standards conformance material.
 
+Native component decode includes independent one-through-four-plane unsigned
+8-bit Part 1 inputs without MCT. The bounded zero-decomposition profile in
+[`docs/native-planes.md`](docs/native-planes.md) preserves caller buffers on
+failure in full-image decode, including parallel builds. This native contract
+does not imply JP2 palette, colour-channel or alpha presentation support.
+
 Applications should normally depend on the facade package and import its
 underscore-form Rust crate name:
 
