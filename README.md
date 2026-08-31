@@ -60,9 +60,13 @@ parsing and packet-signalling validity run before support admission. A broader
 `Ccap^15` permission does not by itself make a codestream unsupported when the
 effective codestream still uses the implemented single-set, ROI-free,
 homogeneous, reversible HT path. Actual multiple HT sets, ROI, heterogeneous
-state, irreversible HT coding in the full-image path, HTMIX and cleanup
-magnitude bounds above 18 remain unsupported in that full-image path. Supported
-full inputs continue
+state, HTMIX and cleanup magnitude bounds above 18 remain unsupported in
+that full-image path. A separate [irreversible HT foundation](docs/ht-lossy-foundations.md)
+admits the selected two-level, no-MCT, unsigned grey/RGB U8/U16_LE profile
+for full native component output from raw HT and JPH. Its target-rate encoder
+is an implementation-facing boundary; public HT encoder options remain lossless.
+Other irreversible full-image profiles remain unsupported, as does rendered
+projection of the new irreversible profile. Supported full inputs continue
 through the existing HT packet, entropy, reconstruction and public image path;
 this is not general Part 15 or JPEG 2000 conformance.
 

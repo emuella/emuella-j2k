@@ -1,10 +1,12 @@
 # Irreversible HT calibration
 
-This project-authored record selects a bounded implementation candidate. It is
-not a public encoder support claim or final qualification. The only code change
-is a test-only probe; production encoding, admission and lossless behaviour are
-unchanged. Independent reconstruction uses the existing authorised installed
-OpenJPH 0.30.1 black box; no external source or output is included here.
+This project-authored historical record selects a bounded implementation candidate.
+It is not a public encoder support claim or final qualification. At the pinned
+source below, only a test-only probe changed; production encoding, admission
+and lossless behaviour were unchanged. The probe now reuses the production
+[internal foundation](ht-lossy-foundations.md), while the CSV and original
+source identities remain the historical evidence. Independent reconstruction uses
+the existing authorised installed OpenJPH 0.30.1 black box; no external source or output is included here.
 
 ## Source and authority
 
@@ -105,8 +107,9 @@ mandatory for both layouts. Reserve working storage fallibly, retain only the
 current and best candidate plus reusable transform/quantisation scratch, and
 bound generated/caller codestream input to 32 MiB. The extent limit and one
 layer/part constrain packet work. A production implementation must enforce
-these bounds; the test-only constructor intentionally is not that admission
-boundary. The measurements below are observations, not CPU/RSS guarantees.
+these bounds. At the selected historical source, the test-only constructor
+was not that admission boundary. The measurements below are observations, not
+CPU/RSS guarantees.
 
 ## Finite qualification matrix selected before implementation
 
@@ -154,9 +157,10 @@ lossless tests and final locked Part 1/HTONLY regression remain separate gates.
 ## Measurements and numerical acceptance
 
 The selected-source probe tests the four sample families in internal planes;
-public input-layout adapters and full-image public admission are still to be
-implemented and qualified. It examines 108 main/boundary candidate rates at
-257×193, six 65×65 extreme candidates, six resource candidates and twelve
+public input-layout adapters and full-image public admission were not yet
+implemented or qualified at that source. The foundation record separately
+describes the subsequent native admission checks. The selected probe examined
+108 main/boundary candidate rates at 257×193, six 65×65 extreme candidates, six resource candidates and twelve
 minimum-size candidates. Every candidate is byte-repeatable and natively
 reconstructed. Observation-only trial streams outside budget/tolerance are
 included for diagnosis; they must never become public successful output.

@@ -41,6 +41,11 @@ planes.
 
 ## Part 15 signalling and admission
 
+The [irreversible HT foundation](ht-lossy-foundations.md) shares the established
+analysis, HT cleanup, packet writing and irreversible reconstruction machinery.
+Its full-image native admission is a separate exact two-level profile; existing
+lossless and reduced-component boundaries remain independent.
+
 The [HTMIX architecture decision](htmix-disposition.md) records the accepted
 unsupported boundary, the mixed-packet admission correction and the distinct
 block-discovery/state contracts required by any separately authorised change.

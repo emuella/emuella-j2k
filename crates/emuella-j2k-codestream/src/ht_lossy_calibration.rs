@@ -1,155 +1,8 @@
 //! Project-authored provisional irreversible HT calibration, not a public API.
 //! Standards and the selected contract are recorded in docs/ht-lossy-calibration.md.
 use super::*;
-const IRREVERSIBLE_QCD_GUARD_BITS: u8 = 3;
 use emuella_j2k_container as container;
 use sha2::{Digest, Sha256};
-
-#[allow(clippy::too_many_arguments)]
-fn candidate(
-    width: u32,
-    height: u32,
-    bits_per_sample: u8,
-    decomposition_levels: u8,
-    transformed_planes: &[Vec<f32>],
-    multiple_component_transform: bool,
-    specs: &[DecompSubbandSpec],
-    coarseness: u32,
-) -> Result<Option<Vec<u8>>> {
-    let octave = coarseness / 2048;
-    let mantissa = u16::try_from(coarseness % 2048).map_err(|_| CodestreamError::SizeOverflow)?;
-    let base_exponent = 31_u8
-        .checked_sub(u8::try_from(octave).map_err(|_| CodestreamError::SizeOverflow)?)
-        .ok_or(CodestreamError::SizeOverflow)?;
-    let qcd_steps = specs
-        .iter()
-        .map(|spec| {
-            let gain = match spec.kind {
-                PacketSubbandKind::LowLow => 0,
-                PacketSubbandKind::HighLow | PacketSubbandKind::LowHigh => 1,
-                PacketSubbandKind::HighHigh => 2,
-            };
-            transform::IrreversibleQuantizationStep::new(
-                base_exponent
-                    .checked_add(gain)
-                    .ok_or(CodestreamError::SizeOverflow)?,
-                mantissa,
-            )
-            .map_err(|_| CodestreamError::SizeOverflow)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    for step in &qcd_steps {
-        let decoder_available_bitplanes = IRREVERSIBLE_QCD_GUARD_BITS
-            .checked_add(step.exponent)
-            .and_then(|value| value.checked_sub(1))
-            .ok_or(CodestreamError::SizeOverflow)?;
-        if decoder_available_bitplanes > CLASSIC_COMPONENT_MAX_MAGNITUDE_BITPLANES {
-            return Ok(None);
-        }
-    }
-    let available_bitplanes = qcd_steps
-        .iter()
-        .map(|step| {
-            IRREVERSIBLE_QCD_GUARD_BITS
-                .checked_add(step.exponent)
-                .and_then(|value| value.checked_sub(1))
-                .ok_or(CodestreamError::SizeOverflow)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut quantized_planes = transformed_planes
-        .iter()
-        .map(|plane| alloc::vec![0_i32; plane.len()])
-        .collect::<Vec<_>>();
-    let stride = usize::try_from(width).map_err(|_| CodestreamError::SizeOverflow)?;
-    for (source, quantized) in transformed_planes.iter().zip(&mut quantized_planes) {
-        for (spec, step) in specs.iter().zip(&qcd_steps) {
-            let gain = match spec.kind {
-                PacketSubbandKind::LowLow => 0,
-                PacketSubbandKind::HighLow | PacketSubbandKind::LowHigh => 1,
-                PacketSubbandKind::HighHigh => 2,
-            };
-            let delta = step
-                .delta(bits_per_sample, gain)
-                .map_err(|_| CodestreamError::SizeOverflow)?;
-            for y in 0..usize::try_from(spec.height).map_err(|_| CodestreamError::SizeOverflow)? {
-                let row = usize::try_from(spec.y)
-                    .map_err(|_| CodestreamError::SizeOverflow)?
-                    .checked_add(y)
-                    .and_then(|value| value.checked_mul(stride))
-                    .and_then(|value| value.checked_add(usize::try_from(spec.x).ok()?))
-                    .ok_or(CodestreamError::SizeOverflow)?;
-                let width =
-                    usize::try_from(spec.width).map_err(|_| CodestreamError::SizeOverflow)?;
-                for x in 0..width {
-                    let value = source[row + x];
-                    let scaled_magnitude = value.abs() / delta;
-                    if scaled_magnitude > i32::MAX as f32 {
-                        return Err(CodestreamError::SizeOverflow);
-                    }
-                    let magnitude = scaled_magnitude as i32;
-                    if magnitude >= (1 << 17) {
-                        return Ok(None);
-                    }
-                    quantized[row + x] = if value.is_sign_negative() {
-                        -magnitude
-                    } else {
-                        magnitude
-                    };
-                }
-            }
-        }
-    }
-
-    let plane_refs = quantized_planes
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
-    let mut segments = Vec::new();
-    let mut component_subbands = Vec::with_capacity(plane_refs.len());
-    for plane in &plane_refs {
-        let mut subbands = Vec::new();
-        for (spec, depth) in specs.iter().zip(&available_bitplanes) {
-            subbands.push(encode_ht_decomp_subband(
-                width,
-                plane,
-                *spec,
-                *depth,
-                &mut segments,
-            )?);
-        }
-        component_subbands.push(subbands);
-    }
-    let mut packet = Vec::with_capacity(native_decomp_packet_capacity_hint(
-        &component_subbands,
-        &segments,
-    )?);
-    write_native_decomp_packets(
-        &mut packet,
-        decomposition_levels,
-        &component_subbands,
-        &segments,
-    )?;
-    let mut codestream = Vec::new();
-    write_native_irreversible_main_header(
-        &mut codestream,
-        width,
-        height,
-        bits_per_sample,
-        u16::try_from(plane_refs.len()).map_err(|_| CodestreamError::SizeOverflow)?,
-        multiple_component_transform,
-        decomposition_levels,
-        &qcd_steps,
-    )?;
-    let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
-    codestream[qcd + 4] = (IRREVERSIBLE_QCD_GUARD_BITS << 5) | 2;
-    // Test-only adaptation: ordinary Part 1 quantisation with HT block signalling.
-    codestream[6..8].copy_from_slice(&0x4000_u16.to_be_bytes());
-    let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
-    codestream[cod + 12] = 0x40;
-    codestream.splice(cod..cod, [0xff, 0x50, 0, 8, 0, 2, 0, 0, 0, 0x2a]);
-    write_tile_part(&mut codestream, 0, &packet, true)?;
-    Ok(Some(codestream))
-}
 
 fn analyse(width: u32, height: u32, bits: u8, source: &[Vec<u16>]) -> Vec<Vec<f32>> {
     let mut planes = source
@@ -157,27 +10,12 @@ fn analyse(width: u32, height: u32, bits: u8, source: &[Vec<u16>]) -> Vec<Vec<f3
         .map(|p| {
             p.iter()
                 .map(|&v| f32::from(v) - (1_u32 << (bits - 1)) as f32)
-                .collect::<Vec<_>>()
+                .collect()
         })
         .collect::<Vec<_>>();
-    for plane in &mut planes {
-        for level in 0..2 {
-            let (w, h) = resolution_dimensions(width, height, 2, 2 - level).unwrap();
-            let config = transform::Irreversible97Config {
-                width: w as usize,
-                height: h as usize,
-                stride: width as usize,
-                edges: transform::Irreversible97Edges::from_tile_origin(
-                    0, 0, w as usize, h as usize,
-                ),
-            };
-            let mut scratch = vec![0.; config.scratch_len()];
-            transform::forward_irreversible_9_7(plane, config, &mut scratch).unwrap();
-        }
-    }
+    ht_lossy::analyse(width, height, &mut planes).unwrap();
     planes
 }
-
 fn search(
     width: u32,
     height: u32,
@@ -185,86 +23,28 @@ fn search(
     planes: &[Vec<f32>],
     budget: usize,
 ) -> (Vec<u8>, u32, usize) {
-    let specs = decomp_subband_specs(width, height, 2).unwrap();
-    let mut lower = IRREVERSIBLE_COARSENESS_MIN;
-    let mut upper = 32 * 2048 - 1;
-    let mut best = candidate(width, height, bits, 2, planes, false, &specs, upper)
-        .unwrap()
-        .unwrap();
-    let mut selected = upper;
-    let mut attempts = 1;
-    if best.len() > budget {
-        return (best, selected, attempts);
-    }
-    while lower <= upper {
-        let midpoint = lower + (upper - lower) / 2;
-        attempts += 1;
-        let Some(encoded) =
-            candidate(width, height, bits, 2, planes, false, &specs, midpoint).unwrap()
-        else {
-            lower = midpoint + 1;
-            continue;
-        };
-        if encoded.len() <= budget {
-            if encoded.len() > best.len() {
-                best = encoded;
-                selected = midpoint;
-            }
-            upper = midpoint - 1;
-        } else {
-            lower = midpoint + 1;
-        }
-    }
-    (best, selected, attempts)
+    ht_lossy::search(width, height, bits, planes, budget).unwrap()
 }
 
 fn native(raw: &[u8]) -> Vec<Vec<u16>> {
-    let parsed = parse(raw).unwrap();
-    validate_part15_packet_signalling(raw, &parsed).unwrap();
-    let style = uniform_effective_coding_style(&parsed).unwrap();
-    assert_eq!(style.decomposition_levels, 2);
-    assert_eq!(style.transform, WaveletTransform::Irreversible97);
-    assert!(!style.multiple_component_transform);
-    let candidate = ht_decode_candidate_with_transform_permission(&parsed, true)
-        .unwrap()
-        .unwrap();
-    let (rect, payload) = single_part1_profile_tile(raw, &parsed).unwrap();
-    let contributions = parse_default_precinct_lrcp_packets(raw, &parsed, rect, payload).unwrap();
-    classify_htonly_native_packet_mechanisms(&contributions).unwrap();
-    let mut result = Vec::new();
-    for component in 0..parsed.siz.component_count() {
-        // The test admits its own exact encoder shape. Production admission remains unchanged.
-        let prepared = PreparedHtj2kReducedComponentDecode {
-            input: raw,
-            codestream: parsed.clone(),
-            candidate,
-            coding_style: style,
-            reconstruction: Htj2kReducedComponentReconstruction::Irreversible,
-            tile_rect: rect,
-            contributions: contributions.clone(),
-            request: Htj2kReducedComponentDecodeRequest {
-                component_index: component,
-                discard_levels: 0,
-            },
-            output_width: rect.width,
-            output_height: rect.height,
-        };
-        let decoded = decode_prepared_htj2k_reduced_component_owned_with_workspace(
-            &prepared,
-            &mut HtCodestreamDecodeWorkspace::new(),
-        )
-        .unwrap();
-        let bytes = &decoded.components[0].samples;
-        result.push(if decoded.bits_per_sample == 8 {
-            bytes.iter().map(|&v| u16::from(v)).collect()
-        } else {
-            bytes
-                .chunks_exact(2)
-                .map(|v| u16::from_le_bytes([v[0], v[1]]))
-                .collect()
-        });
-    }
-    result
+    let decoded =
+        ht_lossy::decode_owned_with_workspace(raw, &mut HtCodestreamDecodeWorkspace::new())
+            .unwrap()
+            .unwrap();
+    decoded
+        .components
+        .iter()
+        .map(|c| {
+            if decoded.bits_per_sample == 8 {
+                c.samples.iter().map(|&v| u16::from(v)).collect()
+            } else {
+                c.samples
+                    .chunks_exact(2)
+                    .map(|v| u16::from_le_bytes([v[0], v[1]]))
+                    .collect()
+            }
+        })
+        .collect()
 }
 
 fn wrapper(raw: &[u8], width: u32, height: u32, bits: u8, components: u16) -> Vec<u8> {
@@ -305,7 +85,13 @@ fn wrapper(raw: &[u8], width: u32, height: u32, bits: u8, components: u16) -> Ve
     out
 }
 
-fn source(width: u32, height: u32, bits: u8, components: u16, pattern: u32) -> Vec<Vec<u16>> {
+pub(super) fn source(
+    width: u32,
+    height: u32,
+    bits: u8,
+    components: u16,
+    pattern: u32,
+) -> Vec<Vec<u16>> {
     let max = (1_u32 << bits) - 1;
     (0..u32::from(components))
         .map(|c| {

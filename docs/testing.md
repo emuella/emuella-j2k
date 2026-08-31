@@ -1128,3 +1128,13 @@ That transcription was retrieval revision
 `7b3d8d60cd4d4f6c056cd108d928b7f99f492aa9`). The smoke result proves only
 that metadata inspection accepts this valid syntax; it does not prove decoded
 pixels or every other feature in that conformance input.
+
+## Irreversible HT foundation checks
+
+The [foundation contract](ht-lossy-foundations.md) distinguishes the low-level
+encoder and full native decoder from the not-yet-public lossy HT encoder API.
+Ordinary codestream and core tests cover the selected rate and resource bounds,
+strict neighbours, all four sample families, raw/JPH, both output layouts and
+atomic padded caller output, including a final-component entropy failure.
+The lossless HT matrix and locked DS0 qualification remain separate gates.
+Historical calibration measurements retain their exact original source pins.
