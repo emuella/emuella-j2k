@@ -1,6 +1,7 @@
 //! Project-authored provisional irreversible HT calibration, not a public API.
 //! Standards and the selected contract are recorded in docs/ht-lossy-calibration.md.
 use super::*;
+const IRREVERSIBLE_QCD_GUARD_BITS: u8 = 3;
 use emuella_j2k_container as container;
 use sha2::{Digest, Sha256};
 
@@ -139,6 +140,8 @@ fn candidate(
         decomposition_levels,
         &qcd_steps,
     )?;
+    let qcd = find_marker(&codestream, 0, Marker::Qcd).unwrap();
+    codestream[qcd + 4] = (IRREVERSIBLE_QCD_GUARD_BITS << 5) | 2;
     // Test-only adaptation: ordinary Part 1 quantisation with HT block signalling.
     codestream[6..8].copy_from_slice(&0x4000_u16.to_be_bytes());
     let cod = find_marker(&codestream, 0, Marker::Cod).unwrap();
@@ -184,7 +187,7 @@ fn search(
 ) -> (Vec<u8>, u32, usize) {
     let specs = decomp_subband_specs(width, height, 2).unwrap();
     let mut lower = IRREVERSIBLE_COARSENESS_MIN;
-    let mut upper = IRREVERSIBLE_COARSENESS_MAX;
+    let mut upper = 32 * 2048 - 1;
     let mut best = candidate(width, height, bits, 2, planes, false, &specs, upper)
         .unwrap()
         .unwrap();
@@ -353,6 +356,10 @@ fn source(width: u32, height: u32, bits: u8, components: u16, pattern: u32) -> V
                                 }
                             }
                             6 => max / 2,
+                            8 => {
+                                let negative = |v: u32| matches!(v % 8, 1 | 2 | 4 | 5);
+                                if negative(x) == negative(y) { max } else { 0 }
+                            }
                             _ => ((x + y + c * 17) * max / (width + height + 34)).min(max),
                         };
                         value as u16
@@ -380,16 +387,40 @@ fn interleaved(planes: &[Vec<u16>], bits: u8) -> Vec<u8> {
 #[test]
 #[ignore = "bounded calibration; optional output must be directed to private registered scratch"]
 fn measure_irreversible_ht_probe() {
-    let width = 257;
-    let height = 193;
+    let env = |name: &str, default: u32| {
+        std::env::var(name)
+            .ok()
+            .map(|s| s.parse::<u32>().unwrap())
+            .unwrap_or(default)
+    };
+    let width = env("EMUELLA_HT_CALIBRATION_WIDTH", 257);
+    let height = env("EMUELLA_HT_CALIBRATION_HEIGHT", 193);
+    let selected_pattern = std::env::var("EMUELLA_HT_CALIBRATION_PATTERN")
+        .ok()
+        .map(|s| s.parse::<u32>().unwrap());
+    let selected_bits = std::env::var("EMUELLA_HT_CALIBRATION_BITS")
+        .ok()
+        .map(|s| s.parse::<u8>().unwrap());
+    let selected_components = std::env::var("EMUELLA_HT_CALIBRATION_COMPONENTS")
+        .ok()
+        .map(|s| s.parse::<u16>().unwrap());
     let output = std::env::var_os("EMUELLA_HT_CALIBRATION_OUTPUT").map(std::path::PathBuf::from);
     if let Some(path) = &output {
         assert!(path.is_dir());
     }
     let first_only = std::env::var_os("EMUELLA_HT_CALIBRATION_FIRST_ONLY").is_some();
-    for pattern in 0..8 {
+    for pattern in 0..9 {
+        if selected_pattern.is_some_and(|p| p != pattern) {
+            continue;
+        }
         for bits in [8, 16] {
+            if selected_bits.is_some_and(|b| b != bits) {
+                continue;
+            }
             for components in [1, 3] {
+                if selected_components.is_some_and(|c| c != components) {
+                    continue;
+                }
                 let source = source(width, height, bits, components, pattern);
                 let planes = analyse(width, height, bits, &source);
                 let mut previous = u128::MAX;
@@ -417,6 +448,24 @@ fn measure_irreversible_ht_probe() {
                         / (f64::from(width * height * u32::from(components))
                             * f64::from(max).powi(2));
                     let monotonic = sse <= previous;
+                    assert!(attempts <= 17);
+                    if width == 257 && height == 193 && pattern < 4 {
+                        assert!(raw.len() <= budget);
+                        assert!(budget - raw.len() <= 32_usize.max(budget.div_ceil(500)));
+                        let ceiling = match rate {
+                            1 => 125,
+                            2 => 60,
+                            4 => 40,
+                            _ => unreachable!(),
+                        };
+                        assert!(
+                            sse * 1000
+                                <= u128::from(width * height * u32::from(components))
+                                    * u128::from(max).pow(2)
+                                    * ceiling
+                        );
+                        assert!(monotonic);
+                    }
                     previous = sse;
                     assert_eq!(search(width, height, bits, &planes, budget).0, raw);
                     let wrapped = wrapper(&raw, width, height, bits, components);
