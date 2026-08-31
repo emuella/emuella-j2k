@@ -26,6 +26,8 @@ pub use emuella_j2k_transform as transform;
 #[doc(hidden)]
 pub mod geometry;
 mod ht_high_component;
+#[cfg(all(test, feature = "std"))]
+mod ht_lossy_calibration;
 #[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
 #[doc(hidden)]
 pub use ht_high_component::encode_htj2k_high_component_entropy_failure_test_fixture;
