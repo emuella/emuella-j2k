@@ -89,6 +89,9 @@ cargo test -p emuella-j2k-test-support --test native_planes
 cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes
 ```
 
+The [canonical local gate](testing.md#canonical-local-gate) and hosted CI include
+the parallel native-plane tests alongside the mapped-presentation tests.
+
 The fixtures and implementation are project-authored. They contain no external
 implementation source, protected payload, or reproduced standards expression.
 Their basis is published normative-core ISO/IEC 15444-1:2024 / ITU-T T.800 (V4),

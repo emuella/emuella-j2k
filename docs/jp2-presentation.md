@@ -127,6 +127,9 @@ cargo test -p emuella-j2k-test-support --test jp2_presentation
 cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test jp2_presentation
 ```
 
+The [canonical local gate](testing.md#canonical-local-gate) and hosted CI include
+the parallel mapped-presentation tests alongside the native-plane tests.
+
 The shared Tier-1 adapter preserves an explicit `MalformedBitstream` variant as
 public `InvalidInput`, including the late invalid-MQ fixture. It previously lost
 that distinction. Unsupported coding-style/pass variants remain `Unsupported`;

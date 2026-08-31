@@ -2,7 +2,9 @@
 
 A release candidate must be built from one reviewed commit. Before publishing:
 
-1. Run `scripts/check.sh`. The public-tree audit accepts only reviewed UTF-8
+1. Run `sh scripts/check.sh` from the clean candidate checkout and retain its
+   reported commit/tree identities. The [canonical gate](../CONTRIBUTING.md#canonical-verification)
+   verifies a disposable committed-source export. The public-tree audit accepts only reviewed UTF-8
    source/text formats and named legal files; it rejects unknown suffixes,
    binary content, links, and non-regular files by default.
 2. Confirm package versions, included-file lists, licences, notices, and

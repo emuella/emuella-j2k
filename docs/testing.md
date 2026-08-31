@@ -5,6 +5,32 @@ created in memory. They require no network, external executable, or adjacent
 repository. `emuella-j2k-test-support` contains the shared generator and
 round-trip tests.
 
+## Canonical local gate
+
+After committing the candidate, run `sh scripts/check.sh` from a clean primary
+or linked checkout. The [contributor instructions](../CONTRIBUTING.md#canonical-verification)
+describe its exact-commit/tree export, dirty-source refusal and disposable
+build-output contract. The source audit remains a staging-tree audit; local
+verification does not set a hosted-CI flag to bypass Git metadata.
+
+The gate runs the existing policy and runner tests, source and dependency
+notice audits, formatting, workspace and fuzz checks, workspace tests, strict
+clippy, dependency policy and no-default-features checks. It also runs the
+committed-tree wrapper's synthetic-Git behavioural tests and this focused
+parallel regression command, which hosted CI runs as well:
+
+```sh
+cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
+```
+
+The workspace's ordinary tests exercise the scalar configuration; compiling
+the codestream parallel feature alone does not exercise these full-image
+caller-buffer and mapped-presentation paths. The focused command supplements,
+rather than replaces, those existing gates. It can also run while editing,
+without producing an exact-committed-tree verification claim.
+
+## Optional corpus verification
+
 Optional conformance and interoperability work is Layer 2. The first inspection
 smoke runner consumes the pinned `layer2/conformance-jpeg-2000` suite and its
 locally materialised `jpeg-2000/conformance` pack:
