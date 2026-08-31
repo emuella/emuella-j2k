@@ -62,7 +62,7 @@ The literal empty-packet family invokes neither an image encoder nor an entropy
 encoder and must reconstruct sample value 128. The varied 5×3 family builds its
 own SIZ/COD/QCD/SOT and packet headers, calls only the project-owned Tier-1
 utility, and compares against explicit native values including 0, 1, 127, 128
-and 255. Neither expected native values nor future expected presentation values
+and 255. Neither expected native values nor expected presentation values
 are derived from a decoder. The helper accepts 1–4 planes with one code-block
 per plane, dimensions 1–64 per axis. Optional JP2 boxes are authored by callers.
 
@@ -73,9 +73,12 @@ the existing project fixture encoder to cover multiple blocks and odd edges
 against independently specified samples. It supplements the hand-built family.
 A late invalid-MQ fixture passes packet preparation and fails reconstruction in
 the final plane; sentinel buffers prove atomicity. Malformed lengths and QCD
-and an unsupported CRG neighbour also fail without mutation. The existing
-Tier-1 error adapter reports an entropy-coder `Unsupported` error for the invalid
-MQ payload; this work does not reclassify its diagnostics.
+and an unsupported CRG neighbour also fail without mutation. The Tier-1 error
+adapter now retains an explicit `MalformedBitstream` result
+as public `InvalidInput`, including this invalid MQ payload. This diagnostic
+correction accompanies mapped JP2 presentation; unsupported coding-style/pass
+variants retain their existing `Unsupported` category. Successful native decode
+and the publication contract are unchanged.
 
 Run both feature configurations; ordinary workspace tests alone do not exercise
 the parallel caller route:

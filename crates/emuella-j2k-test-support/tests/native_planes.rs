@@ -264,13 +264,7 @@ fn late_native_entropy_failure_preserves_caller_planes() {
                 assert_eq!(decode_shape(bad, &options), decode_shape(good, &options));
                 let failure = decode(bad, &options).unwrap_err();
                 assert!(
-                    matches!(
-                        failure,
-                        J2kError::Unsupported {
-                            feature: emuella_j2k_core::UnsupportedFeature::EntropyCoder,
-                            ..
-                        }
-                    ),
+                    matches!(failure, J2kError::InvalidInput { .. }),
                     "{failure:?}"
                 );
                 assert_caller_output(bad, &options, &expected, true);

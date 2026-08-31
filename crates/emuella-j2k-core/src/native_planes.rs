@@ -1,4 +1,4 @@
-//! Bounded native plane contract shared with future JP2 presentation planning.
+//! Bounded native plane contract shared with JP2 presentation planning.
 //!
 //! This selects atomic full-image publication from already supported decoding;
 //! it does not grant or remove any codestream admission. See

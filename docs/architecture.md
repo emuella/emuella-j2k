@@ -436,8 +436,8 @@ signedness must agree with `ihdr` and `bpcc`. Checked box arithmetic, field
 domains and exact containing-box bounds precede metadata allocation. Legal
 unknown boxes remain byte-preserved.
 
-This validation is container and codestream admission, not presentation or
-decode expansion. Palette, component mapping, channel definition, alpha, ICC,
+This JPH validation is container and codestream admission, not presentation or
+decode expansion. JPH palette, component mapping, channel definition, alpha, ICC,
 unrecognised colour interpretation, multiple-codestream composition, HTMIX and
 codec profiles outside the existing decoder remain unsupported. A structurally
 valid file can therefore inspect as unsupported; structural contradictions are
@@ -649,18 +649,23 @@ behaviour unless they interrupt a required sequence.
 This admission establishes container and codestream consistency only. It does
 not produce presentation pixels or select palette application, component
 mapping, channel or alpha interpretation, ICC transforms, colour conversion,
-resampling, resolution handling or multiple-codestream composition. The known
-unimplemented presentation metadata is reported by support classification
-without making an otherwise well-formed container invalid. Component-mode
+resampling, resolution handling or multiple-codestream composition. The separate [bounded mapped JP2 route](jp2-presentation.md) resolves palette,
+mapping, channel order and straight alpha through one shared plan after this
+admission. Its U8 zero-decomposition profile stages native reconstruction and
+projection before caller publication, with a separate expanded-output bound.
+Unimplemented presentation metadata is reported by support classification
+without making an otherwise well-formed container invalid. Signed resulting
+grey/sRGB channels in optional mapping/channel definitions are invalid; the
+existing direct/native container-admission contract is unchanged. Component-mode
 decode may still expose admitted raw codestream planes and applies no
 presentation transform. Component output metadata is inferred from the raw
 selection: all one- and three-component outputs are labelled grayscale and RGB
 respectively, while other counts and explicit subsets remain unknown. JP2
-colour metadata does not alter that inference. Except for the bounded direct
-greyscale and sYCC profiles above, rendered requests fail closed before output
-allocation or mutation for high-depth or signed samples, palette, component
-mapping, channel definition, sYCC, ICC, vendor, reserved or unrecognised colour
-metadata.
+colour metadata does not alter that inference. The bounded mapped route and
+the separate direct greyscale and sYCC profiles above have their own admission
+predicates. Rendered requests outside those profiles fail closed for high-depth
+or signed samples, optional presentation, sYCC, ICC, vendor, reserved or
+unrecognised colour metadata.
 Partial decode requests are native component selections; their Part 1
 full-decode compatibility fallback therefore also uses component mode.
 
