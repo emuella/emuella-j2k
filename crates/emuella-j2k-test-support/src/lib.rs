@@ -3,6 +3,8 @@ use emuella_j2k_core::{
     encode,
 };
 
+pub mod native_planes;
+
 /// Generate deterministic grayscale samples without an external image source.
 pub fn grayscale_gradient(width: u32, height: u32) -> Vec<u8> {
     (0..height)

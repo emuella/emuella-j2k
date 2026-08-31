@@ -27,6 +27,7 @@ pub use emuella_j2k_container as container;
 mod ht_high_component;
 #[cfg(feature = "std")]
 mod ht_roi;
+mod native_planes;
 
 pub const PROJECT_NAME: &str = "emuella-j2k";
 
@@ -7782,6 +7783,8 @@ fn decoded_sample_format(decoded: &codestream::DecodedImage) -> Result<SampleFor
 /// directly into the provided rows, including padded strides, without first
 /// allocating a second full output image. Other profiles remain conservative
 /// caller-owned-buffer adapters over [`decode`].
+/// The bounded independent U8 plane profile described in `docs/native-planes.md`
+/// always finishes in private storage before publishing any caller samples.
 pub fn decode_into(
     input: &[u8],
     target: &mut ImageViewMut<'_>,
@@ -7855,6 +7858,9 @@ fn decode_part1_components_into_direct(
         return Ok(false);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    if native_planes::is_atomic_profile(codestream_bytes, &parsed) {
+        return Ok(false);
+    }
     if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {
         return Ok(false);
     }

@@ -161,6 +161,7 @@ name = "emuella-j2k-test-support"
 version = "0.1.0"
 dependencies = [
  "emuella-j2k-core",
+ "emuella-j2k-tier1",
 ]
 
 [[package]]
