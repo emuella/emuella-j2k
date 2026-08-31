@@ -1,0 +1,228 @@
+# Irreversible HT calibration
+
+This project-authored record selects a bounded implementation candidate. It is
+not a public encoder support claim or final qualification. The only code change
+is a test-only probe; production encoding, admission and lossless behaviour are
+unchanged. Independent reconstruction uses the existing authorised installed
+OpenJPH 0.30.1 black box; no external source or output is included here.
+
+## Source and authority
+
+- Baseline: `0e02932edde23f5fc89928ccfe9709bdb3dd48d2`.
+- Rejected scalar-range checkpoint:
+  `3d810e35ccef80d2f515d893ba17e9410ada4419`.
+- Selected probe source:
+  `84fe9d4e590ebf87565973e827f4fc1faf632d6f`.
+- Probe: `crates/emuella-j2k-codestream/src/ht_lossy_calibration.rs`.
+- [Measurements and project-authored artefact identities](ht-lossy-calibration.csv)
+  retain every selected-source trial, including unsuccessful rate candidates.
+  Input identities describe packed interleaved U8 or U16_LE samples generated
+  by the probe. No fixture or external payload is tracked.
+
+The normative sources consulted are published ISO/IEC 15444-15:2019, extension,
+clause 2 (physical PDF page 9), 8.7.1–8.7.3 (page 32), normative Annex A,
+A.1–A.4 (pages 35–38), and Annex B, B.3 (pages 40–41); retrieval
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db`. Core quantisation follows published
+ISO/IEC 15444-1:2024, normative Annex A, A.6.1 and Tables A.15–A.21
+(pages 46–49), A.6.4 and Tables A.28/A.30 (pages 52–53), Annex E, E.1
+(pages 129–130), and Annex F, F.2.2 (page 132); retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`. Annex E.2's forward quantisation
+account is informative; using its scalar dead-zone form is an engineering
+choice, not an encoder algorithm mandated by E.1.
+
+Part 15 references Part 1:2019 and encourages investigating later editions.
+The Part 1:2024 foreword (page 3) lists no quantisation or 9/7 change. This
+supports using the reviewed current core for the established mechanism; it
+is not a direct comparison with absent canonical 2019 core pages. No newer
+core feature is used to reinterpret Part 15.
+
+The consulted Part 15 text has inherited cross-reference inconsistencies:
+A.3.2's bit wording on page 36 conflicts with A.4's explicit HT-only coding
+style on page 37; A.3.6 refers to 8.6 while the HTIRV definition is in 8.7.2.
+This calibration preserves the already implemented and documented A.4 coding
+style interpretation and uses the named HTIRV definition directly. It neither
+changes standards authority nor claims to correct the canonical text.
+
+## Selected mechanism
+
+Retain exactly two 9/7 decomposition levels. The smallest odd multi-block probe
+and all expanded families reconstruct correctly without adding an HT entropy
+algorithm. Reuse the project-owned analysis, subband geometry, packet writer,
+HT cleanup encoder and irreversible reconstruction helpers. No MCT is applied.
+
+Emit one tile/part, one LRCP quality layer, default precincts, zero image/tile
+origins, matching unit component grids, 64×64 blocks and one cleanup pass per
+included block. SIZ uses `Rsiz=0x4000`; CAP uses `Pcap=0x00020000` and
+`Ccap^15=0x002a`; COD uses HT style `0x40`, irreversible transform `0`,
+no MCT and two levels. Main QCD is scalar-expounded with seven steps and three
+guard bits, without QCC, COC, ROI or tile overrides. Guard-bit count is part of
+the emitted quantisation contract, not an implicit packet adjustment.
+
+Analysis is performed once. The provisional deterministic search samples a
+finite ordered scalar-step family indexed by integers 4096 through 65535.
+Each octave contains 2048 mantissas. The base exponent decreases from 29 to 0;
+HL/LH and HH exponent adjustments preserve the same absolute scalar step
+across orientations. Every candidate resolves its actual QCD magnitude width.
+Widths above 30 are ineligible because the retained native irreversible
+coefficient conversion supports at most 30; quantised magnitudes at or above
+131072 are also ineligible. That conservative coefficient bound keeps cleanup
+magnitudes within the declared 18-bit capability without relying on the larger
+allowance for lower-resolution irreversible bands. Three guard bits keep the
+minimum resolved width at two even when the LL exponent is zero.
+
+The first checkpoint retained Part 1's two guard bits and base exponent at
+least two. Its 1 bpp grey U8 probe produced 6197 bytes for a 6200-byte budget;
+native NMSE was 0.045749682234. Raw and JPH independent reconstruction differed
+from native by one code value in one sample. However, its coarsest ordinary
+RGB U8 texture remained 15592 bytes, exceeding both 1 and 2 bpp budgets.
+Reject that scalar range for this HT profile. The wider range fixes the main
+matrix without changing the entropy implementation or provenance allowlist.
+
+## Proposed public rate and resource contract
+
+The caller supplies finite positive raw bits per reference-grid pixel. Convert
+the exact `f32` to `f64`, multiply by checked pixel count, floor whole bits and
+then floor whole bytes. JPH overhead is excluded. Invalid conversion, zero
+budget, unsupported input and unattainability must return explicit errors.
+A successful stream must not exceed the byte budget and must undershoot by at
+most `max(32 bytes, ceil(budget / 500))`. This tolerance is independently
+supported by the HT measurements; its equality to the Part 1 tolerance does
+not imply that the original quantisation range transfers.
+
+Sample the coarsest candidate and at most sixteen binary-search positions;
+keep the largest sampled eligible complete stream within budget, with a fixed
+first-encounter tie rule. At most seventeen candidate visits occur; invalid
+magnitude candidates skip entropy coding. This is bounded approximate search,
+not exhaustive proof of theoretical attainability. If the retained candidate
+fails the tolerance, return an unattainable-rate error. Never pad, truncate a
+completed stream, return an oversized trial, or silently clamp the requested
+rate. Do not expose the provisional scalar-step index as a public product API.
+
+Select dimensions 4 through 8192 on each axis and at most 1048576 reference
+pixels, hence at most 3145728 component samples. Reject these limits before
+analysis or packet allocation. Checked strides and buffer extents remain
+mandatory for both layouts. Reserve working storage fallibly, retain only the
+current and best candidate plus reusable transform/quantisation scratch, and
+bound generated/caller codestream input to 32 MiB. The extent limit and one
+layer/part constrain packet work. A production implementation must enforce
+these bounds; the test-only constructor intentionally is not that admission
+boundary. The measurements below are observations, not CPU/RSS guarantees.
+
+## Finite qualification matrix selected before implementation
+
+The mandatory success matrix is the Cartesian product of greyscale/RGB,
+U8/U16_LE, planar/interleaved input, patterns 0–3 below and rates 1, 2 and
+4 bpp, at 257×193. This is 96 encoder cells. Each cell must encode twice to
+identical raw bytes, match across layouts, wrap those raw bytes exactly as
+JPH, and decode raw and JPH through both Emuella and the authorised independent
+route. This requires 192 format-specific native and independent checks before
+optional duplicate-layout work is consolidated. Exercise both output layouts
+and owned/padded caller output, including failure atomicity.
+
+| Pattern | Authored stressor |
+| --- | --- |
+| 0 | Coordinate/product/xor/block texture, spanning the full code range |
+| 1 | Deterministically mixed high-frequency noise |
+| 2 | Alternating 17×13 dark/light blocks with quarter-range noise |
+| 3 | Sample-wise alternating bands with half-range noise |
+| 4 | Exact zero/maximum checkerboard |
+| 5 | Single maximum impulse on zero background |
+| 6 | Constant mid-range code value |
+| 7 | Quantised diagonal ramp |
+| 8 | Exact zero/maximum separable eight-sample sign pattern |
+
+Patterns 4–8 add a separately enumerated boundary matrix over the same eight
+format/layout families and three rates. Preserve the observed rate dispositions
+in the CSV: all checkerboard, impulse, constant and pattern-8 requests at
+257×193 fail the proposed tolerance; ramp succeeds at 1 bpp in all four sample
+families and at 2 bpp in RGB U16_LE. These are explicit rate failures, not
+unsupported format families. Every successful boundary output must meet the
+same public budget/tolerance and decoder contract. Do not turn rejected trials
+into nominal successes. Compare distortion over every successful increasing
+rate within a row. Do not discard successful cells to hide a reversal.
+
+Add 65×65 U16_LE pattern 8 in grey/RGB, both layouts, at 1/2/4 bpp; the grey
+1 bpp request currently fits (515/528 bytes) and other requests do not. Add
+1024×1024 and 8192×128 RGB U16_LE noise at all three rates; add 4×4 grey/RGB,
+U8/U16_LE as irreducible-budget failures at those rates. Qualify exact resource
+limits and their immediate neighbours, non-finite/non-positive rates, overflow,
+unsupported precision/signedness/component counts, short/padded strides,
+metadata, transforms, decomposition counts, origin/sampling/marker neighbours,
+truncated entropy, and late failure without caller-buffer mutation. Existing
+lossless tests and final locked Part 1/HTONLY regression remain separate gates.
+
+## Measurements and numerical acceptance
+
+The selected-source probe tests the four sample families in internal planes;
+public input-layout adapters and full-image public admission are still to be
+implemented and qualified. It examines 108 main/boundary candidate rates at
+257×193, six 65×65 extreme candidates, six resource candidates and twelve
+minimum-size candidates. Every candidate is byte-repeatable and natively
+reconstructed. Observation-only trial streams outside budget/tolerance are
+included for diagnosis; they must never become public successful output.
+
+| Main success matrix, patterns 0–3 | 1 bpp | 2 bpp | 4 bpp |
+| --- | ---: | ---: | ---: |
+| Floored raw byte budget | 6200 | 12400 | 24800 |
+| Greatest native NMSE | 0.117352306900 | 0.057098846643 | 0.035057619809 |
+| Greatest independent NMSE | 0.117352307366 | 0.057098846643 | 0.035057619809 |
+| Selected NMSE ceiling | 0.125 | 0.060 | 0.040 |
+
+All 48 main candidate cells fit their budgets; greatest undershoot is 11 bytes.
+Native and independent distortion are non-increasing over each main row's
+increasing rates. Enforce ceilings by exact integer squared-error ratios using
+the source code range, not rounded decimal diagnostics. Peak source error is
+recorded diagnostically; no visual-quality claim follows from these ceilings.
+
+Independent execution accepted all 264 raw/JPH trial files across the five
+probe groups, with identical reconstruction from each raw/JPH pair. The maximum
+native/independent difference is one code value, including U16 extremes and
+resource shapes. Select a one-code-value per-sample inter-decoder tolerance;
+this is separate from source distortion. JPH adds exactly 85 bytes.
+
+At 1024×1024 RGB U16_LE noise, raw sizes were 131018, 261967 and 524281 bytes
+for budgets 131072, 262144 and 524288. Undershoots 54/177/7 remain within the
+scaled tolerance. Search times were 344/432/491 ms in the release probe, and
+its complete twice-encoded, native-decoded run took 2.90 seconds with a maximum
+resident set of 74128 KiB on the measurement host. These measurements support
+the selected finite limit without asserting performance parity.
+
+Some rejected trial streams have non-monotonic source distortion, including
+near-zero U16 checkerboard differences. Preserve those observations in the CSV;
+no universal rate-distortion claim is made. Five successful ramp boundary
+cells remain monotonic over their successful rate sequence. General-image
+attainability, visual quality and optimal subband allocation are unproved.
+
+## Implementation boundary and verification
+
+The next coherent foundation is internal irreversible HT analysis/quantisation,
+header/packet construction and one narrowly admitted full-image native decoder
+plan, including core shape/inspection/owned/caller paths for raw and existing
+JPH composition. Reuse the existing full-resolution execution of irreversible
+component reconstruction with explicit profile admission. Do not widen the
+existing general reduced/full-image classifiers to accept arbitrary 9/7 HT.
+Keep lossless option structs and output bytes unchanged.
+
+Then add an additive lossy HT options type and raw/JPH entry points around the
+bounded rate selector and existing image-view adapters. No fixed-step public
+API is required merely to land the internal foundation. The final package must
+run the entire matrix through public APIs at final merged source, independently
+decode it, and rerun the locked sixteen Part 1 and sixteen HTONLY selections,
+preserving both explicit HTMIX dispositions. This calibration does not replace
+those delivery or regression gates.
+
+Focused commands used a private registered output directory and release build:
+
+```sh
+CARGO_TARGET_DIR=/assigned/build cargo test -p emuella-j2k-codestream --release
+EMUELLA_HT_CALIBRATION_OUTPUT=/assigned/private-probe \
+CARGO_TARGET_DIR=/assigned/build cargo test -p emuella-j2k-codestream \
+  ht_lossy_calibration --release -- --ignored --nocapture
+```
+
+At the selected source, ordinary codestream tests passed 215 tests with this
+calibration test ignored. Every explicitly invoked calibration group passed.
+Detailed external invocation records, binary identities, output/diagnostic
+files and an artefact manifest remain private. Canonical committed-tree
+verification, independent exact-head review, public API qualification and
+landing are required after selecting and implementing the deliverable.
