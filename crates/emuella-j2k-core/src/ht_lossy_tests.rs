@@ -1,26 +1,18 @@
-//! Full-image proof for the implementation-facing irreversible HT boundary.
+//! Full-image and negative-path proof for the shared irreversible HT boundary.
 use super::*;
 
 fn source(width: u32, height: u32, bits: u8, components: u16) -> Vec<Vec<u8>> {
-    (0..u32::from(components))
-        .map(|c| {
-            (0..height)
-                .flat_map(|y| {
-                    (0..width).flat_map(move |x| {
-                        let v = x
-                            .wrapping_mul(977)
-                            .wrapping_add(y * 1393)
-                            .wrapping_add(c * 9973)
-                            .wrapping_add(x * y * 41)
-                            .wrapping_add((x ^ y) * 271)
-                            .wrapping_add((x / 7) * ((y / 5) + 1) * 613)
-                            as u16;
-                        if bits == 8 {
-                            vec![v as u8]
-                        } else {
-                            v.to_le_bytes().to_vec()
-                        }
-                    })
+    codestream::ht_lossy_test_support::source(width, height, bits, components, 0)
+        .iter()
+        .map(|plane| {
+            plane
+                .iter()
+                .flat_map(|&v| {
+                    if bits == 8 {
+                        vec![v as u8]
+                    } else {
+                        v.to_le_bytes().to_vec()
+                    }
                 })
                 .collect()
         })
@@ -28,14 +20,44 @@ fn source(width: u32, height: u32, bits: u8, components: u16) -> Vec<Vec<u8>> {
 }
 fn encoded(bits: u8, components: u16, rate: f32) -> (Vec<Vec<u8>>, Vec<u8>) {
     let planes = source(257, 193, bits, components);
-    let refs = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let raw = codestream::ht_lossy::encode_planar(
+    let info = ImageInfo::new(
         257,
         193,
-        bits,
-        &refs,
-        &vec![257 * usize::from(bits / 8); usize::from(components)],
-        rate,
+        components,
+        if bits == 8 {
+            SampleFormat::U8
+        } else {
+            SampleFormat::U16_LE
+        },
+        if components == 1 {
+            ColorModel::Grayscale
+        } else {
+            ColorModel::Rgb
+        },
+        ComponentLayout::Planar,
+    )
+    .unwrap();
+    let views = planes
+        .iter()
+        .map(|samples| {
+            Plane::new(
+                samples,
+                257,
+                193,
+                257 * usize::from(bits / 8),
+                info.sample_format,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let raw = encode_htj2k_lossy(
+        ImageView::Planar {
+            info: &info,
+            planes: &views,
+        },
+        &Htj2kLossyEncodeOptions {
+            bits_per_pixel: rate,
+        },
     )
     .unwrap();
     (planes, raw)
@@ -69,14 +91,14 @@ fn wrapped(raw: &[u8], bits: u8, components: u16) -> Vec<u8> {
     );
     bytes
 }
-fn options(layout: ComponentLayout) -> DecodeOptions {
+pub(super) fn options(layout: ComponentLayout) -> DecodeOptions {
     DecodeOptions {
         mode: DecodeMode::Components,
         target_layout: layout,
         ..DecodeOptions::default()
     }
 }
-fn assert_caller(input: &[u8], expected: &Image, failure: bool) {
+pub(super) fn assert_caller(input: &[u8], expected: &Image, failure: bool) {
     let width = expected.info.width as usize;
     let height = expected.info.height as usize;
     let bytes = usize::from(expected.info.sample_format.bits_per_sample / 8);
@@ -155,7 +177,7 @@ fn assert_caller(input: &[u8], expected: &Image, failure: bool) {
         }
     }
 }
-fn sse(source: &[Vec<u8>], image: &Image, bits: u8) -> u128 {
+pub(super) fn sse(source: &[Vec<u8>], image: &Image, bits: u8) -> u128 {
     let ImageData::Planes(planes) = &image.data else {
         panic!("planar result required")
     };

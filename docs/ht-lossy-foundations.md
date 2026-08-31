@@ -3,9 +3,11 @@
 The implementation-facing `emuella-j2k-codestream::ht_lossy::encode_planar`
 boundary encodes the calibrated two-level irreversible HT profile. It accepts
 one or three unsigned planar byte views, matching U8 or U16_LE precision,
-explicit byte strides and a finite positive `f32` rate. This is preparation for
-an additive high-level lossy encoder API. `Htj2kEncodeOptions`, `encode_htj2k`
-and `encode_htj2k_jph` still describe their existing lossless contracts.
+explicit byte strides and a finite positive `f32` rate. The additive
+[public API](ht-lossy-public-api.md) now exposes this same boundary through
+`Htj2kLossyEncodeOptions`, `encode_htj2k_lossy` and `encode_htj2k_lossy_jph`.
+`Htj2kEncodeOptions`, `encode_htj2k` and `encode_htj2k_jph` retain their existing
+lossless contracts.
 No public scalar-step option or alternative fixed-step encoder is introduced.
 
 ## Encoding and resources
@@ -86,7 +88,8 @@ The historical optional probe now shares production analysis, candidate search
 and ordinary full-image reconstruction; it no longer contains parallel encoder
 or test-only decoder admission implementations. It intentionally records even
 unsuccessful complete rate trials for historical comparison. Such observation
-trials are not successful results of `encode_planar`. The immutable CSV remains
-unchanged. The full public input-layout matrix and exact-final independent and
-locked-corpus qualification remain subsequent programme gates; this foundation
+trials are not successful results of `encode_planar`. The immutable
+CSV-formatted text remains unchanged. The subsequent [public qualification](ht-lossy-public-api.md) covers
+the complete input-layout matrix. Independent and locked-corpus qualification
+from the final merged source remain separate delivery gates; this foundation
 alone makes no final product or general conformance claim.
