@@ -26,6 +26,11 @@ pub use emuella_j2k_transform as transform;
 #[doc(hidden)]
 pub mod geometry;
 mod ht_high_component;
+#[cfg(feature = "std")]
+#[doc(hidden)]
+pub mod ht_lossy;
+#[cfg(all(test, feature = "std"))]
+mod ht_lossy_calibration;
 #[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
 #[doc(hidden)]
 pub use ht_high_component::encode_htj2k_high_component_entropy_failure_test_fixture;
@@ -5112,6 +5117,7 @@ pub struct Htj2kReducedComponentDecodeRequest {
 enum Htj2kReducedComponentReconstruction {
     Reversible(HtReversibleCodeBlockTransfer),
     Irreversible,
+    IrreversibleFullImage,
     IrreversibleRoi(u8),
 }
 
@@ -14384,11 +14390,14 @@ fn encode_ht_decomp_subband_with_block_size(
         .map_err(|_| CodestreamError::SizeOverflow)?;
     let code_block_rows = u16::try_from(ceil_div(spec.height, block_size)?)
         .map_err(|_| CodestreamError::SizeOverflow)?;
-    let mut code_blocks = Vec::with_capacity(
-        usize::from(code_block_cols)
-            .checked_mul(usize::from(code_block_rows))
-            .ok_or(CodestreamError::SizeOverflow)?,
-    );
+    let mut code_blocks = Vec::new();
+    code_blocks
+        .try_reserve_exact(
+            usize::from(code_block_cols)
+                .checked_mul(usize::from(code_block_rows))
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .map_err(|_| CodestreamError::SizeOverflow)?;
     let image_width_usize =
         usize::try_from(image_width).map_err(|_| CodestreamError::SizeOverflow)?;
     let subband_x = usize::try_from(spec.x).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -14428,6 +14437,9 @@ fn encode_ht_decomp_subband_with_block_size(
             let (included, missing_bitplanes, coding_passes, segment_len) =
                 if let Some(encoded) = encoded {
                     let segment_len = encoded.segment.len();
+                    segments
+                        .try_reserve(segment_len)
+                        .map_err(|_| CodestreamError::SizeOverflow)?;
                     segments.extend_from_slice(&encoded.segment);
                     (
                         true,
@@ -15458,6 +15470,31 @@ fn write_native_irreversible_main_header(
     decomposition_levels: u8,
     qcd_steps: &[transform::IrreversibleQuantizationStep],
 ) -> Result<()> {
+    write_irreversible_main_header(
+        output,
+        width,
+        height,
+        bits_per_sample,
+        components,
+        multiple_component_transform,
+        decomposition_levels,
+        qcd_steps,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_irreversible_main_header(
+    output: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    bits_per_sample: u8,
+    components: u16,
+    multiple_component_transform: bool,
+    decomposition_levels: u8,
+    qcd_steps: &[transform::IrreversibleQuantizationStep],
+    ht: bool,
+) -> Result<()> {
     let expected_subbands = 1usize
         .checked_add(
             usize::from(decomposition_levels)
@@ -15477,7 +15514,7 @@ fn write_native_irreversible_main_header(
         .ok_or(CodestreamError::SizeOverflow)?;
     output.extend_from_slice(&[0xff, 0x4f, 0xff, 0x51]);
     output.extend_from_slice(&siz_len.to_be_bytes());
-    output.extend_from_slice(&0_u16.to_be_bytes());
+    output.extend_from_slice(&(if ht { 0x4000_u16 } else { 0 }).to_be_bytes());
     output.extend_from_slice(&width.to_be_bytes());
     output.extend_from_slice(&height.to_be_bytes());
     output.extend_from_slice(&0_u32.to_be_bytes());
@@ -15494,6 +15531,9 @@ fn write_native_irreversible_main_header(
         output.extend_from_slice(&[sample_marker, 1, 1]);
     }
 
+    if ht {
+        output.extend_from_slice(&[0xff, 0x50, 0, 8, 0, 2, 0, 0, 0, 0x2a]);
+    }
     output.extend_from_slice(&[0xff, 0x52]);
     output.extend_from_slice(&12_u16.to_be_bytes());
     output.extend_from_slice(&[0, 0]);
@@ -15503,7 +15543,7 @@ fn write_native_irreversible_main_header(
         decomposition_levels,
         4,
         4,
-        0,
+        if ht { 0x40 } else { 0 },
         0,
     ]);
 
@@ -15520,7 +15560,7 @@ fn write_native_irreversible_main_header(
     )
     .map_err(|_| CodestreamError::SizeOverflow)?;
     output.extend_from_slice(&qcd_len.to_be_bytes());
-    output.push((IRREVERSIBLE_QCD_GUARD_BITS << 5) | 2);
+    output.push(((if ht { 3 } else { IRREVERSIBLE_QCD_GUARD_BITS }) << 5) | 2);
     for step in qcd_steps {
         let packed = (u16::from(step.exponent) << 11) | step.mantissa;
         output.extend_from_slice(&packed.to_be_bytes());
@@ -15943,10 +15983,18 @@ fn write_native_decomp_packets(
                 }
             }
             writer.align();
+            // The initial packet capacity is only a hint: large block grids
+            // can produce longer headers. Reserve each actual append fallibly.
+            output
+                .try_reserve(writer.bytes().len())
+                .map_err(|_| CodestreamError::SizeOverflow)?;
             output.extend_from_slice(writer.bytes());
             for subband in packet_subbands {
                 for block in subband.code_blocks.iter().filter(|block| block.included) {
                     let segment = checked_slice(segments, block.segment_offset, block.segment_len)?;
+                    output
+                        .try_reserve(segment.len())
+                        .map_err(|_| CodestreamError::SizeOverflow)?;
                     output.extend_from_slice(segment);
                 }
             }
@@ -51355,6 +51403,7 @@ pub fn decode_prepared_htj2k_reduced_component_owned_with_workspace(
             )?
         }
         Htj2kReducedComponentReconstruction::Irreversible
+        | Htj2kReducedComponentReconstruction::IrreversibleFullImage
         | Htj2kReducedComponentReconstruction::IrreversibleRoi(_) => {
             decode_htj2k_reduced_irreversible_component(prepared, payload, workspace)?
         }
@@ -51506,6 +51555,21 @@ fn decode_htj2k_reduced_irreversible_component(
                 UnsupportedConstruct::HtBlockDecode,
                 "HT cleanup code-block dispatch did not produce coefficients",
             ));
+        }
+        if prepared.reconstruction == Htj2kReducedComponentReconstruction::IrreversibleFullImage {
+            for &coefficient in &workspace.coefficients[..coefficient_count] {
+                let doubled = ht_irreversible_doubled_half_step_coefficient(
+                    coefficient,
+                    contribution.available_bitplanes,
+                )?;
+                if doubled.abs() > 262143.0 {
+                    return Err(invalid(
+                        None,
+                        Some(Marker::Sod),
+                        "full-image irreversible HT coefficient exceeds the selected magnitude bound",
+                    ));
+                }
+            }
         }
         let step = contribution.irreversible_quantization_step.ok_or_else(|| {
             invalid(
@@ -54152,6 +54216,7 @@ pub fn htj2k_lossless_profile_unsupported_construct(
 /// diagnostics until packet decode is requested.
 #[cfg(feature = "std")]
 pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) -> Result<()> {
+    ht_lossy::preflight_packet_resources(input, codestream)?;
     if ht_tile_window::envelope(codestream) {
         return ht_tile_window::validate_signalling(input, codestream);
     }

@@ -6041,6 +6041,8 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
 /// The bounded mapped JP2 route resolves palette, channel order and straight
 /// alpha after independent native reconstruction. Rendered descriptors carry
 /// no source component index; RGBA preserves colour samples beneath zero alpha.
+/// Bounded two-level irreversible HT supports full native component output in
+/// raw codestreams and JPH; it does not enable rendered projection.
 pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
@@ -6102,7 +6104,8 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
 /// workspace.
 ///
 /// Returns `Ok(None)` for non-HTJ2K input or HTJ2K outside the admitted
-/// lossless profiles, including the bounded native component-grid profile.
+/// lossless profiles or the bounded two-level irreversible native profile.
+/// The latter requires all components in component mode, for raw HT and JPH.
 #[cfg(feature = "std")]
 pub fn decode_htj2k_with_workspace(
     input: &[u8],
@@ -7029,6 +7032,16 @@ fn validate_htj2k_native_component_grid_request(
         let Some(codestream_bytes) = primary_htj2k_codestream_bytes(input, metadata)? else {
             return Ok(None);
         };
+        let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+        if codestream::ht_lossy::is_profile(codestream_bytes, &parsed)
+            && (options.mode != DecodeMode::Components
+                || !matches!(options.requested_components, ComponentSelection::All))
+        {
+            return Err(unsupported(
+                UnsupportedFeature::ComponentLayout,
+                "full-image irreversible HT requires all native components; rendered and subset output are not admitted",
+            ));
+        }
         let Some(prepared) =
             codestream::prepare_htj2k_native_component_grid_decode(codestream_bytes)
                 .map_err(map_codestream_error)?
@@ -7246,6 +7259,7 @@ fn native_full_decode_is_available(input: &[u8], metadata: &Metadata) -> Result<
             let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
             return Ok(
                 codestream::is_htj2k_lossless_profile(codestream_bytes, &parsed)
+                    || codestream::ht_lossy::is_profile(codestream_bytes, &parsed)
                     || (metadata.format == InputFormat::Htj2kCodestream
                         && codestream::is_htj2k_native_component_grid_profile(
                             codestream_bytes,
@@ -11885,6 +11899,9 @@ fn support_from_codestream(
                 }
             };
         }
+        if codestream::ht_lossy::is_profile(bytes, codestream) {
+            return SupportStatus::Supported;
+        }
         return match codestream::htj2k_lossless_profile_unsupported_construct(bytes, codestream) {
             None => SupportStatus::Supported,
             Some((construct, detail)) => SupportStatus::Unsupported {
@@ -11954,6 +11971,15 @@ fn decode_algorithmic_htj2k_with_workspace(
             &mut workspace.codestream,
         )
         .map_err(map_codestream_error)?;
+        return decoded_baseline_to_image_with_component_info(decoded, options, component_info)
+            .map(Some);
+    }
+    if let Some(decoded) = codestream::ht_lossy::decode_owned_with_workspace(
+        codestream_bytes,
+        &mut workspace.codestream,
+    )
+    .map_err(map_codestream_error)?
+    {
         return decoded_baseline_to_image_with_component_info(decoded, options, component_info)
             .map(Some);
     }
@@ -12226,6 +12252,17 @@ fn validate_partial_options_without_support(
     metadata: &Metadata,
     options: &PartialDecodeOptions,
 ) -> Result<()> {
+    // Irreversible HT requests must use their independently admitted native
+    // route above. Full-image support does not authorise the generic crop path.
+    if metadata.codestream.as_ref().is_some_and(|stream| {
+        stream.kind == codestream::CodestreamKind::Htj2k
+            && stream.transform == Some(WaveletTransform::Irreversible97)
+    }) {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "irreversible HT partial requests require an independently admitted native route",
+        ));
+    }
     if options.max_quality_layers == Some(0) {
         return Err(J2kError::InvalidParameter {
             parameter: "max_quality_layers",
@@ -12542,7 +12579,14 @@ fn interleave_planes(
         .checked_mul(component_count)
         .and_then(|value| value.checked_mul(bytes_per_sample))
         .ok_or_else(sample_size_overflow)?;
-    let mut output = alloc::vec![0_u8; capacity];
+    let mut output = Vec::new();
+    output.try_reserve_exact(capacity).map_err(|_| {
+        unsupported(
+            UnsupportedFeature::ComponentLayout,
+            "interleaved output allocation could not be reserved",
+        )
+    })?;
+    output.resize(capacity, 0_u8);
 
     if let [red, green, blue] = planes {
         match bytes_per_sample {
@@ -18008,3 +18052,6 @@ mod effective_coding_style_tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "std"))]
+mod ht_lossy_tests;
