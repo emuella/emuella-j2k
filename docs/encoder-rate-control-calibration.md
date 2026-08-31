@@ -143,20 +143,19 @@ CARGO_TARGET_DIR="$task_build_root" \
 
 It passed all five tests, including the 12 rate cells, the extreme U16_LE
 decoder boundary, lossless baselines, planar inputs, invalid rates, infeasible
-rates, and transform/profile mismatch cases. The canonical repository check
-was:
+rates, and transform/profile mismatch cases. For current canonical repository
+verification, commit the candidate and run from a clean checkout:
 
 ```sh
-task_build_root=/path/to/assigned-build-root
-GITHUB_ACTIONS=true \
-TMPDIR="$task_build_root/tmp" \
-CARGO_TARGET_DIR="$task_build_root" \
-  sh scripts/check.sh
+EMUELLA_CHECK_TMPDIR=/path/to/assigned-check-scratch sh scripts/check.sh
 ```
 
-The environment flag selects the audit script's staging-tree mode so a linked
-worktree's `.git` administrative file is not treated as publishable content.
-It does not invoke hosted CI. The complete check passed public-tree and legal
+The parent must already exist outside the checkout. The entry point creates an
+exact committed-source export and separate disposable build output; no
+hosted-CI environment flag is needed. See the
+[canonical verification contract](../CONTRIBUTING.md#canonical-verification).
+The historical calibration check predates this source-export entry point and
+is not evidence for the new wrapper. That check passed public-tree and legal
 policy, formatting, all workspace targets and tests, parallel codestream
 checking, strict clippy for workspace and fuzz targets, dependency policy,
 no-default-features checks, and the locked fuzz workspace check.

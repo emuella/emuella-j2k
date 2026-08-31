@@ -8,12 +8,56 @@ Before submitting a change:
    clear redistribution rights.
 2. Keep third-party and restricted test data out of this repository; integrate
    it through `emuella-testdata` instead.
-3. Run `scripts/check.sh`.
+3. Commit the candidate source, then run `sh scripts/check.sh` from a clean
+   primary or linked Git checkout.
 4. Include provenance and licence updates whenever generated or third-party
    material changes.
 
 Unless explicitly stated otherwise, intentionally submitted contributions are
 provided under Apache-2.0 as described by section 5 of the licence.
+
+## Canonical verification
+
+Use focused Cargo or Python tests while editing. The complete local gate,
+`sh scripts/check.sh`, verifies committed source: it refuses staged or unstaged
+tracked changes and non-ignored untracked files instead of silently checking an
+older revision. Ignored private overlays and build caches may remain in the
+checkout; they are not exported.
+
+The entry point reports the full commit and tree identities, reads the complete
+tree directly from Git objects, and runs all checks in a disposable source
+export without Git metadata. `export-ignore`, `export-subst` and checkout
+filters cannot silently change that source. Working source must match the
+committed bytes and executable modes, including files marked assume-unchanged
+or skip-worktree. Links, submodules and unsafe paths are refused.
+
+Python 3.11 or later, Git, the pinned Rust toolchain and `cargo-deny` must be
+available. By default, the wrapper allocates a disposable child in the system
+temporary directory. To choose an existing parent outside the checkout:
+
+```sh
+EMUELLA_CHECK_TMPDIR=/path/to/check-scratch sh scripts/check.sh
+```
+
+The child contains separate source, Cargo build and temporary-output
+directories. The wrapper overrides `CARGO_TARGET_DIR` for this run; existing
+checkout build caches are neither copied nor reused. Ordinary Cargo download
+caches remain available outside the export. Only the allocated child is
+removed on normal completion or a handled failure; its parent and unrelated
+files are preserved. An abrupt process kill may leave that reported child for
+manual inspection and cleanup.
+
+A pass requires unchanged exported source and an unchanged, clean original
+checkout after the checks. Keep the checkout idle for the run; this guards
+against observed changes, not a hostile process changing and restoring bytes
+between checks. The public-tree audit is unchanged and no hosted-CI environment
+flag is needed. Direct invocation from an already unpacked source tree runs
+the same checks without claiming a Git identity or discovering a parent
+repository; keep its build output outside that source tree yourself.
+
+Both the complete local gate and hosted CI run the existing native-plane and
+JP2-presentation tests with the core parallel feature. See
+[`docs/testing.md`](docs/testing.md#canonical-local-gate) for the focused command.
 
 ## Standards and implementation provenance
 

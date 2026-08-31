@@ -4,6 +4,13 @@ set -eu
 repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repository_root"
 
+# Only a checkout's own Git marker triggers export. Do not discover a parent
+# repository when these checks run in an unpacked source tree.
+if [ -e .git ] || [ -L .git ]; then
+  exec python3 scripts/check-committed-tree.py
+fi
+
+python3 scripts/test-check-committed-tree.py
 python3 scripts/test-public-tree-policy.py
 python3 scripts/test-package-legal-policy.py
 python3 scripts/test-layer2-conformance-inspection.py
@@ -21,6 +28,7 @@ cargo fmt \
 cargo check --workspace --all-targets
 cargo check -p emuella-j2k-codestream --features parallel
 cargo test --workspace
+cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy \
   --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \

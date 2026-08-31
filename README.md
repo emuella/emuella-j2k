@@ -18,6 +18,12 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+These commands are useful while editing. After committing the candidate, run
+`sh scripts/check.sh` for the canonical gate: it verifies the exact clean Git
+tree in a disposable export, including the focused parallel native-plane and
+JP2-presentation regressions. See [contributor instructions](CONTRIBUTING.md#canonical-verification)
+for prerequisites, scratch placement and the clean-checkout contract.
+
 The ordinary test suite is self-contained. It generates its inputs
 algorithmically and does not download or invoke OpenJPEG, OpenJPH, Kakadu, or
 standards conformance material.

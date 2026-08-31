@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: clippy,rustfmt
+      - run: python3 scripts/test-check-committed-tree.py
       - run: python3 scripts/test-public-tree-policy.py
       - run: python3 scripts/test-package-legal-policy.py
       - run: python3 scripts/test-layer2-conformance-inspection.py
@@ -43,6 +44,7 @@ jobs:
       - run: cargo check --workspace --all-targets
       - run: cargo check -p emuella-j2k-codestream --features parallel
       - run: cargo test --workspace
+      - run: cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml --all-targets --locked -- -D warnings
       - run: cargo check -p emuella-j2k -p emuella-j2k-core -p emuella-j2k-codestream -p emuella-j2k-container -p emuella-j2k-ht -p emuella-j2k-tier1 -p emuella-j2k-transform --no-default-features
