@@ -557,6 +557,61 @@ mod tests {
     }
 
     #[test]
+    fn large_noise_packets_exceed_capacity_hint_without_changing_calibrated_bytes() {
+        use sha2::{Digest, Sha256};
+
+        let source = super::super::ht_lossy_calibration::source(1024, 1024, 16, 3, 1);
+        let mut planes = source
+            .iter()
+            .map(|plane| {
+                plane
+                    .iter()
+                    .map(|&sample| f32::from(sample) - 32768.0)
+                    .collect()
+            })
+            .collect::<Vec<Vec<f32>>>();
+        analyse(1024, 1024, &mut planes).unwrap();
+        let specs = decomp_subband_specs(1024, 1024, 2).unwrap();
+        let mut quantized = vec![vec![0; 1024 * 1024]; 3];
+        // Retained 2/4-bpp candidates exercise the actual large-shape writer
+        // without repeating all seventeen search visits in the ordinary suite.
+        for (coarseness, expected_header_bytes, expected_packet_bytes, expected_hash) in [
+            (
+                61689,
+                1557,
+                261857,
+                "dfd296ef4947f06c5cd495de7438c557e04e8e541edd7d4f7ec1fb0218132c72",
+            ),
+            (
+                60344,
+                1950,
+                524171,
+                "728142639df1c29863df3a450b133fc86c3aea587f992f38a99079bc70c5ce6b",
+            ),
+        ] {
+            let raw = candidate(1024, 1024, 16, &planes, &specs, coarseness, &mut quantized)
+                .unwrap()
+                .unwrap();
+            let parsed = parse(&raw).unwrap();
+            let (rect, payload) = single_part1_profile_tile(&raw, &parsed).unwrap();
+            let contributions =
+                parse_default_precinct_lrcp_packets(&raw, &parsed, rect, payload).unwrap();
+            let body_bytes = contributions
+                .iter()
+                .map(|block| block.codeword_len)
+                .sum::<usize>();
+            let header_bytes = payload.len() - body_bytes;
+            assert_eq!(header_bytes, expected_header_bytes);
+            assert_eq!(payload.len(), expected_packet_bytes);
+            // Seven subbands per component supplied only 21 * 64 header bytes
+            // in the original capacity hint, so both streams require growth.
+            assert!(header_bytes > 3 * 7 * 64);
+            assert_eq!(format!("{:x}", Sha256::digest(&raw)), expected_hash);
+            assert!(is_profile(&raw, &parsed));
+        }
+    }
+
+    #[test]
     fn resource_rate_and_plane_preflight_precedes_working_allocation() {
         for rate in [
             f32::NAN,

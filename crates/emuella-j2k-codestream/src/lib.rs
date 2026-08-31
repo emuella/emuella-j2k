@@ -15983,10 +15983,18 @@ fn write_native_decomp_packets(
                 }
             }
             writer.align();
+            // The initial packet capacity is only a hint: large block grids
+            // can produce longer headers. Reserve each actual append fallibly.
+            output
+                .try_reserve(writer.bytes().len())
+                .map_err(|_| CodestreamError::SizeOverflow)?;
             output.extend_from_slice(writer.bytes());
             for subband in packet_subbands {
                 for block in subband.code_blocks.iter().filter(|block| block.included) {
                     let segment = checked_slice(segments, block.segment_offset, block.segment_len)?;
+                    output
+                        .try_reserve(segment.len())
+                        .map_err(|_| CodestreamError::SizeOverflow)?;
                     output.extend_from_slice(segment);
                 }
             }
