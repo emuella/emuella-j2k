@@ -1584,7 +1584,10 @@ fn validate_channel_definition(
             } else {
                 default_ordered_colours = false;
             }
-        } else {
+        } else if channel_type != u16::MAX {
+            // An unspecified description adds no role to a channel. Resolve
+            // default ordering from its actual colour and auxiliary roles,
+            // independently of redundant descriptions or their order.
             default_ordered_colours = false;
         }
         if matches!(channel_type, 1 | 2) {
@@ -1638,6 +1641,7 @@ fn validate_channel_definition(
         }
         if kind == ContainerKind::Jp2
             && matches!(channel_type, 1 | 2)
+            && association != u16::MAX
             && pairs.contains_key(&(3 - channel_type, association))
         {
             return Err(invalid(

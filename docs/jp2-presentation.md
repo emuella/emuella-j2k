@@ -34,8 +34,12 @@ channels. Mapping records establish logical channel order independently of
 native component order. A `cdef` then assigns those logical channels to display
 roles. It must cover all logical channels and required colours; default ordered
 colour-only channels omit it. One channel may supply more than one colour.
-Distinct channels cannot claim the same defined role. Whole-image and
-colour-specific opacity assignments cannot conflict.
+Distinct channels cannot claim the same defined role. A redundant unspecified
+description adds no role and cannot justify a `cdef` for default ordered
+colour-only channels. Whole-image and colour-specific opacity assignments
+cannot conflict. Straight and premultiplied opacity with association 65535
+have no colour association and do not conflict with each other; their
+presentation remains unsupported.
 
 RGB is emitted in R/G/B order. With opacity, the output is always R/G/B/A and
 `ColorModel::Rgba`; greyscale is repeated into R/G/B. Alpha values are preserved

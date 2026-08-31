@@ -991,3 +991,117 @@ fn projection_handles_multiple_blocks_and_odd_image_edges() {
         caller(&input, &options, &expected, false);
     }
 }
+
+#[test]
+fn unspecified_descriptions_do_not_justify_default_colour_definitions() {
+    for (count, colour, model) in [(1, 17, ColorModel::Grayscale), (3, 16, ColorModel::Rgb)] {
+        let native = vec![vec![128; 15]; count];
+        let known = (0..count)
+            .map(|channel| (channel as u16, 0, channel as u16 + 1))
+            .collect::<Vec<_>>();
+        for order in permutations(&(0..count as u16).collect::<Vec<_>>()) {
+            for association in [0, 1, u16::MAX] {
+                for repeated in [false, true] {
+                    let mut descriptions = order
+                        .iter()
+                        .map(|index| known[usize::from(*index)])
+                        .collect::<Vec<_>>();
+                    descriptions.push((0, u16::MAX, association));
+                    if repeated {
+                        descriptions.extend(descriptions.clone());
+                    }
+                    for reversed in [false, true] {
+                        let mut entries = descriptions.clone();
+                        if reversed {
+                            entries.reverse();
+                        }
+                        let input = make(&native, colour, &definitions(&entries));
+                        assert!(
+                            matches!(container::parse(&input), Err(container::ContainerError::InvalidBox { message, .. }) if message.contains("must omit"))
+                        );
+                        assert!(
+                            matches!(inspect(&input, &InspectOptions::default()), Err(J2kError::InvalidInput { message, .. }) if message.contains("must omit"))
+                        );
+                        rejected(&input, true, &native, model);
+                    }
+                }
+            }
+        }
+    }
+    // An actual extra channel or a reordered colour channel still needs cdef.
+    // Its unspecified description remains structurally valid but unrendered.
+    for (native, colour, entries) in [
+        (
+            vec![vec![128; 15]; 2],
+            17,
+            vec![(0, 0, 1), (1, u16::MAX, u16::MAX)],
+        ),
+        (
+            vec![vec![128; 15]; 3],
+            16,
+            vec![(0, 0, 2), (1, 0, 1), (2, 0, 3), (0, u16::MAX, u16::MAX)],
+        ),
+        (
+            vec![vec![128; 15]; 2],
+            16,
+            vec![(0, 0, 1), (0, 0, 2), (0, 0, 3), (1, u16::MAX, u16::MAX)],
+        ),
+    ] {
+        for reversed in [false, true] {
+            let mut entries = entries.clone();
+            if reversed {
+                entries.reverse();
+            }
+            let input = make(&native, colour, &definitions(&entries));
+            container::parse(&input).unwrap();
+            rejected(&input, false, &vec![vec![0; 15]; 3], ColorModel::Rgb);
+        }
+    }
+}
+
+#[test]
+fn unassociated_opacity_types_are_not_colour_association_conflicts() {
+    let native = vec![vec![128; 15]; 3];
+    let base = [(0, 0, 1), (1, 1, u16::MAX), (2, 2, u16::MAX)];
+    for order in permutations(&[0, 1, 2]) {
+        for repeated in [false, true] {
+            let mut entries = order
+                .iter()
+                .map(|index| base[usize::from(*index)])
+                .collect::<Vec<_>>();
+            if repeated {
+                entries.extend(entries.clone());
+            }
+            let input = make(&native, 17, &definitions(&entries));
+            container::parse(&input).unwrap();
+            assert!(matches!(
+                inspect(&input, &InspectOptions::default()).unwrap().support,
+                SupportStatus::Unsupported { .. }
+            ));
+            rejected(&input, false, &native, ColorModel::Rgb);
+            let decoded = decode(
+                &input,
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    target_layout: ComponentLayout::Planar,
+                    ..DecodeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(decoded.data, ImageData::Planes(native.clone()));
+        }
+    }
+    for association in [0, 1] {
+        for reversed in [false, true] {
+            let mut entries = vec![(0, 0, 1), (1, 1, association), (2, 2, association)];
+            if reversed {
+                entries.reverse();
+            }
+            let input = make(&native, 17, &definitions(&entries));
+            assert!(
+                matches!(container::parse(&input),Err(container::ContainerError::InvalidBox{message,..}) if message.contains("cannot mix opacity"))
+            );
+            rejected(&input, true, &native, ColorModel::Rgb);
+        }
+    }
+}
