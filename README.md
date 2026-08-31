@@ -25,8 +25,12 @@ standards conformance material.
 Native component decode includes independent one-through-four-plane unsigned
 8-bit Part 1 inputs without MCT. The bounded zero-decomposition profile in
 [`docs/native-planes.md`](docs/native-planes.md) preserves caller buffers on
-failure in full-image decode, including parallel builds. This native contract
-does not imply JP2 palette, colour-channel or alpha presentation support.
+failure in full-image decode, including parallel builds. Native output remains
+separate from the bounded
+[JP2 mapped presentation](docs/jp2-presentation.md) route, which expands U8
+grey/RGB palettes, direct/palette/mixed mappings and channel-defined order into
+greyscale, RGB or straight RGBA. Full shape, owned and padded caller decode
+agree in both layouts; alpha preserves colour samples even when zero.
 
 Applications should normally depend on the facade package and import its
 underscore-form Rust crate name:

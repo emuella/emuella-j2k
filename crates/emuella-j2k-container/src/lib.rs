@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -1232,6 +1233,16 @@ fn validate_jp2_header_fields(
     };
 
     let required_colour_count = required_colour_count(color_specification);
+    // Apply resulting-colour validity at the optional presentation boundary.
+    // Keep the existing direct/native container-admission contract unchanged.
+    let unsigned_presentation_colours = kind == ContainerKind::Jp2
+        && color_specification.is_some_and(|colour| {
+            colour.method == ColorSpecificationMethod::Enumerated
+                && matches!(
+                    colour.enumerated_color_space,
+                    Some(EnumeratedColorSpace::Greyscale | EnumeratedColorSpace::SRgb)
+                )
+        });
     if let Some(record) = children
         .iter()
         .find(|record| record.box_type == boxes::CHANNEL_DEFINITION)
@@ -1243,6 +1254,7 @@ fn validate_jp2_header_fields(
             &channel_formats,
             colour_count == 0,
             required_colour_count,
+            unsigned_presentation_colours,
         )?;
     } else if let Some(required_colour_count) = required_colour_count
         && channel_formats.len() != required_colour_count
@@ -1251,6 +1263,15 @@ fn validate_jp2_header_fields(
             Some(header_record.header_offset),
             Some(boxes::CHANNEL_DEFINITION),
             "non-default channel count requires a complete channel-definition box",
+        ));
+    } else if unsigned_presentation_colours
+        && palette_record.is_some()
+        && channel_formats.iter().any(|format| format.signed)
+    {
+        return Err(invalid(
+            Some(header_record.header_offset),
+            Some(boxes::COMPONENT_MAPPING),
+            "mapped greyscale and sRGB colour channels require unsigned samples",
         ));
     }
     if let Some(record) = children
@@ -1462,6 +1483,7 @@ fn validate_channel_definition(
     channel_formats: &[ComponentSampleFormat],
     colour_unspecified: bool,
     required_colour_count: Option<usize>,
+    unsigned_presentation_colours: bool,
 ) -> Result<()> {
     if record.data_len < 2 {
         return Err(invalid(
@@ -1492,7 +1514,9 @@ fn validate_channel_definition(
         ));
     }
 
-    let mut pairs = Vec::with_capacity(count);
+    let mut pairs = BTreeMap::new();
+    let mut opacity = BTreeMap::new();
+    let mut whole_opacity = None;
     let mut described_channels = alloc::vec![false; channel_formats.len()];
     let mut described_colours = alloc::vec![false; required_colour_count.unwrap_or(0)];
     let mut default_ordered_colours =
@@ -1531,6 +1555,13 @@ fn validate_channel_definition(
             ));
         }
         if channel_type == 0 {
+            if unsigned_presentation_colours && channel_format.signed {
+                return Err(invalid(
+                    Some(offset),
+                    Some(record.box_type),
+                    "mapped greyscale and sRGB colour channels require unsigned samples",
+                ));
+            }
             if association == 0 || association == u16::MAX {
                 return Err(invalid(
                     Some(offset + 4),
@@ -1593,16 +1624,21 @@ fn validate_channel_definition(
             }
         }
         let pair = (channel_type, association);
-        if kind == ContainerKind::Jp2 && pair != (u16::MAX, u16::MAX) && pairs.contains(&pair) {
+        if kind == ContainerKind::Jp2
+            && pair != (u16::MAX, u16::MAX)
+            && pairs
+                .get(&pair)
+                .is_some_and(|previous_channel| *previous_channel != channel)
+        {
             return Err(invalid(
                 Some(offset + 2),
                 Some(record.box_type),
-                "JP2 cannot repeat a channel type and association pair",
+                "different JP2 channels cannot claim the same type and association",
             ));
         }
         if kind == ContainerKind::Jp2
             && matches!(channel_type, 1 | 2)
-            && pairs.contains(&(3 - channel_type, association))
+            && pairs.contains_key(&(3 - channel_type, association))
         {
             return Err(invalid(
                 Some(offset + 2),
@@ -1610,7 +1646,27 @@ fn validate_channel_definition(
                 "JP2 cannot mix opacity and premultiplied opacity for one association",
             ));
         }
-        pairs.push(pair);
+        if kind == ContainerKind::Jp2 && matches!(channel_type, 1 | 2) && association != u16::MAX {
+            let assignment = (channel, channel_type);
+            let conflict = if association == 0 {
+                whole_opacity.is_none() && opacity.values().any(|previous| *previous != assignment)
+            } else {
+                whole_opacity.is_some_and(|previous| previous != assignment)
+            };
+            if conflict {
+                return Err(invalid(
+                    Some(offset + 2),
+                    Some(record.box_type),
+                    "whole-image and colour-specific opacity assignments conflict",
+                ));
+            }
+            if association == 0 {
+                whole_opacity = Some(assignment);
+            } else {
+                opacity.insert(association, assignment);
+            }
+        }
+        pairs.insert(pair, channel);
         offset = offset.checked_add(6).ok_or(ContainerError::SizeOverflow)?;
     }
     if described_channels.iter().any(|described| !described) {

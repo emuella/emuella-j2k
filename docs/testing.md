@@ -145,7 +145,7 @@ JPH file and one-bit changes across signature magic and protected file-type
 fields. Focused tests run through container parsing, inspection, shape
 discovery, owned decode, incremental inspection and caller-owned decode.
 
-These tests do not claim optional colour, palette, alpha or composition
+These JPH tests do not claim JPH optional colour, palette, alpha or composition
 support, multiple-codestream presentation, HTMIX support, general encoder or
 decoder coverage, or external conformance. Structurally valid but unimplemented
 presentation and decode profiles remain explicit support-classification
@@ -567,6 +567,19 @@ B.2.6–B.2.6.1, PDF pages 26–27. P0.16's component-0 reference and exact limi
 are defined by Annex C, C.2.1 and Table C.1, PDF page 31. The reviewed
 transcription was retrieval revision
 `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
+
+### Mapped JP2 presentation
+
+The [mapped presentation matrix](jp2-presentation.md#independent-acceptance-evidence)
+qualifies U8 greyscale/RGB palettes, direct/palette/mixed mappings, independent
+source/column/channel permutations, channel-defined order and straight RGBA
+from direct or palette opacity. It uses independently stated display vectors,
+including a literal-packet fixture without an encoder. Both scalar and parallel
+runs cover shape, rendered descriptors, native separation, planar/interleaved
+owned output, padded caller adapters and rejection atomicity. Output-size
+preflight, malformed metadata, valid unsupported neighbours, out-of-table
+indices and late entropy failure have distinct tests. Existing direct
+greyscale/sYCC and JPH contracts below are not widened by those results.
 
 ### Direct high-precision greyscale
 

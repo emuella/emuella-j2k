@@ -47676,7 +47676,14 @@ fn tile_payload_for_rect<'a>(
     Ok(Cow::Owned(payload))
 }
 
-fn map_tier1_error(_error: tier1::Tier1Error) -> CodestreamError {
+fn map_tier1_error(error: tier1::Tier1Error) -> CodestreamError {
+    if let tier1::Tier1Error::MalformedBitstream { reason } = error {
+        return CodestreamError::InvalidMarker {
+            offset: None,
+            marker: None,
+            message: reason,
+        };
+    }
     unsupported(
         None,
         None,
@@ -57988,5 +57995,41 @@ fn unsupported(
         marker,
         construct,
         message,
+    }
+}
+
+#[cfg(test)]
+mod tier1_error_classification_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_entropy_keeps_its_category_without_reclassifying_unsupported_modes() {
+        assert!(matches!(
+            map_tier1_error(tier1::Tier1Error::MalformedBitstream {
+                reason: "invalid MQ segment"
+            }),
+            CodestreamError::InvalidMarker {
+                message: "invalid MQ segment",
+                ..
+            }
+        ));
+        for error in [
+            tier1::Tier1Error::UnsupportedCodingStyle {
+                style: 128,
+                unsupported_bits: 128,
+            },
+            tier1::Tier1Error::UnsupportedCodingPass {
+                pass: tier1::CodingPass::Cleanup,
+                reason: "outside implemented pass range",
+            },
+        ] {
+            assert!(matches!(
+                map_tier1_error(error),
+                CodestreamError::Unsupported {
+                    construct: UnsupportedConstruct::Tier1Decode,
+                    ..
+                }
+            ));
+        }
     }
 }

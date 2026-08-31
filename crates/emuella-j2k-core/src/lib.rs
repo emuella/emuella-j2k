@@ -27,6 +27,7 @@ pub use emuella_j2k_container as container;
 mod ht_high_component;
 #[cfg(feature = "std")]
 mod ht_roi;
+mod jp2_presentation;
 mod native_planes;
 
 pub const PROJECT_NAME: &str = "emuella-j2k";
@@ -2686,7 +2687,7 @@ mod jp2_header_validation_tests {
         output
     }
 
-    fn unsupported_presentation_inputs(raw: &[u8], components: u16) -> Vec<Vec<u8>> {
+    fn optional_presentation_inputs(raw: &[u8], components: u16) -> Vec<Vec<u8>> {
         let mut inputs = Vec::new();
         for box_type in [
             container::boxes::PALETTE,
@@ -3074,9 +3075,13 @@ mod jp2_header_validation_tests {
         let mut sycc = wrap_jp2(&rgb_raw, 5, 3, 3, 7, None);
         set_first_colour(&mut sycc, 1, Some(18));
 
+        for input in [&palette, &reordered] {
+            assert_eq!(
+                inspect(input, &InspectOptions::default()).unwrap().support,
+                SupportStatus::Supported
+            );
+        }
         for (input, expected_feature, fragment) in [
-            (&palette, UnsupportedFeature::ContainerBox, "pclr"),
-            (&reordered, UnsupportedFeature::ContainerBox, "cdef"),
             (&icc, UnsupportedFeature::ColorModel, "ICC"),
             (&reserved, UnsupportedFeature::ColorModel, "reserved"),
             (&sycc, UnsupportedFeature::ColorModel, "sYCC"),
@@ -3179,7 +3184,7 @@ mod jp2_header_validation_tests {
     }
 
     #[test]
-    fn component_decode_ignores_unsupported_jp2_presentation_metadata() {
+    fn component_decode_ignores_jp2_presentation_metadata() {
         let raw = codestream(1);
         let reference = decode(
             &raw,
@@ -3259,19 +3264,22 @@ mod jp2_header_validation_tests {
                 expected_model
             );
 
-            for (index, input) in unsupported_presentation_inputs(&raw, 3)
+            for (index, input) in optional_presentation_inputs(&raw, 3)
                 .into_iter()
                 .enumerate()
             {
-                assert!(matches!(
-                    inspect(&input, &InspectOptions::default()).unwrap().support,
-                    SupportStatus::Unsupported { feature, .. }
-                        if feature == if index < 3 {
-                            UnsupportedFeature::ContainerBox
-                        } else {
-                            UnsupportedFeature::ColorModel
+                let support = inspect(&input, &InspectOptions::default()).unwrap().support;
+                if index < 3 {
+                    assert_eq!(support, SupportStatus::Supported);
+                } else {
+                    assert!(matches!(
+                        support,
+                        SupportStatus::Unsupported {
+                            feature: UnsupportedFeature::ColorModel,
+                            ..
                         }
-                ));
+                    ));
+                }
 
                 let decoded = decode(&input, &full_options).unwrap();
                 let shape = decode_shape(&input, &full_options).unwrap();
@@ -3311,7 +3319,7 @@ mod jp2_header_validation_tests {
         }
 
         let one_raw = codestream(1);
-        let one_input = unsupported_presentation_inputs(&one_raw, 1)
+        let one_input = optional_presentation_inputs(&one_raw, 1)
             .into_iter()
             .next()
             .unwrap();
@@ -3344,7 +3352,10 @@ mod jp2_header_validation_tests {
 
     #[test]
     fn rendered_routes_reject_unsupported_jp2_presentation_before_mutation() {
-        let raw = codestream(1);
+        let mut raw = codestream(1);
+        // RLCP remains outside the new mapped-presentation coding envelope.
+        let cod = marker_offset(&raw, codestream::Marker::Cod.code().to_be_bytes());
+        raw[cod + 5] = 1;
         let mut inputs = Vec::new();
         for box_type in [
             container::boxes::PALETTE,
@@ -5015,6 +5026,7 @@ impl SampleFormat {
 pub enum ColorModel {
     Grayscale,
     Rgb,
+    /// Red, green, blue and straight (unassociated) alpha for bounded JP2 output.
     Rgba,
     YCbCr,
     Unknown,
@@ -5032,8 +5044,9 @@ pub enum ComponentLayout {
 /// Semantic decode mode selected by callers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeMode {
-    /// Decode pixels as rendered/display channels for the declared image color
-    /// model.
+    /// Decode pixels as rendered/display channels for the declared image colour
+    /// model. Bounded mapped JP2 output is greyscale, RGB or straight RGBA;
+    /// greyscale with alpha repeats grey into RGB and preserves alpha unchanged.
     Rendered,
     /// Decode raw codestream component planes without applying display-only
     /// projection such as palette expansion, alpha handling, or color-managed
@@ -6024,6 +6037,10 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
 }
 
 /// Convenience full decode that owns the returned image buffers.
+///
+/// The bounded mapped JP2 route resolves palette, channel order and straight
+/// alpha after independent native reconstruction. Rendered descriptors carry
+/// no source component index; RGBA preserves colour samples beneath zero alpha.
 pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
@@ -6047,6 +6064,9 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     requested_component_indices(&metadata, &options.requested_components)?;
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
+    }
+    if let Some(plan) = jp2_presentation::for_request(input, &metadata, options)? {
+        return plan.decode(options);
     }
     reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
@@ -6152,7 +6172,9 @@ pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
 }
 
 /// Resolve the full-image output shape for a decode request without allocating
-/// image samples.
+/// image samples. For mapped JP2 this reports the resolved rendered channel
+/// count (including alpha), not merely the native component count. Packet and
+/// palette-index sample failures can still occur during decode.
 pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape> {
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
@@ -6176,6 +6198,9 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     requested_component_indices(&metadata, &options.requested_components)?;
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
+    }
+    if let Some(plan) = jp2_presentation::for_request(input, &metadata, options)? {
+        return Ok(plan.shape(options.target_layout));
     }
     reject_unsupported_rendered_projection(input, &metadata, options)?;
     reject_unsupported_part1_rendered_sampling(input, &metadata, options)?;
@@ -7063,7 +7088,7 @@ fn reject_unsupported_rendered_projection(
             .transpose()
             .map_err(map_codestream_error)?;
         if let Some((feature, detail)) =
-            unsupported_container_presentation(&container, primary.zip(parsed.as_ref()))?
+            unsupported_container_presentation(input, &container, primary.zip(parsed.as_ref()))?
         {
             return Err(unsupported(feature, detail));
         }
@@ -11246,6 +11271,7 @@ fn metadata_from_container(
     }
     let image = image_info_from_container(&container);
     let unsupported_presentation = unsupported_container_presentation(
+        input,
         &container,
         primary_codestream.zip(parsed_codestream.as_ref()),
     )?;
@@ -11255,6 +11281,14 @@ fn metadata_from_container(
         }
     } else if let Some((feature, detail)) = unsupported_presentation {
         SupportStatus::Unsupported { feature, detail }
+    } else if jp2_presentation::prepare(
+        input,
+        &container,
+        primary_codestream.zip(parsed_codestream.as_ref()),
+    )?
+    .is_some()
+    {
+        SupportStatus::Supported
     } else {
         match (&container.kind, &parsed_codestream) {
             (container::ContainerKind::Jph, Some(codestream))
@@ -11364,9 +11398,16 @@ fn validate_jph_codestreams(
 }
 
 fn unsupported_container_presentation(
+    input: &[u8],
     container: &container::Container,
     primary_codestream: Option<(&[u8], &codestream::Codestream)>,
 ) -> Result<Option<(UnsupportedFeature, String)>> {
+    match jp2_presentation::prepare(input, container, primary_codestream) {
+        Ok(Some(_)) => return Ok(None),
+        Err(J2kError::Unsupported { feature, detail }) => return Ok(Some((feature, detail))),
+        Err(error) => return Err(error),
+        Ok(None) => {}
+    }
     let name = match container.kind {
         container::ContainerKind::Jp2 => "JP2",
         container::ContainerKind::Jph => "JPH",
