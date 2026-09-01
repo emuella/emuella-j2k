@@ -56,7 +56,10 @@ the same checks without claiming a Git identity or discovering a parent
 repository; keep its build output outside that source tree yourself.
 
 Both the complete local gate and hosted CI run the existing native-plane and
-JP2-presentation tests with the core parallel feature. See
+JP2-presentation tests with the core parallel feature. They also run the
+complete 264-cell lossy HT public matrix through its checked optimised entry
+point; ordinary workspace tests retain a representative smoke case without
+repeating that complete matrix in unoptimised mode. See
 [`docs/testing.md`](docs/testing.md#canonical-local-gate) for the focused command.
 
 ## Standards and implementation provenance

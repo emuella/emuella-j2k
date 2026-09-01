@@ -16,11 +16,42 @@ verification does not set a hosted-CI flag to bypass Git metadata.
 The gate runs the existing policy and runner tests, source and dependency
 notice audits, formatting, workspace and fuzz checks, workspace tests, strict
 clippy, dependency policy and no-default-features checks. It also runs the
-committed-tree wrapper's synthetic-Git behavioural tests and this focused
-parallel regression command, which hosted CI runs as well:
+committed-tree wrapper's synthetic-Git behavioural tests, the mandatory lossy
+HT public qualification and this focused parallel regression command. Hosted
+CI runs both focused gates as well:
 
 ```sh
+sh scripts/check-lossy-ht-public-matrix.sh
 cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
+```
+
+The lossy HT entry point discovers the exact smoke and complete test names and
+checks that only the complete test is ignored before running that complete
+264-cell matrix with the optimised Cargo profile. A rename, duplicate or
+classification mismatch therefore fails instead of silently selecting zero
+tests. `cargo test --workspace` runs the six-cell unoptimised smoke through one
+257 × 193 U8 greyscale row, both input layouts and all three selected rates.
+The complete matrix runs once, separately, through the checked entry point.
+
+At source revision `cc9fabe2cea81007cb75dfb303b63b50396fd9fa`, the five former
+unoptimised matrix tests took 435 seconds on the measurement host: 89 seconds
+for main including a roughly 9-second cold compile, 39 seconds for boundary,
+less than one second for extreme, 307 seconds for resource and less than one
+second for minimum. The same five focused tests took 73 seconds in the
+optimised profile including a 20-second cold compile; their test bodies took
+7.08, 2.90, 0.04, 42.07 and approximately 0 seconds respectively. The
+resulting `cargo test --workspace` took 43 seconds on the same host with
+warm dependencies and a 9.88-second incremental workspace compile; the core
+test binary took 6.85 seconds, including 2.79 seconds for the focused smoke.
+The checked optimised entry point took 52.96 seconds for the complete matrix
+after a 2.54-second incremental compile. These are local elapsed-time
+measurements rather than hosted-run guarantees: toolchain, CPU, thermal state
+and warm Cargo caches affect both compile and execution time. To time or
+exercise only the ordinary smoke while editing, use:
+
+```sh
+cargo test -p emuella-j2k-core --lib \
+  ht_lossy_public_tests::lossy_ht_public_smoke -- --exact --nocapture
 ```
 
 The workspace's ordinary tests exercise the scalar configuration; compiling
@@ -1150,11 +1181,14 @@ workspace and padded caller routes agree with owned decoding. Truncation leaves
 caller storage unchanged, and the foundation's separate late entropy failures
 still exercise atomic publication after component reconstruction has begun.
 
-The ordinary tests enforce exact rational NMSE ceilings for main cells,
-non-increasing distortion across every successful rate sequence, rate budgets
-and the complete expected success/failure dispositions. They share the
-calibration pattern generator rather than storing fixtures. An ignored export
-test reproduces that same matrix as project-authored source, Emuella raw/JPH,
-and canonical native bytes outside the source tree. It never executes another
-codec. Independent full-matrix decoding and locked-corpus qualification remain
+The ordinary smoke enforces exact rational NMSE ceilings, non-increasing
+distortion across its successful rate sequence and rate budgets while
+exercising raw/JPH repeatability and the owned, shape, workspace and padded
+caller decode routes. The mandatory optimised canonical and hosted-CI gate
+enforces those properties across all cells and retains the complete expected
+success/failure dispositions. Both share the calibration pattern generator
+rather than storing fixtures. An ignored export test reproduces that same
+complete matrix as project-authored source, Emuella raw/JPH, and canonical
+native bytes outside the source tree. It never executes another codec.
+Independent full-matrix decoding and locked-corpus qualification remain
 separate authorised gates; native self-decoding does not prove interoperability.
