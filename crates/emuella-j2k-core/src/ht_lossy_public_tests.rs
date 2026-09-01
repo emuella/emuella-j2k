@@ -152,8 +152,13 @@ impl Report {
             ..Self::default()
         }
     }
-    fn run(&mut self, group: &str, output: Option<&Path>) {
-        for row in rows(group) {
+    fn run(
+        &mut self,
+        group: &str,
+        selected_rows: impl IntoIterator<Item = Row>,
+        output: Option<&Path>,
+    ) {
+        for row in selected_rows {
             let source = codestream::ht_lossy_test_support::source(
                 row.width,
                 row.height,
@@ -388,31 +393,45 @@ impl Report {
         );
     }
 }
-fn qualify(group: &str, cells: usize, successes: usize) {
+#[test]
+fn lossy_ht_public_smoke() {
+    let representative = Row {
+        width: 257,
+        height: 193,
+        bits: 8,
+        components: 1,
+        pattern: 0,
+    };
     let mut report = Report::new();
-    report.run(group, None);
+    report.run("main", [representative], None);
     report.summary();
-    assert_eq!((report.cells, report.successes), (cells, successes));
+    assert_eq!((report.cells, report.successes), (6, 6));
 }
-#[test]
-fn lossy_ht_public_main_matrix() {
-    qualify("main", 96, 96);
+
+fn complete_matrix(output: Option<&Path>) -> Report {
+    let mut report = Report::new();
+    for (group, expected_cells, expected_successes) in [
+        ("main", 96, 96),
+        ("boundary", 120, 10),
+        ("extreme", 12, 2),
+        ("resource", 12, 12),
+        ("minimum", 24, 0),
+    ] {
+        let cells_before = report.cells;
+        let successes_before = report.successes;
+        report.run(group, rows(group), output);
+        assert_eq!(report.cells - cells_before, expected_cells);
+        assert_eq!(report.successes - successes_before, expected_successes);
+    }
+    report.summary();
+    assert_eq!((report.cells, report.successes), (264, 120));
+    report
 }
+
 #[test]
-fn lossy_ht_public_boundary_matrix() {
-    qualify("boundary", 120, 10);
-}
-#[test]
-fn lossy_ht_public_extreme_matrix() {
-    qualify("extreme", 12, 2);
-}
-#[test]
-fn lossy_ht_public_resource_matrix() {
-    qualify("resource", 12, 12);
-}
-#[test]
-fn lossy_ht_public_minimum_matrix() {
-    qualify("minimum", 24, 0);
+#[ignore = "mandatory optimised qualification; invoked by scripts/check-lossy-ht-public-matrix.sh"]
+fn lossy_ht_public_complete_matrix() {
+    complete_matrix(None);
 }
 
 #[test]
@@ -432,12 +451,7 @@ fn lossy_ht_export_public_matrix() {
         output.is_dir() && std::fs::read_dir(&output).unwrap().next().is_none(),
         "export directory must exist and be empty"
     );
-    let mut report = Report::new();
-    for group in ["main", "boundary", "extreme", "resource", "minimum"] {
-        report.run(group, Some(&output));
-    }
-    report.summary();
-    assert_eq!((report.cells, report.successes), (264, 120));
+    let report = complete_matrix(Some(&output));
     std::fs::write(output.join("manifest.txt"), report.manifest).unwrap();
 }
 

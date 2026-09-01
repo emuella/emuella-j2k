@@ -362,6 +362,7 @@ class CommittedTreeTests(unittest.TestCase):
         for path in ("scripts/check.sh", ".github/workflows/ci.yml"):
             text = (ROOT / path).read_text()
             self.assertIn(command, text)
+            self.assertIn("sh scripts/check-lossy-ht-public-matrix.sh", text)
             self.assertIn("python3 scripts/test-check-committed-tree.py", text)
 
     def test_real_shell_dispatches_checkout_but_not_parent_repository(self) -> None:
@@ -376,9 +377,28 @@ class CommittedTreeTests(unittest.TestCase):
         )
         python.chmod(0o755)
         cargo = tools / "cargo"
-        cargo.write_text("#!/bin/sh\nexit 0\n")
+        cargo.write_text(
+            "#!/bin/sh\n"
+            "listed=false\n"
+            "ignored=false\n"
+            'for argument in "$@"; do\n'
+            '  [ "$argument" = --list ] && listed=true\n'
+            '  [ "$argument" = --ignored ] && ignored=true\n'
+            "done\n"
+            'if [ "$listed" = true ]; then\n'
+            "  if [ \"$ignored\" = false ]; then\n"
+            "    echo 'ht_lossy_public_tests::lossy_ht_public_smoke: test'\n"
+            "  fi\n"
+            "  echo 'ht_lossy_public_tests::lossy_ht_public_complete_matrix: test'\n"
+            "fi\n"
+            "exit 0\n"
+        )
         cargo.chmod(0o755)
-        for name in ("check.sh", "check-committed-tree.py"):
+        for name in (
+            "check.sh",
+            "check-committed-tree.py",
+            "check-lossy-ht-public-matrix.sh",
+        ):
             (self.repo / "scripts" / name).write_bytes(
                 (ROOT / "scripts" / name).read_bytes()
             )
@@ -416,6 +436,9 @@ class CommittedTreeTests(unittest.TestCase):
         (nested / "scripts").mkdir(parents=True)
         (nested / "scripts/check.sh").write_bytes(
             (ROOT / "scripts/check.sh").read_bytes()
+        )
+        (nested / "scripts/check-lossy-ht-public-matrix.sh").write_bytes(
+            (ROOT / "scripts/check-lossy-ht-public-matrix.sh").read_bytes()
         )
         result = subprocess.run(
             ["sh", "scripts/check.sh"],
