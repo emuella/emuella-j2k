@@ -70,14 +70,18 @@ not publish stale coefficients.
 
 Rendered projection and container presentation remain outside this foundation.
 One independent raw partial route selects component zero from the unsigned
-greyscale U16 encoder profile at exactly one or two discarded resolution
-levels. It reuses the complete envelope and packet admission above, retains
-only the required resolutions, and passes the checked reduced geometry to the
-existing prepared reduced executor. The private atomic-publication path is
-shared; the public reusable Part 1 workspace route does not retain HT scratch,
-preserving its accounting and clear contract. There is no second decoder,
-full-resolution decode-and-resample fallback or full-resolution output plane.
-RGB, U8, signed, interleaved, JPH, spatial, tile, layer, zero-discard and
+greyscale U16 encoder profile. No-region requests admit exactly one or two
+discarded levels; a contained non-empty full-grid region admits full,
+discard-one or discard-two output. It reuses the complete envelope and packet
+admission above, then retains only whole blocks required by compact coefficient
+and bounded 9/7 synthesis windows. The public reusable Part 1 workspace retains
+private segment, coefficient-window and synthesis storage and includes those
+capacities in accounting. Per-block HT entropy scratch is local to one call;
+the separate active-use limit conservatively includes it and is checked before
+reconstruction. Atomic publication is
+shared across owned and caller routes. There is no second decoder, full decode
+and crop, resampling, complete coefficient plane or full-resolution output
+plane for small requests. RGB, U8, signed, interleaved, JPH, tile, layer and
 discard-above-two requests remain outside this boundary. Existing JPH header
 consistency and presentation checks, independent DS0 reduced-component
 profiles, HTMIX dispositions and the lossless full-image classifier are

@@ -8,8 +8,11 @@ machinery reconstruct exact regions from the raw greyscale U16_LE output of
 blocks and never retaining a complete coefficient or output plane?
 
 The probe started from codec revision
-`31a32971531895ad6cda5e4da583d410c6e94220`. It is an internal calibration;
-it does not change partial-decode admission or any public API.
+`31a32971531895ad6cda5e4da583d410c6e94220`. It began as an internal
+calibration and was retained as implementation evidence for the bounded public
+partial-decode route. The historical identities below describe the exact
+provisional checkpoints; they do not claim that the later deliverable has
+landed or passed independent qualification.
 
 The executable calibration checkpoint is
 `fb04df168927e689e0a9ea893b4432b28978f0cf`, tree
@@ -67,21 +70,23 @@ probe, not a claim quoted from the standard.
 All six comparisons are byte-exact. Complete parsing retains 256 contribution
 records, but only the following whole intersecting contribution rectangles
 reach HT decode. Workspace ceilings include compact and synthesis f32 values,
-one maximum 64×64 i32 block, the largest selected segment and exact U16 output.
+one maximum 64×64 i32 block, the largest selected segment, exact U16 output and
+a conservative checked ceiling for per-call HT entropy scratch derived from
+the selected maximum block layout and segment length.
 
 | Region | Discard | Output | Selected blocks | Selected block coefficients | Compact coefficients | Synthesis ceiling samples | Workspace ceiling bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| interior | 0 | 43×35 | 11 | 45,056 | 4,364 | 5,366 | 66,947 |
-| edge | 0 | 51×43 | 7 | 28,672 | 3,632 | 7,158 | 75,338 |
-| interior | 1 | 21×17 | 8 | 32,768 | 1,292 | 1,504 | 31,866 |
-| edge | 1 | 25×21 | 4 | 16,384 | 1,020 | 1,868 | 33,219 |
-| interior | 2 | 10×9 | 1 | 4,096 | 90 | 182 | 18,666 |
-| edge | 2 | 12×10 | 1 | 4,096 | 120 | 242 | 19,205 |
+| interior | 0 | 43×35 | 11 | 45,056 | 4,364 | 5,366 | 2,557,421 |
+| edge | 0 | 51×43 | 7 | 28,672 | 3,632 | 7,158 | 2,566,226 |
+| interior | 1 | 21×17 | 8 | 32,768 | 1,292 | 1,504 | 2,514,114 |
+| edge | 1 | 25×21 | 4 | 16,384 | 1,020 | 1,868 | 2,515,053 |
+| interior | 2 | 10×9 | 1 | 4,096 | 90 | 182 | 2,473,878 |
+| edge | 2 | 12×10 | 1 | 4,096 | 120 | 242 | 2,474,399 |
 
-The test locks these figures, confirms every selected block intersects its
-required subband rectangle, and confirms the legacy complete reduced
-coefficient plane and transform scratch retain zero capacity. No compact
-coefficient band, synthesis workspace or output reaches 1,048,576 samples.
+The test locks these figures and confirms every selected block intersects its
+required subband rectangle. The region workspace has no complete reduced
+coefficient plane or full-transform scratch field. No compact coefficient band,
+synthesis workspace or output reaches 1,048,576 samples.
 
 ## Decision and limitations
 
@@ -89,14 +94,17 @@ coefficient band, synthesis workspace or output reaches 1,048,576 samples.
 normalisation/dequantisation, and transform-owned bounded 9/7 synthesis are
 sufficient for the selected encoder envelope without material redesign.
 
-This result covers one deterministic input, rate, interior region and edge
-region. It is not the public admission matrix and does not establish caller-
-buffer atomicity, reusable region workspace behaviour, malformed entropy
-failure handling, other rates or patterns, one-pixel and strip geometry, full-
-image requests, or any excluded container, format, colour, tile or profile.
+The original six-cell result covered one deterministic input, rate, interior
+region and edge region. It was not itself the public admission matrix. Later
+codec-owned focused tests add caller-buffer atomicity, reusable workspace
+behaviour, malformed selected entropy, representative successful rates and
+patterns, one-pixel and strip geometry, full-image requests and explicit
+excluded-profile neighbours. This record remains the detailed mechanism and
+accounting evidence rather than a landing or general-conformance claim.
 
-The retained seam now has a production-private executor for zero, one or two
-discarded resolution levels. The discard-two increment started from codec
+The retained seam has one executor for zero, one or two discarded resolution
+levels; the candidate public route now owns its narrow admission and staged
+publication. The discard-two increment started from codec
 revision `c7615fa5fcefb9dda5af25a999d4252a8f788fc1`. At both discard 1 and 2,
 eighteen full-resolution half-open regions with valid projections use checked
 ceiling geometry and match exact crops of the established direct reduced
@@ -113,15 +121,16 @@ blocks, with no 9/7 synthesis levels.
 
 | Full-resolution request | Projected output | Selected blocks | Compact LL samples | Synthesis ceiling samples | Workspace ceiling bytes |
 |---|---:|---:|---:|---:|---:|
-| 1024×1024 full image | 256×256 | 16/256 | 65,536 | 131,074 | 1,196,728 |
-| `(256, 256, 256, 256)` | 64×64 | 1/256 | 4,096 | 8,194 | 90,773 |
+| 1024×1024 full image | 256×256 | 16/256 | 65,536 | 131,074 | 3,652,552 |
+| `(256, 256, 256, 256)` | 64×64 | 1/256 | 4,096 | 8,194 | 2,545,967 |
 
 One workspace successfully alternates full-resolution, discard-1 and
 discard-2 requests while regions shrink, grow and relocate. Tests mechanically
 retain only the required LL/HL/LH/HH windows and whole selected blocks,
 entropy-decode only those selected blocks, enforce the checked deterministic
-workspace ceiling before reconstruction, and keep the legacy complete reduced
-coefficient plane and transform scratch at zero capacity. Empty requests and
+workspace ceiling before reconstruction, and use no complete reduced
+coefficient plane or full-transform scratch in the retained region workspace.
+Empty requests and
 empty discard-two projections, out-of-bounds and overflowing geometry, discard
 above two, truncated packets, corrupted selected HT payload, malformed selected
 contribution metadata and a one-byte-short workspace limit all fail without
@@ -132,8 +141,14 @@ The discard-two release-mode codec run passed 15/15 focused
 and the new two-cell large-geometry accounting. The release-mode core lossy
 matrix passed 8/8, including public partial-request closure and both established
 reduced routes; the irreversible odd-plane transform test passed 1/1. Release
-clippy for all codestream targets, formatting and diff checks passed. Public
-partial-decode admission remains unchanged; this is not a public support claim.
+clippy for all codestream targets, formatting and diff checks passed. Those
+checkpoint results remain provisional evidence rather than a landing claim.
 
-The next safe action is public admission, caller-buffer qualification and
-publication of the already calibrated full/discard-1/discard-2 executor.
+The retained candidate now routes the calibrated full/discard-1/discard-2
+executor through public shape, component-descriptor, owned, reusable-workspace
+and padded caller-buffer APIs for the exact raw U16_LE profile. Public tests use
+only exact crops of Emuella's established full or reduced decode as the oracle,
+exercise deterministic active-use exhaustion and recovery, and preserve every
+caller byte on failure. The next safe action is canonical clean-source
+verification and independent exact-head review; this record makes no advance
+claim about either result or landing.

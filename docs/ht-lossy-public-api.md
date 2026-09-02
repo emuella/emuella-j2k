@@ -58,19 +58,63 @@ failures leave all caller bytes untouched; successful output preserves padding.
 
 The default rendered mode and additional JPH presentation remain outside this
 full-image profile. One independent partial route admits only raw, unsigned
-greyscale `U16_LE` encoder output, planar component zero and exactly one or two
-discarded resolution levels. It uses the same envelope, complete packet walker,
-checked reduced geometry, prepared reduced executor and atomic publication
-path. The public reusable Part 1 workspace route does not retain HT scratch,
-preserving its existing accounting and clear contract. It does not allocate a
-full-resolution output plane.
-JPH, RGB, U8, signed, rendered or interleaved output, other selections, regions,
-tiles, layer limits, zero discard and discard above two remain unsupported.
-Existing reversible full-image and separately bounded native-grid, reduced,
-ROI and selected DS0 routes keep their own admission contracts. The new partial
-route does not widen them or claim general conformance.
+greyscale `U16_LE` encoder output and planar component zero. Without a region,
+exactly one or two resolution levels must be discarded. With a region, full,
+discard-one and discard-two output are admitted.
 
-## Reduced U16 qualification
+`PartialDecodeOptions::region` is one non-empty, contained, image-relative
+half-open rectangle on the full-resolution reference grid. For a discard count
+`d`, its left, top, right and bottom endpoints are independently projected as
+`ceil(endpoint / 2^d)`. A non-empty full-resolution request whose projected
+endpoints coincide is rejected rather than published as an empty image.
+`decode_partial_info` reports the projected width and height;
+`decode_partial_component_info` additionally reports the projected origin.
+A full-image region agrees byte-for-byte and geometrically with the established
+full-image or reduced route.
+
+Preparation uses the exact encoder envelope and complete packet walker before
+retaining selected work. Only whole code blocks intersecting the required
+coefficient windows reach HT entropy decode. Compact LL/HL/LH/HH windows and
+transform-owned bounded 9/7 synthesis reconstruct conservative internal
+support before returning exactly the requested rectangle; callers see no halo.
+Small requests allocate neither complete coefficient/synthesis planes nor a
+full-tile or full-resolution output plane. This is not full decode followed by
+crop or resampling.
+
+Owned output, shape, component descriptors, `Part1DecodeWorkspace` reuse and
+padded `decode_partial_into` agree byte-exactly. The reusable workspace retains
+private segment, coefficient-window and synthesis storage;
+`retained_heap_bytes` includes those capacities. Per-block HT entropy scratch
+is local to one call and dropped afterwards. The
+`set_lossy_ht_spatial_region_memory_limit` value bounds deterministic active
+work for each region, including a conservative checked ceiling for that local
+entropy scratch. Retained capacity may exceed a later request's active need and
+is not treated as current use. Target geometry, format, stride, final extent
+and padding are validated before execution. Complete selected entropy decode,
+synthesis, finite ties-to-even U16_LE conversion, output allocation and the
+active-use limit all succeed in staging storage before any caller row is
+copied. Every failure therefore preserves active bytes, row padding and
+trailing storage; success preserves padding.
+
+JPH and other wrappers, RGB, U8, signed, rendered or interleaved output, other
+selections, tiles, layer limits, discard above two and any altered coding,
+quantisation, decomposition, origin, sampling or packet profile remain
+unsupported. Existing reversible full-image and separately bounded native-grid,
+reduced, ROI and selected DS0 routes keep their own admission contracts. This
+finite profile does not claim general JPEG 2000 or Part 15 conformance.
+
+The spatial planning basis is ISO/IEC 15444-1:2024 retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`: B.1–B.3 and B.5–B.9 for image,
+resolution, subband and code-block geometry; E.1–E.1.1.2 for packet
+completeness; F.1–F.3.8.2.1 for recursive inverse 9/7 synthesis and boundary
+extension; and G.1–G.1.2 for the existing quantisation handling. HT cleanup
+interpretation remains based on ISO/IEC 15444-15:2019 retrieval
+`10baf9472429d52f5d6b5f9b7a892dbed395b1db`, clauses 6.1–6.2 and 7.6,
+Annex A.1–A.3 and B.1–B.3. These references inform independently authored
+code and generated tests; no protected standards expression or payload is
+reproduced.
+
+## Partial U16 qualification
 
 The project-authored reduced matrix exercises smooth ramp, structured
 zero/maximum checkerboard, structured texture and high-entropy inputs at the
@@ -83,15 +127,24 @@ noise case at two discarded levels produces exactly 256 × 256 samples.
 Shape discovery, component descriptors, deterministic owned output, the
 reusable-workspace route and padded caller output agree. Output is planar
 unsigned `U16_LE`, caller row padding is preserved, and every successful public
-plane equals the internal prepared reduced executor byte-for-byte. One
-workspace is reused across dimensions, rates and both reductions. Invalid
-requests, truncated input and corrupt retained entropy leave caller storage
-unchanged; a failed workspace decode can be followed by a successful decode.
-Neighbour tests reject discard above two, regions, tiles, layer limits, JPH,
-RGB, U8, signed input, default rendered mode, unsupported component selections,
-interleaved output and altered geometry, decomposition, coding, quantisation,
-profile or layer state. Full-resolution raw/JPH reconstruction and repeated raw
-encoder bytes are checked alongside the reduced results.
+plane equals an exact crop of Emuella's established full or direct reduced
+decode. One workspace is reused across dimensions, rates, all three admitted
+resolutions and growing, shrinking and relocated regions. The matrix covers
+interior, corners, every edge, one-pixel and narrow strips, odd geometry,
+64-sample alignment and crossings, transform boundaries, full-image requests,
+representative smooth/structured/high-entropy encoder successes, a 1024 × 1024
+image with a 256 × 256 full-grid request, and a 1024 × 1024 full request
+projecting to 256 × 256 at discard two. Invalid requests, malformed packets,
+truncated input, corrupt selected entropy and one-byte-short active workspace
+limits leave caller storage unchanged; a failed workspace decode can be
+followed by a successful decode.
+Neighbour tests reject empty, out-of-bounds, endpoint-overflow and empty-
+projection regions, discard above two, simultaneous region and tile, tiles,
+layer limits, JPH, RGB, U8, signed input, default rendered mode, unsupported
+component selections, interleaved output and altered geometry, decomposition,
+coding, quantisation, profile or layer state. Full-resolution raw/JPH
+reconstruction and repeated raw encoder bytes are checked alongside the
+partial results.
 
 ## Public qualification
 

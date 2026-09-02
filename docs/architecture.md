@@ -59,20 +59,35 @@ JPH writer reserves the complete output fallibly, calls the raw encoder once
 and wraps its bytes with the existing container writer. Full native decoding
 requires `DecodeMode::Components` with all components, through either output
 layout; it does not add rendering. A separate raw greyscale U16 partial gate
-selects planar component zero at exactly one or two discarded levels.
+selects planar component zero. No-region requests admit discard one or two;
+one contained image-relative half-open region admits full, discard one or
+discard two.
 
-That reduced gate calls the exact lossy envelope and complete packet walker
-before retaining only resolutions needed by the request. Checked reduced
-geometry and the prepared plan feed the existing
-`PreparedHtj2kReducedComponentDecode` executor and private atomic-publication
-adapter. The public reusable Part 1 workspace route uses owned HT
-reconstruction without retaining HT allocations in that workspace, preserving
-its accounting and clear contract. No second decoder, full-image
-decode-and-resample path or full-resolution output plane is introduced. The
-same preparer supplies shape discovery, component descriptors and execution,
-so unsupported request or codestream neighbours fail before caller mutation.
-The gate is limited to raw unsigned greyscale `U16_LE`, component zero, planar
-output and discard one or two; all other lossy partial shapes remain excluded.
+The spatial preparer calls the exact lossy envelope and complete packet walker
+before selection. It independently ceiling-projects both region endpoints,
+rejects an empty projected rectangle, derives conservative finite 9/7 support,
+and retains only whole code blocks intersecting required LL/HL/LH/HH windows.
+Selected HT coefficients enter compact band windows; transform-owned bounded
+synthesis produces only the requested output with no public halo. There is no
+second packet, HT or transform implementation, full decode/crop, resampling,
+complete coefficient plane or full-resolution output plane for a small
+request.
+
+One prepared route supplies `decode_partial_info`, component descriptors and
+owned execution. The public `Part1DecodeWorkspace` retains its private lossy
+HT region workspace across growing, shrinking and relocated requests. Its
+capacity accounting includes retained segment, coefficient-window and
+synthesis storage. Selected-block HT entropy scratch is instead local to one
+call and is included conservatively in the deterministic active-work ceiling
+derived before reconstruction; previously retained capacity is not
+reclassified as per-call use. Caller-target geometry, stride, storage and
+padding are validated before execution. Entropy, synthesis, finite conversion,
+output extent and active-use limits all succeed in private storage before rows
+are copied, so every failure leaves active bytes, row padding and trailing
+storage unchanged and every success preserves padding. Unsupported request or
+codestream neighbours fail closed before fallback. JPH, other formats and
+broader irreversible HT remain outside this route; this is not general JPEG
+2000 or Part 15 conformance.
 
 The [HTMIX architecture decision](htmix-disposition.md) records the accepted
 unsupported boundary, the mixed-packet admission correction and the distinct

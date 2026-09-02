@@ -148,13 +148,19 @@ quantisation, ROI, HTMIX and other irreversible HT shapes remain unsupported by
 this route.
 
 The lossy encoder's raw unsigned greyscale `U16_LE` output has an independent
-partial component-zero route at exactly one or two discarded resolution
-levels. It retains the encoder's exact two-level irreversible envelope,
-validates the complete packet stream, and reconstructs the checked reduced
-planar geometry directly without a full-resolution output plane. JPH, RGB,
-U8, signed, rendered or interleaved output, other component selections,
-regions, tiles, layer limits, zero discard and discard above two remain
-unsupported by this route.
+partial component-zero route. A no-region request admits exactly one or two
+discarded resolution levels. A spatial request must provide one contained,
+non-empty, image-relative half-open full-resolution region and may select full,
+discard-one or discard-two output. Each half-open endpoint is projected
+independently with ceiling division; `decode_partial_component_info` reports
+that projected origin and shape. The route validates the complete packet
+stream, entropy-decodes selected whole blocks only and reconstructs bounded
+coefficient and 9/7 synthesis windows without an application-visible halo,
+full decode/crop, resampling or a full-resolution output plane for small
+requests. Owned, reusable-workspace and padded caller output are byte-exact;
+caller bytes and padding remain unchanged on every failure. JPH, RGB, U8,
+signed, rendered or interleaved output, other component selections, tiles,
+layer limits and discard above two remain unsupported.
 
 A separate reduction-three request selects transformed component zero from a
 raw zero-origin single tile/part with three matching unsigned 8-bit unit-sampled
