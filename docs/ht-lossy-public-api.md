@@ -60,8 +60,10 @@ The default rendered mode and additional JPH presentation remain outside this
 full-image profile. One independent partial route admits only raw, unsigned
 greyscale `U16_LE` encoder output, planar component zero and exactly one or two
 discarded resolution levels. It uses the same envelope, complete packet walker,
-checked reduced geometry, prepared reduced executor, reusable HT workspace and
-atomic publication path. It does not allocate a full-resolution output plane.
+checked reduced geometry, prepared reduced executor and atomic publication
+path. The public reusable Part 1 workspace route does not retain HT scratch,
+preserving its existing accounting and clear contract. It does not allocate a
+full-resolution output plane.
 JPH, RGB, U8, signed, rendered or interleaved output, other selections, regions,
 tiles, layer limits, zero discard and discard above two remain unsupported.
 Existing reversible full-image and separately bounded native-grid, reduced,

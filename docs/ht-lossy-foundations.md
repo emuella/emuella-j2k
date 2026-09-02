@@ -73,8 +73,9 @@ One independent raw partial route selects component zero from the unsigned
 greyscale U16 encoder profile at exactly one or two discarded resolution
 levels. It reuses the complete envelope and packet admission above, retains
 only the required resolutions, and passes the checked reduced geometry to the
-existing prepared reduced executor. The reusable HT workspace and private
-atomic-publication path are shared; there is no second decoder,
+existing prepared reduced executor. The private atomic-publication path is
+shared; the public reusable Part 1 workspace route does not retain HT scratch,
+preserving its accounting and clear contract. There is no second decoder,
 full-resolution decode-and-resample fallback or full-resolution output plane.
 RGB, U8, signed, interleaved, JPH, spatial, tile, layer, zero-discard and
 discard-above-two requests remain outside this boundary. Existing JPH header
@@ -90,9 +91,11 @@ The reviewed Part 1 authority is ISO/IEC 15444-1:2024, local file
 248 physical PDF pages, reviewed bundle
 `1a7a03799078b476bf38e91786b979059b4c533d`, at retrieval revision
 `34e5d1639b9f121807e620c001893ca9d2c8f977`. The bounded implementation review
-covered Annex A, A.5.1, physical pages 41–44; A.6.1, pages 46–51; A.6.4–A.6.5,
-pages 52–54; Annex B, B.5–B.6, pages 85–87; B.9, pages 89–90; B.12.1.1,
-pages 96–98; Annex E, E.1.1.1–E.1.1.2, pages 129–130; Annex F, F.3.1 and
+covered Annex A, A.5.1, physical pages 41–44; A.6.1, pages 46–49; A.6.2,
+pages 49–51; A.6.4–A.6.5, pages 52–54; Annex B, B.5–B.6, pages 85–87; B.9,
+pages 89–90; B.12 and
+B.12.1.1–B.12.1.5, pages 96–98, with LRCP at B.12.1.1 on page 96; Annex E,
+E.1.1.1–E.1.1.2, pages 129–130; Annex F, F.3.1 and
 F.3.8.2, pages 132 and 142–143; and Annex G, G.1.2, pages 153–154, and G.3,
 pages 154–155. These locations bound image/component geometry, coding and
 quantisation state, packet ordering, subband reconstruction and native sample
@@ -104,7 +107,7 @@ The reviewed HT authority is ISO/IEC 15444-15:2019, local source SHA-256
 `e7d1936131227fae2d3f8315309de4dedc83eb3f`, at retrieval revision
 `10baf9472429d52f5d6b5f9b7a892dbed395b1db`. The bounded review covered
 clauses 6.1–6.2, physical pages 10–11; clause 7, pages 11–31; clauses 8.2–8.3,
-page 31; clauses 8.7.1–8.7.3, pages 32–34; Annex A, A.1–A.4, pages 35–38;
+page 31; clauses 8.7.1–8.7.2, pages 32–34; Annex A, A.1–A.4, pages 35–38;
 and Annex B, B.1–B.3, pages 40–42. These locations bound the HT codestream,
 block-coding and signalling requirements used by the existing packet and
 entropy machinery.

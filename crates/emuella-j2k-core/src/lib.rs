@@ -5234,13 +5234,11 @@ pub struct Image {
     pub data: ImageData,
 }
 
-/// Reusable scratch for selective Part 1 and bounded reduced HT component
-/// decode into caller-owned planar storage.
+/// Reusable scratch for selective Part 1 component decode into caller-owned
+/// planar storage.
 #[derive(Default)]
 pub struct Part1DecodeWorkspace {
     codestream: codestream::Part1ComponentDecodeWorkspace,
-    #[cfg(feature = "std")]
-    ht_codestream: codestream::HtCodestreamDecodeWorkspace,
 }
 
 impl Part1DecodeWorkspace {
@@ -8482,22 +8480,14 @@ fn decode_owned_htj2k_reduced_component(
     options: &PartialDecodeOptions,
 ) -> Result<Option<Image>> {
     let mut workspace = codestream::HtCodestreamDecodeWorkspace::new();
-    decode_owned_htj2k_reduced_component_with_workspace(input, options, &mut workspace)
-}
-
-#[cfg(feature = "std")]
-fn decode_owned_htj2k_reduced_component_with_workspace(
-    input: &[u8],
-    options: &PartialDecodeOptions,
-    workspace: &mut codestream::HtCodestreamDecodeWorkspace,
-) -> Result<Option<Image>> {
     let Some((prepared, _info, component_info)) =
         prepare_htj2k_reduced_component_target(input, options)?
     else {
         return Ok(None);
     };
     let decoded = codestream::decode_prepared_htj2k_reduced_component_owned_with_workspace(
-        &prepared, workspace,
+        &prepared,
+        &mut workspace,
     )
     .map_err(map_codestream_error)?;
     let decode_options = DecodeOptions {
@@ -9444,14 +9434,6 @@ pub fn decode_partial_into_with_workspace(
         validate_decode_target_components(&expected_info, component_info, target)?;
     } else {
         validate_decode_target(&expected_info, target)?;
-    }
-    #[cfg(feature = "std")]
-    if let Some(decoded) = decode_owned_htj2k_reduced_component_with_workspace(
-        input,
-        &owned_options,
-        &mut workspace.ht_codestream,
-    )? {
-        return copy_image_into_target(&decoded, target);
     }
     if decode_partial_part1_components_into_direct(input, target, &owned_options, workspace)? {
         return Ok(());

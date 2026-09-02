@@ -162,6 +162,7 @@ fn assert_reduced_u16_routes(
     height: u32,
     workspace: &mut Part1DecodeWorkspace,
 ) -> Image {
+    let retained_workspace_bytes = workspace.retained_heap_bytes();
     let request = reduced_u16_options(discard_levels);
     let info = decode_partial_info(raw, &request).unwrap();
     assert_eq!(
@@ -253,6 +254,9 @@ fn assert_reduced_u16_routes(
                 .all(|byte| *byte == sentinel)
         );
     }
+    assert_eq!(workspace.retained_heap_bytes(), retained_workspace_bytes);
+    workspace.clear();
+    assert_eq!(workspace.retained_heap_bytes(), retained_workspace_bytes);
     owned
 }
 
