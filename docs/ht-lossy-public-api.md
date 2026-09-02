@@ -56,11 +56,40 @@ the original unsigned precision. Full caller decode stages reconstruction
 before publication: invalid targets, truncated inputs and late entropy
 failures leave all caller bytes untouched; successful output preserves padding.
 
-The default rendered mode, selected components, partial or reduced requests,
-other irreversible profiles and additional JPH presentation remain outside this
-profile. Existing reversible full-image and separately bounded native-grid,
-reduced, ROI and selected DS0 routes keep their own admission contracts. New
-encoder support does not widen those routes or claim general conformance.
+The default rendered mode and additional JPH presentation remain outside this
+full-image profile. One independent partial route admits only raw, unsigned
+greyscale `U16_LE` encoder output, planar component zero and exactly one or two
+discarded resolution levels. It uses the same envelope, complete packet walker,
+checked reduced geometry, prepared reduced executor, reusable HT workspace and
+atomic publication path. It does not allocate a full-resolution output plane.
+JPH, RGB, U8, signed, rendered or interleaved output, other selections, regions,
+tiles, layer limits, zero discard and discard above two remain unsupported.
+Existing reversible full-image and separately bounded native-grid, reduced,
+ROI and selected DS0 routes keep their own admission contracts. The new partial
+route does not widen them or claim general conformance.
+
+## Reduced U16 qualification
+
+The project-authored reduced matrix exercises smooth ramp, structured
+zero/maximum checkerboard, structured texture and high-entropy inputs at the
+representative 1, 2 and 4 bpp targets. Every cell asserts its selected success
+or the matrix's explicit `EncoderRateUnattainable` disposition; no successful
+row is chosen after observing the result. Successful rows decode at both
+reductions and cover even, odd and non-power-of-two dimensions. The 1024 × 1024
+noise case at two discarded levels produces exactly 256 × 256 samples.
+
+Shape discovery, component descriptors, deterministic owned output, the
+reusable-workspace route and padded caller output agree. Output is planar
+unsigned `U16_LE`, caller row padding is preserved, and every successful public
+plane equals the internal prepared reduced executor byte-for-byte. One
+workspace is reused across dimensions, rates and both reductions. Invalid
+requests, truncated input and corrupt retained entropy leave caller storage
+unchanged; a failed workspace decode can be followed by a successful decode.
+Neighbour tests reject discard above two, regions, tiles, layer limits, JPH,
+RGB, U8, signed input, default rendered mode, unsupported component selections,
+interleaved output and altered geometry, decomposition, coding, quantisation,
+profile or layer state. Full-resolution raw/JPH reconstruction and repeated raw
+encoder bytes are checked alongside the reduced results.
 
 ## Public qualification
 

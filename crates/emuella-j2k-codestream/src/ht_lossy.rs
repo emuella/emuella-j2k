@@ -515,7 +515,7 @@ fn prepare<'a>(
 }
 
 /// Prepare component zero from the bounded unsigned U16 greyscale encoder
-/// profile at exactly one discarded resolution level.
+/// profile at exactly one or two discarded resolution levels.
 ///
 /// This reuses the complete full-image envelope and packet admission before
 /// reducing the retained packet set and checked output geometry. It does not
@@ -532,12 +532,12 @@ pub fn prepare_reduced_component_decode(
     if !envelope(input, &parsed)? {
         return Ok(None);
     }
-    if request.component_index != 0 || request.discard_levels != 1 {
+    if request.component_index != 0 || !matches!(request.discard_levels, 1 | 2) {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::ComponentCount,
-            "reduced irreversible HT encoder output selects component zero at exactly one discarded resolution level",
+            "reduced irreversible HT encoder output selects component zero at exactly one or two discarded resolution levels",
         ));
     }
     if parsed.siz.component_count() != 1

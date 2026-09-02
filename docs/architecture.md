@@ -56,9 +56,21 @@ last active byte. All plane metadata must agree with `ImageInfo`.
 The [public lossy contract](ht-lossy-public-api.md) records the fixed two-level,
 no-MCT, single-tile/layer profile, rate tolerance and resource envelope. Its
 JPH writer reserves the complete output fallibly, calls the raw encoder once
-and wraps its bytes with the existing container writer. Native decoding requires
-full `DecodeMode::Components` with all components, through either output layout;
-it does not add rendering, partial or selected-component admission.
+and wraps its bytes with the existing container writer. Full native decoding
+requires `DecodeMode::Components` with all components, through either output
+layout; it does not add rendering. A separate raw greyscale U16 partial gate
+selects planar component zero at exactly one or two discarded levels.
+
+That reduced gate calls the exact lossy envelope and complete packet walker
+before retaining only resolutions needed by the request. Checked reduced
+geometry and the prepared plan feed the existing
+`PreparedHtj2kReducedComponentDecode` executor, reusable HT workspace and
+private atomic-publication adapter. No second decoder, full-image
+decode-and-resample path or full-resolution output plane is introduced. The
+same preparer supplies shape discovery, component descriptors and execution,
+so unsupported request or codestream neighbours fail before caller mutation.
+The gate is limited to raw unsigned greyscale `U16_LE`, component zero, planar
+output and discard one or two; all other lossy partial shapes remain excluded.
 
 The [HTMIX architecture decision](htmix-disposition.md) records the accepted
 unsupported boundary, the mixed-packet admission correction and the distinct
