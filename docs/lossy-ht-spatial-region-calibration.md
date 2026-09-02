@@ -95,18 +95,30 @@ buffer atomicity, reusable region workspace behaviour, malformed entropy
 failure handling, other rates or patterns, one-pixel and strip geometry, full-
 image requests, or any excluded container, format, colour, tile or profile.
 
-The retained seam now has a production-private full-resolution executor. It
-admits only discard zero, reuses compact coefficient, HT and window-synthesis
-storage, applies a checked deterministic workspace ceiling before
-reconstruction allocation, and returns owned output only after successful
-entropy decode, 9/7 synthesis
-and U16_LE conversion. Focused internal tests cover full-image equality, odd
-non-power-of-two geometry, corners and edges, one-pixel and strip regions,
-64-sample block alignment and crossings, representative successful encoder
-patterns, relocated shrinking workspace reuse, malformed selected
-contributions and resource-limit failure. Public partial-decode admission is
-still unchanged.
+The retained seam now has a production-private executor for zero or exactly
+one discarded resolution level. At discard 1, eighteen full-resolution
+half-open regions project through checked ceiling geometry and match exact
+crops of the established direct reduced reconstruction. The matrix covers a
+full odd non-power-of-two image, all corners and edges, retained one-pixel and
+strip results, odd origins and dimensions, 64-sample block boundaries and
+crossings, and transform boundaries. Three representative successful
+pattern/rate pairs also match byte-for-byte.
 
-The next safe action is to qualify discard 1 separately, retaining this exact
-full-resolution boundary and calibration identity, before public routing and
-the complete publication matrix.
+One workspace successfully alternates full-resolution and discard-1 requests
+while regions shrink, grow and relocate. Tests mechanically retain only the
+required LL/HL/LH/HH windows and whole selected blocks, enforce the checked
+deterministic workspace ceiling before reconstruction, and keep the legacy
+complete reduced coefficient plane and transform scratch at zero capacity.
+Empty request and empty projected regions, out-of-bounds and overflowing
+geometry, discard 2 and 3, truncated packets, corrupted selected HT payload,
+malformed selected contribution metadata and a one-byte-short workspace limit
+all fail without returning output.
+
+The release-mode codec run passed 14/14 focused `ht_lossy::tests`, including
+the unchanged six-cell hashes and accounting above. The release-mode core
+lossy matrix passed 8/8 and the irreversible odd-plane transform test passed
+1/1; release clippy for the codestream crate and formatting also passed.
+Public partial-decode admission remains unchanged.
+
+The next safe action is to qualify discard 2 against the same calibration
+identity and private executor before any public routing or publication work.
