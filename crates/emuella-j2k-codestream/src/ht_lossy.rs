@@ -703,12 +703,12 @@ pub(crate) fn prepare_lossy_ht_spatial_region(
     input: &[u8],
     request: LossyHtSpatialRegionRequest,
 ) -> Result<PreparedLossyHtSpatialRegion<'_>> {
-    if !matches!(request.discard_levels, 0 | 1) {
+    if !matches!(request.discard_levels, 0..=2) {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::Transform,
-            "lossy HT spatial reconstruction currently accepts zero or one discarded resolution level",
+            "lossy HT spatial reconstruction accepts zero, one or two discarded resolution levels",
         ));
     }
     prepare_lossy_ht_spatial_region_at_discard(input, request)
@@ -1345,7 +1345,7 @@ mod tests {
                     width: 2,
                     height: 1,
                 },
-                discard_levels: 1,
+                discard_levels: 2,
             },
             LossyHtSpatialRegionRequest {
                 region: TileRegionRequest {
@@ -1591,10 +1591,9 @@ mod tests {
     }
 
     #[test]
-    fn discard_one_spatial_regions_match_reduced_image_across_geometry_matrix() {
+    fn discarded_spatial_regions_match_reduced_image_across_geometry_matrix() {
         let (width, height) = (193_u32, 137_u32);
         let raw = encode_u16_grey(width, height, 0, 4.0);
-        let established = established_component(&raw, 1);
         let regions = [
             TileRegionRequest {
                 x: 0,
@@ -1658,7 +1657,7 @@ mod tests {
             },
             TileRegionRequest {
                 x: 3,
-                y: 62,
+                y: 64,
                 width: 129,
                 height: 1,
             },
@@ -1705,33 +1704,234 @@ mod tests {
                 height: 11,
             },
         ];
+        for discard_levels in [1, 2] {
+            let established = established_component(&raw, discard_levels);
+            let divisor = 1_u32 << discard_levels;
+            let retained_resolution = 2 - discard_levels;
+            let mut workspace = LossyHtSpatialRegionWorkspace::new();
+            for region in regions {
+                let plan = prepare_lossy_ht_spatial_region(
+                    &raw,
+                    LossyHtSpatialRegionRequest {
+                        region,
+                        discard_levels,
+                    },
+                )
+                .unwrap_or_else(|error| panic!("discard {discard_levels}, {region:?}: {error:?}"));
+                let projected_x = region.x.div_ceil(divisor);
+                let projected_y = region.y.div_ceil(divisor);
+                let projected_right = (region.x + region.width).div_ceil(divisor);
+                let projected_bottom = (region.y + region.height).div_ceil(divisor);
+                let projected = TileRegionRequest {
+                    x: projected_x,
+                    y: projected_y,
+                    width: projected_right - projected_x,
+                    height: projected_bottom - projected_y,
+                };
+                let (actual, report) =
+                    decode_prepared_lossy_ht_spatial_region(&plan, &mut workspace).unwrap();
+                assert_eq!(plan.projected_region, projected);
+                assert_eq!(
+                    actual.len(),
+                    projected.width as usize * projected.height as usize * 2
+                );
+                assert_eq!(
+                    actual,
+                    crop_u16(
+                        &established.components[0].samples,
+                        established.width,
+                        projected
+                    )
+                );
+                assert_eq!(plan.retained_resolution, retained_resolution);
+                assert_eq!(plan.synthesis.levels.len(), retained_resolution as usize);
+                assert_eq!(report.work.output_samples, plan.accounting.output_samples);
+                assert_eq!(
+                    plan.accounting.output_samples,
+                    u64::from(projected.width) * u64::from(projected.height)
+                );
+                let required_coefficient_samples = plan
+                    .synthesis
+                    .levels
+                    .iter()
+                    .flat_map(|level| [level.high_low, level.low_high, level.high_high])
+                    .fold(
+                        plan.synthesis.lowest_low_low.sample_count(),
+                        |total, required| total + required.sample_count(),
+                    );
+                assert_eq!(
+                    required_coefficient_samples,
+                    plan.accounting.compact_coefficient_samples
+                );
+                assert_eq!(
+                    plan.accounting.selected_code_blocks,
+                    plan.selected_contribution_indices.len() as u64
+                );
+                assert!(plan.accounting.selected_code_blocks > 0);
+                assert!(plan.accounting.selected_code_blocks <= plan.accounting.total_code_blocks);
+                assert!(
+                    plan.accounting.deterministic_workspace_ceiling_bytes
+                        <= DEFAULT_LOSSY_HT_SPATIAL_WORKSPACE_LIMIT_BYTES
+                );
+                for &index in &plan.selected_contribution_indices {
+                    let contribution = &plan.prepared.contributions[index];
+                    assert!(contribution.resolution <= retained_resolution);
+                    assert!(
+                        synthesis_window_dependency_selects_contribution(
+                            &plan.synthesis,
+                            contribution
+                        )
+                        .unwrap()
+                    );
+                }
+                assert_eq!(workspace.decode.reduced_irreversible_plane.capacity(), 0);
+                assert_eq!(
+                    workspace
+                        .decode
+                        .reduced_irreversible_transform_scratch
+                        .capacity(),
+                    0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn discarded_spatial_regions_cover_representative_encoder_patterns() {
+        let region = TileRegionRequest {
+            x: 29,
+            y: 17,
+            width: 73,
+            height: 61,
+        };
+        for (discard_levels, projected) in [
+            (
+                1,
+                TileRegionRequest {
+                    x: 15,
+                    y: 9,
+                    width: 36,
+                    height: 30,
+                },
+            ),
+            (
+                2,
+                TileRegionRequest {
+                    x: 8,
+                    y: 5,
+                    width: 18,
+                    height: 15,
+                },
+            ),
+        ] {
+            for (pattern, rate) in [(7, 1.0), (0, 4.0), (1, 4.0)] {
+                let raw = encode_u16_grey(257, 193, pattern, rate);
+                let established = established_component(&raw, discard_levels);
+                let plan = prepare_lossy_ht_spatial_region(
+                    &raw,
+                    LossyHtSpatialRegionRequest {
+                        region,
+                        discard_levels,
+                    },
+                )
+                .unwrap();
+                let (actual, _) = decode_prepared_lossy_ht_spatial_region(
+                    &plan,
+                    &mut LossyHtSpatialRegionWorkspace::new(),
+                )
+                .unwrap();
+                assert_eq!(plan.projected_region, projected);
+                assert_eq!(
+                    actual,
+                    crop_u16(
+                        &established.components[0].samples,
+                        established.width,
+                        projected
+                    ),
+                    "discard {discard_levels}, pattern {pattern}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn discard_two_large_geometry_retains_only_required_lowest_low_low() {
+        let width = 1024_u32;
+        let height = 1024_u32;
+        let raw = encode_u16_grey(width, height, 1, 4.0);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&raw)),
+            "f376f5c04b13c640fec6b80ba52bfb198cc1832d75f6850411ba801e035da597"
+        );
+        let established = established_component(&raw, 2);
+        let requests = [
+            (
+                TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+                TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 256,
+                    height: 256,
+                },
+                16_u64,
+            ),
+            (
+                TileRegionRequest {
+                    x: 256,
+                    y: 256,
+                    width: 256,
+                    height: 256,
+                },
+                TileRegionRequest {
+                    x: 64,
+                    y: 64,
+                    width: 64,
+                    height: 64,
+                },
+                1_u64,
+            ),
+        ];
         let mut workspace = LossyHtSpatialRegionWorkspace::new();
-        for region in regions {
+        let mut observed = Vec::new();
+        for (region, projected, selected_code_blocks) in requests {
             let plan = prepare_lossy_ht_spatial_region(
                 &raw,
                 LossyHtSpatialRegionRequest {
                     region,
-                    discard_levels: 1,
+                    discard_levels: 2,
                 },
             )
-            .unwrap_or_else(|error| panic!("{region:?}: {error:?}"));
-            let projected_x = region.x.div_ceil(2);
-            let projected_y = region.y.div_ceil(2);
-            let projected_right = (region.x + region.width).div_ceil(2);
-            let projected_bottom = (region.y + region.height).div_ceil(2);
-            let projected = TileRegionRequest {
-                x: projected_x,
-                y: projected_y,
-                width: projected_right - projected_x,
-                height: projected_bottom - projected_y,
-            };
+            .unwrap();
             let (actual, report) =
                 decode_prepared_lossy_ht_spatial_region(&plan, &mut workspace).unwrap();
             assert_eq!(plan.projected_region, projected);
+            assert_eq!(plan.retained_resolution, 0);
+            assert!(plan.synthesis.levels.is_empty());
             assert_eq!(
-                actual.len(),
-                projected.width as usize * projected.height as usize * 2
+                plan.synthesis.lowest_low_low,
+                AxisAlignedRegion {
+                    x: projected.x,
+                    y: projected.y,
+                    width: projected.width,
+                    height: projected.height,
+                }
             );
+            assert_eq!(plan.synthesis.output_region, plan.synthesis.lowest_low_low);
+            assert_eq!(plan.accounting.selected_code_blocks, selected_code_blocks);
+            assert_eq!(plan.accounting.total_code_blocks, 256);
+            assert_eq!(
+                plan.accounting.compact_coefficient_samples,
+                u64::from(projected.width) * u64::from(projected.height)
+            );
+            assert_eq!(report.work.output_samples, plan.accounting.output_samples);
+            assert_eq!(report.work.horizontal_values, 0);
+            assert_eq!(report.work.vertical_values, 0);
+            assert_eq!(report.work.lifting_updates, 0);
             assert_eq!(
                 actual,
                 crop_u16(
@@ -1740,39 +1940,10 @@ mod tests {
                     projected
                 )
             );
-            assert_eq!(plan.retained_resolution, 1);
-            assert_eq!(plan.synthesis.levels.len(), 1);
-            assert_eq!(report.work.output_samples, plan.accounting.output_samples);
-            assert_eq!(
-                plan.accounting.output_samples,
-                u64::from(projected.width) * u64::from(projected.height)
-            );
-            let required_coefficient_samples = plan
-                .synthesis
-                .levels
-                .iter()
-                .flat_map(|level| [level.high_low, level.low_high, level.high_high])
-                .fold(
-                    plan.synthesis.lowest_low_low.sample_count(),
-                    |total, required| total + required.sample_count(),
-                );
-            assert_eq!(
-                required_coefficient_samples,
-                plan.accounting.compact_coefficient_samples
-            );
-            assert_eq!(
-                plan.accounting.selected_code_blocks,
-                plan.selected_contribution_indices.len() as u64
-            );
-            assert!(plan.accounting.selected_code_blocks > 0);
-            assert!(plan.accounting.selected_code_blocks <= plan.accounting.total_code_blocks);
-            assert!(
-                plan.accounting.deterministic_workspace_ceiling_bytes
-                    <= DEFAULT_LOSSY_HT_SPATIAL_WORKSPACE_LIMIT_BYTES
-            );
             for &index in &plan.selected_contribution_indices {
                 let contribution = &plan.prepared.contributions[index];
-                assert!(contribution.resolution <= 1);
+                assert_eq!(contribution.resolution, 0);
+                assert_eq!(contribution.subband, PacketSubbandKind::LowLow);
                 assert!(
                     synthesis_window_dependency_selects_contribution(&plan.synthesis, contribution)
                         .unwrap()
@@ -1786,50 +1957,36 @@ mod tests {
                     .capacity(),
                 0
             );
+            observed.push(plan.accounting);
         }
-    }
-
-    #[test]
-    fn discard_one_spatial_regions_cover_representative_encoder_patterns() {
-        let region = TileRegionRequest {
-            x: 29,
-            y: 17,
-            width: 73,
-            height: 61,
-        };
-        let projected = TileRegionRequest {
-            x: 15,
-            y: 9,
-            width: 36,
-            height: 30,
-        };
-        for (pattern, rate) in [(7, 1.0), (0, 4.0), (1, 4.0)] {
-            let raw = encode_u16_grey(257, 193, pattern, rate);
-            let established = established_component(&raw, 1);
-            let plan = prepare_lossy_ht_spatial_region(
-                &raw,
-                LossyHtSpatialRegionRequest {
-                    region,
-                    discard_levels: 1,
+        assert_eq!(
+            observed,
+            [
+                LossyHtSpatialRegionAccounting {
+                    total_code_blocks: 256,
+                    selected_code_blocks: 16,
+                    selected_block_coefficients: 65_536,
+                    maximum_block_coefficients: 4096,
+                    maximum_segment_bytes: 688,
+                    compact_coefficient_samples: 65_536,
+                    synthesis_workspace_ceiling_samples: 131_074,
+                    output_samples: 65_536,
+                    deterministic_workspace_ceiling_bytes: 1_196_728,
                 },
-            )
-            .unwrap();
-            let (actual, _) = decode_prepared_lossy_ht_spatial_region(
-                &plan,
-                &mut LossyHtSpatialRegionWorkspace::new(),
-            )
-            .unwrap();
-            assert_eq!(plan.projected_region, projected);
-            assert_eq!(
-                actual,
-                crop_u16(
-                    &established.components[0].samples,
-                    established.width,
-                    projected
-                ),
-                "pattern {pattern}"
-            );
-        }
+                LossyHtSpatialRegionAccounting {
+                    total_code_blocks: 256,
+                    selected_code_blocks: 1,
+                    selected_block_coefficients: 4096,
+                    maximum_block_coefficients: 4096,
+                    maximum_segment_bytes: 653,
+                    compact_coefficient_samples: 4096,
+                    synthesis_workspace_ceiling_samples: 8194,
+                    output_samples: 4096,
+                    deterministic_workspace_ceiling_bytes: 90_773,
+                },
+            ]
+        );
+        println!("LOSSY_HT_DISCARD_TWO_LARGE_ACCOUNTING={observed:#?}");
     }
 
     #[test]
@@ -1933,7 +2090,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_reuses_storage_across_full_resolution_and_discard_one() {
+    fn workspace_reuses_storage_across_full_and_both_discard_levels() {
         let raw = encode_u16_grey(257, 193, 1, 4.0);
         let requests = [
             (
@@ -1971,6 +2128,33 @@ mod tests {
                     height: 87,
                 },
                 1,
+            ),
+            (
+                TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 257,
+                    height: 193,
+                },
+                2,
+            ),
+            (
+                TileRegionRequest {
+                    x: 7,
+                    y: 9,
+                    width: 17,
+                    height: 19,
+                },
+                2,
+            ),
+            (
+                TileRegionRequest {
+                    x: 173,
+                    y: 117,
+                    width: 63,
+                    height: 51,
+                },
+                2,
             ),
         ];
         let mut workspace = LossyHtSpatialRegionWorkspace::new();
@@ -2027,7 +2211,7 @@ mod tests {
                     width: 9,
                     height: 7,
                 },
-                discard_levels: 2,
+                discard_levels: 3,
             },
             LossyHtSpatialRegionRequest {
                 region: TileRegionRequest {
@@ -2036,7 +2220,7 @@ mod tests {
                     width: 9,
                     height: 7,
                 },
-                discard_levels: 3,
+                discard_levels: u8::MAX,
             },
             LossyHtSpatialRegionRequest {
                 region: TileRegionRequest {
@@ -2054,7 +2238,7 @@ mod tests {
                     width: 2,
                     height: 1,
                 },
-                discard_levels: 1,
+                discard_levels: 2,
             },
             LossyHtSpatialRegionRequest {
                 region: TileRegionRequest {
@@ -2063,7 +2247,7 @@ mod tests {
                     width: 1,
                     height: 1,
                 },
-                discard_levels: 1,
+                discard_levels: 2,
             },
             LossyHtSpatialRegionRequest {
                 region: TileRegionRequest {
@@ -2077,6 +2261,25 @@ mod tests {
         ] {
             assert!(prepare_lossy_ht_spatial_region(&raw, request).is_err());
         }
+        assert!(matches!(
+            prepare_lossy_ht_spatial_region(
+                &raw,
+                LossyHtSpatialRegionRequest {
+                    region: TileRegionRequest {
+                        x: 1,
+                        y: 1,
+                        width: 9,
+                        height: 7,
+                    },
+                    discard_levels: 3,
+                },
+            ),
+            Err(CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::Transform,
+                message,
+                ..
+            }) if message.contains("zero, one or two")
+        ));
         assert!(
             prepare_lossy_ht_spatial_region(
                 &raw[..raw.len() - 1],
@@ -2087,7 +2290,7 @@ mod tests {
                         width: 9,
                         height: 7
                     },
-                    discard_levels: 1,
+                    discard_levels: 2,
                 },
             )
             .is_err()
@@ -2102,7 +2305,7 @@ mod tests {
                     width: 9,
                     height: 7,
                 },
-                discard_levels: 1,
+                discard_levels: 2,
             },
         )
         .unwrap();
@@ -2132,7 +2335,7 @@ mod tests {
                     width: 9,
                     height: 7,
                 },
-                discard_levels: 1,
+                discard_levels: 2,
             },
         )
         .unwrap();
@@ -2158,7 +2361,7 @@ mod tests {
                     width: 9,
                     height: 7,
                 },
-                discard_levels: 1,
+                discard_levels: 2,
             },
         )
         .unwrap();
