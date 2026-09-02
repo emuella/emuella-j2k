@@ -11,6 +11,14 @@ The probe started from codec revision
 `31a32971531895ad6cda5e4da583d410c6e94220`. It is an internal calibration;
 it does not change partial-decode admission or any public API.
 
+The executable calibration checkpoint is
+`fb04df168927e689e0a9ea893b4432b28978f0cf`, tree
+`750dfea589d6b7e2e5aea19457c357de2f292a0f`. On that exact source, the seven
+release-mode `ht_lossy::tests` passed, including the six-cell probe and checked
+negative cases. The public-encoder identity test and the existing discard-1/
+discard-2 geometry-and-routes test each ran once and passed. Formatting and
+diff checks also passed.
+
 ## Probe identity
 
 The project-authored input is the deterministic
