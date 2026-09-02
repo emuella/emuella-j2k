@@ -5861,10 +5861,10 @@ pub enum ComponentSelection {
 
 /// Scoped partial decode request. Unsupported combinations must fail explicitly.
 ///
-/// Native HTJ2K currently admits one reduced transformed-component shape:
-/// planar component 0 at two discarded levels from either documented
-/// five-level HTONLY transform branch. It returns the plane before inverse
-/// colour transformation.
+/// Native HTJ2K admits several independently bounded reduced-component shapes.
+/// The lossy encoder route selects planar unsigned greyscale U16 component 0 at
+/// one or two discarded levels. Existing HTONLY branches retain their documented
+/// component, discard and transform contracts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialDecodeOptions {
     /// Non-empty full-resolution image-relative reference-grid rectangle.
@@ -8401,7 +8401,7 @@ fn is_htj2k_reduced_component_request(options: &PartialDecodeOptions) -> bool {
         && matches!(
             options.resolution,
             ResolutionLevel::Reduced {
-                discard_levels: 2 | 3 | 5
+                discard_levels: 1 | 2 | 3 | 5
             }
         )
         && matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
@@ -8426,15 +8426,26 @@ fn prepare_htj2k_reduced_component_target<'a>(
     let ResolutionLevel::Reduced { discard_levels } = options.resolution else {
         return Ok(None);
     };
-    let Some(prepared) = codestream::prepare_htj2k_reduced_component_decode(
-        input,
-        codestream::Htj2kReducedComponentDecodeRequest {
-            component_index: 0,
-            discard_levels,
-        },
-    )
-    .map_err(map_codestream_error)?
-    else {
+    let request = codestream::Htj2kReducedComponentDecodeRequest {
+        component_index: 0,
+        discard_levels,
+    };
+    let prepared = match discard_levels {
+        1 => codestream::ht_lossy::prepare_reduced_component_decode(input, request)
+            .map_err(map_codestream_error)?,
+        2 => {
+            match codestream::ht_lossy::prepare_reduced_component_decode(input, request)
+                .map_err(map_codestream_error)?
+            {
+                Some(prepared) => Some(prepared),
+                None => codestream::prepare_htj2k_reduced_component_decode(input, request)
+                    .map_err(map_codestream_error)?,
+            }
+        }
+        _ => codestream::prepare_htj2k_reduced_component_decode(input, request)
+            .map_err(map_codestream_error)?,
+    };
+    let Some(prepared) = prepared else {
         return Ok(None);
     };
     let sample_format = SampleFormat::with_byte_order(
@@ -8468,12 +8479,12 @@ fn decode_owned_htj2k_reduced_component(
     input: &[u8],
     options: &PartialDecodeOptions,
 ) -> Result<Option<Image>> {
+    let mut workspace = codestream::HtCodestreamDecodeWorkspace::new();
     let Some((prepared, _info, component_info)) =
         prepare_htj2k_reduced_component_target(input, options)?
     else {
         return Ok(None);
     };
-    let mut workspace = codestream::HtCodestreamDecodeWorkspace::new();
     let decoded = codestream::decode_prepared_htj2k_reduced_component_owned_with_workspace(
         &prepared,
         &mut workspace,

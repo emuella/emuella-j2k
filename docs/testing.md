@@ -1192,3 +1192,23 @@ complete matrix as project-authored source, Emuella raw/JPH, and canonical
 native bytes outside the source tree. It never executes another codec.
 Independent full-matrix decoding and locked-corpus qualification remain
 separate authorised gates; native self-decoding does not prove interoperability.
+
+## Reduced lossy U16 qualification
+
+`ht_lossy_tests::lossy_ht_u16_greyscale_reduced_acceptance_matrix` uses only
+the shared project-authored generator. It enumerates smooth ramp, structured
+texture, zero/maximum high contrast and high-entropy rows at 1, 2 and 4 bpp,
+with explicit expected success or matrix `EncoderRateUnattainable` assertions.
+Every successful row exercises discard one and two through metadata, component
+descriptors, repeated owned output, the internal prepared executor, a reusable
+workspace and padded caller storage. Odd, even and non-power-of-two dimensions
+are included; a 1024 × 1024 row proves the 256 × 256 discard-two geometry.
+
+The companion neighbour test covers zero discard, discard above two, region,
+tile and layer requests, JPH, RGB, U8, signed input, rendered/default mode,
+unsupported component selections, interleaving, altered origins/profile,
+decomposition, coding, transform, quantisation and extra layers. Invalid
+requests, truncation and corrupt retained entropy at each discard preserve all
+caller bytes. The same failed workspace is then reused successfully. Existing
+full-resolution lossy raw/JPH, reversible HT, ROI, legacy reduced and classic
+Part 1 tests remain independent regression evidence.
