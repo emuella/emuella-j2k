@@ -162,7 +162,10 @@ pub fn plan_window_synthesis(
         WaveletTransform::Irreversible97 => 4,
     };
     let mut desired = output_region;
-    let mut descending = Vec::with_capacity(usize::from(decomposition_levels));
+    let mut descending = Vec::new();
+    descending
+        .try_reserve_exact(usize::from(decomposition_levels))
+        .map_err(|_| TransformError::SizeOverflow)?;
     for resolution in (1..=decomposition_levels).rev() {
         let (level_width, level_height) =
             resolution_dimensions(width, height, decomposition_levels, resolution)?;
@@ -263,15 +266,14 @@ pub struct WindowCoefficientBand<T> {
 
 impl<T: Copy + Default> WindowCoefficientBand<T> {
     fn new(region: AxisAlignedRegion) -> Result<Self, TransformError> {
-        Ok(Self {
-            region,
-            values: alloc::vec![T::default(); region_len(region)?],
-        })
+        let mut values = Vec::new();
+        resize_fallibly(&mut values, region_len(region)?)?;
+        Ok(Self { region, values })
     }
 
     fn reset(&mut self, region: AxisAlignedRegion) -> Result<(), TransformError> {
         self.region = region;
-        self.values.resize(region_len(region)?, T::default());
+        resize_fallibly(&mut self.values, region_len(region)?)?;
         self.values.fill(T::default());
         Ok(())
     }
@@ -328,18 +330,18 @@ pub struct WindowCoefficientPlane<T> {
 impl<T: Copy + Default> WindowCoefficientPlane<T> {
     pub fn new(plan: &WindowSynthesisPlan) -> Result<Self, TransformError> {
         let lowest_low_low = WindowCoefficientBand::new(plan.lowest_low_low)?;
-        let levels = plan
-            .levels
-            .iter()
-            .map(|level| {
-                Ok(WindowLevelCoefficients {
-                    resolution: level.resolution,
-                    high_low: WindowCoefficientBand::new(level.high_low)?,
-                    low_high: WindowCoefficientBand::new(level.low_high)?,
-                    high_high: WindowCoefficientBand::new(level.high_high)?,
-                })
-            })
-            .collect::<Result<Vec<_>, TransformError>>()?;
+        let mut levels = Vec::new();
+        levels
+            .try_reserve_exact(plan.levels.len())
+            .map_err(|_| TransformError::SizeOverflow)?;
+        for level in &plan.levels {
+            levels.push(WindowLevelCoefficients {
+                resolution: level.resolution,
+                high_low: WindowCoefficientBand::new(level.high_low)?,
+                low_high: WindowCoefficientBand::new(level.low_high)?,
+                high_high: WindowCoefficientBand::new(level.high_high)?,
+            });
+        }
         Ok(Self {
             lowest_low_low,
             levels,
@@ -351,6 +353,11 @@ impl<T: Copy + Default> WindowCoefficientPlane<T> {
     pub fn reset_for_plan(&mut self, plan: &WindowSynthesisPlan) -> Result<(), TransformError> {
         self.lowest_low_low.reset(plan.lowest_low_low)?;
         self.levels.truncate(plan.levels.len());
+        if self.levels.capacity() < plan.levels.len() {
+            self.levels
+                .try_reserve_exact(plan.levels.len() - self.levels.len())
+                .map_err(|_| TransformError::SizeOverflow)?;
+        }
         for (index, planned) in plan.levels.iter().enumerate() {
             if let Some(level) = self.levels.get_mut(index) {
                 level.resolution = planned.resolution;
@@ -627,12 +634,12 @@ impl<T: Copy + Default> WindowSynthesisWorkspace<T> {
                     .ok_or(TransformError::SizeOverflow)?,
             );
         }
-        reserve_to(&mut self.current, max_plane);
-        reserve_to(&mut self.next, max_plane);
-        reserve_to(&mut self.horizontal_low, max_horizontal_low);
-        reserve_to(&mut self.horizontal_high, max_horizontal_high);
-        reserve_to(&mut self.line, max_line);
-        reserve_to(&mut self.line_work, max_line);
+        reserve_to(&mut self.current, max_plane)?;
+        reserve_to(&mut self.next, max_plane)?;
+        reserve_to(&mut self.horizontal_low, max_horizontal_low)?;
+        reserve_to(&mut self.horizontal_high, max_horizontal_high)?;
+        reserve_to(&mut self.line, max_line)?;
+        reserve_to(&mut self.line_work, max_line)?;
         Ok(())
     }
 
@@ -709,16 +716,32 @@ impl<T: Copy + Default> WindowSynthesisWorkspace<T> {
                         .ok_or(TransformError::SizeOverflow)?,
                 );
         }
-        reserve_to(&mut self.phase_lines, max_lines);
-        reserve_to(&mut self.phase_line_work, max_lines);
+        reserve_to(&mut self.phase_lines, max_lines)?;
+        reserve_to(&mut self.phase_line_work, max_lines)?;
         Ok(())
     }
 }
 
-fn reserve_to<T>(values: &mut Vec<T>, capacity: usize) {
+fn reserve_to<T>(values: &mut Vec<T>, capacity: usize) -> Result<(), TransformError> {
     if values.capacity() < capacity {
-        values.reserve_exact(capacity - values.len());
+        values
+            .try_reserve_exact(capacity - values.len())
+            .map_err(|_| TransformError::SizeOverflow)?;
     }
+    Ok(())
+}
+
+fn resize_fallibly<T: Copy + Default>(
+    values: &mut Vec<T>,
+    len: usize,
+) -> Result<(), TransformError> {
+    if values.len() < len {
+        values
+            .try_reserve_exact(len - values.len())
+            .map_err(|_| TransformError::SizeOverflow)?;
+    }
+    values.resize(len, T::default());
+    Ok(())
 }
 
 fn validate_plan<T>(

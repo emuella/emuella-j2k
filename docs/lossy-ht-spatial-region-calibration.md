@@ -95,6 +95,18 @@ buffer atomicity, reusable region workspace behaviour, malformed entropy
 failure handling, other rates or patterns, one-pixel and strip geometry, full-
 image requests, or any excluded container, format, colour, tile or profile.
 
-The next safe action is to turn this retained internal seam into the first
-full-resolution production increment, then qualify discard 1 and 2 separately
-before public routing and the complete negative/reuse matrix.
+The retained seam now has a production-private full-resolution executor. It
+admits only discard zero, reuses compact coefficient, HT and window-synthesis
+storage, applies a checked deterministic workspace ceiling before
+reconstruction allocation, and returns owned output only after successful
+entropy decode, 9/7 synthesis
+and U16_LE conversion. Focused internal tests cover full-image equality, odd
+non-power-of-two geometry, corners and edges, one-pixel and strip regions,
+64-sample block alignment and crossings, representative successful encoder
+patterns, relocated shrinking workspace reuse, malformed selected
+contributions and resource-limit failure. Public partial-decode admission is
+still unchanged.
+
+The next safe action is to qualify discard 1 separately, retaining this exact
+full-resolution boundary and calibration identity, before public routing and
+the complete publication matrix.

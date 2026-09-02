@@ -514,19 +514,19 @@ fn prepare<'a>(
     }))
 }
 
-// Provisional codec-owned calibration seam. This remains private to the
-// codestream crate until the complete region contract, transactional output
-// routes and acceptance matrix are qualified.
-#[cfg(all(test, feature = "std"))]
+// Production-private spatial reconstruction. Public partial-decode admission
+// remains unchanged until the complete resolution and publication contract is
+// qualified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LossyHtSpatialRegionRequest {
+#[allow(dead_code)] // Production-private until the later public routing increment.
+pub(crate) struct LossyHtSpatialRegionRequest {
     region: TileRegionRequest,
     discard_levels: u8,
 }
 
-#[cfg(all(test, feature = "std"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LossyHtSpatialRegionAccounting {
+#[allow(dead_code)]
+pub(crate) struct LossyHtSpatialRegionAccounting {
     total_code_blocks: u64,
     selected_code_blocks: u64,
     selected_block_coefficients: u64,
@@ -538,8 +538,8 @@ struct LossyHtSpatialRegionAccounting {
     deterministic_workspace_ceiling_bytes: u64,
 }
 
-#[cfg(all(test, feature = "std"))]
-struct PreparedLossyHtSpatialRegion<'a> {
+#[allow(dead_code)]
+pub(crate) struct PreparedLossyHtSpatialRegion<'a> {
     prepared: PreparedHtj2kReducedComponentDecode<'a>,
     retained_resolution: u8,
     projected_region: TileRegionRequest,
@@ -548,19 +548,60 @@ struct PreparedLossyHtSpatialRegion<'a> {
     accounting: LossyHtSpatialRegionAccounting,
 }
 
-#[cfg(all(test, feature = "std"))]
+#[allow(dead_code)]
+const DEFAULT_LOSSY_HT_SPATIAL_WORKSPACE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+
+#[allow(dead_code)]
+pub(crate) struct LossyHtSpatialRegionWorkspace {
+    decode: HtCodestreamDecodeWorkspace,
+    coefficients: Option<transform::WindowCoefficientPlane<f32>>,
+    synthesis: transform::WindowSynthesisWorkspace<f32>,
+    segment: Vec<u8>,
+    maximum_bytes: u64,
+}
+
+#[allow(dead_code)]
+impl LossyHtSpatialRegionWorkspace {
+    pub(crate) fn new() -> Self {
+        Self::with_maximum_bytes(DEFAULT_LOSSY_HT_SPATIAL_WORKSPACE_LIMIT_BYTES)
+    }
+
+    pub(crate) fn with_maximum_bytes(maximum_bytes: u64) -> Self {
+        Self {
+            decode: HtCodestreamDecodeWorkspace::new(),
+            coefficients: None,
+            synthesis: transform::WindowSynthesisWorkspace::new(),
+            segment: Vec::new(),
+            maximum_bytes,
+        }
+    }
+
+    #[cfg(test)]
+    fn compact_coefficient_retained_bytes(&self) -> u64 {
+        self.coefficients
+            .as_ref()
+            .map_or(0, transform::WindowCoefficientPlane::retained_heap_bytes)
+    }
+
+    #[cfg(test)]
+    fn synthesis_retained_bytes(&self) -> u64 {
+        self.synthesis.retained_heap_bytes()
+    }
+}
+
+#[allow(dead_code)]
 fn checked_region_samples(region: AxisAlignedRegion) -> Result<u64> {
     u64::from(region.width)
         .checked_mul(u64::from(region.height))
         .ok_or(CodestreamError::SizeOverflow)
 }
 
-#[cfg(all(test, feature = "std"))]
+#[allow(dead_code)]
 fn checked_add_u64(left: u64, right: u64) -> Result<u64> {
     left.checked_add(right).ok_or(CodestreamError::SizeOverflow)
 }
 
-#[cfg(all(test, feature = "std"))]
+#[allow(dead_code)]
 fn lossy_ht_window_storage_accounting(
     synthesis: &SynthesisWindowPlan,
     contributions: &[PacketCodeBlockContribution],
@@ -643,8 +684,10 @@ fn lossy_ht_window_storage_accounting(
         })
         .ok_or(CodestreamError::SizeOverflow)?;
     Ok(LossyHtSpatialRegionAccounting {
-        total_code_blocks: contributions.len() as u64,
-        selected_code_blocks: selected_contribution_indices.len() as u64,
+        total_code_blocks: u64::try_from(contributions.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?,
+        selected_code_blocks: u64::try_from(selected_contribution_indices.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?,
         selected_block_coefficients,
         maximum_block_coefficients,
         maximum_segment_bytes,
@@ -655,18 +698,29 @@ fn lossy_ht_window_storage_accounting(
     })
 }
 
-#[cfg(all(test, feature = "std"))]
-fn prepare_lossy_ht_spatial_region_calibration(
+#[allow(dead_code)]
+pub(crate) fn prepare_lossy_ht_spatial_region(
     input: &[u8],
     request: LossyHtSpatialRegionRequest,
 ) -> Result<PreparedLossyHtSpatialRegion<'_>> {
-    if request.discard_levels > 2 {
+    if request.discard_levels != 0 {
         return Err(unsupported(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::Transform,
-            "lossy HT spatial calibration accepts discard levels zero through two",
+            "lossy HT spatial reconstruction currently accepts full resolution only",
         ));
+    }
+    prepare_lossy_ht_spatial_region_at_discard(input, request)
+}
+
+#[allow(dead_code)]
+fn prepare_lossy_ht_spatial_region_at_discard(
+    input: &[u8],
+    request: LossyHtSpatialRegionRequest,
+) -> Result<PreparedLossyHtSpatialRegion<'_>> {
+    if request.discard_levels > 2 {
+        return Err(CodestreamError::SizeOverflow);
     }
     let parsed = parse(input)?;
     if !envelope(input, &parsed)?
@@ -682,7 +736,7 @@ fn prepare_lossy_ht_spatial_region_calibration(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::ComponentSampling,
-            "lossy HT spatial calibration requires the raw U16 greyscale encoder envelope",
+            "lossy HT spatial reconstruction requires the raw U16 greyscale encoder envelope",
         ));
     }
     // prepare() validates the complete packet stream before selection.
@@ -715,7 +769,7 @@ fn prepare_lossy_ht_spatial_region_calibration(
         },
         WaveletTransform::Irreversible97,
     )?;
-    let mut selected_contribution_indices = Vec::new();
+    let mut selected_contribution_indices = reserved(prepared.contributions.len())?;
     for (index, contribution) in prepared.contributions.iter().enumerate() {
         if contribution.component_index == 0
             && contribution.resolution <= retained_resolution
@@ -742,11 +796,14 @@ fn prepare_lossy_ht_spatial_region_calibration(
     })
 }
 
-#[cfg(all(test, feature = "std"))]
-fn decode_prepared_lossy_ht_spatial_region_calibration(
+#[allow(dead_code)]
+pub(crate) fn decode_prepared_lossy_ht_spatial_region(
     plan: &PreparedLossyHtSpatialRegion<'_>,
-    workspace: &mut HtCodestreamDecodeWorkspace,
+    workspace: &mut LossyHtSpatialRegionWorkspace,
 ) -> Result<(Vec<u8>, transform::WindowSynthesisReport)> {
+    if plan.accounting.deterministic_workspace_ceiling_bytes > workspace.maximum_bytes {
+        return Err(resource_error());
+    }
     let (_, payload) = single_part1_profile_tile(plan.prepared.input, &plan.prepared.codestream)?;
     let component = plan
         .prepared
@@ -755,8 +812,17 @@ fn decode_prepared_lossy_ht_spatial_region_calibration(
         .components
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
-    let mut coefficients_plane = transform::WindowCoefficientPlane::<f32>::new(&plan.synthesis)?;
-    let mut segment_scratch = Vec::new();
+    if let Some(coefficients) = &mut workspace.coefficients {
+        coefficients.reset_for_plan(&plan.synthesis)?;
+    } else {
+        workspace.coefficients = Some(transform::WindowCoefficientPlane::<f32>::new(
+            &plan.synthesis,
+        )?);
+    }
+    let coefficients_plane = workspace
+        .coefficients
+        .as_mut()
+        .ok_or(CodestreamError::SizeOverflow)?;
     for &index in &plan.selected_contribution_indices {
         let contribution = plan
             .prepared
@@ -783,7 +849,7 @@ fn decode_prepared_lossy_ht_spatial_region_calibration(
             ht::HtCodeBlockDimensions::new(contribution.width, contribution.height)
                 .map_err(|_| CodestreamError::SizeOverflow)?;
         let code_block_segment =
-            code_block_segment_for_decode(payload, contribution, &mut segment_scratch)?;
+            code_block_segment_for_decode(payload, contribution, &mut workspace.segment)?;
         let (segment, cleanup_len, missing_most_significant_bitplanes) =
             if let Some(coding_set) = expanded_coding_set {
                 let end = coding_set
@@ -825,11 +891,21 @@ fn decode_prepared_lossy_ht_spatial_region_calibration(
             segment,
         };
         let coefficient_count = active_dimensions.coefficient_count();
-        workspace.coefficients.resize(coefficient_count, 0);
-        let (decoded, _) = workspace.block.decode_code_block_input_into_with_progress(
-            code_block_input,
-            &mut workspace.coefficients[..coefficient_count],
-        )?;
+        if workspace.decode.coefficients.len() < coefficient_count {
+            workspace
+                .decode
+                .coefficients
+                .try_reserve_exact(coefficient_count - workspace.decode.coefficients.len())
+                .map_err(|_| resource_error())?;
+        }
+        workspace.decode.coefficients.resize(coefficient_count, 0);
+        let (decoded, _) = workspace
+            .decode
+            .block
+            .decode_code_block_input_into_with_progress(
+                code_block_input,
+                &mut workspace.decode.coefficients[..coefficient_count],
+            )?;
         if decoded.is_none() {
             return Err(CodestreamError::SizeOverflow);
         }
@@ -844,7 +920,7 @@ fn decode_prepared_lossy_ht_spatial_region_calibration(
         let delta = step
             .delta(component.bits_per_sample, gain)
             .map_err(|_| CodestreamError::SizeOverflow)?;
-        for &coefficient in &workspace.coefficients[..coefficient_count] {
+        for &coefficient in &workspace.decode.coefficients[..coefficient_count] {
             let doubled = ht_irreversible_doubled_half_step_coefficient(
                 coefficient,
                 contribution.available_bitplanes,
@@ -857,38 +933,27 @@ fn decode_prepared_lossy_ht_spatial_region_calibration(
                 ));
             }
         }
+        let shift = 30_u8
+            .checked_sub(contribution.available_bitplanes)
+            .ok_or(CodestreamError::SizeOverflow)?;
+        let alignment = (1_u32
+            .checked_shl(u32::from(shift))
+            .ok_or(CodestreamError::SizeOverflow)?) as f32;
         place_direct_window_coefficients(
-            &mut coefficients_plane,
+            coefficients_plane,
             contribution,
-            &workspace.coefficients[..coefficient_count],
-            |coefficient| {
-                ht_irreversible_doubled_half_step_coefficient(
-                    coefficient,
-                    contribution.available_bitplanes,
-                )
-                .expect("validated HT coefficient alignment")
-                    * (0.5 * delta)
-            },
+            &workspace.decode.coefficients[..coefficient_count],
+            |coefficient| coefficient as f32 / alignment * (0.5 * delta),
         )?;
     }
     if coefficients_plane.sample_count() != plan.accounting.compact_coefficient_samples {
         return Err(CodestreamError::SizeOverflow);
     }
-    let mut synthesis_workspace = transform::WindowSynthesisWorkspace::<f32>::new();
-    synthesis_workspace.reserve_for_plan(&plan.synthesis)?;
-    if synthesis_workspace.retained_heap_bytes()
-        > plan
-            .accounting
-            .synthesis_workspace_ceiling_samples
-            .checked_mul(core::mem::size_of::<f32>() as u64)
-            .ok_or(CodestreamError::SizeOverflow)?
-    {
-        return Err(CodestreamError::SizeOverflow);
-    }
+    workspace.synthesis.reserve_for_plan(&plan.synthesis)?;
     let report = transform::inverse_irreversible_9_7_window(
-        &coefficients_plane,
+        coefficients_plane,
         &plan.synthesis,
-        &mut synthesis_workspace,
+        &mut workspace.synthesis,
         false,
     )?;
     if report.work.output_samples != plan.accounting.output_samples
@@ -901,8 +966,16 @@ fn decode_prepared_lossy_ht_spatial_region_calibration(
     {
         return Err(CodestreamError::SizeOverflow);
     }
-    let samples = irreversible_component_samples_to_bytes(component, synthesis_workspace.output())?;
+    let samples = irreversible_component_samples_to_bytes(component, workspace.synthesis.output())?;
     Ok((samples, report))
+}
+
+#[cfg(test)]
+fn prepare_lossy_ht_spatial_region_calibration(
+    input: &[u8],
+    request: LossyHtSpatialRegionRequest,
+) -> Result<PreparedLossyHtSpatialRegion<'_>> {
+    prepare_lossy_ht_spatial_region_at_discard(input, request)
 }
 
 /// Prepare component zero from the bounded unsigned U16 greyscale encoder
@@ -1115,10 +1188,9 @@ mod tests {
                     discard_levels,
                 };
                 let plan = prepare_lossy_ht_spatial_region_calibration(&raw, request).unwrap();
-                let mut workspace = HtCodestreamDecodeWorkspace::new();
+                let mut workspace = LossyHtSpatialRegionWorkspace::new();
                 let (actual, report) =
-                    decode_prepared_lossy_ht_spatial_region_calibration(&plan, &mut workspace)
-                        .unwrap();
+                    decode_prepared_lossy_ht_spatial_region(&plan, &mut workspace).unwrap();
                 let expected = crop_u16(
                     &established.components[0].samples,
                     established.width,
@@ -1147,9 +1219,12 @@ mod tests {
                 );
                 assert!(plan.accounting.synthesis_workspace_ceiling_samples < 1024_u64 * 1024);
                 assert!(plan.accounting.output_samples < 1024_u64 * 1024);
-                assert_eq!(workspace.reduced_irreversible_plane.capacity(), 0);
+                assert_eq!(workspace.decode.reduced_irreversible_plane.capacity(), 0);
                 assert_eq!(
-                    workspace.reduced_irreversible_transform_scratch.capacity(),
+                    workspace
+                        .decode
+                        .reduced_irreversible_transform_scratch
+                        .capacity(),
                     0
                 );
                 for &index in &plan.selected_contribution_indices {
@@ -1311,6 +1386,379 @@ mod tests {
                 &valid.synthesis,
                 &valid.prepared.contributions,
                 &[usize::MAX]
+            )
+            .is_err()
+        );
+    }
+
+    fn encode_u16_grey(width: u32, height: u32, pattern: u32, rate: f32) -> Vec<u8> {
+        let source = crate::ht_lossy_test_support::source(width, height, 16, 1, pattern)
+            .pop()
+            .unwrap();
+        let bytes = source
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        encode_planar(
+            width,
+            height,
+            16,
+            &[bytes.as_slice()],
+            &[width as usize * 2],
+            rate,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn full_resolution_spatial_regions_match_full_image_across_geometry_matrix() {
+        let (width, height) = (193_u32, 137_u32);
+        let raw = encode_u16_grey(width, height, 0, 4.0);
+        let established = established_component(&raw, 0);
+        let regions = [
+            TileRegionRequest {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            TileRegionRequest {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            TileRegionRequest {
+                x: 192,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            TileRegionRequest {
+                x: 0,
+                y: 136,
+                width: 1,
+                height: 1,
+            },
+            TileRegionRequest {
+                x: 192,
+                y: 136,
+                width: 1,
+                height: 1,
+            },
+            TileRegionRequest {
+                x: 31,
+                y: 0,
+                width: 67,
+                height: 9,
+            },
+            TileRegionRequest {
+                x: 45,
+                y: 132,
+                width: 33,
+                height: 5,
+            },
+            TileRegionRequest {
+                x: 0,
+                y: 21,
+                width: 7,
+                height: 55,
+            },
+            TileRegionRequest {
+                x: 188,
+                y: 19,
+                width: 5,
+                height: 71,
+            },
+            TileRegionRequest {
+                x: 97,
+                y: 73,
+                width: 1,
+                height: 1,
+            },
+            TileRegionRequest {
+                x: 3,
+                y: 63,
+                width: 129,
+                height: 1,
+            },
+            TileRegionRequest {
+                x: 64,
+                y: 3,
+                width: 1,
+                height: 129,
+            },
+            TileRegionRequest {
+                x: 5,
+                y: 7,
+                width: 37,
+                height: 29,
+            },
+            TileRegionRequest {
+                x: 64,
+                y: 64,
+                width: 64,
+                height: 64,
+            },
+            TileRegionRequest {
+                x: 63,
+                y: 63,
+                width: 64,
+                height: 64,
+            },
+            TileRegionRequest {
+                x: 61,
+                y: 62,
+                width: 9,
+                height: 7,
+            },
+            TileRegionRequest {
+                x: 3,
+                y: 4,
+                width: 17,
+                height: 19,
+            },
+            TileRegionRequest {
+                x: 124,
+                y: 125,
+                width: 13,
+                height: 11,
+            },
+        ];
+        let mut workspace = LossyHtSpatialRegionWorkspace::new();
+        for region in regions {
+            let plan = prepare_lossy_ht_spatial_region(
+                &raw,
+                LossyHtSpatialRegionRequest {
+                    region,
+                    discard_levels: 0,
+                },
+            )
+            .unwrap();
+            let (actual, report) =
+                decode_prepared_lossy_ht_spatial_region(&plan, &mut workspace).unwrap();
+            assert_eq!(
+                actual,
+                crop_u16(&established.components[0].samples, width, region)
+            );
+            assert_eq!(report.work.output_samples, plan.accounting.output_samples);
+            assert_eq!(plan.projected_region, region);
+            assert_eq!(plan.retained_resolution, 2);
+            assert_eq!(workspace.decode.reduced_irreversible_plane.capacity(), 0);
+            assert_eq!(
+                workspace
+                    .decode
+                    .reduced_irreversible_transform_scratch
+                    .capacity(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn full_resolution_spatial_regions_cover_representative_encoder_patterns() {
+        let region = TileRegionRequest {
+            x: 29,
+            y: 17,
+            width: 73,
+            height: 61,
+        };
+        // Pattern 4 is deliberately absent: the established acceptance matrix
+        // proves that high-contrast source is unattainable at every supported
+        // target rate, so there is no successful encoder output to qualify.
+        for (pattern, rate) in [(7, 1.0), (0, 4.0), (1, 4.0)] {
+            let raw = encode_u16_grey(257, 193, pattern, rate);
+            let established = established_component(&raw, 0);
+            let plan = prepare_lossy_ht_spatial_region(
+                &raw,
+                LossyHtSpatialRegionRequest {
+                    region,
+                    discard_levels: 0,
+                },
+            )
+            .unwrap();
+            let (actual, _) = decode_prepared_lossy_ht_spatial_region(
+                &plan,
+                &mut LossyHtSpatialRegionWorkspace::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                actual,
+                crop_u16(&established.components[0].samples, 257, region),
+                "pattern {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_resolution_workspace_reuses_bounded_storage_and_enforces_limit() {
+        let raw = encode_u16_grey(257, 193, 1, 4.0);
+        let requests = [
+            TileRegionRequest {
+                x: 17,
+                y: 19,
+                width: 151,
+                height: 113,
+            },
+            TileRegionRequest {
+                x: 211,
+                y: 167,
+                width: 13,
+                height: 11,
+            },
+            TileRegionRequest {
+                x: 3,
+                y: 5,
+                width: 7,
+                height: 9,
+            },
+        ];
+        let mut workspace = LossyHtSpatialRegionWorkspace::new();
+        let mut retained = None;
+        for region in requests {
+            let plan = prepare_lossy_ht_spatial_region(
+                &raw,
+                LossyHtSpatialRegionRequest {
+                    region,
+                    discard_levels: 0,
+                },
+            )
+            .unwrap();
+            decode_prepared_lossy_ht_spatial_region(&plan, &mut workspace).unwrap();
+            let now = (
+                workspace.compact_coefficient_retained_bytes(),
+                workspace.synthesis_retained_bytes(),
+            );
+            if let Some(previous) = retained {
+                assert_eq!(now, previous);
+            }
+            retained = Some(now);
+            assert_eq!(workspace.decode.reduced_irreversible_plane.capacity(), 0);
+        }
+
+        let plan = prepare_lossy_ht_spatial_region(
+            &raw,
+            LossyHtSpatialRegionRequest {
+                region: requests[1],
+                discard_levels: 0,
+            },
+        )
+        .unwrap();
+        let duplicate = prepare_lossy_ht_spatial_region(
+            &raw,
+            LossyHtSpatialRegionRequest {
+                region: requests[1],
+                discard_levels: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.synthesis, duplicate.synthesis);
+        assert_eq!(
+            plan.selected_contribution_indices,
+            duplicate.selected_contribution_indices
+        );
+        assert_eq!(plan.accounting, duplicate.accounting);
+        assert_eq!(plan.synthesis.levels.len(), 2);
+        assert_eq!(
+            plan.synthesis.output_region.sample_count(),
+            plan.accounting.output_samples
+        );
+        let required_coefficient_samples = plan
+            .synthesis
+            .levels
+            .iter()
+            .flat_map(|level| [level.high_low, level.low_high, level.high_high])
+            .fold(
+                plan.synthesis.lowest_low_low.sample_count(),
+                |total, region| total + region.sample_count(),
+            );
+        assert_eq!(
+            required_coefficient_samples,
+            plan.accounting.compact_coefficient_samples
+        );
+        assert_eq!(
+            plan.accounting.selected_code_blocks,
+            plan.selected_contribution_indices.len() as u64
+        );
+        assert!(plan.accounting.compact_coefficient_samples < 257 * 193);
+        assert!(plan.accounting.output_samples < 257 * 193);
+        let mut limited = LossyHtSpatialRegionWorkspace::with_maximum_bytes(
+            plan.accounting.deterministic_workspace_ceiling_bytes - 1,
+        );
+        assert!(decode_prepared_lossy_ht_spatial_region(&plan, &mut limited).is_err());
+        assert_eq!(limited.compact_coefficient_retained_bytes(), 0);
+        assert_eq!(limited.synthesis_retained_bytes(), 0);
+    }
+
+    #[test]
+    fn full_resolution_private_boundary_rejects_neighbours_and_corruption() {
+        let raw = encode_u16_grey(64, 64, 0, 4.0);
+        for request in [
+            LossyHtSpatialRegionRequest {
+                region: TileRegionRequest {
+                    x: 1,
+                    y: 1,
+                    width: 9,
+                    height: 7,
+                },
+                discard_levels: 1,
+            },
+            LossyHtSpatialRegionRequest {
+                region: TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 1,
+                },
+                discard_levels: 0,
+            },
+            LossyHtSpatialRegionRequest {
+                region: TileRegionRequest {
+                    x: 63,
+                    y: 63,
+                    width: 2,
+                    height: 1,
+                },
+                discard_levels: 0,
+            },
+        ] {
+            assert!(prepare_lossy_ht_spatial_region(&raw, request).is_err());
+        }
+        assert!(
+            prepare_lossy_ht_spatial_region(
+                &raw[..raw.len() - 1],
+                LossyHtSpatialRegionRequest {
+                    region: TileRegionRequest {
+                        x: 1,
+                        y: 1,
+                        width: 9,
+                        height: 7
+                    },
+                    discard_levels: 0,
+                },
+            )
+            .is_err()
+        );
+
+        let mut plan = prepare_lossy_ht_spatial_region(
+            &raw,
+            LossyHtSpatialRegionRequest {
+                region: TileRegionRequest {
+                    x: 1,
+                    y: 1,
+                    width: 9,
+                    height: 7,
+                },
+                discard_levels: 0,
+            },
+        )
+        .unwrap();
+        let selected = plan.selected_contribution_indices[0];
+        plan.prepared.contributions[selected].codeword_len = usize::MAX;
+        assert!(
+            decode_prepared_lossy_ht_spatial_region(
+                &plan,
+                &mut LossyHtSpatialRegionWorkspace::new()
             )
             .is_err()
         );
