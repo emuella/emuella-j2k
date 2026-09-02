@@ -514,6 +514,67 @@ fn prepare<'a>(
     }))
 }
 
+/// Prepare component zero from the bounded unsigned U16 greyscale encoder
+/// profile at exactly one discarded resolution level.
+///
+/// This reuses the complete full-image envelope and packet admission before
+/// reducing the retained packet set and checked output geometry. It does not
+/// admit JPH wrapping, other sample formats, component selections or discard
+/// counts.
+pub fn prepare_reduced_component_decode(
+    input: &[u8],
+    request: Htj2kReducedComponentDecodeRequest,
+) -> Result<Option<PreparedHtj2kReducedComponentDecode<'_>>> {
+    let parsed = parse(input)?;
+    if parsed.kind != CodestreamKind::Htj2k {
+        return Ok(None);
+    }
+    if !envelope(input, &parsed)? {
+        return Ok(None);
+    }
+    if request.component_index != 0 || request.discard_levels != 1 {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::ComponentCount,
+            "reduced irreversible HT encoder output selects component zero at exactly one discarded resolution level",
+        ));
+    }
+    if parsed.siz.component_count() != 1
+        || parsed.siz.components.first().is_none_or(|component| {
+            component.bits_per_sample != 16
+                || component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "reduced irreversible HT encoder output requires one unsigned U16 unit-sampled component",
+        ));
+    }
+
+    let Some(mut prepared) = prepare(input, parsed)? else {
+        return Ok(None);
+    };
+    let (retained_resolution, output_width, output_height, _) =
+        htj2k_reduced_component_output_geometry(
+            prepared.tile_rect.width,
+            prepared.tile_rect.height,
+            prepared.coding_style.decomposition_levels,
+            request,
+        )?;
+    prepared
+        .contributions
+        .retain(|contribution| contribution.resolution <= retained_resolution);
+    prepared.request = request;
+    prepared.output_width = output_width;
+    prepared.output_height = output_height;
+    Ok(Some(prepared))
+}
+
 /// Classify the exact full-image irreversible profile, including packet grammar.
 /// Entropy payload validity is established by decode, not by support inspection.
 pub fn is_profile(input: &[u8], parsed: &Codestream) -> bool {

@@ -68,10 +68,15 @@ failures leave every caller byte unchanged. Successful padded targets preserve
 row padding and trailing storage. Workspace reuse after a failed decode does
 not publish stale coefficients.
 
-This foundation does not add rendered projection, component selection, partial
-or reduced requests, or container presentation features. Existing JPH header
-consistency and presentation checks remain in force. The independent DS0
-reduced-component profiles, HTMIX dispositions and existing lossless full-image
+Rendered projection and container presentation remain outside this foundation.
+One independent raw partial route selects component zero from the unsigned
+greyscale U16 encoder profile at exactly one discarded resolution level. It
+reuses the complete envelope and packet admission above, retains only the
+required resolutions, and reconstructs the checked reduced plane without a
+full-resolution output allocation. RGB, U8, signed, interleaved, JPH, spatial,
+tile, layer and other reduction requests remain outside this first bounded
+increment. Existing JPH header consistency and presentation checks, independent
+DS0 reduced-component profiles, HTMIX dispositions and the lossless full-image
 classifier are unchanged.
 
 ## Evidence boundary

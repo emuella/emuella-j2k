@@ -5234,11 +5234,13 @@ pub struct Image {
     pub data: ImageData,
 }
 
-/// Reusable scratch for selective Part 1 component decode into caller-owned
-/// planar storage.
+/// Reusable scratch for selective Part 1 and bounded reduced HT component
+/// decode into caller-owned planar storage.
 #[derive(Default)]
 pub struct Part1DecodeWorkspace {
     codestream: codestream::Part1ComponentDecodeWorkspace,
+    #[cfg(feature = "std")]
+    ht_codestream: codestream::HtCodestreamDecodeWorkspace,
 }
 
 impl Part1DecodeWorkspace {
@@ -8401,7 +8403,7 @@ fn is_htj2k_reduced_component_request(options: &PartialDecodeOptions) -> bool {
         && matches!(
             options.resolution,
             ResolutionLevel::Reduced {
-                discard_levels: 2 | 3 | 5
+                discard_levels: 1 | 2 | 3 | 5
             }
         )
         && matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
@@ -8426,15 +8428,17 @@ fn prepare_htj2k_reduced_component_target<'a>(
     let ResolutionLevel::Reduced { discard_levels } = options.resolution else {
         return Ok(None);
     };
-    let Some(prepared) = codestream::prepare_htj2k_reduced_component_decode(
-        input,
-        codestream::Htj2kReducedComponentDecodeRequest {
-            component_index: 0,
-            discard_levels,
-        },
-    )
-    .map_err(map_codestream_error)?
-    else {
+    let request = codestream::Htj2kReducedComponentDecodeRequest {
+        component_index: 0,
+        discard_levels,
+    };
+    let prepared = if discard_levels == 1 {
+        codestream::ht_lossy::prepare_reduced_component_decode(input, request)
+    } else {
+        codestream::prepare_htj2k_reduced_component_decode(input, request)
+    }
+    .map_err(map_codestream_error)?;
+    let Some(prepared) = prepared else {
         return Ok(None);
     };
     let sample_format = SampleFormat::with_byte_order(
@@ -8468,15 +8472,23 @@ fn decode_owned_htj2k_reduced_component(
     input: &[u8],
     options: &PartialDecodeOptions,
 ) -> Result<Option<Image>> {
+    let mut workspace = codestream::HtCodestreamDecodeWorkspace::new();
+    decode_owned_htj2k_reduced_component_with_workspace(input, options, &mut workspace)
+}
+
+#[cfg(feature = "std")]
+fn decode_owned_htj2k_reduced_component_with_workspace(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+    workspace: &mut codestream::HtCodestreamDecodeWorkspace,
+) -> Result<Option<Image>> {
     let Some((prepared, _info, component_info)) =
         prepare_htj2k_reduced_component_target(input, options)?
     else {
         return Ok(None);
     };
-    let mut workspace = codestream::HtCodestreamDecodeWorkspace::new();
     let decoded = codestream::decode_prepared_htj2k_reduced_component_owned_with_workspace(
-        &prepared,
-        &mut workspace,
+        &prepared, workspace,
     )
     .map_err(map_codestream_error)?;
     let decode_options = DecodeOptions {
@@ -9423,6 +9435,14 @@ pub fn decode_partial_into_with_workspace(
         validate_decode_target_components(&expected_info, component_info, target)?;
     } else {
         validate_decode_target(&expected_info, target)?;
+    }
+    #[cfg(feature = "std")]
+    if let Some(decoded) = decode_owned_htj2k_reduced_component_with_workspace(
+        input,
+        &owned_options,
+        &mut workspace.ht_codestream,
+    )? {
+        return copy_image_into_target(&decoded, target);
     }
     if decode_partial_part1_components_into_direct(input, target, &owned_options, workspace)? {
         return Ok(());

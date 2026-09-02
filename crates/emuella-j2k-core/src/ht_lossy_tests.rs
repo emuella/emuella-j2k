@@ -91,6 +91,73 @@ fn wrapped(raw: &[u8], bits: u8, components: u16) -> Vec<u8> {
     );
     bytes
 }
+
+fn encoded_u16_greyscale(width: u32, height: u32, rate: f32) -> (Vec<u8>, Vec<u8>) {
+    let source = codestream::ht_lossy_test_support::source(width, height, 16, 1, 0)[0]
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect::<Vec<_>>();
+    let info = ImageInfo::new(
+        width,
+        height,
+        1,
+        SampleFormat::U16_LE,
+        ColorModel::Grayscale,
+        ComponentLayout::Planar,
+    )
+    .unwrap();
+    let plane = Plane::new(
+        &source,
+        width,
+        height,
+        width as usize * 2,
+        SampleFormat::U16_LE,
+    )
+    .unwrap();
+    let raw = encode_htj2k_lossy(
+        ImageView::Planar {
+            info: &info,
+            planes: &[plane],
+        },
+        &Htj2kLossyEncodeOptions {
+            bits_per_pixel: rate,
+        },
+    )
+    .unwrap();
+    (source, raw)
+}
+
+fn reduced_u16_options(discard_levels: u8) -> PartialDecodeOptions {
+    PartialDecodeOptions {
+        resolution: ResolutionLevel::Reduced { discard_levels },
+        components: ComponentSelection::Indices(vec![0]),
+        target_layout: ComponentLayout::Planar,
+        ..PartialDecodeOptions::default()
+    }
+}
+
+fn wrapped_dimensions(raw: &[u8], width: u32, height: u32, bits: u8, components: u16) -> Vec<u8> {
+    let info = ImageInfo::new(
+        width,
+        height,
+        components,
+        if bits == 8 {
+            SampleFormat::U8
+        } else {
+            SampleFormat::U16_LE
+        },
+        if components == 1 {
+            ColorModel::Grayscale
+        } else {
+            ColorModel::Rgb
+        },
+        ComponentLayout::Planar,
+    )
+    .unwrap();
+    let mut bytes = Vec::new();
+    write_jph_encode_output(&info, raw, &mut bytes).unwrap();
+    bytes
+}
 pub(super) fn options(layout: ComponentLayout) -> DecodeOptions {
     DecodeOptions {
         mode: DecodeMode::Components,
@@ -406,7 +473,7 @@ fn lossy_ht_neighbour_support_shape_and_caller_admission_agree() {
 }
 
 #[test]
-fn lossy_ht_full_admission_does_not_enable_partial_metadata_or_crops() {
+fn lossy_ht_full_admission_does_not_enable_unqualified_partial_requests() {
     let (_, raw) = encoded(8, 3, 1.0);
     for input in [&raw, &wrapped(&raw, 8, 3)] {
         let mut requests = vec![PartialDecodeOptions::default()];
@@ -441,4 +508,274 @@ fn lossy_ht_full_admission_does_not_enable_partial_metadata_or_crops() {
             assert!(decode_partial_component_info(input, &request).is_err());
         }
     }
+}
+
+#[test]
+fn lossy_ht_u16_greyscale_discard_one_geometry_and_routes_agree() {
+    let (_, raw) = encoded_u16_greyscale(258, 193, 2.0);
+    let request = reduced_u16_options(1);
+    let info = decode_partial_info(&raw, &request).unwrap();
+    assert_eq!(
+        info,
+        ImageInfo::new(
+            129,
+            97,
+            1,
+            SampleFormat::U16_LE,
+            ColorModel::Unknown,
+            ComponentLayout::Planar,
+        )
+        .unwrap()
+    );
+    let component_info = decode_partial_component_info(&raw, &request).unwrap();
+    assert_eq!(component_info.len(), 1);
+    assert_eq!(component_info[0].source_component, Some(0));
+    assert_eq!(
+        (component_info[0].width, component_info[0].height),
+        (129, 97)
+    );
+    assert_eq!(component_info[0].sample_format, SampleFormat::U16_LE);
+
+    let owned = decode_partial(&raw, &request).unwrap();
+    assert_eq!(owned.info, info);
+    assert_eq!(owned.component_info, component_info);
+    let ImageData::Planes(owned_planes) = &owned.data else {
+        panic!("reduced component output was not planar")
+    };
+    assert_eq!(owned_planes.len(), 1);
+    assert_eq!(owned_planes[0].len(), 129 * 97 * 2);
+    assert!(
+        owned_planes[0]
+            .chunks_exact(2)
+            .any(|sample| sample[0] != sample[1])
+    );
+    assert_eq!(decode_partial(&raw, &request).unwrap(), owned);
+
+    let prepared = codestream::ht_lossy::prepare_reduced_component_decode(
+        &raw,
+        codestream::Htj2kReducedComponentDecodeRequest {
+            component_index: 0,
+            discard_levels: 1,
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        (prepared.output_width(), prepared.output_height()),
+        (129, 97)
+    );
+    let internal = codestream::decode_prepared_htj2k_reduced_component_owned_with_workspace(
+        &prepared,
+        &mut codestream::HtCodestreamDecodeWorkspace::new(),
+    )
+    .unwrap();
+    assert_eq!(internal.bits_per_sample, 16);
+    assert!(!internal.signed);
+    assert_eq!(internal.components[0].samples, owned_planes[0]);
+
+    let row_bytes = 129 * 2;
+    let stride = row_bytes + 7;
+    let mut workspace = Part1DecodeWorkspace::new();
+    for sentinel in [0xa5, 0x6d] {
+        let mut buffer = vec![sentinel; stride * 97 + 5];
+        {
+            let plane = PlaneMut::new(&mut buffer, 129, 97, stride, SampleFormat::U16_LE).unwrap();
+            let mut planes = [plane];
+            decode_partial_into_with_workspace(
+                &raw,
+                &mut ImageViewMut::Planar {
+                    info: &info,
+                    planes: &mut planes,
+                },
+                &request,
+                &mut workspace,
+            )
+            .unwrap();
+        }
+        for y in 0..97 {
+            assert_eq!(
+                &buffer[y * stride..y * stride + row_bytes],
+                &owned_planes[0][y * row_bytes..(y + 1) * row_bytes]
+            );
+            assert!(
+                buffer[y * stride + row_bytes..(y + 1) * stride]
+                    .iter()
+                    .all(|byte| *byte == sentinel)
+            );
+        }
+        assert!(buffer[stride * 97..].iter().all(|byte| *byte == sentinel));
+    }
+}
+
+#[test]
+fn lossy_ht_u16_greyscale_discard_one_rejects_neighbours_atomically() {
+    let (_, raw) = encoded_u16_greyscale(257, 193, 2.0);
+    let admitted = reduced_u16_options(1);
+    let info = decode_partial_info(&raw, &admitted).unwrap();
+
+    let assert_atomic_rejection = |input: &[u8], request: &PartialDecodeOptions| {
+        let stride = info.width as usize * 2 + 5;
+        let mut buffer = vec![0xa5; stride * info.height as usize + 3];
+        {
+            let plane = PlaneMut::new(
+                &mut buffer,
+                info.width,
+                info.height,
+                stride,
+                SampleFormat::U16_LE,
+            )
+            .unwrap();
+            let mut planes = [plane];
+            assert!(
+                decode_partial_into(
+                    input,
+                    &mut ImageViewMut::Planar {
+                        info: &info,
+                        planes: &mut planes,
+                    },
+                    request,
+                )
+                .is_err(),
+                "request unexpectedly succeeded: {request:?}"
+            );
+        }
+        assert!(buffer.iter().all(|byte| *byte == 0xa5));
+    };
+
+    for discard_levels in [2, 3, 4, 5, 6] {
+        let request = reduced_u16_options(discard_levels);
+        assert!(decode_partial_info(&raw, &request).is_err());
+        assert!(decode_partial_component_info(&raw, &request).is_err());
+        assert!(decode_partial(&raw, &request).is_err());
+        assert_atomic_rejection(&raw, &request);
+    }
+
+    let mut requests = vec![PartialDecodeOptions::default()];
+    requests.push(PartialDecodeOptions {
+        components: ComponentSelection::Indices(vec![1]),
+        ..admitted.clone()
+    });
+    requests.push(PartialDecodeOptions {
+        region: Some(Region {
+            x: 0,
+            y: 0,
+            width: 16,
+            height: 16,
+        }),
+        ..admitted.clone()
+    });
+    requests.push(PartialDecodeOptions {
+        tile: Some(TileSelection {
+            tile_x: 0,
+            tile_y: 0,
+        }),
+        ..admitted.clone()
+    });
+    requests.push(PartialDecodeOptions {
+        max_quality_layers: Some(1),
+        ..admitted.clone()
+    });
+    for request in requests {
+        assert!(decode_partial_info(&raw, &request).is_err());
+        assert!(decode_partial(&raw, &request).is_err());
+        assert_atomic_rejection(&raw, &request);
+    }
+    let interleaved_request = PartialDecodeOptions {
+        target_layout: ComponentLayout::Interleaved,
+        ..admitted.clone()
+    };
+    assert!(decode_partial_info(&raw, &interleaved_request).is_err());
+    assert!(decode_partial(&raw, &interleaved_request).is_err());
+    let interleaved_info = ImageInfo {
+        layout: ComponentLayout::Interleaved,
+        ..info.clone()
+    };
+    let mut interleaved = vec![0xa5; info.width as usize * info.height as usize * 2];
+    assert!(
+        decode_partial_into(
+            &raw,
+            &mut ImageViewMut::Interleaved {
+                info: &interleaved_info,
+                samples: &mut interleaved,
+                stride_bytes: info.width as usize * 2,
+            },
+            &admitted,
+        )
+        .is_err()
+    );
+    assert!(interleaved.iter().all(|byte| *byte == 0xa5));
+
+    let jph = wrapped_dimensions(&raw, 257, 193, 16, 1);
+    assert!(decode_partial_info(&jph, &admitted).is_err());
+    assert_atomic_rejection(&jph, &admitted);
+    let (_, u8_raw) = encoded(8, 1, 2.0);
+    assert!(decode_partial_info(&u8_raw, &admitted).is_err());
+    assert_atomic_rejection(&u8_raw, &admitted);
+    let (_, rgb_raw) = encoded(16, 3, 2.0);
+    assert!(decode_partial_info(&rgb_raw, &admitted).is_err());
+    assert_atomic_rejection(&rgb_raw, &admitted);
+
+    let mut signed = raw.clone();
+    signed[42] |= 0x80;
+    assert!(decode_partial_info(&signed, &admitted).is_err());
+    assert_atomic_rejection(&signed, &admitted);
+    let parsed = codestream::parse(&raw).unwrap();
+    let cod = parsed
+        .markers
+        .iter()
+        .find(|marker| marker.marker == codestream::Marker::Cod)
+        .unwrap()
+        .offset;
+    for levels in [1, 3] {
+        let mut other_decomposition = raw.clone();
+        other_decomposition[cod + 9] = levels;
+        assert!(decode_partial_info(&other_decomposition, &admitted).is_err());
+        assert_atomic_rejection(&other_decomposition, &admitted);
+    }
+    let sod = raw
+        .windows(2)
+        .position(|bytes| bytes == codestream::Marker::Sod.code().to_be_bytes())
+        .unwrap();
+    let mut invalid_packet = raw.clone();
+    invalid_packet[sod + 2] ^= 0x40;
+    assert!(decode_partial_info(&invalid_packet, &admitted).is_err());
+    assert_atomic_rejection(&invalid_packet, &admitted);
+    let truncated = &raw[..raw.len() - 1];
+    assert!(decode_partial_info(truncated, &admitted).is_err());
+    assert_atomic_rejection(truncated, &admitted);
+
+    let tile = parsed.tiles[0];
+    let payload_offset = tile.payload_offset.unwrap();
+    let payload_len = tile.payload_len.unwrap();
+    let contributions = codestream::parse_default_precinct_lrcp_packets(
+        &raw,
+        &parsed,
+        codestream::TileRect {
+            tile_index: 0,
+            tile_x: 0,
+            tile_y: 0,
+            x: 0,
+            y: 0,
+            width: 257,
+            height: 193,
+        },
+        &raw[payload_offset..payload_offset + payload_len],
+    )
+    .unwrap();
+    let retained = contributions
+        .iter()
+        .find(|contribution| {
+            contribution.component_index == 0
+                && contribution.resolution <= 1
+                && contribution.coding_passes == 1
+                && contribution.codeword_len >= 2
+        })
+        .unwrap();
+    let cleanup_end = payload_offset + retained.payload_offset + retained.codeword_len;
+    let mut late = raw.clone();
+    late[cleanup_end - 2] &= 0xf0;
+    late[cleanup_end - 1] = 0;
+    assert!(decode_partial_info(&late, &admitted).is_ok());
+    assert!(decode_partial(&late, &admitted).is_err());
+    assert_atomic_rejection(&late, &admitted);
 }
