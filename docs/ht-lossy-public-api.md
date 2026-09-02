@@ -88,7 +88,9 @@ private segment, coefficient-window and synthesis storage;
 is local to one call and dropped afterwards. The
 `set_lossy_ht_spatial_region_memory_limit` value bounds deterministic active
 work for each region, including a conservative checked ceiling for that local
-entropy scratch. Retained capacity may exceed a later request's active need and
+entropy scratch. This route uses the project-authored caller-owned direct
+cleanup boundary and does not depend on private accelerated-backend storage
+representation. Retained capacity may exceed a later request's active need and
 is not treated as current use. Target geometry, format, stride, final extent
 and padding are validated before execution. Complete selected entropy decode,
 synthesis, finite ties-to-even U16_LE conversion, output allocation and the
@@ -105,9 +107,10 @@ finite profile does not claim general JPEG 2000 or Part 15 conformance.
 
 The spatial planning basis is ISO/IEC 15444-1:2024 retrieval
 `34e5d1639b9f121807e620c001893ca9d2c8f977`: B.1–B.3 and B.5–B.9 for image,
-resolution, subband and code-block geometry; E.1–E.1.1.2 for packet
-completeness; F.1–F.3.8.2.1 for recursive inverse 9/7 synthesis and boundary
-extension; and G.1–G.1.2 for the existing quantisation handling. HT cleanup
+resolution, subband and code-block geometry; B.9–B.10 for packet formation;
+E.1–E.1.1.2 for inverse quantisation; F.1–F.3.8.2.1 for recursive inverse 9/7
+synthesis and boundary extension; and G.1–G.1.2 for the existing output level
+shift. HT cleanup
 interpretation remains based on ISO/IEC 15444-15:2019 retrieval
 `10baf9472429d52f5d6b5f9b7a892dbed395b1db`, clauses 6.1–6.2 and 7.6,
 Annex A.1–A.3 and B.1–B.3. These references inform independently authored

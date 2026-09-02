@@ -49,11 +49,12 @@ implementation or fixture.
 The planning follows ISO/IEC 15444-1:2024 retrieval
 `34e5d1639b9f121807e620c001893ca9d2c8f977`: image, tile-component,
 resolution and subband geometry in B.1–B.3 (PDF pages 79–82), subband and code-
-block partitioning in B.5–B.9 (pages 85–90), packet completeness in E.1–
-E.1.1.2 (pages 129–130), and recursive inverse 9/7 synthesis and boundary
-extension in F.1–F.3.8.2.1 (pages 132–143). G.1–G.1.2 (page 153) informs the
-existing quantisation handling. Figures B.1, B.9, F.8 and F.15 and the inverse
-lifting equations were inspected; no standards text is reproduced here.
+block partitioning and packet formation in B.5–B.10 (pages 85–90), inverse
+quantisation in E.1–E.1.1.2 (pages 129–130), and recursive inverse 9/7
+synthesis and boundary extension in F.1–F.3.8.2.1 (pages 132–143).
+G.1–G.1.2 (pages 153–154) informs the existing output level shift. Figures
+B.1, B.9, F.8 and F.15 and the inverse lifting equations were inspected; no
+standards text is reproduced here.
 
 HT cleanup interpretation remains the existing implementation of ISO/IEC
 15444-15:2019 retrieval
@@ -72,16 +73,18 @@ records, but only the following whole intersecting contribution rectangles
 reach HT decode. Workspace ceilings include compact and synthesis f32 values,
 one maximum 64×64 i32 block, the largest selected segment, exact U16 output and
 a conservative checked ceiling for per-call HT entropy scratch derived from
-the selected maximum block layout and segment length.
+the selected maximum block layout and segment length. The bounded route uses
+the project-authored caller-owned direct cleanup boundary; no private
+accelerated-backend representation participates in this accounting.
 
 | Region | Discard | Output | Selected blocks | Selected block coefficients | Compact coefficients | Synthesis ceiling samples | Workspace ceiling bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| interior | 0 | 43×35 | 11 | 45,056 | 4,364 | 5,366 | 2,557,421 |
-| edge | 0 | 51×43 | 7 | 28,672 | 3,632 | 7,158 | 2,566,226 |
-| interior | 1 | 21×17 | 8 | 32,768 | 1,292 | 1,504 | 2,514,114 |
-| edge | 1 | 25×21 | 4 | 16,384 | 1,020 | 1,868 | 2,515,053 |
-| interior | 2 | 10×9 | 1 | 4,096 | 90 | 182 | 2,473,878 |
-| edge | 2 | 12×10 | 1 | 4,096 | 120 | 242 | 2,474,399 |
+| interior | 0 | 43×35 | 11 | 45,056 | 4,364 | 5,366 | 699,907 |
+| edge | 0 | 51×43 | 7 | 28,672 | 3,632 | 7,158 | 708,298 |
+| interior | 1 | 21×17 | 8 | 32,768 | 1,292 | 1,504 | 664,826 |
+| edge | 1 | 25×21 | 4 | 16,384 | 1,020 | 1,868 | 666,179 |
+| interior | 2 | 10×9 | 1 | 4,096 | 90 | 182 | 651,626 |
+| edge | 2 | 12×10 | 1 | 4,096 | 120 | 242 | 652,165 |
 
 The test locks these figures and confirms every selected block intersects its
 required subband rectangle. The region workspace has no complete reduced
@@ -121,8 +124,8 @@ blocks, with no 9/7 synthesis levels.
 
 | Full-resolution request | Projected output | Selected blocks | Compact LL samples | Synthesis ceiling samples | Workspace ceiling bytes |
 |---|---:|---:|---:|---:|---:|
-| 1024×1024 full image | 256×256 | 16/256 | 65,536 | 131,074 | 3,652,552 |
-| `(256, 256, 256, 256)` | 64×64 | 1/256 | 4,096 | 8,194 | 2,545,967 |
+| 1024×1024 full image | 256×256 | 16/256 | 65,536 | 131,074 | 1,829,688 |
+| `(256, 256, 256, 256)` | 64×64 | 1/256 | 4,096 | 8,194 | 723,733 |
 
 One workspace successfully alternates full-resolution, discard-1 and
 discard-2 requests while regions shrink, grow and relocate. Tests mechanically
