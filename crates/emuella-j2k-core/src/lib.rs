@@ -5239,6 +5239,8 @@ pub struct Image {
 #[derive(Default)]
 pub struct Part1DecodeWorkspace {
     codestream: codestream::Part1ComponentDecodeWorkspace,
+    #[cfg(feature = "std")]
+    lossy_ht_spatial_region: codestream::ht_lossy::LossyHtSpatialRegionWorkspace,
 }
 
 impl Part1DecodeWorkspace {
@@ -5279,12 +5281,34 @@ impl Part1DecodeWorkspace {
     /// Capacity-based heap bytes retained by the complete workspace,
     /// including private parallel worker scratch.
     pub fn retained_heap_bytes(&self) -> u64 {
-        self.codestream.retained_heap_bytes()
+        let retained = self.codestream.retained_heap_bytes();
+        #[cfg(feature = "std")]
+        let retained = retained.saturating_add(self.lossy_ht_spatial_region.retained_heap_bytes());
+        retained
     }
 
     /// Clear logical scratch lengths while retaining allocation capacity.
     pub fn clear(&mut self) {
         self.codestream.clear();
+        #[cfg(feature = "std")]
+        self.lossy_ht_spatial_region.clear();
+    }
+
+    /// Set the deterministic active-use ceiling for the bounded lossy HT
+    /// spatial-region route. Already-retained capacity is not charged as use
+    /// by a smaller follow-up request and is not released by changing this
+    /// limit.
+    #[cfg(feature = "std")]
+    pub fn set_lossy_ht_spatial_region_memory_limit(&mut self, maximum_bytes: u64) {
+        self.lossy_ht_spatial_region
+            .set_maximum_bytes(maximum_bytes);
+    }
+
+    /// Current deterministic active-use ceiling for lossy HT spatial-region
+    /// reconstruction.
+    #[cfg(feature = "std")]
+    pub fn lossy_ht_spatial_region_memory_limit(&self) -> u64 {
+        self.lossy_ht_spatial_region.maximum_bytes()
     }
 }
 
@@ -5861,14 +5885,18 @@ pub enum ComponentSelection {
 
 /// Scoped partial decode request. Unsupported combinations must fail explicitly.
 ///
-/// Native HTJ2K admits several independently bounded reduced-component shapes.
-/// The lossy encoder route selects planar unsigned greyscale U16 component 0 at
-/// one or two discarded levels. Existing HTONLY branches retain their documented
-/// component, discard and transform contracts.
+/// Native HTJ2K admits several independently bounded partial-component shapes.
+/// The lossy encoder route selects raw planar unsigned greyscale U16 component
+/// zero. No-region requests admit one or two discarded levels; one contained
+/// half-open region admits full, discard-one or discard-two output with each
+/// endpoint independently ceiling-projected. Existing HTONLY branches retain
+/// their documented component, discard and transform contracts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialDecodeOptions {
-    /// Non-empty full-resolution image-relative reference-grid rectangle.
-    /// Mutually exclusive with [`Self::tile`].
+    /// Non-empty full-resolution image-relative half-open reference-grid
+    /// rectangle. Mutually exclusive with [`Self::tile`]. Reduced lossy HT
+    /// output independently ceiling-projects the rectangle's two endpoints on
+    /// each axis and rejects an empty projection.
     pub region: Option<Region>,
     /// SIZ tile-grid coordinate resolved to the clipped image-relative tile
     /// rectangle. Mutually exclusive with [`Self::region`].
@@ -5898,6 +5926,7 @@ impl Default for PartialDecodeOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Image-relative half-open rectangle expressed as origin plus extent.
 pub struct Region {
     pub x: u32,
     pub y: u32,
@@ -7979,8 +8008,19 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
         return Ok(image);
     }
     #[cfg(feature = "std")]
+    if let Some(image) = decode_owned_lossy_ht_spatial_region(input, options)? {
+        return Ok(image);
+    }
+    #[cfg(feature = "std")]
     if let Some(image) = decode_owned_htj2k_reduced_component(input, options)? {
         return Ok(image);
+    }
+    #[cfg(feature = "std")]
+    if options.region.is_some() && is_lossy_ht_u16_greyscale_source(input)? {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "lossy HT spatial regions require raw planar component zero, no tile or layer limit, and zero through two discarded levels",
+        ));
     }
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_partial_quality_layer_profile(input, &metadata, options)?;
@@ -8386,12 +8426,119 @@ pub fn decode_partial_component_info(
             return Ok(component_info);
         }
         if let Some((_, _, component_info)) =
+            prepare_lossy_ht_spatial_region_target(input, options)?
+        {
+            return Ok(component_info);
+        }
+        if let Some((_, _, component_info)) =
             prepare_htj2k_reduced_component_target(input, options)?
         {
             return Ok(component_info);
         }
+        if options.region.is_some() && is_lossy_ht_u16_greyscale_source(input)? {
+            return Err(unsupported(
+                UnsupportedFeature::PartialDecodeMode,
+                "lossy HT spatial regions require raw planar component zero, no tile or layer limit, and zero through two discarded levels",
+            ));
+        }
     }
     Ok(prepare_part1_decode(input, options)?.component_info)
+}
+
+#[cfg(feature = "std")]
+fn is_lossy_ht_spatial_region_request(options: &PartialDecodeOptions) -> bool {
+    options.region.is_some()
+        && options.tile.is_none()
+        && matches!(
+            options.resolution,
+            ResolutionLevel::Full
+                | ResolutionLevel::Reduced {
+                    discard_levels: 0..=2
+                }
+        )
+        && matches!(&options.components, ComponentSelection::Indices(indices) if indices.as_slice() == [0_u16])
+        && options.max_quality_layers.is_none()
+        && options.target_layout == ComponentLayout::Planar
+}
+
+#[cfg(feature = "std")]
+fn is_lossy_ht_u16_greyscale_source(input: &[u8]) -> Result<bool> {
+    let metadata = inspect(input, &InspectOptions::default())?;
+    let Some(codestream_bytes) = primary_htj2k_codestream_bytes(input, &metadata)? else {
+        return Ok(false);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    Ok(codestream::ht_lossy::is_profile(codestream_bytes, &parsed)
+        && parsed.siz.component_count() == 1
+        && parsed.siz.components.first().is_some_and(|component| {
+            component.bits_per_sample == 16
+                && !component.signed
+                && component.horizontal_separation == 1
+                && component.vertical_separation == 1
+        }))
+}
+
+#[cfg(feature = "std")]
+fn prepare_lossy_ht_spatial_region_target<'a>(
+    input: &'a [u8],
+    options: &PartialDecodeOptions,
+) -> Result<
+    Option<(
+        codestream::ht_lossy::PreparedLossyHtSpatialRegion<'a>,
+        ImageInfo,
+        Vec<ComponentInfo>,
+    )>,
+> {
+    if !is_lossy_ht_spatial_region_request(options) || !input.starts_with(&[0xff, 0x4f]) {
+        return Ok(None);
+    }
+    let parsed = codestream::parse(input).map_err(map_codestream_error)?;
+    if !codestream::ht_lossy::is_profile(input, &parsed) {
+        return Ok(None);
+    }
+    let region = options.region.ok_or_else(sample_size_overflow)?;
+    let discard_levels = match options.resolution {
+        ResolutionLevel::Full | ResolutionLevel::Reduced { discard_levels: 0 } => 0,
+        ResolutionLevel::Reduced { discard_levels } => discard_levels,
+    };
+    let prepared = codestream::ht_lossy::prepare_lossy_ht_spatial_region(
+        input,
+        codestream::ht_lossy::LossyHtSpatialRegionRequest::new(
+            codestream::TileRegionRequest {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            },
+            discard_levels,
+        ),
+    )
+    .map_err(map_codestream_error)?;
+    let projected = prepared.projected_region();
+    let sample_format = SampleFormat::with_byte_order(
+        prepared.bits_per_sample(),
+        prepared.signed(),
+        Some(SampleEndian::Little),
+    )?;
+    let info = ImageInfo::new(
+        projected.width,
+        projected.height,
+        1,
+        sample_format,
+        ColorModel::Unknown,
+        ComponentLayout::Planar,
+    )?;
+    let component_info = alloc::vec![ComponentInfo {
+        source_component: Some(prepared.component_index()),
+        width: projected.width,
+        height: projected.height,
+        x_origin: projected.x,
+        y_origin: projected.y,
+        horizontal_separation: 1,
+        vertical_separation: 1,
+        sample_format,
+    }];
+    Ok(Some((prepared, info, component_info)))
 }
 
 #[cfg(feature = "std")]
@@ -8498,6 +8645,38 @@ fn decode_owned_htj2k_reduced_component(
     };
     decoded_baseline_to_image_with_component_info(decoded, &decode_options, Some(component_info))
         .map(Some)
+}
+
+#[cfg(feature = "std")]
+fn decode_owned_lossy_ht_spatial_region(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+) -> Result<Option<Image>> {
+    let mut workspace = Part1DecodeWorkspace::new();
+    decode_owned_lossy_ht_spatial_region_with_workspace(input, options, &mut workspace)
+}
+
+#[cfg(feature = "std")]
+fn decode_owned_lossy_ht_spatial_region_with_workspace(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+    workspace: &mut Part1DecodeWorkspace,
+) -> Result<Option<Image>> {
+    let Some((prepared, info, component_info)) =
+        prepare_lossy_ht_spatial_region_target(input, options)?
+    else {
+        return Ok(None);
+    };
+    let (samples, _) = codestream::ht_lossy::decode_prepared_lossy_ht_spatial_region(
+        &prepared,
+        &mut workspace.lossy_ht_spatial_region,
+    )
+    .map_err(map_codestream_error)?;
+    Ok(Some(Image {
+        info,
+        component_info,
+        data: ImageData::Planes(alloc::vec![samples]),
+    }))
 }
 
 fn decode_owned_selective_part1_discard(
@@ -9434,6 +9613,12 @@ pub fn decode_partial_into_with_workspace(
         validate_decode_target_components(&expected_info, component_info, target)?;
     } else {
         validate_decode_target(&expected_info, target)?;
+    }
+    #[cfg(feature = "std")]
+    if let Some(decoded) =
+        decode_owned_lossy_ht_spatial_region_with_workspace(input, &owned_options, workspace)?
+    {
+        return copy_native_component_image_into_target(&decoded, target);
     }
     if decode_partial_part1_components_into_direct(input, target, &owned_options, workspace)? {
         return Ok(());
@@ -12870,8 +13055,19 @@ fn partial_decode_target_info(input: &[u8], options: &PartialDecodeOptions) -> R
         return Ok(info);
     }
     #[cfg(feature = "std")]
+    if let Some((_, info, _)) = prepare_lossy_ht_spatial_region_target(input, options)? {
+        return Ok(info);
+    }
+    #[cfg(feature = "std")]
     if let Some((_, info, _)) = prepare_htj2k_reduced_component_target(input, options)? {
         return Ok(info);
+    }
+    #[cfg(feature = "std")]
+    if options.region.is_some() && is_lossy_ht_u16_greyscale_source(input)? {
+        return Err(unsupported(
+            UnsupportedFeature::PartialDecodeMode,
+            "lossy HT spatial regions require raw planar component zero, no tile or layer limit, and zero through two discarded levels",
+        ));
     }
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_partial_quality_layer_profile(input, &metadata, options)?;
