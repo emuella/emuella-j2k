@@ -659,6 +659,21 @@ fn lossy_ht_u16_greyscale_discard_one_and_two_geometry_and_routes_agree() {
 }
 
 #[test]
+fn lossy_ht_spatial_calibration_probe_is_public_encoder_output() {
+    use sha2::{Digest, Sha256};
+
+    let (source, raw) = try_encoded_u16_greyscale(1024, 1024, 1, 4.0).unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&source)),
+        "75855d11fddce88d3377bcaeab864905cef5cc724f0059da81271832010c9054"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&raw)),
+        "f376f5c04b13c640fec6b80ba52bfb198cc1832d75f6850411ba801e035da597"
+    );
+}
+
+#[test]
 fn lossy_ht_u16_greyscale_reduced_acceptance_matrix() {
     struct RateCase {
         label: &'static str,
