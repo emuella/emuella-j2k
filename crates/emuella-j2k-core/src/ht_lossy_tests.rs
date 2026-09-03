@@ -1,5 +1,15 @@
 //! Full-image and negative-path proof for the shared irreversible HT boundary.
 use super::*;
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(encoded, "{byte:02x}").unwrap();
+    }
+    encoded
+}
 
 fn source(width: u32, height: u32, bits: u8, components: u16) -> Vec<Vec<u8>> {
     codestream::ht_lossy_test_support::source(width, height, bits, components, 0)
@@ -804,15 +814,13 @@ fn lossy_ht_u16_greyscale_discard_one_and_two_geometry_and_routes_agree() {
 
 #[test]
 fn lossy_ht_spatial_calibration_probe_is_public_encoder_output() {
-    use sha2::{Digest, Sha256};
-
     let (source, raw) = try_encoded_u16_greyscale(1024, 1024, 1, 4.0).unwrap();
     assert_eq!(
-        format!("{:x}", Sha256::digest(&source)),
+        sha256_hex(&source),
         "75855d11fddce88d3377bcaeab864905cef5cc724f0059da81271832010c9054"
     );
     assert_eq!(
-        format!("{:x}", Sha256::digest(&raw)),
+        sha256_hex(&raw),
         "f376f5c04b13c640fec6b80ba52bfb198cc1832d75f6850411ba801e035da597"
     );
 }

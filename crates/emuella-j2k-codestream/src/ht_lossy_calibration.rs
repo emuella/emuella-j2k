@@ -3,6 +3,15 @@
 use super::*;
 use emuella_j2k_container as container;
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(encoded, "{byte:02x}").unwrap();
+    }
+    encoded
+}
 
 fn analyse(width: u32, height: u32, bits: u8, source: &[Vec<u16>]) -> Vec<Vec<f32>> {
     let mut planes = source
@@ -190,12 +199,12 @@ fn measure_irreversible_ht_probe() {
                     let native_bytes = interleaved(&decoded, bits);
                     let name = format!("p{pattern}-u{bits}-c{components}-r{rate}");
                     println!(
-                        "HTCAL,{name},{budget},{},{},{coarseness},{attempts},{sse},{nmse:.12},{peak},{monotonic},{millis},{:x},{:x},{:x}",
+                        "HTCAL,{name},{budget},{},{},{coarseness},{attempts},{sse},{nmse:.12},{peak},{monotonic},{millis},{},{},{}",
                         raw.len(),
                         budget.saturating_sub(raw.len()),
-                        Sha256::digest(&input),
-                        Sha256::digest(&raw),
-                        Sha256::digest(&native_bytes)
+                        sha256_hex(&input),
+                        sha256_hex(&raw),
+                        sha256_hex(&native_bytes)
                     );
                     if let Some(path) = &output {
                         for (extension, data) in [

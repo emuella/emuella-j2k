@@ -1238,6 +1238,15 @@ pub fn decode_owned_with_workspace(
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut encoded = String::with_capacity(64);
+        for byte in Sha256::digest(bytes) {
+            write!(encoded, "{byte:02x}").unwrap();
+        }
+        encoded
+    }
 
     fn encoded() -> Vec<u8> {
         let source = crate::ht_lossy_test_support::source(257, 193, 8, 3, 0);
@@ -1318,11 +1327,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            format!("{:x}", Sha256::digest(&source_bytes)),
+            sha256_hex(&source_bytes),
             "75855d11fddce88d3377bcaeab864905cef5cc724f0059da81271832010c9054"
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(&raw)),
+            sha256_hex(&raw),
             "f376f5c04b13c640fec6b80ba52bfb198cc1832d75f6850411ba801e035da597"
         );
 
@@ -2004,7 +2013,7 @@ mod tests {
         let height = 1024_u32;
         let raw = encode_u16_grey(width, height, 1, 4.0);
         assert_eq!(
-            format!("{:x}", Sha256::digest(&raw)),
+            sha256_hex(&raw),
             "f376f5c04b13c640fec6b80ba52bfb198cc1832d75f6850411ba801e035da597"
         );
         let established = established_component(&raw, 2);
@@ -2505,8 +2514,6 @@ mod tests {
 
     #[test]
     fn large_noise_packets_exceed_capacity_hint_without_changing_calibrated_bytes() {
-        use sha2::{Digest, Sha256};
-
         let source = crate::ht_lossy_test_support::source(1024, 1024, 16, 3, 1);
         let mut planes = source
             .iter()
@@ -2553,7 +2560,7 @@ mod tests {
             // Seven subbands per component supplied only 21 * 64 header bytes
             // in the original capacity hint, so both streams require growth.
             assert!(header_bytes > 3 * 7 * 64);
-            assert_eq!(format!("{:x}", Sha256::digest(&raw)), expected_hash);
+            assert_eq!(sha256_hex(&raw), expected_hash);
             assert!(is_profile(&raw, &parsed));
         }
     }
