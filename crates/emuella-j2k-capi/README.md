@@ -24,4 +24,6 @@ retain the temporary destination.
 
 `sh scripts/check-c-api.sh` regenerates and compares the header, checks the
 shared-library symbol allow-list, and compiles, links and runs the C11 and C++17
-consumers against both shared and static Linux x86-64 libraries.
+consumers against both shared and static Linux x86-64 libraries. Each consumer
+also drives one decoder concurrently from two threads with distinct workspaces
+and outputs; its positioned callback proves that the operations overlap.

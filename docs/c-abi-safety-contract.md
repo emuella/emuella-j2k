@@ -354,12 +354,13 @@ thread-safety obligation on a GDAL VSI adapter, which can initially meet it with
 safe serialisation.
 
 The experimental implementation adds and verifies the safe source-backed
-inspection operation, and resolves the current symbol names, plain-data layouts,
-status values, ABI queries and package targets in its generated header. Major
-one still requires the remaining gates above and explicit supported-platform
-export controls. A later increment must not add JP2 traversal, encoding, direct
-foreign output, asynchronous work, allocation callbacks or new codec admission
-under the authority of this record alone.
+inspection operation, including mixed-language concurrent decoder calls with
+distinct workspaces and outputs. It resolves the current symbol names,
+plain-data layouts, status values, ABI queries and package targets in its
+generated header. Major one still requires the remaining gates above and
+explicit supported-platform export controls. A later increment must not add
+JP2 traversal, encoding, direct foreign output, asynchronous work, allocation
+callbacks or new codec admission under the authority of this record alone.
 
 This contract is based on the Rust Reference's
 [C ABI](https://doc.rust-lang.org/reference/items/external-blocks.html),

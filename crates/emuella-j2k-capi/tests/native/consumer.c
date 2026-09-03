@@ -1,9 +1,15 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "emuella_j2k.h"
 
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
 
 #define ASSERT_LAYOUT(type, size, alignment) \
   _Static_assert(sizeof(type) == size, #type " size"); \
@@ -72,22 +78,69 @@ static const uint8_t CODESTREAM[] = {
     0x37, 0xff, 0xd9,
 };
 
-static EmuellaJ2kStatus read_at(void *context, uint64_t offset,
+typedef struct SourceContext {
+  const uint8_t *bytes;
+  size_t length;
+  atomic_bool concurrent_mode;
+  atomic_int barrier_entries;
+  atomic_int active_callbacks;
+  atomic_bool overlap_observed;
+} SourceContext;
+
+static EmuellaJ2kStatus read_at(void *opaque, uint64_t offset,
                                 uint8_t *destination, size_t length) {
-  const uint8_t *bytes = (const uint8_t *)context;
-  if (offset > sizeof(CODESTREAM) || length > sizeof(CODESTREAM) - (size_t)offset) {
+  SourceContext *context = (SourceContext *)opaque;
+  int previous_active = atomic_fetch_add(&context->active_callbacks, 1);
+  if (previous_active != 0) {
+    atomic_store(&context->overlap_observed, true);
+  }
+  if (atomic_load(&context->concurrent_mode)) {
+    int ticket = atomic_fetch_add(&context->barrier_entries, 1);
+    if (ticket < 2) {
+      while (atomic_load(&context->barrier_entries) < 2) {
+        sched_yield();
+      }
+    }
+  }
+  if (offset > context->length || length > context->length - (size_t)offset) {
+    atomic_fetch_sub(&context->active_callbacks, 1);
     return 99;
   }
-  memcpy(destination, bytes + (size_t)offset, length);
+  memcpy(destination, context->bytes + (size_t)offset, length);
+  atomic_fetch_sub(&context->active_callbacks, 1);
   return EMUELLA_J2K_STATUS_OK;
+}
+
+typedef struct ConcurrentDecode {
+  EmuellaJ2kDecoder *decoder;
+  EmuellaJ2kWorkspace *workspace;
+  EmuellaJ2kDecodeRequestV0 request;
+  EmuellaJ2kStatus status;
+  EmuellaJ2kImage *image;
+  uint8_t samples[4];
+} ConcurrentDecode;
+
+static void *decode_concurrently(void *opaque) {
+  ConcurrentDecode *decode = (ConcurrentDecode *)opaque;
+  decode->status = emuella_j2k_decode_component_region(
+      decode->decoder, decode->workspace, &decode->request, &decode->image, NULL);
+  if (decode->status == EMUELLA_J2K_STATUS_OK) {
+    decode->status = emuella_j2k_image_copy(
+        decode->image, decode->samples, sizeof(decode->samples), 2, NULL);
+  }
+  return NULL;
 }
 
 int main(void) {
   assert(emuella_j2k_abi_version() == EMUELLA_J2K_ABI_VERSION);
   assert(strcmp(emuella_j2k_package_version(), "0.1.0") == 0);
+  SourceContext source_context = {
+      CODESTREAM, sizeof(CODESTREAM), ATOMIC_VAR_INIT(false), ATOMIC_VAR_INIT(0),
+      ATOMIC_VAR_INIT(0), ATOMIC_VAR_INIT(false),
+  };
   EmuellaJ2kSourceV0 source = {
       sizeof(source), EMUELLA_J2K_ABI_VERSION, 0, sizeof(CODESTREAM),
-      (void *)CODESTREAM, read_at,
+      &source_context, read_at,
   };
   EmuellaJ2kDecoder *decoder = NULL;
   assert(emuella_j2k_decoder_create(&source, &decoder, NULL) == EMUELLA_J2K_STATUS_OK);
@@ -129,6 +182,33 @@ int main(void) {
   assert(samples[3] == 9 && samples[4] == 10);
   emuella_j2k_image_destroy(image);
   emuella_j2k_workspace_destroy(workspace);
+
+  EmuellaJ2kWorkspace *concurrent_workspaces[2] = {NULL, NULL};
+  for (size_t index = 0; index < 2; ++index) {
+    assert(emuella_j2k_workspace_create(&concurrent_workspaces[index], NULL) ==
+           EMUELLA_J2K_STATUS_OK);
+  }
+  ConcurrentDecode decodes[2] = {0};
+  for (size_t index = 0; index < 2; ++index) {
+    decodes[index].decoder = decoder;
+    decodes[index].workspace = concurrent_workspaces[index];
+    decodes[index].request = request;
+  }
+  atomic_store(&source_context.concurrent_mode, true);
+  pthread_t threads[2];
+  assert(pthread_create(&threads[0], NULL, decode_concurrently, &decodes[0]) == 0);
+  assert(pthread_create(&threads[1], NULL, decode_concurrently, &decodes[1]) == 0);
+  for (size_t index = 0; index < 2; ++index) {
+    assert(pthread_join(threads[index], NULL) == 0);
+    assert(decodes[index].status == EMUELLA_J2K_STATUS_OK);
+    assert(memcmp(decodes[index].samples,
+                  (const uint8_t[]){5, 6, 9, 10}, 4) == 0);
+    emuella_j2k_image_destroy(decodes[index].image);
+    emuella_j2k_workspace_destroy(concurrent_workspaces[index]);
+  }
+  assert(atomic_load(&source_context.overlap_observed));
+  assert(atomic_load(&source_context.active_callbacks) == 0);
+
   emuella_j2k_inspection_destroy(inspection);
   emuella_j2k_decoder_destroy(decoder);
   return 0;

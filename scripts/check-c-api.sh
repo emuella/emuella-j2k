@@ -3,6 +3,21 @@ set -eu
 
 repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 crate="$repository_root/crates/emuella-j2k-capi"
+capi_source="$crate/src/lib.rs"
+
+production_unsafe_count=$(awk '
+  /#\[cfg\(test\)\]/ { exit }
+  /unsafe \{/ { count += 1 }
+  END { print count + 0 }
+' "$capi_source")
+total_unsafe_count=$(grep -c 'unsafe {' "$capi_source")
+test "$production_unsafe_count" -eq 6
+test "$total_unsafe_count" -eq 7
+if grep -E 'unsafe (impl|trait)|transmute|static mut|extern "C-unwind"|from_raw_parts' \
+  "$capi_source"; then
+  echo "prohibited unsafe construct in C API boundary" >&2
+  exit 1
+fi
 
 cleanup_target=false
 if [ -z "${CARGO_TARGET_DIR:-}" ]; then
@@ -39,9 +54,9 @@ for language in c cc; do
   static="$native_output/consumer-$language-static"
   "$compiler" "$standard" -Wall -Wextra -Werror -I"$crate/include" "$source" \
     -L"$CARGO_TARGET_DIR/release" -lemuella_j2k_capi \
-    -Wl,-rpath,"$CARGO_TARGET_DIR/release" -o "$shared"
+    -Wl,-rpath,"$CARGO_TARGET_DIR/release" -pthread -o "$shared"
   "$shared"
   "$compiler" "$standard" -Wall -Wextra -Werror -I"$crate/include" "$source" \
-    "$CARGO_TARGET_DIR/release/libemuella_j2k_capi.a" -ldl -lpthread -lm -o "$static"
+    "$CARGO_TARGET_DIR/release/libemuella_j2k_capi.a" -ldl -pthread -lm -o "$static"
   "$static"
 done

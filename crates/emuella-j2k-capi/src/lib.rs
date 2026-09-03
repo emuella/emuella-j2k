@@ -1197,6 +1197,28 @@ mod tests {
     }
 
     #[test]
+    fn malformed_later_marker_is_invalid_input_not_source_io() {
+        let (mut malformed, _) = fixture();
+        let eoc_prefix = malformed.bytes.len() - 2;
+        assert_eq!(&malformed.bytes[eoc_prefix..], &[0xff, 0xd9]);
+        malformed.bytes[eoc_prefix] = 0xfe;
+        let decoder = decoder(&mut malformed);
+        let mut inspection = ptr::null_mut();
+        let mut error = ptr::null_mut();
+        assert_eq!(
+            emuella_j2k_decoder_inspect(decoder, &mut inspection, &mut error),
+            EMUELLA_J2K_STATUS_INVALID_INPUT
+        );
+        assert!(inspection.is_null());
+        assert_eq!(
+            emuella_j2k_error_status(error),
+            EMUELLA_J2K_STATUS_INVALID_INPUT
+        );
+        emuella_j2k_error_destroy(error);
+        emuella_j2k_decoder_destroy(decoder);
+    }
+
+    #[test]
     fn malformed_input_and_undersized_structures_are_rejected() {
         let (mut malformed, _) = fixture();
         malformed.bytes[1] = 0x50;

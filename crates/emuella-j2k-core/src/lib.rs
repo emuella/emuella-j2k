@@ -9625,6 +9625,24 @@ mod part1_source_inspection_tests {
             }) if message.contains("injected positioned failure")
         ));
     }
+
+    #[test]
+    fn source_inspection_classifies_malformed_later_marker_as_invalid_input() {
+        let samples = (0_u8..16).collect::<Vec<_>>();
+        let mut fixture =
+            codestream::encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let eoc_prefix = fixture.len() - 2;
+        assert_eq!(&fixture[eoc_prefix..], &[0xff, 0xd9]);
+        fixture[eoc_prefix] = 0xfe;
+
+        assert!(matches!(
+            inspect_part1_source(&codestream::source::SliceSource::new(&fixture)),
+            Err(J2kError::InvalidInput {
+                offset: Some(offset),
+                ref message,
+            }) if offset == eoc_prefix as u64 && message.contains("marker prefix")
+        ));
+    }
 }
 
 /// Prepare a raw Part 1 codestream from an immutable positioned-read source.

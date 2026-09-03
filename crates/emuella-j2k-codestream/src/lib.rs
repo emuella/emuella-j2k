@@ -7714,12 +7714,11 @@ fn source_marker(source: &dyn source::CodestreamSource, offset: u64) -> Result<M
     let mut bytes = [0_u8; 2];
     source.read_exact_at(offset, &mut bytes)?;
     if bytes[0] != 0xff {
-        return Err(CodestreamError::Source {
-            offset,
-            requested: 2,
-            available: 2,
-            message: String::from("expected a JPEG 2000 marker prefix"),
-        });
+        return Err(invalid(
+            usize::try_from(offset).ok(),
+            Some(Marker::from_code(u16::from_be_bytes(bytes))),
+            "expected a JPEG 2000 marker prefix",
+        ));
     }
     Ok(Marker::from_code(u16::from_be_bytes(bytes)))
 }
@@ -7898,12 +7897,14 @@ fn scan_part1_source_headers(
         if Marker::from_code(u16::from_be_bytes([sot_bytes[0], sot_bytes[1]])) != Marker::Sot
             || u16::from_be_bytes([sot_bytes[2], sot_bytes[3]]) != 10
         {
-            return Err(CodestreamError::Source {
-                offset: next_source_offset,
-                requested: 12,
-                available: 12,
-                message: String::from("tile-part index does not point to a valid SOT segment"),
-            });
+            return Err(invalid(
+                usize::try_from(next_source_offset).ok(),
+                Some(Marker::from_code(u16::from_be_bytes([
+                    sot_bytes[0],
+                    sot_bytes[1],
+                ]))),
+                "tile-part index does not point to a valid SOT segment",
+            ));
         }
         let tile = parse_sot(
             &sot_bytes[4..],
