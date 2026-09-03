@@ -20,17 +20,22 @@ generated header pass the gates below.
 ## Decision
 
 The project will expose a small C ABI from a separate
-`emuella-j2k-capi` crate. The ABI will call the existing safe public facade and
-source-backed decoder; it will not duplicate codec behaviour. `cbindgen` will
-produce the public C header deterministically from explicitly C-compatible Rust
-declarations. The installed C ABI, rather than Rust or C++ ABI, will be the
-binary contract for consumers.
+`emuella-j2k-capi` crate. The ABI will call safe public facade operations and
+will not duplicate codec behaviour. Before the C API exposes source discovery,
+`emuella-j2k` must add a safe source-backed inspection operation that reports
+raw Part 1 image geometry and component descriptors without requiring a decode
+request. That prerequisite remains codec-owned and must reuse the codec's
+parser, admission and error behaviour; the C API must not parse codestream
+markers itself. `cbindgen` will produce the public C header deterministically
+from explicitly C-compatible Rust declarations. The installed C ABI, rather
+than Rust or C++ ABI, will be the binary contract for consumers.
 
 The initial implementation is read-only and source-backed. Its intended
 capabilities are:
 
 - create a decoder over an immutable positioned-read source;
-- discover raw Part 1 image and component properties;
+- after the safe source-inspection prerequisite is implemented, discover raw
+  Part 1 image and component properties;
 - decode one admitted component/region/resolution request with a reusable
   workspace;
 - retain decoded samples in Rust-owned immutable image storage;
@@ -64,6 +69,13 @@ The C API must not expose Rust layout, generics, trait objects, references,
 slices, `String`, `Vec`, panics or allocator obligations. The codec crates must
 not depend on the C API crate or GDAL. A GDAL adapter owns `VSILFILE` and GDAL
 object semantics; the C API sees only the positioned source contract.
+
+The source-inspection prerequisite is an additive safe Rust facade operation,
+not C ABI code. It must be implemented and verified in `emuella-j2k` before the
+C ABI discovery operation, and both operations must share the same codec-owned
+interpretation of image properties. Until then, source discovery is deferred;
+the C API may not compensate by reading markers or reconstructing private
+parser behaviour.
 
 ## C representation
 
@@ -323,11 +335,12 @@ need for a direct-output contract. Concurrent source callbacks place a clear
 thread-safety obligation on a GDAL VSI adapter, which can initially meet it with
 safe serialisation.
 
-The implementation increment must resolve and document exact symbol names,
-plain-data layouts, status values, ABI query behaviour, package target names and
-platform export controls. It must not add JP2 traversal, encoding, direct
-foreign output, asynchronous work, allocation callbacks or new codec admission
-under the authority of this record alone.
+The implementation increment must first add and verify the safe source-backed
+inspection operation described above. It must then resolve and document exact
+symbol names, plain-data layouts, status values, ABI query behaviour, package
+target names and platform export controls. It must not add JP2 traversal,
+encoding, direct foreign output, asynchronous work, allocation callbacks or new
+codec admission under the authority of this record alone.
 
 This contract is based on the Rust Reference's
 [C ABI](https://doc.rust-lang.org/reference/items/external-blocks.html),
