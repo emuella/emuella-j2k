@@ -10,3 +10,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # The action's numeric tags can precede the corresponding Rust release.
+      # Compiler updates must also reconcile Cargo.toml and project guidance.
+      - dependency-name: dtolnay/rust-toolchain
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
