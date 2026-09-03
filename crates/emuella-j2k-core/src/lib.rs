@@ -5084,6 +5084,14 @@ pub struct ComponentInfo {
     pub sample_format: SampleFormat,
 }
 
+/// Raw Part 1 image and component properties inspected from a positioned
+/// source without constructing a decode request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part1SourceInspection {
+    pub image: ImageInfo,
+    pub components: Vec<ComponentInfo>,
+}
+
 impl ImageInfo {
     pub fn new(
         width: u32,
@@ -9420,6 +9428,205 @@ pub fn prepare_part1_decode<'a>(
     })
 }
 
+/// Inspect raw Part 1 image and component properties from an immutable
+/// positioned-read source without constructing a decode request.
+pub fn inspect_part1_source(
+    source: &dyn codestream::source::CodestreamSource,
+) -> Result<Part1SourceInspection> {
+    let inspected = codestream::inspect_part1_source(source).map_err(map_codestream_error)?;
+    let first = inspected
+        .components
+        .first()
+        .ok_or_else(sample_size_overflow)?;
+    let sample_format = SampleFormat::with_byte_order(
+        first.bits_per_sample,
+        first.signed,
+        (first.bits_per_sample > 8).then_some(SampleEndian::Little),
+    )?;
+    let component_count = u16::try_from(inspected.components.len()).map_err(|_| {
+        unsupported(
+            UnsupportedFeature::ComponentLayout,
+            "source component count exceeds the public image model",
+        )
+    })?;
+    let image = ImageInfo::new(
+        inspected.image_width,
+        inspected.image_height,
+        component_count,
+        sample_format,
+        match component_count {
+            1 => ColorModel::Grayscale,
+            3 => ColorModel::Rgb,
+            _ => ColorModel::Unknown,
+        },
+        ComponentLayout::Planar,
+    )?;
+    let components = inspected
+        .components
+        .into_iter()
+        .map(|component| {
+            Ok(ComponentInfo {
+                source_component: Some(component.component_index),
+                width: component.width,
+                height: component.height,
+                x_origin: component.x_origin,
+                y_origin: component.y_origin,
+                horizontal_separation: component.horizontal_separation,
+                vertical_separation: component.vertical_separation,
+                sample_format: SampleFormat::with_byte_order(
+                    component.bits_per_sample,
+                    component.signed,
+                    (component.bits_per_sample > 8).then_some(SampleEndian::Little),
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Part1SourceInspection { image, components })
+}
+
+#[cfg(test)]
+mod part1_source_inspection_tests {
+    use super::*;
+
+    #[test]
+    fn source_inspection_matches_slice_metadata_and_prepared_descriptors() {
+        let planes = [
+            (0_u8..48).collect::<Vec<_>>(),
+            (0_u8..24).map(|value| value.wrapping_mul(3)).collect(),
+            (0_u8..12).map(|value| value.wrapping_mul(7)).collect(),
+        ];
+        let fixture = codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
+            8,
+            6,
+            &[
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: &planes[0],
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 1,
+                    samples: &planes[1],
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &planes[2],
+                },
+            ],
+        )
+        .unwrap();
+        let source = codestream::source::SliceSource::new(&fixture);
+        let inspected = inspect_part1_source(&source).unwrap();
+        let slice_metadata = inspect(&fixture, &InspectOptions::default()).unwrap();
+        assert_eq!(Some(&inspected.image), slice_metadata.image.as_ref());
+        let component_indices = [0, 1, 2];
+        let prepared = prepare_part1_decode_from_source(
+            &source,
+            codestream::Part1ComponentDecodeRequest {
+                component_indices: &component_indices,
+                region: codestream::TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 8,
+                    height: 6,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(inspected.components, prepared.component_info());
+    }
+
+    #[test]
+    fn source_inspection_preserves_heterogeneous_component_samples() {
+        let planes = [vec![0_u8; 16], vec![0_u8; 8], vec![0_u8; 4]];
+        let mut fixture = codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
+            4,
+            4,
+            &[
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: &planes[0],
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 1,
+                    samples: &planes[1],
+                },
+                codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &planes[2],
+                },
+            ],
+        )
+        .unwrap();
+        // This project-authored fixture begins with SOC followed by SIZ. Its
+        // three-byte component records start at byte 42; mutate only Ssizi so
+        // inspection must retain per-component precision and signedness even
+        // though the encoded packet samples remain irrelevant to inspection.
+        assert_eq!(&fixture[..4], &[0xff, 0x4f, 0xff, 0x51]);
+        fixture[45] = 0x8b; // signed 12-bit component one
+        fixture[48] = 0x0f; // unsigned 16-bit component two
+
+        let inspected =
+            inspect_part1_source(&codestream::source::SliceSource::new(&fixture)).unwrap();
+        assert_eq!(inspected.components.len(), 3);
+        assert_eq!(
+            inspected
+                .components
+                .iter()
+                .map(|component| (
+                    component.sample_format.bits_per_sample,
+                    component.sample_format.signed,
+                    component.horizontal_separation,
+                    component.vertical_separation,
+                ))
+                .collect::<Vec<_>>(),
+            vec![(8, false, 1, 1), (12, true, 2, 1), (16, false, 2, 2)]
+        );
+    }
+
+    struct FailingSource;
+
+    impl codestream::source::CodestreamSource for FailingSource {
+        fn len(&self) -> core::result::Result<u64, codestream::source::SourceError> {
+            Ok(64)
+        }
+
+        fn read_exact_at(
+            &self,
+            offset: u64,
+            destination: &mut [u8],
+        ) -> core::result::Result<(), codestream::source::SourceError> {
+            Err(codestream::source::SourceError {
+                kind: codestream::source::SourceErrorKind::Io,
+                offset,
+                requested: destination.len() as u64,
+                available: 64_u64.saturating_sub(offset),
+                message: "injected positioned failure".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn source_inspection_preserves_io_category_and_range_provenance() {
+        assert!(matches!(
+            inspect_part1_source(&FailingSource),
+            Err(J2kError::Source {
+                offset: 0,
+                requested: 2,
+                available: 64,
+                ref message,
+            }) if message.contains("injected positioned failure")
+        ));
+    }
+}
+
 /// Prepare a raw Part 1 codestream from an immutable positioned-read source.
 ///
 /// This is the application boundary for large files and container image
@@ -11522,6 +11729,12 @@ pub enum J2kError {
         offset: Option<u64>,
         message: String,
     },
+    Source {
+        offset: u64,
+        requested: u64,
+        available: u64,
+        message: String,
+    },
     TruncatedInput {
         needed: usize,
         remaining: usize,
@@ -11549,6 +11762,15 @@ impl fmt::Display for J2kError {
                 Some(offset) => write!(f, "invalid input at byte {offset}: {message}"),
                 None => write!(f, "invalid input: {message}"),
             },
+            Self::Source {
+                offset,
+                requested,
+                available,
+                message,
+            } => write!(
+                f,
+                "source I/O failure at byte {offset}: requested {requested} bytes, available {available} ({message})"
+            ),
             Self::TruncatedInput { needed, remaining } => write!(
                 f,
                 "truncated input: needed at least {needed} more bytes, had {remaining}"
@@ -11604,9 +11826,14 @@ fn map_container_error(error: container::ContainerError) -> J2kError {
 fn map_codestream_error(error: codestream::CodestreamError) -> J2kError {
     match error {
         codestream::CodestreamError::Source {
-            offset, message, ..
-        } => J2kError::InvalidInput {
-            offset: Some(offset),
+            offset,
+            requested,
+            available,
+            message,
+        } => J2kError::Source {
+            offset,
+            requested,
+            available,
             message,
         },
         codestream::CodestreamError::TruncatedInput {

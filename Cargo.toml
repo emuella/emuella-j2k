@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/emuella-j2k",
+  "crates/emuella-j2k-capi",
   "crates/emuella-j2k-accel",
   "crates/emuella-j2k-cli",
   "crates/emuella-j2k-codestream",
@@ -27,6 +28,7 @@ keywords = ["jpeg2000", "jp2", "j2k", "htj2k", "codec"]
 categories = ["multimedia::images", "encoding"]
 
 [workspace.dependencies]
+emuella-j2k = { version = "0.1.0", path = "crates/emuella-j2k", default-features = false }
 emuella-j2k-accel = { version = "0.1.0", path = "crates/emuella-j2k-accel", default-features = false }
 emuella-j2k-codestream = { version = "0.1.0", path = "crates/emuella-j2k-codestream", default-features = false }
 emuella-j2k-container = { version = "0.1.0", path = "crates/emuella-j2k-container", default-features = false }
@@ -36,6 +38,9 @@ emuella-j2k-tier1 = { version = "0.1.0", path = "crates/emuella-j2k-tier1", defa
 emuella-j2k-transform = { version = "0.1.0", path = "crates/emuella-j2k-transform", default-features = false }
 numpy = "0.29.0"
 pyo3 = "0.29.0"
+
+[profile.release]
+panic = "unwind"
 
 [profile.perf]
 inherits = "release"

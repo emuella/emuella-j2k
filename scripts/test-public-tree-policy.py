@@ -57,6 +57,13 @@ class PublicTreePolicyTests(unittest.TestCase):
             [],
         )
 
+    def test_native_consumer_and_generated_header_sources_are_allowed(self) -> None:
+        for path in ("tests/consumer.c", "tests/consumer.cc", "include/api.h"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    content_policy_errors(PurePosixPath(path), b"/* source */\n"), []
+                )
+
     def test_reviewed_legal_basename_is_allowed(self) -> None:
         self.assertEqual(
             content_policy_errors(PurePosixPath("LICENSE-APACHE-2.0"), b"text\n"),

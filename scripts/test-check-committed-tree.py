@@ -363,6 +363,7 @@ class CommittedTreeTests(unittest.TestCase):
             text = (ROOT / path).read_text()
             self.assertIn(command, text)
             self.assertIn("sh scripts/check-lossy-ht-public-matrix.sh", text)
+            self.assertIn("sh scripts/check-c-api.sh", text)
             self.assertIn("python3 scripts/test-check-committed-tree.py", text)
 
     def test_real_shell_dispatches_checkout_but_not_parent_repository(self) -> None:
@@ -402,6 +403,7 @@ class CommittedTreeTests(unittest.TestCase):
             (self.repo / "scripts" / name).write_bytes(
                 (ROOT / "scripts" / name).read_bytes()
             )
+        (self.repo / "scripts/check-c-api.sh").write_text("#!/bin/sh\nexit 0\n")
         self.commit()
         env = runner.environment()
         env.update(
@@ -440,6 +442,7 @@ class CommittedTreeTests(unittest.TestCase):
         (nested / "scripts/check-lossy-ht-public-matrix.sh").write_bytes(
             (ROOT / "scripts/check-lossy-ht-public-matrix.sh").read_bytes()
         )
+        (nested / "scripts/check-c-api.sh").write_text("#!/bin/sh\nexit 0\n")
         result = subprocess.run(
             ["sh", "scripts/check.sh"],
             cwd=nested,

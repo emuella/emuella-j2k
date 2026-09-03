@@ -6986,6 +6986,17 @@ pub struct Part1ComponentOutputInfo {
     pub signed: bool,
 }
 
+/// Raw Part 1 image and component geometry obtained from a positioned source.
+///
+/// This is inspection metadata only. It does not imply that any particular
+/// decode request is admitted by the codec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part1SourceInspection {
+    pub image_width: u32,
+    pub image_height: u32,
+    pub components: Vec<Part1ComponentOutputInfo>,
+}
+
 /// Structurally validated selective Part 1 work retained for one or more
 /// executions into caller-owned component planes.
 ///
@@ -24863,6 +24874,84 @@ pub fn prepare_part1_component_decode_from_source<'a>(
         prepared.preparation_timings.total_ns = prepared.preparation_timings.prepare_ns;
     }
     Ok(prepared)
+}
+
+/// Inspect raw Part 1 image and component geometry from an immutable
+/// positioned-read source without constructing a decode request.
+///
+/// The operation shares the source-backed header scanner, structural
+/// validation and source-error provenance used by prepared decode. Packet
+/// bodies are not decoded and the result makes no decode-support claim.
+pub fn inspect_part1_source(
+    source: &dyn source::CodestreamSource,
+) -> Result<Part1SourceInspection> {
+    let scan = scan_part1_source_headers(
+        source,
+        TileRegionRequest {
+            x: 0,
+            y: 0,
+            width: u32::MAX,
+            height: u32::MAX,
+        },
+    )
+    .map_err(|error| match error {
+        CodestreamError::Source {
+            offset,
+            requested,
+            available,
+            message,
+        } => CodestreamError::Source {
+            offset,
+            requested,
+            available,
+            message: format!("source inspection: {message}"),
+        },
+        error => error,
+    })?;
+    if scan.codestream.kind != CodestreamKind::J2k {
+        return Err(unsupported(
+            None,
+            None,
+            UnsupportedConstruct::EntropyCoder,
+            "raw source inspection is limited to JPEG 2000 Part 1 codestreams",
+        ));
+    }
+
+    let siz = &scan.codestream.siz;
+    let components = siz
+        .components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| {
+            let horizontal = u32::from(component.horizontal_separation);
+            let vertical = u32::from(component.vertical_separation);
+            let x_origin = siz.image_origin_x.div_ceil(horizontal);
+            let y_origin = siz.image_origin_y.div_ceil(vertical);
+            let x_end = siz.reference_grid_width.div_ceil(horizontal);
+            let y_end = siz.reference_grid_height.div_ceil(vertical);
+            Ok(Part1ComponentOutputInfo {
+                component_index: u16::try_from(index).map_err(|_| CodestreamError::SizeOverflow)?,
+                x_origin,
+                y_origin,
+                width: x_end
+                    .checked_sub(x_origin)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                height: y_end
+                    .checked_sub(y_origin)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                horizontal_separation: component.horizontal_separation,
+                vertical_separation: component.vertical_separation,
+                bits_per_sample: component.bits_per_sample,
+                signed: component.signed,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Part1SourceInspection {
+        image_width: scan.codestream.image_width(),
+        image_height: scan.codestream.image_height(),
+        components,
+    })
 }
 
 fn validate_source_selective_request_sample_guard(

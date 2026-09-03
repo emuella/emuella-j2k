@@ -49,11 +49,15 @@ cargo add emuella-j2k
 use emuella_j2k::{DecodeOptions, decode};
 ```
 
-Future native C and C++ consumers will use a separately packaged C ABI rather
-than Rust layout or ABI. Its accepted pre-implementation ownership, threading,
-failure, versioning and unsafe-code rules are recorded in the
-[C ABI design and safety contract](docs/c-abi-safety-contract.md); no C symbols
-or compatibility promise exist yet.
+Experimental native C and C++ consumers can use the separately packaged
+`emuella-j2k-capi` crate and its generated
+[`emuella_j2k.h`](crates/emuella-j2k-capi/include/emuella_j2k.h). The major-zero
+ABI exposes positioned raw Part 1 source inspection and one-component region
+decode into Rust-owned immutable images. Linux x86-64 C11 and C++17 consumers
+exercise both shared and static libraries in the canonical check. This
+qualifies the current experiment, not a cross-platform or ABI-major-one
+compatibility promise; the remaining gates and safety rules are recorded in the
+[C ABI safety contract](docs/c-abi-safety-contract.md).
 
 Lossless HTJ2K callers can choose raw codestream bytes with `encode_htj2k` or
 a deterministic JPH container with `encode_htj2k_jph`. Both entry points use

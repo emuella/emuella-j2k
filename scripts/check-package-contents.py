@@ -21,7 +21,7 @@ from package_legal_policy import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-PACKAGE_DIRECTORY = ROOT / "target/package"
+PACKAGE_DIRECTORY = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "package"
 
 
 def workspace_package_names() -> set[str]:

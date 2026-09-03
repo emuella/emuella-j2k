@@ -13,6 +13,9 @@ from pathlib import PurePosixPath
 ALLOWED_TEXT_SUFFIXES = frozenset(
     {
         ".json",
+        ".c",
+        ".cc",
+        ".h",
         ".lock",
         ".md",
         ".py",

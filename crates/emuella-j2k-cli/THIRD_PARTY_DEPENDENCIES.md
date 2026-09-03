@@ -4,7 +4,7 @@
 
 Distribution target: `cli` (`emuella-j2k-cli`)
 
-Locked graph: repository `Cargo.lock` SHA-256 `f94c329121e9bdac5107035202d9588b44ff63588acbc509f4f68c27c9776d40`.
+Locked graph: repository `Cargo.lock` SHA-256 `5a6188c829da398cf2744f617c9127d4037f558e5517ff76d2130c7455705ac6`.
 
 This inventory is derived from `cargo metadata --locked --format-version 1`
 without a platform filter, so `runtime` is the conservative union of normal,
