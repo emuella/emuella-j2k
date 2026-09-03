@@ -134,7 +134,11 @@ fn peak(source: &[u8], native: &[u8], bits: u8) -> u16 {
         .unwrap()
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let mut encoded = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(encoded, "{byte:02x}").unwrap();
+    }
+    encoded
 }
 
 #[derive(Default)]

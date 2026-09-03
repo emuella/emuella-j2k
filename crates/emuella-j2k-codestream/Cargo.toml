@@ -36,7 +36,7 @@ rayon = { version = "1.11.0", optional = true }
 [dev-dependencies]
 emuella-j2k-container.workspace = true
 emuella-j2k-tier1 = { workspace = true, features = ["test-fixtures"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 
 [lints]
 workspace = true
