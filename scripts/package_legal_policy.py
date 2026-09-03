@@ -61,6 +61,7 @@ def apache_only_policy() -> PackageLegalPolicy:
 
 PACKAGE_POLICY: Mapping[str, PackageLegalPolicy] = {
     "emuella-j2k": apache_only_policy(),
+    "emuella-j2k-capi": apache_only_policy(),
     "emuella-j2k-accel": PackageLegalPolicy(
         license_expression=COMBINED,
         legal_file_sha256={

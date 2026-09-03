@@ -44,6 +44,7 @@ jobs:
       - run: cargo check --workspace --all-targets
       - run: cargo check -p emuella-j2k-codestream --features parallel
       - run: cargo test --workspace
+      - run: sh scripts/check-c-api.sh
       - run: sh scripts/check-lossy-ht-public-matrix.sh
       - run: cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
       - run: cargo clippy --workspace --all-targets -- -D warnings

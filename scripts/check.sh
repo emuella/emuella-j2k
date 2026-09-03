@@ -28,6 +28,7 @@ cargo fmt \
 cargo check --workspace --all-targets
 cargo check -p emuella-j2k-codestream --features parallel
 cargo test --workspace
+sh scripts/check-c-api.sh
 sh scripts/check-lossy-ht-public-matrix.sh
 cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
 cargo clippy --workspace --all-targets -- -D warnings
