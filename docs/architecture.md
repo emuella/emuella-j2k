@@ -20,6 +20,11 @@ inspect/decode/encode entry points. Lower-level crates parse boxes and markers,
 walk packets, decode or encode code blocks, and apply transforms. Optional
 parallel and SIMD paths retain deterministic scalar fallbacks.
 
+The accepted [C ABI design and safety contract](c-abi-safety-contract.md)
+places any future native-language adapter above the safe public facade in a
+separate crate. It fixes the ownership, concurrency, failure, versioning and
+unsafe-code boundaries before implementation; no C ABI currently exists.
+
 Classic block coding in `emuella-j2k-tier1` uses a project-authored Annex C MQ
 coder and Annex D coefficient-context model. Its standards basis, design
 boundary, and qualification record are documented in
