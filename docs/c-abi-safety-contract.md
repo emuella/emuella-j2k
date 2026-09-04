@@ -52,6 +52,13 @@ and ABI version. `emuella_j2k_abi_version` and
 callback, inspection, reusable-workspace component-region decode, immutable
 image copy and owned diagnostic lifecycles are the complete current surface.
 
+One admitted reversible-MCT regional profile reconstructs the three required
+component dependencies privately and returns only the single component named
+by the existing request. The image continues to contain exactly one plane and
+its descriptor retains that requested source-component identity. No ABI field,
+ownership rule or publication sequence changes: the handle is published only
+after all dependency reads, reconstruction and inverse RCT succeed.
+
 Raw J2K is the first input route because it is a payload form delegated by a
 NITF `IC=C8` image segment. JP2 container traversal, HTJ2K/JPH exposure,
 encoding, direct decode into foreign storage, asynchronous work and custom
@@ -315,6 +322,8 @@ allow-list, layout assertions, and C11/C++17 compile, shared/static link and
 runtime source-inspect-decode-copy journeys. Rust tests cover ordinary pointer
 validation, callback failure and provenance, malformed input, bounds,
 workspace reuse, natural `Send`/`Sync`, panic containment and poisoning. The
+reversible-MCT regional regression also checks exact one-plane output through
+the existing request, image-descriptor and copy calls. The
 remaining major-one gates include the full Miri, sanitiser, concurrent native
 callback and operation-sequence fuzzing campaigns below; until those are
 complete the version remains experimental major zero.

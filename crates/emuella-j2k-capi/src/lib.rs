@@ -1127,6 +1127,80 @@ mod tests {
     }
 
     #[test]
+    fn reversible_mct_region_preserves_the_one_plane_abi() {
+        let fixture = emuella_j2k_test_support::native_planes::reversible_mct_region_fixture();
+        let mut source = Box::new(TestSource {
+            bytes: fixture.tnsot_zero,
+            fail_reads: false,
+        });
+        let decoder = decoder(&mut source);
+        let mut workspace = ptr::null_mut();
+        assert_eq!(
+            emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+            EMUELLA_J2K_STATUS_OK
+        );
+        let request = EmuellaJ2kDecodeRequestV0 {
+            struct_size: size_of::<EmuellaJ2kDecodeRequestV0>(),
+            abi_version: EMUELLA_J2K_ABI_VERSION,
+            reserved: 0,
+            component: 2,
+            max_quality_layers: 0,
+            x: 61,
+            y: 63,
+            width: 7,
+            height: 5,
+            discard_levels: 0,
+            reserved_bytes: [0; 7],
+        };
+        let mut image = ptr::null_mut();
+        assert_eq!(
+            emuella_j2k_decode_component_region(
+                decoder,
+                workspace,
+                &request,
+                &mut image,
+                ptr::null_mut(),
+            ),
+            EMUELLA_J2K_STATUS_OK
+        );
+        let mut info = EmuellaJ2kImageInfoV0::default();
+        assert_eq!(
+            emuella_j2k_image_info(image, &mut info, ptr::null_mut()),
+            EMUELLA_J2K_STATUS_OK
+        );
+        assert_eq!((info.width, info.height, info.component_count), (7, 5, 1));
+        let mut component = EmuellaJ2kComponentInfoV0::default();
+        assert_eq!(
+            emuella_j2k_image_component_info(image, &mut component, ptr::null_mut()),
+            EMUELLA_J2K_STATUS_OK
+        );
+        assert_eq!(
+            (
+                component.source_component,
+                component.width,
+                component.height
+            ),
+            (2, 7, 5)
+        );
+        let mut actual = [0_u8; 35];
+        assert_eq!(
+            emuella_j2k_image_copy(image, actual.as_mut_ptr(), actual.len(), 7, ptr::null_mut(),),
+            EMUELLA_J2K_STATUS_OK
+        );
+        let mut expected = Vec::new();
+        for y in 63_usize..68 {
+            expected.extend_from_slice(
+                &fixture.planes[2]
+                    [y * fixture.width as usize + 61..y * fixture.width as usize + 68],
+            );
+        }
+        assert_eq!(actual.as_slice(), expected);
+        emuella_j2k_image_destroy(image);
+        emuella_j2k_workspace_destroy(workspace);
+        emuella_j2k_decoder_destroy(decoder);
+    }
+
+    #[test]
     fn inspection_exposes_heterogeneous_component_metadata() {
         let mut source = heterogeneous_fixture();
         let decoder = decoder(&mut source);

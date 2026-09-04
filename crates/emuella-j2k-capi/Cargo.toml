@@ -21,6 +21,7 @@ emuella-j2k = { workspace = true, features = ["std"] }
 cbindgen = "=0.29.4"
 
 [dev-dependencies]
+emuella-j2k-test-support = { version = "0.1.0", path = "../emuella-j2k-test-support" }
 static_assertions = "1.1.0"
 
 [lints.rust]

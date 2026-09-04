@@ -7007,6 +7007,8 @@ pub struct Part1SourceInspection {
 pub struct PreparedPart1ComponentDecode<'a> {
     codestream: Codestream,
     coding_style: CodingStyleMarker,
+    reconstruction_component_indices: Vec<u16>,
+    source_to_reconstruction: Vec<u16>,
     component_indices: Vec<u16>,
     source_to_output: Vec<u16>,
     region: TileRegionRequest,
@@ -7083,6 +7085,14 @@ impl PreparedPart1ComponentDecode<'_> {
     /// Selected source components in caller-visible output order.
     pub fn component_indices(&self) -> &[u16] {
         &self.component_indices
+    }
+
+    /// Internal source components retained to satisfy output-transform
+    /// dependencies. This is diagnostic planning evidence, not an additional
+    /// caller-visible output selection.
+    #[doc(hidden)]
+    pub fn reconstruction_component_indices(&self) -> &[u16] {
+        &self.reconstruction_component_indices
     }
 
     /// Uniform sample representation of the selected component planes.
@@ -7180,7 +7190,8 @@ fn prepared_part1_execution_parallelism(
             return (DecodeParallelAxis::Scalar, 1);
         }
         let prepared = _prepared;
-        if prepared.native_component_geometry {
+        if prepared.native_component_geometry || prepared.coding_style.multiple_component_transform
+        {
             return (DecodeParallelAxis::Scalar, 1);
         }
         let selected_code_blocks = prepared
@@ -7235,26 +7246,31 @@ fn div_ceil_or_zero(bytes: u64, count: u64) -> u64 {
 fn prepared_part1_plan_memory(
     prepared: &PreparedPart1ComponentDecode<'_>,
 ) -> PreparedPart1PlanMemory {
-    let mut retained_heap_bytes = capacity_bytes::<u16>(prepared.component_indices.capacity())
-        .saturating_add(capacity_bytes::<u16>(prepared.source_to_output.capacity()))
-        .saturating_add(capacity_bytes::<usize>(
-            prepared.component_sample_bytes.capacity(),
-        ))
-        .saturating_add(capacity_bytes::<Part1ComponentOutputInfo>(
-            prepared.component_outputs.capacity(),
-        ))
-        .saturating_add(capacity_bytes::<PreparedPart1TileDecode<'_>>(
-            prepared.tiles.capacity(),
-        ))
-        .saturating_add(capacity_bytes::<ComponentParameters>(
-            prepared.codestream.siz.components.capacity(),
-        ))
-        .saturating_add(capacity_bytes::<MarkerSegment>(
-            prepared.codestream.markers.capacity(),
-        ))
-        .saturating_add(capacity_bytes::<TilePartState>(
-            prepared.codestream.tiles.capacity(),
-        ));
+    let mut retained_heap_bytes =
+        capacity_bytes::<u16>(prepared.reconstruction_component_indices.capacity())
+            .saturating_add(capacity_bytes::<u16>(
+                prepared.source_to_reconstruction.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<u16>(prepared.component_indices.capacity()))
+            .saturating_add(capacity_bytes::<u16>(prepared.source_to_output.capacity()))
+            .saturating_add(capacity_bytes::<usize>(
+                prepared.component_sample_bytes.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<Part1ComponentOutputInfo>(
+                prepared.component_outputs.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<PreparedPart1TileDecode<'_>>(
+                prepared.tiles.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<ComponentParameters>(
+                prepared.codestream.siz.components.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<MarkerSegment>(
+                prepared.codestream.markers.capacity(),
+            ))
+            .saturating_add(capacity_bytes::<TilePartState>(
+                prepared.codestream.tiles.capacity(),
+            ));
     if let Some(table) = &prepared.codestream.tile_part_lengths {
         retained_heap_bytes =
             retained_heap_bytes.saturating_add(capacity_bytes::<TilePartLengthEntry>(
@@ -8010,7 +8026,7 @@ fn scan_part1_source_headers(
         declared_index += 1;
     }
     validate_indexed_tile_part_sequence(&siz, &all_tiles)?;
-    if strict_native_origin
+    if (strict_native_origin || coding_style.is_some_and(|style| style.eph_markers))
         && next_source_offset
             .checked_add(2)
             .ok_or(CodestreamError::SizeOverflow)?
@@ -8020,7 +8036,7 @@ fn scan_part1_source_headers(
             usize::try_from(next_source_offset).ok(),
             Some(Marker::Eoc),
             UnsupportedConstruct::MarkerSegment,
-            "non-zero-origin source decode requires EOC to terminate the raw codestream bytes",
+            "source decode requires EOC to terminate the admitted raw codestream bytes",
         ));
     }
 
@@ -11002,6 +11018,112 @@ pub fn encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
         1,
     )?;
     write_tile_part(&mut codestream, 0, &packet, true)?;
+    Ok(codestream)
+}
+
+/// Build the deterministic classic Part 1 fixture used to qualify bounded
+/// selective reversible-MCT regions with inline EPH, TLM and PLT signalling.
+///
+/// This is test support, not an application encode profile. The first of 19
+/// LRCP layers carries every authored Tier-1 contribution and the remaining
+/// layers contain empty packets, preserving material multi-layer packet state
+/// without introducing a second rate-allocation implementation.
+#[doc(hidden)]
+pub fn encode_part1_reversible_mct_region_test_fixture(
+    input: RgbU8Encode<'_>,
+    unspecified_tile_part_count: bool,
+) -> Result<Vec<u8>> {
+    const DECOMPOSITION_LEVELS: u8 = 5;
+    const LAYERS: u16 = 19;
+
+    validate_rgb_u8_encode(input)?;
+    let [mut y, mut db, mut dr] =
+        forward_rct_rgb_components(input)?.map(|component| component.coefficients);
+    forward_reversible_5_3_rgb_components(
+        input.width,
+        input.height,
+        &mut y,
+        &mut db,
+        &mut dr,
+        DECOMPOSITION_LEVELS,
+        "project-authored Part 1 regional MCT fixture forward transform failed",
+    )?;
+    let component_planes = [y.as_slice(), db.as_slice(), dr.as_slice()];
+    let subband_specs = decomp_subband_specs(input.width, input.height, DECOMPOSITION_LEVELS)?;
+    let qcd_exponents = subband_specs
+        .iter()
+        .map(|spec| {
+            max_component_subband_available_bitplanes(input.width, &component_planes, *spec)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut segments = Vec::new();
+    let mut component_subbands = Vec::with_capacity(3);
+    let mut tier1_scratch = tier1::CodeBlockEncodeScratch::new();
+    for plane in component_planes {
+        let mut subbands = Vec::with_capacity(subband_specs.len());
+        for (spec, available_bitplanes) in subband_specs.iter().zip(&qcd_exponents) {
+            subbands.push(encode_decomp_subband(
+                input.width,
+                plane,
+                *spec,
+                *available_bitplanes,
+                &mut segments,
+                &mut tier1_scratch,
+            )?);
+        }
+        component_subbands.push(subbands);
+    }
+    let (packets, packet_lengths) =
+        write_part1_mct_eph_packets(DECOMPOSITION_LEVELS, LAYERS, &component_subbands, &segments)?;
+    let plt = packet_length_table_segment(&packet_lengths)?;
+    let tile_part_length = 12_usize
+        .checked_add(plt.len())
+        .and_then(|length| length.checked_add(2))
+        .and_then(|length| length.checked_add(packets.len()))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part_length =
+        u32::try_from(tile_part_length).map_err(|_| CodestreamError::SizeOverflow)?;
+
+    let mut codestream = Vec::new();
+    write_native_main_header(
+        &mut codestream,
+        input.width,
+        input.height,
+        input.width,
+        input.height,
+        8,
+        3,
+        true,
+        DECOMPOSITION_LEVELS,
+        &qcd_exponents,
+        false,
+        0,
+        LAYERS,
+    )?;
+    let cod = codestream
+        .windows(2)
+        .position(|bytes| bytes == Marker::Cod.code().to_be_bytes())
+        .ok_or(CodestreamError::SizeOverflow)?;
+    *codestream
+        .get_mut(cod.checked_add(4).ok_or(CodestreamError::SizeOverflow)?)
+        .ok_or(CodestreamError::SizeOverflow)? |= 0x04;
+
+    codestream.extend_from_slice(&Marker::Tlm.code().to_be_bytes());
+    codestream.extend_from_slice(&10_u16.to_be_bytes());
+    codestream.extend_from_slice(&[0, 0x60]);
+    codestream.extend_from_slice(&0_u16.to_be_bytes());
+    codestream.extend_from_slice(&tile_part_length.to_be_bytes());
+
+    codestream.extend_from_slice(&Marker::Sot.code().to_be_bytes());
+    codestream.extend_from_slice(&10_u16.to_be_bytes());
+    codestream.extend_from_slice(&0_u16.to_be_bytes());
+    codestream.extend_from_slice(&tile_part_length.to_be_bytes());
+    codestream.push(0);
+    codestream.push(u8::from(!unspecified_tile_part_count));
+    codestream.extend_from_slice(&plt);
+    codestream.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+    codestream.extend_from_slice(&packets);
+    codestream.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
     Ok(codestream)
 }
 
@@ -16018,6 +16140,123 @@ fn write_native_decomp_packets(
     Ok(())
 }
 
+fn write_part1_mct_eph_packets(
+    decomposition_levels: u8,
+    layers: u16,
+    component_subbands: &[Vec<NativeDecompSubband>],
+    segments: &[u8],
+) -> Result<(Vec<u8>, Vec<usize>)> {
+    if layers == 0 || component_subbands.len() != 3 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let packet_count = usize::from(layers)
+        .checked_mul(usize::from(decomposition_levels) + 1)
+        .and_then(|count| count.checked_mul(component_subbands.len()))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut output = Vec::new();
+    let mut packet_lengths = Vec::new();
+    packet_lengths
+        .try_reserve_exact(packet_count)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    for layer in 0..layers {
+        for resolution in 0..=decomposition_levels {
+            for subbands in component_subbands {
+                let packet_start = output.len();
+                let packet_subbands = subbands
+                    .iter()
+                    .filter(|subband| subband.resolution == resolution)
+                    .collect::<Vec<_>>();
+                let mut writer = PacketBitWriter::new();
+                if layer == 0 {
+                    let has_contribution = packet_subbands
+                        .iter()
+                        .any(|subband| subband.code_blocks.iter().any(|block| block.included));
+                    writer.write_bit(u32::from(has_contribution))?;
+                    if has_contribution {
+                        for subband in packet_subbands
+                            .iter()
+                            .filter(|subband| !subband.code_blocks.is_empty())
+                        {
+                            write_component_packet_header(
+                                &mut writer,
+                                subband.code_block_cols,
+                                subband.code_block_rows,
+                                &subband.code_blocks,
+                            )?;
+                        }
+                    }
+                } else {
+                    writer.write_bit(0)?;
+                }
+                writer.align();
+                output
+                    .try_reserve(writer.bytes().len().saturating_add(2))
+                    .map_err(|_| CodestreamError::SizeOverflow)?;
+                output.extend_from_slice(writer.bytes());
+                output.extend_from_slice(&Marker::Eph.code().to_be_bytes());
+                if layer == 0 {
+                    for subband in packet_subbands {
+                        for block in subband.code_blocks.iter().filter(|block| block.included) {
+                            let segment =
+                                checked_slice(segments, block.segment_offset, block.segment_len)?;
+                            output
+                                .try_reserve(segment.len())
+                                .map_err(|_| CodestreamError::SizeOverflow)?;
+                            output.extend_from_slice(segment);
+                        }
+                    }
+                }
+                packet_lengths.push(
+                    output
+                        .len()
+                        .checked_sub(packet_start)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                );
+            }
+        }
+    }
+    Ok((output, packet_lengths))
+}
+
+fn packet_length_table_segment(packet_lengths: &[usize]) -> Result<Vec<u8>> {
+    let mut encoded = Vec::new();
+    for length in packet_lengths {
+        let mut groups = [0_u8; 10];
+        let mut value = u64::try_from(*length).map_err(|_| CodestreamError::SizeOverflow)?;
+        let mut count = 0_usize;
+        loop {
+            groups[count] =
+                u8::try_from(value & 0x7f).map_err(|_| CodestreamError::SizeOverflow)?;
+            count += 1;
+            value >>= 7;
+            if value == 0 {
+                break;
+            }
+        }
+        encoded
+            .try_reserve(count)
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        for group_index in (0..count).rev() {
+            let continuation = u8::from(group_index != 0) << 7;
+            encoded.push(groups[group_index] | continuation);
+        }
+    }
+    let marker_length = encoded
+        .len()
+        .checked_add(3)
+        .and_then(|length| u16::try_from(length).ok())
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut segment = Vec::new();
+    segment
+        .try_reserve_exact(encoded.len().saturating_add(5))
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    segment.extend_from_slice(&Marker::Plt.code().to_be_bytes());
+    segment.extend_from_slice(&marker_length.to_be_bytes());
+    segment.push(0);
+    segment.extend_from_slice(&encoded);
+    Ok(segment)
+}
+
 #[cfg(any(test, feature = "test-fixtures"))]
 struct QualityLayerHeaderState {
     inclusion: EncTagTree,
@@ -20673,7 +20912,9 @@ fn validate_supported_native_component_multitile_profile_with_sample_guard(
             "native component decode accepts multiple component transform only for three-component rows",
         ));
     }
-    if inline_packet_markers {
+    if coding_style.eph_markers {
+        validate_one_tile_part_per_tile_with_unspecified_count(codestream)?;
+    } else if inline_packet_markers {
         validate_one_tile_part_per_tile(codestream)?;
     } else {
         validate_retained_tile_parts_per_tile(codestream)?;
@@ -21068,7 +21309,7 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
             validate_supported_part1_native_multitile_partial_semantics(codestream)
         };
     }
-    match coding_style.transform {
+    let coding_style = match coding_style.transform {
         WaveletTransform::Irreversible97 => {
             validate_supported_native_irreversible_component_selective_profile(input, codestream)
         }
@@ -21089,7 +21330,23 @@ fn validate_supported_selective_native_component_profile_with_sample_guard(
                 bounded_poc.is_some() && bounded_maxshift.is_some(),
             )
         }
+    }?;
+    if coding_style.eph_markers
+        && codestream
+            .markers
+            .iter()
+            .rfind(|segment| segment.marker == Marker::Eoc)
+            .and_then(|segment| segment.offset.checked_add(2))
+            != Some(input.len())
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Eoc),
+            UnsupportedConstruct::MarkerSegment,
+            "EPH native component decode requires EOC to terminate the raw codestream bytes",
+        ));
     }
+    Ok(coding_style)
 }
 
 fn validate_part1_reduced_reversible_mct_component_profile(
@@ -23213,8 +23470,32 @@ fn validate_supported_native_two_decomp_multitile_profile(
 }
 
 fn validate_one_tile_part_per_tile(codestream: &Codestream) -> Result<()> {
+    validate_one_tile_part_per_tile_inner(codestream, false)
+}
+
+fn validate_one_tile_part_per_tile_with_unspecified_count(codestream: &Codestream) -> Result<()> {
+    validate_one_tile_part_per_tile_inner(codestream, true)
+}
+
+fn validate_one_tile_part_per_tile_inner(
+    codestream: &Codestream,
+    allow_unspecified_count: bool,
+) -> Result<()> {
     let tile_rects = tile_rects(codestream)?;
-    if codestream.tiles.len() != tile_rects.len() {
+    let complete_tlm_one_part_per_tile =
+        codestream.tile_part_lengths.as_ref().is_some_and(|table| {
+            table.fully_covers_codestream
+                && table.entries.len() == tile_rects.len()
+                && tile_rects.iter().all(|rect| {
+                    table
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.tile_index == rect.tile_index)
+                        .count()
+                        == 1
+                })
+        });
+    if codestream.tiles.len() != tile_rects.len() && !complete_tlm_one_part_per_tile {
         return Err(unsupported(
             None,
             Some(Marker::Sot),
@@ -23232,12 +23513,18 @@ fn validate_one_tile_part_per_tile(codestream: &Codestream) -> Result<()> {
                 "multi-tile decode rejects tile-part continuations",
             ));
         }
-        if tile.tile_part_count != Some(1) {
+        if tile.tile_part_count != Some(1)
+            && !(allow_unspecified_count && tile.tile_part_count.is_none())
+        {
             return Err(unsupported(
                 None,
                 Some(Marker::Sot),
                 UnsupportedConstruct::MarkerSegment,
-                "multi-tile decode requires each tile to declare exactly one tile-part",
+                if allow_unspecified_count {
+                    "multi-tile decode requires each tile to declare one tile-part or leave the count unspecified"
+                } else {
+                    "multi-tile decode requires each tile to declare exactly one tile-part"
+                },
             ));
         }
         let matching_rects = tile_rects
@@ -23270,6 +23557,10 @@ fn validate_one_tile_part_per_tile(codestream: &Codestream) -> Result<()> {
         })?;
     }
 
+    if complete_tlm_one_part_per_tile && codestream.tiles.len() != tile_rects.len() {
+        return Ok(());
+    }
+
     for rect in tile_rects {
         let matching_parts = codestream
             .tiles
@@ -23287,6 +23578,46 @@ fn validate_one_tile_part_per_tile(codestream: &Codestream) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod one_tile_part_per_tile_validation_tests {
+    use super::*;
+
+    #[test]
+    fn complete_tlm_can_prove_unretained_tiles_have_one_unspecified_part() {
+        let samples = [128_u8; 16];
+        let bytes = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let mut parsed = parse(&bytes).unwrap();
+        parsed.siz.tile_width = 2;
+        let mut selected = parsed.tiles[0];
+        selected.tile_index = 1;
+        selected.tile_part_count = None;
+        parsed.tiles = vec![selected];
+        parsed.tile_part_lengths = Some(TilePartLengthTable {
+            entries: vec![
+                TilePartLengthEntry {
+                    tile_index: 0,
+                    tile_part_length: 14,
+                    sot_offset: 0,
+                    marker_offset: 0,
+                },
+                TilePartLengthEntry {
+                    tile_index: 1,
+                    tile_part_length: 14,
+                    sot_offset: 14,
+                    marker_offset: 0,
+                },
+            ],
+            fully_covers_codestream: true,
+        });
+
+        assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_ok());
+        assert!(validate_one_tile_part_per_tile(&parsed).is_err());
+
+        parsed.tile_part_lengths.as_mut().unwrap().entries[1].tile_index = 0;
+        assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_err());
+    }
 }
 
 fn validate_retained_tile_parts_per_tile(codestream: &Codestream) -> Result<()> {
@@ -24958,6 +25289,13 @@ pub fn inspect_part1_source(
 fn validate_source_selective_request_sample_guard(
     request: Part1ComponentDecodeRequest<'_>,
 ) -> Result<()> {
+    validate_selective_request_sample_guard(request, request.component_indices.len())
+}
+
+fn validate_selective_request_sample_guard(
+    request: Part1ComponentDecodeRequest<'_>,
+    component_count: usize,
+) -> Result<()> {
     let scale = 1_u64
         .checked_shl(u32::from(request.discard_levels))
         .ok_or(CodestreamError::SizeOverflow)?;
@@ -24965,7 +25303,7 @@ fn validate_source_selective_request_sample_guard(
     let height = u64::from(request.region.height).div_ceil(scale);
     let samples = width
         .checked_mul(height)
-        .and_then(|samples| samples.checked_mul(request.component_indices.len() as u64))
+        .and_then(|samples| samples.checked_mul(component_count as u64))
         .ok_or(CodestreamError::SizeOverflow)?;
     if samples == 0 || samples > MAX_NATIVE_PART1_TOTAL_DECODE_SAMPLES {
         return Err(unsupported(
@@ -24976,6 +25314,73 @@ fn validate_source_selective_request_sample_guard(
         ));
     }
     Ok(())
+}
+
+fn validate_selective_reversible_mct_region_profile(
+    codestream: &Codestream,
+    coding_style: CodingStyleMarker,
+    request: Part1ComponentDecodeRequest<'_>,
+) -> Result<()> {
+    if codestream.siz.component_count() != 3
+        || codestream.siz.components.iter().any(|component| {
+            component.bits_per_sample != 8
+                || component.signed
+                || component.horizontal_separation != 1
+                || component.vertical_separation != 1
+        })
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Siz),
+            UnsupportedConstruct::ComponentSampling,
+            "selective reversible MCT regions require three matching unsigned 8-bit unit-sampled components",
+        ));
+    }
+    if request.discard_levels != 0 || request.max_layers.is_some() {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::Transform,
+            "selective reversible MCT regions require full resolution and all declared quality layers",
+        ));
+    }
+    if coding_style.progression_order != ProgressionOrder::Lrcp
+        || !coding_style.eph_markers
+        || coding_style.sop_markers
+        || coding_style.precincts_declared
+    {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::PacketDecode,
+            "selective reversible MCT regions require default-precinct LRCP packets with EPH and without SOP",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a parsed raw Part 1 codestream has the bounded static envelope for
+/// full-resolution selective RGB regions after inverse reversible MCT.
+pub fn is_supported_part1_selective_reversible_mct_region_profile(codestream: &Codestream) -> bool {
+    validate_supported_native_component_multitile_profile(codestream).is_ok_and(|coding_style| {
+        coding_style.multiple_component_transform
+            && validate_selective_reversible_mct_region_profile(
+                codestream,
+                coding_style,
+                Part1ComponentDecodeRequest {
+                    component_indices: &[0],
+                    region: TileRegionRequest {
+                        x: 0,
+                        y: 0,
+                        width: 1,
+                        height: 1,
+                    },
+                    discard_levels: 0,
+                    max_layers: None,
+                },
+            )
+            .is_ok()
+    })
 }
 
 fn plan_synthesis_window(
@@ -25216,6 +25621,22 @@ where
         &codestream,
         enforce_total_sample_guard,
     )?;
+    let reconstruction_component_indices = if coding_style.multiple_component_transform {
+        validate_selective_reversible_mct_region_profile(&codestream, coding_style, request)?;
+        alloc::vec![0_u16, 1, 2]
+    } else {
+        component_indices.clone()
+    };
+    validate_selective_request_sample_guard(request, reconstruction_component_indices.len())?;
+    let mut source_to_reconstruction =
+        alloc::vec![u16::MAX; usize::from(codestream.siz.component_count())];
+    for (position, component_index) in reconstruction_component_indices.iter().copied().enumerate()
+    {
+        *source_to_reconstruction
+            .get_mut(usize::from(component_index))
+            .ok_or(CodestreamError::SizeOverflow)? =
+            u16::try_from(position).map_err(|_| CodestreamError::SizeOverflow)?;
+    }
     let subsampled = codestream.siz.components.iter().any(|component| {
         component.horizontal_separation != 1 || component.vertical_separation != 1
     });
@@ -25228,14 +25649,6 @@ where
         ));
     }
     let bounded_maxshift = parse_bounded_tile_maxshift(marker_input, &codestream)?;
-    if coding_style.multiple_component_transform {
-        return Err(unsupported(
-            None,
-            Some(Marker::Cod),
-            UnsupportedConstruct::Transform,
-            "direct selective component output does not split multiple-component-transform inputs",
-        ));
-    }
     let max_resolution = coding_style
         .decomposition_levels
         .checked_sub(request.discard_levels)
@@ -25306,7 +25719,7 @@ where
 
     let mut prepared_tiles = Vec::with_capacity(plan.tiles.len());
     for planned in plan.tiles {
-        let component_windows = component_indices
+        let component_windows = reconstruction_component_indices
             .iter()
             .map(|component_index| {
                 let component = codestream
@@ -25357,7 +25770,7 @@ where
             &payload,
             request.max_layers,
             max_resolution,
-            &component_indices,
+            &reconstruction_component_indices,
             &parse_work.tile_part_order,
         )?;
         timings.packets_parsed = timings
@@ -25376,7 +25789,7 @@ where
             .contributions
             .iter()
             .filter(|contribution| {
-                source_to_output
+                source_to_reconstruction
                     .get(usize::from(contribution.component_index))
                     .copied()
                     .unwrap_or(u16::MAX)
@@ -25390,7 +25803,7 @@ where
             .saturating_add(skipped)
             .saturating_add(parsed_packets.excluded_body_bytes);
 
-        let mut component_plans = component_indices
+        let mut component_plans = reconstruction_component_indices
             .iter()
             .copied()
             .zip(component_windows)
@@ -25406,7 +25819,7 @@ where
             .collect::<Vec<_>>();
         let mut spatially_skipped_bytes = 0_u64;
         for (contribution_index, contribution) in parsed_packets.contributions.iter().enumerate() {
-            let output_position = source_to_output
+            let output_position = source_to_reconstruction
                 .get(usize::from(contribution.component_index))
                 .copied()
                 .unwrap_or(u16::MAX);
@@ -25489,6 +25902,8 @@ where
     Ok(PreparedPart1ComponentDecode {
         codestream,
         coding_style,
+        reconstruction_component_indices,
+        source_to_reconstruction,
         component_indices,
         source_to_output,
         region,
@@ -25635,6 +26050,36 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
     }
     timings.execution_axis = execution_axis;
     timings.execution_workers = execution_workers;
+    if prepared.coding_style.multiple_component_transform {
+        let mut decoded_tiles = Vec::new();
+        decoded_tiles
+            .try_reserve_exact(prepared.tiles.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        for tile in &prepared.tiles {
+            decoded_tiles.push(decode_prepared_part1_tile(
+                prepared, tile, workspace, options,
+            )?);
+        }
+        for (tile, decoded) in prepared.tiles.iter().zip(&decoded_tiles) {
+            timings.add_assign(&decoded.timings);
+            copy_decoded_prepared_part1_tile(
+                prepared,
+                tile,
+                &decoded.components,
+                output_planes,
+                &mut timings,
+                options.instrumentation == DecodeInstrumentation::StageTimings
+                    || options.instrumentation == DecodeInstrumentation::DetailedProfile,
+            )?;
+        }
+        finish_prepared_part1_output_timings(prepared, &mut timings);
+        #[cfg(feature = "std")]
+        {
+            timings.execute_ns = execute_started.elapsed().as_nanos();
+            timings.total_ns = timings.prepare_ns.saturating_add(timings.execute_ns);
+        }
+        return Ok(timings);
+    }
     if prepared.native_component_geometry {
         if prepared.tiles.len() != 1 {
             return Err(CodestreamError::SizeOverflow);
@@ -25894,6 +26339,19 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
                 || options.instrumentation == DecodeInstrumentation::DetailedProfile,
         )?;
     }
+    finish_prepared_part1_output_timings(prepared, &mut timings);
+    #[cfg(feature = "std")]
+    {
+        timings.execute_ns = execute_started.elapsed().as_nanos();
+        timings.total_ns = timings.prepare_ns.saturating_add(timings.execute_ns);
+    }
+    Ok(timings)
+}
+
+fn finish_prepared_part1_output_timings(
+    prepared: &PreparedPart1ComponentDecode<'_>,
+    timings: &mut DecodeStageTimings,
+) {
     timings.output_samples = prepared
         .component_outputs
         .iter()
@@ -25913,12 +26371,6 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
             )
         });
     timings.caller_output_bytes = timings.synthesis_output_bytes_written;
-    #[cfg(feature = "std")]
-    {
-        timings.execute_ns = execute_started.elapsed().as_nanos();
-        timings.total_ns = timings.prepare_ns.saturating_add(timings.execute_ns);
-    }
-    Ok(timings)
 }
 
 fn copy_decoded_prepared_part1_tile(
@@ -28951,6 +29403,65 @@ fn decode_prepared_part1_tile_component_samples(
 ) -> Result<Vec<Vec<u8>>> {
     let detailed_profile = instrumentation == DecodeInstrumentation::DetailedProfile;
     let coarse_stage_timings = instrumentation == DecodeInstrumentation::StageTimings;
+    if prepared.coding_style.multiple_component_transform {
+        let planes = reconstruct_default_precinct_component_planes_selected(
+            &tile.payload,
+            &prepared.codestream,
+            prepared.coding_style,
+            tile.planned.tile,
+            tile.maxshift,
+            &tile.contributions,
+            Some(&tile.selected_contribution_indices),
+            Some(&tile.synthesis_window),
+            &prepared.reconstruction_component_indices,
+            Some(&prepared.source_to_reconstruction),
+            detailed_profile,
+            coarse_stage_timings,
+            timings.as_deref_mut(),
+            workspace,
+            prepared.discard_levels,
+        )?;
+        if planes.len() != 3 {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        #[cfg(feature = "std")]
+        let stage_started =
+            (detailed_profile || coarse_stage_timings).then(std::time::Instant::now);
+        let rgb = rgb_u8_inverse_rct_planes_to_bytes(planes)?;
+        #[cfg(feature = "std")]
+        if let Some(stage_started) = stage_started {
+            record_stage(
+                &mut timings,
+                DecodeStage::InverseRct,
+                stage_started.elapsed(),
+            );
+        }
+        let mut rgb_iter = rgb.into_iter();
+        let mut rgb = [rgb_iter.next(), rgb_iter.next(), rgb_iter.next()];
+        if rgb.iter().any(Option::is_none) || rgb_iter.next().is_some() {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let mut components = Vec::new();
+        components
+            .try_reserve_exact(prepared.component_indices.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        for component_index in &prepared.component_indices {
+            components.push(
+                rgb.get_mut(usize::from(*component_index))
+                    .and_then(Option::take)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            );
+        }
+        record_selected_tile_output_samples(
+            &mut timings,
+            &prepared.codestream,
+            prepared.coding_style,
+            tile.planned.tile,
+            &prepared.reconstruction_component_indices,
+            prepared.discard_levels,
+        )?;
+        return Ok(components);
+    }
     if prepared.coding_style.transform == WaveletTransform::Irreversible97 {
         let planes = reconstruct_irreversible_component_planes_selected(
             &tile.payload,
