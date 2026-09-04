@@ -5349,6 +5349,13 @@ impl PreparedPart1Decode<'_> {
         self.codestream.memory_accounting()
     }
 
+    /// Source components retained solely for reconstruction and transform
+    /// dependencies, independently of caller-visible output selection.
+    #[doc(hidden)]
+    pub fn reconstruction_component_indices(&self) -> &[u16] {
+        self.codestream.reconstruction_component_indices()
+    }
+
     pub fn execution_parallelism(&self) -> (codestream::DecodeParallelAxis, usize) {
         self.codestream.execution_parallelism()
     }
@@ -7504,6 +7511,9 @@ fn is_direct_selective_part1_component_profile(codestream_bytes: &[u8]) -> bool 
                 .is_some_and(|style| style.transform == codestream::WaveletTransform::Reversible53))
             || (!native_subsampled
                 && (codestream::is_owned_baseline_profile(codestream_bytes)
+                    || codestream::is_supported_part1_selective_reversible_mct_region_profile(
+                        &parsed,
+                    )
                     || codestream::is_supported_part1_bounded_poc_component_profile(
                         codestream_bytes,
                         &parsed,
@@ -7959,7 +7969,10 @@ fn decode_part1_components_into_direct(
     }
     if parsed
         .uniform_effective_coding_style()
-        .is_some_and(|coding_style| coding_style.multiple_component_transform)
+        .is_some_and(|coding_style| {
+            coding_style.multiple_component_transform
+                && !codestream::is_supported_part1_selective_reversible_mct_region_profile(&parsed)
+        })
     {
         return Ok(false);
     }
@@ -8801,7 +8814,10 @@ fn decode_owned_selective_part1_partial(
     }
     if parsed
         .uniform_effective_coding_style()
-        .is_some_and(|coding_style| coding_style.multiple_component_transform)
+        .is_some_and(|coding_style| {
+            coding_style.multiple_component_transform
+                && !codestream::is_supported_part1_selective_reversible_mct_region_profile(&parsed)
+        })
     {
         return Ok(None);
     }
@@ -9346,7 +9362,10 @@ pub fn prepare_part1_decode<'a>(
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
     if parsed
         .uniform_effective_coding_style()
-        .is_some_and(|coding_style| coding_style.multiple_component_transform)
+        .is_some_and(|coding_style| {
+            coding_style.multiple_component_transform
+                && !codestream::is_supported_part1_selective_reversible_mct_region_profile(&parsed)
+        })
     {
         return Err(unsupported(
             UnsupportedFeature::ComponentLayout,

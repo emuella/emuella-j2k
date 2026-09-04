@@ -38,6 +38,16 @@ grey/RGB palettes, direct/palette/mixed mappings and channel-defined order into
 greyscale, RGB or straight RGBA. Full shape, owned and padded caller decode
 agree in both layouts; alpha preserves colour samples even when zero.
 
+The positioned-source regional route also admits reversible MCT within the
+existing classic Part 1 EPH envelope: three matching unsigned 8-bit
+unit-sampled components, reversible 5/3, default-precinct LRCP packets, and
+exactly one `TPsot=0` part per SIZ tile. `TNsot` may declare one part or leave
+the count unspecified; complete sequence validation must still prove the
+single part and reconcile SOT, any TLM, `Psot` and terminal EOC. Regional
+reconstruction retains all three RCT dependencies but publishes only requested
+native RGB components. Other tile-part counts, interleaving, reductions, layer
+limits and MCT shapes remain unsupported.
+
 Applications should normally depend on the facade package and import its
 underscore-form Rust crate name:
 

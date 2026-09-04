@@ -220,6 +220,7 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "emuella-j2k",
+ "emuella-j2k-test-support",
  "static_assertions",
 ]
 

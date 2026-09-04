@@ -444,6 +444,43 @@ component comparison is distinct from full image reconstruction, as described
 by ISO/IEC 15444-4:2024, B.2.3.1.2 and B.2.5 (pages 25–26), retrieval
 `725ecba70e5d03eff3f6ce9626bb9cb08dd4e0c7`.
 
+### Classic reversible-MCT regional output
+
+The source-backed prepared route has a separate reversible-MCT permission
+within the existing classic Part 1 EPH envelope. It requires three matching
+unsigned 8-bit unit-sampled components, reversible 5/3, default-precinct LRCP
+packets and one complete `TPsot=0` part for every SIZ tile. A SOT count of one
+and an unspecified `TNsot=0` are equivalent only after the complete indexed
+sequence has proved that invariant, bounded every payload, reconciled any TLM
+with SOT and `Psot`, and reached terminal EOC. Duplicate, missing, non-dense,
+out-of-range, inconsistent and genuinely multi-part sequences remain rejected.
+
+Requested outputs and reconstruction dependencies are distinct in the
+prepared plan. Packet-header state is validated for the complete admitted
+sequence, while retained packet bodies, code blocks and synthesis windows cover
+the common bounded region for components 0–2. Inverse RCT runs only after all
+three private component regions are reconstructed. Publication then copies
+only the caller-selected component or components; output descriptors preserve
+their requested source-component identities. This keeps the existing one-plane
+C ABI unchanged and ensures a late dependency or source failure cannot mutate
+caller storage. Work and source-read accounting include all transform
+dependencies; final output accounting includes only published planes.
+
+Before any dependency work, execution admits the aggregate peak for all three
+`i32` reconstruction planes, bounded-window coefficient and transform storage,
+scalar full-synthesis scratch, and the requested RGB staging retained across
+tiles. The ordinary 640 MiB ceiling applies when the caller supplies no lower
+limit. MCT execution reports that aggregate admission and intermediate RGB
+bytes; it rejects forced synthesis backends, crossover routes, parallel phase
+plans and Tier-1 plans because this transactional branch executes scalar
+dependency reconstruction with its preparation-selected regional windows.
+
+The inverse ordering follows ISO/IEC 15444-1:2024, G.2 and G.2.2, PDF page
+154, retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`. Tile-part, TLM and
+packet structure follow A.4.2, A.7.1, A.7.3 and B.11–B.12, PDF pages 39–40,
+56–59 and 95–96 at the same retrieval. This is not general tile-part
+continuation or interleaving support.
+
 Leading placeholder-only layered HT contributions consume a complete
 zero-length field covering their announced passes before the next block's
 header. This repairs packet alignment without treating placeholders as actual

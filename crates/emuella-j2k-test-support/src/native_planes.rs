@@ -1,13 +1,69 @@
 //! Small project-authored Part 1 fixtures for native and mapped JP2 tests.
 //!
-//! The marker and packet builder is independent of the production image
-//! encoder. Empty packets need no entropy encoder; non-empty packets use only
-//! the project-owned Tier-1 block utility. Expected samples belong to callers.
-//! See `docs/native-planes.md` for the contract and standards basis.
+//! The compact native-plane marker builder is independent of the production
+//! image encoder. The regional reversible-MCT fixture instead delegates to a
+//! dedicated project-owned test encoder in the codestream crate. Expected
+//! samples are authored here rather than recovered from a decoder. See
+//! `docs/native-planes.md` for the broader contract and standards basis.
 
 use emuella_j2k_tier1::{
     CodeBlockDimensions, CodeBlockEncodeSpec, Subband, encode_baseline_code_block,
 };
+
+/// Deterministic classic Part 1 reversible-MCT regional fixture and its
+/// independently authored RGB plane oracle.
+pub struct ReversibleMctRegionFixture {
+    pub width: u32,
+    pub height: u32,
+    pub planes: [Vec<u8>; 3],
+    pub tnsot_zero: Vec<u8>,
+    pub tnsot_one: Vec<u8>,
+}
+
+/// Build a five-level, 19-layer LRCP fixture with TLM, PLT and inline EPH.
+///
+/// Samples are generated here rather than recovered from either decoder
+/// output. The dimensions cross 64-sample code-block boundaries on both axes,
+/// so a non-trivial region can exclude real packet-body work.
+pub fn reversible_mct_region_fixture() -> ReversibleMctRegionFixture {
+    const WIDTH: u32 = 256;
+    const HEIGHT: u32 = 192;
+    let mut planes = [Vec::new(), Vec::new(), Vec::new()];
+    for plane in &mut planes {
+        plane.reserve_exact(usize::try_from(WIDTH * HEIGHT).unwrap());
+    }
+    let mut interleaved = Vec::with_capacity(usize::try_from(WIDTH * HEIGHT * 3).unwrap());
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let red = ((x * 13 + y * 7 + x * y * 3 + 17) & 0xff) as u8;
+            let green = ((x * 5 + y * 19 + (x ^ y) * 11 + 29) & 0xff) as u8;
+            let blue = ((x * 23 + y * 3 + x * y * 5 + 41) & 0xff) as u8;
+            planes[0].push(red);
+            planes[1].push(green);
+            planes[2].push(blue);
+            interleaved.extend_from_slice(&[red, green, blue]);
+        }
+    }
+    let encode = |unspecified_tile_part_count| {
+        emuella_j2k_core::codestream::encode_part1_reversible_mct_region_test_fixture(
+            emuella_j2k_core::codestream::RgbU8Encode {
+                width: WIDTH,
+                height: HEIGHT,
+                samples: &interleaved,
+                stride_bytes: usize::try_from(WIDTH * 3).unwrap(),
+            },
+            unspecified_tile_part_count,
+        )
+        .unwrap()
+    };
+    ReversibleMctRegionFixture {
+        width: WIDTH,
+        height: HEIGHT,
+        planes,
+        tnsot_zero: encode(true),
+        tnsot_one: encode(false),
+    }
+}
 
 /// Build a single-block-per-component, no-MCT codestream from authored planes.
 ///

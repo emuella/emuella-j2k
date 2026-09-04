@@ -979,6 +979,35 @@ follows Annex B. The canonical transcription consulted was retrieval revision
 `1a7a03799078b476bf38e91786b979059b4c533d`). Tests use only the
 project-authored multi-tile encoder fixture.
 
+### Classic reversible-MCT regional component decode
+
+A deterministic project-authored 256-by-192 fixture exercises the exact
+source-backed classic profile without retaining external codestream bytes or
+derived pixels. It carries five reversible 5/3 levels, 19 LRCP layers, default
+precincts, inline EPH, one TLM entry, a 342-packet PLT series and reversible
+MCT. The authored RGB sample formula is the oracle. Equivalent `TNsot=0` and
+`TNsot=1` forms decode all three full planes and one selected component across
+non-trivial code-block-boundary and image-edge regions.
+
+Planning regressions prove that one requested component retains the same three
+transform dependencies as an all-component request, while regional packet
+body reads, code-block work and Tier-1 bytes remain below full-image work.
+Positioned-source metrics prove bounded reads rather than full materialisation;
+padded output and an execution-time callback failure prove caller-buffer
+atomicity. The C ABI regression requests one component, observes one published
+plane with the requested source-component descriptor, and checks exact pixels.
+Full-region resource tests derive the aggregate admitted dependency, transform
+and requested-RGB staging bytes from a successful run, then prove that a limit
+one byte below that requirement fails before any source read or caller
+mutation. They also require non-zero allocation telemetry and fail-closed
+handling of forced synthesis backend and crossover options.
+
+Malformed variants cover an out-of-range tile, non-zero first `TPsot`, a
+non-one declared count, TLM and `Psot` disagreement, duplicate indices,
+inconsistent declarations, a well-formed but unsupported second part, a missing
+part and truncation. Existing sequence validation remains the authority; the
+profile-local `TNsot=0` permission is applied only after the complete parse.
+
 ### Native quality-layer truncation
 
 The public component APIs admit leading-quality-layer selection for one narrow
