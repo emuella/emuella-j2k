@@ -466,6 +466,15 @@ C ABI unchanged and ensures a late dependency or source failure cannot mutate
 caller storage. Work and source-read accounting include all transform
 dependencies; final output accounting includes only published planes.
 
+Before any dependency work, execution admits the aggregate peak for all three
+`i32` reconstruction planes, bounded-window coefficient and transform storage,
+scalar full-synthesis scratch, and the requested RGB staging retained across
+tiles. The ordinary 640 MiB ceiling applies when the caller supplies no lower
+limit. MCT execution reports that aggregate admission and intermediate RGB
+bytes; it rejects forced synthesis backends, crossover routes, parallel phase
+plans and Tier-1 plans because this transactional branch executes scalar
+dependency reconstruction with its preparation-selected regional windows.
+
 The inverse ordering follows ISO/IEC 15444-1:2024, G.2 and G.2.2, PDF page
 154, retrieval `34e5d1639b9f121807e620c001893ca9d2c8f977`. Tile-part, TLM and
 packet structure follow A.4.2, A.7.1, A.7.3 and B.11–B.12, PDF pages 39–40,

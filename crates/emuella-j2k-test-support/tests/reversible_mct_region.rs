@@ -227,6 +227,148 @@ fn regional_planning_retains_mct_dependencies_but_not_full_image_work() {
     );
 }
 
+#[test]
+fn full_region_preflights_aggregate_mct_storage_and_forced_options() {
+    let fixture = reversible_mct_region_fixture();
+    let source = codestream::source::InstrumentedSource::new(codestream::source::SliceSource::new(
+        &fixture.tnsot_zero,
+    ));
+    let component_indices = [0_u16];
+    let prepared = prepare_part1_decode_from_source(
+        &source,
+        codestream::Part1ComponentDecodeRequest {
+            component_indices: &component_indices,
+            region: codestream::TileRegionRequest {
+                x: 0,
+                y: 0,
+                width: fixture.width,
+                height: fixture.height,
+            },
+            discard_levels: 0,
+            max_layers: None,
+        },
+    )
+    .unwrap();
+    let sample_count = usize::try_from(fixture.width * fixture.height).unwrap();
+    let mut output = vec![0_u8; sample_count];
+    let timings = {
+        let plane = PlaneMut::new(
+            &mut output,
+            fixture.width,
+            fixture.height,
+            fixture.width as usize,
+            SampleFormat::U8,
+        )
+        .unwrap();
+        let mut planes = [plane];
+        let mut target = ImageViewMut::Planar {
+            info: prepared.info(),
+            planes: &mut planes,
+        };
+        execute_prepared_part1_decode_into_with_workspace(
+            &prepared,
+            &mut target,
+            &mut Part1DecodeWorkspace::new(),
+            codestream::PreparedPart1ExecutionOptions {
+                instrumentation: codestream::DecodeInstrumentation::WorkCounters,
+                parallelism: codestream::DecodeExecutionParallelism::Serial,
+                ..codestream::PreparedPart1ExecutionOptions::default()
+            },
+        )
+        .unwrap()
+    };
+    assert_eq!(output, fixture.planes[0]);
+    assert!(
+        timings.full_synthesis_request_admitted_bytes
+            > (sample_count as u64) * (3 * std::mem::size_of::<i32>() as u64 + 1)
+    );
+    assert_eq!(
+        timings.full_synthesis_request_admitted_bytes,
+        timings.full_synthesis_admitted_bytes
+    );
+    assert!(timings.full_synthesis_admitted_bytes >= timings.full_synthesis_estimated_bytes);
+    assert_eq!(timings.full_intermediate_output_bytes, sample_count as u64);
+    assert!(timings.full_coefficient_plane_capacity >= sample_count as u64);
+    assert!(timings.full_transform_scratch_capacity > 0);
+    assert!(timings.peak_scratch_bytes >= timings.full_synthesis_request_admitted_bytes);
+    assert_eq!(
+        timings.full_synthesis_backend,
+        Some(codestream::FullSynthesisBackend::LegacyScalar)
+    );
+
+    let metrics_before_rejection = source.metrics();
+    let mut limited = vec![0x6d_u8; sample_count];
+    let before = limited.clone();
+    let error = {
+        let plane = PlaneMut::new(
+            &mut limited,
+            fixture.width,
+            fixture.height,
+            fixture.width as usize,
+            SampleFormat::U8,
+        )
+        .unwrap();
+        let mut planes = [plane];
+        let mut target = ImageViewMut::Planar {
+            info: prepared.info(),
+            planes: &mut planes,
+        };
+        execute_prepared_part1_decode_into_with_workspace(
+            &prepared,
+            &mut target,
+            &mut Part1DecodeWorkspace::new(),
+            codestream::PreparedPart1ExecutionOptions {
+                instrumentation: codestream::DecodeInstrumentation::WorkCounters,
+                parallelism: codestream::DecodeExecutionParallelism::Serial,
+                retained_memory_limit: Some(timings.full_synthesis_request_admitted_bytes - 1),
+                ..codestream::PreparedPart1ExecutionOptions::default()
+            },
+        )
+        .unwrap_err()
+    };
+    assert!(format!("{error:?}").contains("retained-memory limit"));
+    assert_eq!(limited, before);
+    assert_eq!(source.metrics(), metrics_before_rejection);
+
+    for forced in [
+        codestream::PreparedPart1ExecutionOptions {
+            full_synthesis_backend: Some(codestream::FullSynthesisBackend::LegacyScalar),
+            ..codestream::PreparedPart1ExecutionOptions::default()
+        },
+        codestream::PreparedPart1ExecutionOptions {
+            synthesis_crossover_route: Some(codestream::SynthesisCrossoverRoute::Full),
+            ..codestream::PreparedPart1ExecutionOptions::default()
+        },
+    ] {
+        let mut caller = vec![0x4b_u8; sample_count];
+        let before = caller.clone();
+        let plane = PlaneMut::new(
+            &mut caller,
+            fixture.width,
+            fixture.height,
+            fixture.width as usize,
+            SampleFormat::U8,
+        )
+        .unwrap();
+        let mut planes = [plane];
+        let mut target = ImageViewMut::Planar {
+            info: prepared.info(),
+            planes: &mut planes,
+        };
+        assert!(
+            execute_prepared_part1_decode_into_with_workspace(
+                &prepared,
+                &mut target,
+                &mut Part1DecodeWorkspace::new(),
+                forced,
+            )
+            .is_err()
+        );
+        assert_eq!(caller, before);
+        assert_eq!(source.metrics(), metrics_before_rejection);
+    }
+}
+
 struct SwitchFailSource<'a> {
     bytes: &'a [u8],
     fail: AtomicBool,

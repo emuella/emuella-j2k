@@ -996,6 +996,11 @@ Positioned-source metrics prove bounded reads rather than full materialisation;
 padded output and an execution-time callback failure prove caller-buffer
 atomicity. The C ABI regression requests one component, observes one published
 plane with the requested source-component descriptor, and checks exact pixels.
+Full-region resource tests derive the aggregate admitted dependency, transform
+and requested-RGB staging bytes from a successful run, then prove that a limit
+one byte below that requirement fails before any source read or caller
+mutation. They also require non-zero allocation telemetry and fail-closed
+handling of forced synthesis backend and crossover options.
 
 Malformed variants cover an out-of-range tile, non-zero first `TPsot`, a
 non-one declared count, TLM and `Psot` disagreement, duplicate indices,

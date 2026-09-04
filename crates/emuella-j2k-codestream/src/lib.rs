@@ -6848,8 +6848,9 @@ pub struct PreparedPart1ExecutionOptions {
     /// Bound how much parallel work this execution contributes to the current
     /// Rayon pool. This never constructs a nested pool.
     pub parallelism: DecodeExecutionParallelism,
-    /// Maximum retained bytes for the active full coefficient plane and its
-    /// selected transform workspace. `None` uses the documented default.
+    /// Maximum retained bytes for active coefficient, transform and staged
+    /// output storage. Reversible MCT admits all three dependency planes as
+    /// one aggregate request. `None` uses the documented default.
     pub retained_memory_limit: Option<u64>,
     /// Adaptive large full-plane latency-versus-memory preference.
     pub latency_policy: DecodeLatencyPolicy,
@@ -6893,8 +6894,9 @@ pub enum DecodeLatencyPolicy {
 /// Optional policy for large full-plane inverse synthesis.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FullSynthesisExecutionOptions {
-    /// Maximum retained bytes for the coefficient plane and selected full
-    /// transform workspace. `None` uses the documented 640 MiB ceiling.
+    /// Maximum retained bytes for coefficient, transform and staged output
+    /// storage. Reversible MCT admits all three dependency planes as one
+    /// aggregate request. `None` uses the documented 640 MiB ceiling.
     pub retained_memory_limit: Option<u64>,
     pub latency_policy: DecodeLatencyPolicy,
     /// Force one backend for differential tests and focused qualification.
@@ -26051,6 +26053,24 @@ pub fn execute_prepared_part1_component_decode_into_with_workspace_and_full_synt
     timings.execution_axis = execution_axis;
     timings.execution_workers = execution_workers;
     if prepared.coding_style.multiple_component_transform {
+        let admission = prepare_reversible_mct_resource_admission(
+            prepared,
+            workspace,
+            options,
+            full_synthesis_options,
+        )?;
+        timings.full_synthesis_estimated_bytes = admission.estimated_bytes;
+        timings.full_synthesis_admitted_bytes = admission.admitted_bytes;
+        timings.full_synthesis_request_admitted_bytes = admission.admitted_bytes;
+        timings.full_coefficient_plane_capacity = admission.maximum_plane_samples;
+        timings.full_transform_scratch_capacity = admission.transform_capacity_samples;
+        if admission.full_synthesis_backend.is_some() {
+            timings.full_synthesis_wave_jobs = 3;
+            timings.full_synthesis_internal_workers = 1;
+        }
+        timings.full_synthesis_backend = admission.full_synthesis_backend;
+        timings.full_intermediate_output_bytes = admission.intermediate_output_bytes;
+        timings.peak_scratch_bytes = timings.peak_scratch_bytes.max(admission.admitted_bytes);
         let mut decoded_tiles = Vec::new();
         decoded_tiles
             .try_reserve_exact(prepared.tiles.len())
@@ -26502,9 +26522,246 @@ struct DecodedPreparedPart1Tile {
     timings: DecodeStageTimings,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReversibleMctResourceAdmission {
+    estimated_bytes: u64,
+    admitted_bytes: u64,
+    maximum_plane_samples: u64,
+    transform_capacity_samples: u64,
+    intermediate_output_bytes: u64,
+    full_synthesis_backend: Option<transform::FullSynthesisBackend>,
+}
+
+fn checked_resource_add(left: u64, right: u64) -> Result<u64> {
+    left.checked_add(right).ok_or(CodestreamError::SizeOverflow)
+}
+
+fn checked_resource_mul(left: u64, right: u64) -> Result<u64> {
+    left.checked_mul(right).ok_or(CodestreamError::SizeOverflow)
+}
+
+fn fallible_allocation_capacity<T>(len: usize) -> Result<u64> {
+    let mut allocation = Vec::<T>::new();
+    allocation
+        .try_reserve_exact(len)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    u64::try_from(allocation.capacity()).map_err(|_| CodestreamError::SizeOverflow)
+}
+
+fn window_coefficient_sample_count(window: &SynthesisWindowPlan) -> Result<u64> {
+    let mut samples = window.lowest_low_low.sample_count();
+    for level in &window.levels {
+        samples = checked_resource_add(samples, level.high_low.sample_count())?;
+        samples = checked_resource_add(samples, level.low_high.sample_count())?;
+        samples = checked_resource_add(samples, level.high_high.sample_count())?;
+    }
+    Ok(samples)
+}
+
+fn validate_reversible_mct_execution_options(
+    options: PreparedPart1ExecutionOptions,
+    full_synthesis_options: FullSynthesisExecutionOptions,
+) -> Result<()> {
+    if options.full_synthesis_backend.is_some() || full_synthesis_options.backend.is_some() {
+        return Err(invalid(
+            None,
+            None,
+            "reversible MCT regional execution does not accept a forced full-synthesis backend",
+        ));
+    }
+    if options.synthesis_crossover_route.is_some() {
+        return Err(invalid(
+            None,
+            None,
+            "reversible MCT regional execution does not accept a forced synthesis crossover route",
+        ));
+    }
+    if options.phase_worker_plan.is_some()
+        || options.tier1_shard_strategy.is_some()
+        || options.tier1_acquisition_route.is_some()
+    {
+        return Err(invalid(
+            None,
+            None,
+            "reversible MCT regional execution does not accept forced parallel phase or Tier-1 plans",
+        ));
+    }
+    if options.latency_policy != DecodeLatencyPolicy::Balanced
+        || full_synthesis_options.latency_policy != DecodeLatencyPolicy::Balanced
+    {
+        return Err(invalid(
+            None,
+            None,
+            "reversible MCT regional execution supports only the balanced scalar latency policy",
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_reversible_mct_resource_admission(
+    prepared: &PreparedPart1ComponentDecode<'_>,
+    workspace: &mut Part1ComponentDecodeWorkspace,
+    options: PreparedPart1ExecutionOptions,
+    full_synthesis_options: FullSynthesisExecutionOptions,
+) -> Result<ReversibleMctResourceAdmission> {
+    validate_reversible_mct_execution_options(options, full_synthesis_options)?;
+    let limit = full_synthesis_options
+        .retained_memory_limit
+        .unwrap_or(DEFAULT_FULL_SYNTHESIS_MEMORY_LIMIT);
+    let dependency_count = u64::try_from(prepared.reconstruction_component_indices.len())
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    let output_count = u64::try_from(prepared.component_indices.len())
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    if dependency_count != 3 || output_count == 0 {
+        return Err(CodestreamError::SizeOverflow);
+    }
+
+    let i32_bytes = core::mem::size_of::<i32>() as u64;
+    let mut held_output_bytes = 0_u64;
+    let mut peak_local_bytes = 0_u64;
+    let mut maximum_full_axis = 0_u64;
+    let mut uses_windowed_synthesis = false;
+    let mut uses_full_synthesis = false;
+    for tile in &prepared.tiles {
+        let window = &tile.synthesis_window;
+        let output_samples = if window.use_windowed_synthesis {
+            uses_windowed_synthesis = true;
+            window.output_region.sample_count()
+        } else {
+            uses_full_synthesis = true;
+            checked_resource_mul(u64::from(window.width), u64::from(window.height))?
+        };
+        if !window.use_windowed_synthesis {
+            maximum_full_axis = maximum_full_axis.max(u64::from(window.width.max(window.height)));
+        }
+        let dependency_plane_bytes = checked_resource_mul(
+            checked_resource_mul(output_samples, dependency_count)?,
+            i32_bytes,
+        )?;
+        let window_coefficient_bytes = if window.use_windowed_synthesis {
+            checked_resource_mul(
+                checked_resource_mul(window_coefficient_sample_count(window)?, dependency_count)?,
+                i32_bytes,
+            )?
+        } else {
+            0
+        };
+        let requested_output_bytes = checked_resource_mul(output_samples, output_count)?;
+        let current = checked_resource_add(
+            held_output_bytes,
+            checked_resource_add(
+                dependency_plane_bytes,
+                checked_resource_add(window_coefficient_bytes, requested_output_bytes)?,
+            )?,
+        )?;
+        peak_local_bytes = peak_local_bytes.max(current);
+        held_output_bytes = checked_resource_add(held_output_bytes, requested_output_bytes)?;
+    }
+
+    let required_transform_samples = checked_resource_mul(maximum_full_axis, 3)?;
+    let required_transform_bytes = checked_resource_mul(required_transform_samples, i32_bytes)?;
+    let minimum_admission = checked_resource_add(peak_local_bytes, required_transform_bytes)?;
+    if minimum_admission > limit {
+        return Err(invalid(
+            None,
+            None,
+            "reversible MCT regional dependency and output staging exceeds the retained-memory limit",
+        ));
+    }
+
+    if required_transform_samples > 0 {
+        let required_transform_samples = usize::try_from(required_transform_samples)
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        if workspace.transform_scratch.capacity() < required_transform_samples {
+            workspace
+                .transform_scratch
+                .try_reserve_exact(required_transform_samples - workspace.transform_scratch.len())
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+        }
+    }
+    if uses_windowed_synthesis {
+        for tile in &prepared.tiles {
+            if tile.synthesis_window.use_windowed_synthesis {
+                workspace
+                    .reversible_window_synthesis
+                    .reserve_for_plan(&tile.synthesis_window)?;
+            }
+        }
+    }
+    let transform_capacity_samples = if uses_full_synthesis {
+        u64::try_from(workspace.transform_scratch.capacity())
+            .map_err(|_| CodestreamError::SizeOverflow)?
+    } else {
+        0
+    };
+    let transform_capacity_bytes = checked_resource_mul(transform_capacity_samples, i32_bytes)?;
+    let window_workspace_bytes = if uses_windowed_synthesis {
+        workspace.reversible_window_synthesis.retained_heap_bytes()
+    } else {
+        0
+    };
+    let fixed_workspace_bytes =
+        checked_resource_add(transform_capacity_bytes, window_workspace_bytes)?;
+    let mut actual_held_output_bytes = 0_u64;
+    let mut actual_peak_local_bytes = 0_u64;
+    let mut maximum_plane_samples = 0_u64;
+    for tile in &prepared.tiles {
+        let window = &tile.synthesis_window;
+        let output_samples = if window.use_windowed_synthesis {
+            window.output_region.sample_count()
+        } else {
+            checked_resource_mul(u64::from(window.width), u64::from(window.height))?
+        };
+        let output_len =
+            usize::try_from(output_samples).map_err(|_| CodestreamError::SizeOverflow)?;
+        let plane_capacity = fallible_allocation_capacity::<i32>(output_len)?;
+        if !window.use_windowed_synthesis {
+            maximum_plane_samples = maximum_plane_samples.max(plane_capacity);
+        }
+        let dependency_plane_bytes = checked_resource_mul(
+            checked_resource_mul(plane_capacity, dependency_count)?,
+            i32_bytes,
+        )?;
+        let window_coefficient_bytes = if window.use_windowed_synthesis {
+            let coefficients = transform::WindowCoefficientPlane::<i32>::new(window)?;
+            checked_resource_mul(coefficients.retained_heap_bytes(), dependency_count)?
+        } else {
+            0
+        };
+        let output_capacity = fallible_allocation_capacity::<u8>(output_len)?;
+        let requested_output_bytes = checked_resource_mul(output_capacity, output_count)?;
+        let current = checked_resource_add(
+            actual_held_output_bytes,
+            checked_resource_add(
+                dependency_plane_bytes,
+                checked_resource_add(window_coefficient_bytes, requested_output_bytes)?,
+            )?,
+        )?;
+        actual_peak_local_bytes = actual_peak_local_bytes.max(current);
+        actual_held_output_bytes =
+            checked_resource_add(actual_held_output_bytes, requested_output_bytes)?;
+    }
+    let admitted_bytes = checked_resource_add(actual_peak_local_bytes, fixed_workspace_bytes)?;
+    if admitted_bytes > limit {
+        return Err(invalid(
+            None,
+            None,
+            "reversible MCT regional dependency, transform and output staging exceeds the retained-memory limit",
+        ));
+    }
+    Ok(ReversibleMctResourceAdmission {
+        estimated_bytes: minimum_admission,
+        admitted_bytes,
+        maximum_plane_samples,
+        transform_capacity_samples,
+        intermediate_output_bytes: held_output_bytes,
+        full_synthesis_backend: uses_full_synthesis
+            .then_some(transform::FullSynthesisBackend::LegacyScalar),
+    })
+}
+
 #[cfg(feature = "parallel")]
 const MAX_PHASE_PARALLEL_FULL_SAMPLES: u64 = 4 * 1024 * 1024;
-#[cfg(feature = "parallel")]
 const DEFAULT_FULL_SYNTHESIS_MEMORY_LIMIT: u64 = 640 * 1024 * 1024;
 
 #[cfg(feature = "parallel")]
@@ -29427,29 +29684,14 @@ fn decode_prepared_part1_tile_component_samples(
         #[cfg(feature = "std")]
         let stage_started =
             (detailed_profile || coarse_stage_timings).then(std::time::Instant::now);
-        let rgb = rgb_u8_inverse_rct_planes_to_bytes(planes)?;
+        let components =
+            rgb_u8_inverse_rct_planes_to_selected_bytes(&planes, &prepared.component_indices)?;
         #[cfg(feature = "std")]
         if let Some(stage_started) = stage_started {
             record_stage(
                 &mut timings,
                 DecodeStage::InverseRct,
                 stage_started.elapsed(),
-            );
-        }
-        let mut rgb_iter = rgb.into_iter();
-        let mut rgb = [rgb_iter.next(), rgb_iter.next(), rgb_iter.next()];
-        if rgb.iter().any(Option::is_none) || rgb_iter.next().is_some() {
-            return Err(CodestreamError::SizeOverflow);
-        }
-        let mut components = Vec::new();
-        components
-            .try_reserve_exact(prepared.component_indices.len())
-            .map_err(|_| CodestreamError::SizeOverflow)?;
-        for component_index in &prepared.component_indices {
-            components.push(
-                rgb.get_mut(usize::from(*component_index))
-                    .and_then(Option::take)
-                    .ok_or(CodestreamError::SizeOverflow)?,
             );
         }
         record_selected_tile_output_samples(
@@ -43098,14 +43340,31 @@ fn reconstruct_default_precinct_component_planes_selected(
         })
         .collect::<Result<Vec<_>>>()?;
     let windowed = synthesis_window.filter(|window| window.use_windowed_synthesis);
-    let mut planes = if windowed.is_some() {
-        (0..component_indices.len()).map(|_| Vec::new()).collect()
-    } else {
-        plane_geometry
-            .iter()
-            .map(|(_, _, _, plane_len)| alloc::vec![0_i32; *plane_len])
-            .collect::<Vec<_>>()
-    };
+    let mut planes = Vec::new();
+    planes
+        .try_reserve_exact(component_indices.len())
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    for (_, _, _, plane_len) in &plane_geometry {
+        let mut plane = Vec::new();
+        if windowed.is_some() {
+            let output_len = usize::try_from(
+                synthesis_window
+                    .ok_or(CodestreamError::SizeOverflow)?
+                    .output_region
+                    .sample_count(),
+            )
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+            plane
+                .try_reserve_exact(output_len)
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+        } else {
+            plane
+                .try_reserve_exact(*plane_len)
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            plane.resize(*plane_len, 0_i32);
+        }
+        planes.push(plane);
+    }
     let mut window_coefficients = if let Some(window) = windowed {
         if component_indices.len() == 1 {
             let coefficients =
@@ -43115,11 +43374,24 @@ fn reconstruct_default_precinct_component_planes_selected(
                 } else {
                     transform::WindowCoefficientPlane::<i32>::new(window)?
                 };
-            alloc::vec![coefficients]
+            let mut coefficients_for_components = Vec::new();
+            coefficients_for_components
+                .try_reserve_exact(1)
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            coefficients_for_components.push(coefficients);
+            coefficients_for_components
         } else {
-            (0..component_indices.len())
-                .map(|_| transform::WindowCoefficientPlane::<i32>::new(window).map_err(Into::into))
-                .collect::<Result<Vec<_>>>()?
+            let mut coefficients_for_components = Vec::new();
+            coefficients_for_components
+                .try_reserve_exact(component_indices.len())
+                .map_err(|_| CodestreamError::SizeOverflow)?;
+            for _ in component_indices {
+                coefficients_for_components.push(
+                    transform::WindowCoefficientPlane::<i32>::new(window)
+                        .map_err(CodestreamError::from)?,
+                );
+            }
+            coefficients_for_components
         }
     } else {
         Vec::new()
@@ -43356,7 +43628,11 @@ fn reconstruct_default_precinct_component_planes_selected(
                 &mut workspace.reversible_window_synthesis,
                 detailed_profile || coarse_stage_timings,
             )?;
-            plane.extend_from_slice(workspace.reversible_window_synthesis.output());
+            let output = workspace.reversible_window_synthesis.output();
+            if output.len() > plane.capacity().saturating_sub(plane.len()) {
+                return Err(CodestreamError::SizeOverflow);
+            }
+            plane.extend_from_slice(output);
             transformed_samples = transformed_samples
                 .saturating_add(report.work.horizontal_values)
                 .saturating_add(report.work.vertical_values);
@@ -47132,6 +47408,49 @@ fn rgb_u8_inverse_rct_planes_to_bytes(mut planes: Vec<Vec<i32>>) -> Result<Vec<V
     let y = planes.pop().ok_or(CodestreamError::SizeOverflow)?;
 
     rgb_u8_inverse_rct_plane_slices_to_bytes(&y, &db, &dr)
+}
+
+fn rgb_u8_inverse_rct_planes_to_selected_bytes(
+    planes: &[Vec<i32>],
+    component_indices: &[u16],
+) -> Result<Vec<Vec<u8>>> {
+    let [y, db, dr] = planes else {
+        return Err(CodestreamError::SizeOverflow);
+    };
+    if y.len() != db.len() || y.len() != dr.len() {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(component_indices.len())
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    for component_index in component_indices {
+        if *component_index > 2 {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let mut samples = Vec::new();
+        samples
+            .try_reserve_exact(y.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        samples.resize(y.len(), 0_u8);
+        for (output, ((y, db), dr)) in samples.iter_mut().zip(
+            y.iter()
+                .copied()
+                .zip(db.iter().copied())
+                .zip(dr.iter().copied()),
+        ) {
+            let green = y.wrapping_sub(inverse_rct_chroma_quarter(db, dr));
+            let value = match *component_index {
+                0 => dr.wrapping_add(green),
+                1 => green,
+                2 => db.wrapping_add(green),
+                _ => return Err(CodestreamError::SizeOverflow),
+            };
+            *output = value.wrapping_add(128).clamp(0, 255) as u8;
+        }
+        selected.push(samples);
+    }
+    Ok(selected)
 }
 
 fn rgb_u8_inverse_rct_plane_slices_to_bytes(
