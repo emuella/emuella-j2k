@@ -5,14 +5,25 @@ repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 crate="$repository_root/crates/emuella-j2k-capi"
 capi_source="$crate/src/lib.rs"
 
-production_unsafe_count=$(awk '
-  /#\[cfg\(test\)\]/ { exit }
-  /unsafe \{/ { count += 1 }
-  END { print count + 0 }
-' "$capi_source")
-total_unsafe_count=$(grep -c 'unsafe {' "$capi_source")
-test "$production_unsafe_count" -eq 6
-test "$total_unsafe_count" -eq 7
+# Count the raw-operation sites, not explicit unsafe calls forwarding the
+# documented caller obligations. New unsafe operations still require review.
+python3 - "$capi_source" <<'PY_AUDIT'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text().split("#[cfg(test)]", 1)[0]
+operations = (
+    "pointer.read()",
+    "pointer.write(value)",
+    "&*(pointer.cast::<S>())",
+    "Box::from_raw(pointer.cast::<S>())",
+    "ptr::copy_nonoverlapping(source.as_ptr(), destination, source.len())",
+    "(self.read_at)(",
+)
+for operation in operations:
+    if source.count(operation) != 1:
+        sys.exit(f"C ABI raw-operation inventory changed: {operation}")
+PY_AUDIT
 if grep -E 'unsafe (impl|trait)|transmute|static mut|extern "C-unwind"|from_raw_parts' \
   "$capi_source"; then
   echo "prohibited unsafe construct in C API boundary" >&2

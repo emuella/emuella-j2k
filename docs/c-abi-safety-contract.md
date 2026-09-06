@@ -93,6 +93,22 @@ delegates to it so both operations share the same codec-owned interpretation of
 image properties. The C API may not read markers or reconstruct private parser
 behaviour in a later extension.
 
+## Rust calling contract
+
+The crate also produces an `rlib`. Every pointer-dependent export is therefore
+an `unsafe extern "C" fn`, with an individual `# Safety` section stating the
+caller obligations. Only the pointer-free ABI and package version queries
+remain safe. Rust consumers must acknowledge storage validity, handle lifetime
+and ownership, output non-aliasing, callback lifetime and concurrent-use rules
+at each call. This corrects the Rust API's safety contract without changing C
+symbol names, calling convention or structure layouts.
+
+Null, alignment, capacity and structure-size checks detect some invalid
+arguments; they cannot establish allocation provenance or prevent use after
+destruction. The private pointer helpers and panic boundary are also unsafe,
+so a safe helper cannot hide these obligations. `unsafe_op_in_unsafe_fn` is
+denied and each unsafe call has an explicit justification.
+
 ## C representation
 
 Only fixed-width integers, `size_t`, raw pointers, function pointers and
@@ -290,14 +306,21 @@ The initial C API permits only these unsafe categories:
 4. a checked copy between Rust storage and a caller-provided byte range; and
 5. invocation of a validated foreign positioned-read callback.
 
-Categories 2 through 5 have a combined ceiling of eight handwritten
-`unsafe {}` blocks. Each block must perform one local operation class, carry a
-`// SAFETY:` comment that discharges every relevant validity, alignment,
-aliasing, length, lifetime and concurrency precondition, and immediately return
-to safe types. Shared generic helpers are preferred to repeating pointer logic.
-Combining unrelated operations into a larger block, hiding unsafe inside a
-project macro, or moving it to another project crate does not satisfy the
-budget.
+Categories 2 through 5 retain six raw-operation sites: callback invocation,
+plain-data read, output write, opaque-handle borrow, allocation reconstruction
+and byte copy. `scripts/check-c-api.sh` checks this explicit inventory. Each
+raw operation must remain local, carry a `// SAFETY:` comment explaining its
+validity, alignment, aliasing, length, lifetime and concurrency preconditions,
+and immediately return to safe types.
+
+Explicit unsafe calls to these helpers, the panic boundary and the public
+exports forward the documented caller obligations and need their own local
+safety justification. These calls are not additional raw operations. This
+replaces the original eight-block ceiling: counting delegation blocks would
+penalise enforcing the Rust calling contract and encourage safe helpers that
+conceal unchecked preconditions. Adding a raw operation or a prohibited
+construct still requires an amended design record and independent safety
+review; neither larger blocks nor macros may conceal such a change.
 
 The initial implementation prohibits:
 
@@ -310,7 +333,7 @@ The initial implementation prohibits:
 - callbacks that return borrowed foreign storage; and
 - allocator interposition or consumer release of Rust storage.
 
-An implementation that cannot meet the ceiling or needs a prohibited operation
+An implementation that needs another raw operation or a prohibited operation
 must stop and amend this design record with the motivating evidence and a new
 independent safety review. Unsafe reduction is not allowed to weaken checks,
 failure atomicity, source stability or resource bounds.
@@ -321,7 +344,9 @@ The current Linux x86-64 gate checks header drift, the shared-library symbol
 allow-list, layout assertions, and C11/C++17 compile, shared/static link and
 runtime source-inspect-decode-copy journeys. Rust tests cover ordinary pointer
 validation, callback failure and provenance, malformed input, bounds,
-workspace reuse, natural `Send`/`Sync`, panic containment and poisoning. The
+workspace reuse, natural `Send`/`Sync`, panic containment and poisoning.
+Compile-fail Rust consumer tests independently require unsafe calls for each
+pointer-dependent export, with safe version queries as positive controls. The
 reversible-MCT regional regression also checks exact one-plane output through
 the existing request, image-descriptor and copy calls. The
 remaining major-one gates include the full Miri, sanitiser, concurrent native

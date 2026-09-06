@@ -151,6 +151,23 @@ uint32_t emuella_j2k_abi_version(void);
 
 /**
  * Decode one component region into a new immutable Rust-owned image.
+ *
+ * # Safety
+ * `decoder` and `workspace` must be null or exact live handles of their
+ * respective types from this library, kept alive for the call. No other active
+ * operation may use this workspace. The decoder creation-time source and
+ * callback obligations still apply, including concurrent callback safety.
+ * `request` must contain a readable, initialised size/version prefix and, when
+ * it advertises the supported full size, the complete initialised request. `output` must
+ * provide writable storage for one value of its declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_decode_component_region(const struct EmuellaJ2kDecoder *decoder,
                                                      const struct EmuellaJ2kWorkspace *workspace,
@@ -160,6 +177,25 @@ EmuellaJ2kStatus emuella_j2k_decode_component_region(const struct EmuellaJ2kDeco
 
 /**
  * Create a decoder that borrows the source descriptor's context and callback.
+ *
+ * # Safety
+ * `source` must contain a readable, initialised size/version prefix; if it
+ * advertises the supported full size, the complete source structure must be
+ * readable and initialised. The descriptor is copied. Its callback, context,
+ * stable length and immutable source bytes must remain valid until the returned
+ * decoder is destroyed and all its operations finish. The callback must support
+ * concurrent calls, fill each successful requested range, retain no destination,
+ * neither re-enter related handles nor destroy or mutate any Emuella handle,
+ * and return normally without unwinding. `output` must provide writable storage for one value
+ * of its declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_decoder_create(const struct EmuellaJ2kSourceV0 *source,
                                             struct EmuellaJ2kDecoder **output,
@@ -167,11 +203,31 @@ EmuellaJ2kStatus emuella_j2k_decoder_create(const struct EmuellaJ2kSourceV0 *sou
 
 /**
  * Destroy a decoder after all calls and callbacks using it have quiesced.
+ *
+ * # Safety
+ * `decoder` must be null or the exact live decoder handle returned by this
+ * library. A non-null handle transfers ownership back exactly once; all calls,
+ * callbacks and borrowed observations using it must have quiesced. It must not
+ * be used again or destroyed concurrently.
  */
 void emuella_j2k_decoder_destroy(struct EmuellaJ2kDecoder *decoder);
 
 /**
  * Inspect raw Part 1 geometry without decoding packet bodies.
+ *
+ * # Safety
+ * `decoder` must be null or an exact live decoder from this library, kept
+ * alive for the call. Its creation-time source and callback obligations still
+ * apply, including concurrent callback safety. `output` must provide writable storage for one
+ * value of its declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_decoder_inspect(const struct EmuellaJ2kDecoder *decoder,
                                              struct EmuellaJ2kInspection **output,
@@ -179,11 +235,27 @@ EmuellaJ2kStatus emuella_j2k_decoder_inspect(const struct EmuellaJ2kDecoder *dec
 
 /**
  * Destroy an immutable diagnostic handle.
+ *
+ * # Safety
+ * `error` must be null or the exact live error handle returned by this
+ * library. A non-null handle transfers ownership back exactly once; all calls,
+ * callbacks and borrowed observations using it must have quiesced. It must not
+ * be used again or destroyed concurrently.
  */
 void emuella_j2k_error_destroy(struct EmuellaJ2kError *error);
 
 /**
  * Copy the complete NUL-terminated UTF-8 diagnostic into caller storage.
+ *
+ * # Safety
+ * `error` must be null or an exact live diagnostic from this library, with
+ * no destruction during the call. `destination` must provide `capacity`
+ * exclusively writable bytes disjoint from the diagnostic allocation.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_error_message_copy(const struct EmuellaJ2kError *error,
                                                 uint8_t *destination,
@@ -191,17 +263,50 @@ EmuellaJ2kStatus emuella_j2k_error_message_copy(const struct EmuellaJ2kError *er
 
 /**
  * Return the diagnostic byte count, including its terminating NUL byte.
+ *
+ * # Safety
+ * `error` must be null or an exact live diagnostic from this library, with
+ * no destruction during the call. `output` must provide exclusive writable
+ * storage for one usize, disjoint from the diagnostic allocation.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_error_message_size(const struct EmuellaJ2kError *error,
                                                 size_t *output);
 
 /**
  * Return the status retained by an immutable diagnostic handle.
+ *
+ * # Safety
+ * `error` must be null or an exact live diagnostic from this library, with
+ * no destruction during the call. Concurrent immutable observations are allowed.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_error_status(const struct EmuellaJ2kError *error);
 
 /**
  * Copy the single decoded component descriptor into caller-owned storage.
+ *
+ * # Safety
+ * `image` must be null or an exact live image handle from this library,
+ * kept alive without destruction throughout the call. Concurrent immutable
+ * observations are allowed. `output` must provide writable storage for one value of its
+ * declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_image_component_info(const struct EmuellaJ2kImage *image,
                                                   struct EmuellaJ2kComponentInfoV0 *output,
@@ -209,6 +314,19 @@ EmuellaJ2kStatus emuella_j2k_image_component_info(const struct EmuellaJ2kImage *
 
 /**
  * Copy decoded rows into a bounded caller-owned buffer with explicit stride.
+ *
+ * # Safety
+ * `image` must be null or an exact live image from this library, kept alive
+ * throughout the copy. `destination` must provide `capacity` exclusively writable
+ * bytes, disjoint from the image and all other inputs and outputs. The checked
+ * stride and capacity determine the rows written. A non-null `error_output`
+ * must provide writable storage for one error pointer, owned by the caller on
+ * return and released once with `emuella_j2k_error_destroy`.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_image_copy(const struct EmuellaJ2kImage *image,
                                         uint8_t *destination,
@@ -218,11 +336,31 @@ EmuellaJ2kStatus emuella_j2k_image_copy(const struct EmuellaJ2kImage *image,
 
 /**
  * Destroy an immutable decoded image.
+ *
+ * # Safety
+ * `image` must be null or the exact live image handle returned by this
+ * library. A non-null handle transfers ownership back exactly once; all calls,
+ * callbacks and borrowed observations using it must have quiesced. It must not
+ * be used again or destroyed concurrently.
  */
 void emuella_j2k_image_destroy(struct EmuellaJ2kImage *image);
 
 /**
  * Copy decoded image properties into caller-owned storage.
+ *
+ * # Safety
+ * `image` must be null or an exact live image handle from this library,
+ * kept alive without destruction throughout the call. Concurrent immutable
+ * observations are allowed. `output` must provide writable storage for one value of its
+ * declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_image_info(const struct EmuellaJ2kImage *image,
                                         struct EmuellaJ2kImageInfoV0 *output,
@@ -230,6 +368,20 @@ EmuellaJ2kStatus emuella_j2k_image_info(const struct EmuellaJ2kImage *image,
 
 /**
  * Copy one inspected component descriptor into caller-owned storage.
+ *
+ * # Safety
+ * `inspection` must be null or an exact live inspection handle from this library,
+ * kept alive without destruction throughout the call. Concurrent immutable
+ * observations are allowed. `output` must provide writable storage for one value of its
+ * declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_inspection_component_info(const struct EmuellaJ2kInspection *inspection,
                                                        uint16_t component,
@@ -238,11 +390,31 @@ EmuellaJ2kStatus emuella_j2k_inspection_component_info(const struct EmuellaJ2kIn
 
 /**
  * Destroy an immutable inspection handle.
+ *
+ * # Safety
+ * `inspection` must be null or the exact live inspection handle returned by this
+ * library. A non-null handle transfers ownership back exactly once; all calls,
+ * callbacks and borrowed observations using it must have quiesced. It must not
+ * be used again or destroyed concurrently.
  */
 void emuella_j2k_inspection_destroy(struct EmuellaJ2kInspection *inspection);
 
 /**
  * Copy reference-image properties into caller-owned storage.
+ *
+ * # Safety
+ * `inspection` must be null or an exact live inspection handle from this library,
+ * kept alive without destruction throughout the call. Concurrent immutable
+ * observations are allowed. `output` must provide writable storage for one value of its
+ * declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_inspection_image_info(const struct EmuellaJ2kInspection *inspection,
                                                    struct EmuellaJ2kImageInfoV0 *output,
@@ -255,12 +427,29 @@ const char *emuella_j2k_package_version(void);
 
 /**
  * Create an exclusively used, reusable decode workspace.
+ *
+ * # Safety
+ * `output` must provide writable storage for one value of its declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
  */
 EmuellaJ2kStatus emuella_j2k_workspace_create(struct EmuellaJ2kWorkspace **output,
                                               struct EmuellaJ2kError **error_output);
 
 /**
  * Destroy an idle workspace, including a workspace poisoned by panic.
+ *
+ * # Safety
+ * `workspace` must be null or the exact live workspace handle returned by this
+ * library. A non-null handle transfers ownership back exactly once; all calls,
+ * callbacks and borrowed observations using it must have quiesced. It must not
+ * be used again or destroyed concurrently.
  */
 void emuella_j2k_workspace_destroy(struct EmuellaJ2kWorkspace *workspace);
 

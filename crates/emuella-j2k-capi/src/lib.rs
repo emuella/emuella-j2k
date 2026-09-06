@@ -1,4 +1,6 @@
 //! Experimental C ABI for raw JPEG 2000 Part 1 positioned sources.
+#![doc = include_str!("rust-safety.md")]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(panic = "abort")]
 compile_error!("emuella-j2k-capi requires panic=unwind for ABI containment");
@@ -239,7 +241,10 @@ impl From<J2kError> for AbiFailure {
     }
 }
 
-fn checked_read<T: Copy>(pointer: *const T, name: &'static str) -> Result<T, AbiFailure> {
+/// # Safety
+/// For non-null aligned pointers, the caller supplies a readable, initialised T, immutable
+/// during the read.
+unsafe fn checked_read<T: Copy>(pointer: *const T, name: &'static str) -> Result<T, AbiFailure> {
     if pointer.is_null() || !(pointer as usize).is_multiple_of(align_of::<T>()) {
         return Err(AbiFailure::invalid(format!(
             "{name} must be non-null and aligned"
@@ -252,7 +257,14 @@ fn checked_read<T: Copy>(pointer: *const T, name: &'static str) -> Result<T, Abi
     Ok(unsafe { pointer.read() })
 }
 
-fn checked_write<T>(pointer: *mut T, value: T, name: &'static str) -> Result<(), AbiFailure> {
+/// # Safety
+/// For non-null aligned pointers, the caller supplies exclusive writable storage for one T,
+/// disjoint from all inputs.
+unsafe fn checked_write<T>(
+    pointer: *mut T,
+    value: T,
+    name: &'static str,
+) -> Result<(), AbiFailure> {
     if pointer.is_null() || !(pointer as usize).is_multiple_of(align_of::<T>()) {
         return Err(AbiFailure::invalid(format!(
             "{name} must be non-null and aligned"
@@ -266,7 +278,10 @@ fn checked_write<T>(pointer: *mut T, value: T, name: &'static str) -> Result<(),
     Ok(())
 }
 
-fn handle_ref<'a, O, S>(pointer: *const O, name: &'static str) -> Result<&'a S, AbiFailure> {
+/// # Safety
+/// The caller supplies a null/rejected pointer or the exact live Box<S> handle, with no
+/// destruction or incompatible access for the returned borrow's lifetime.
+unsafe fn handle_ref<'a, O, S>(pointer: *const O, name: &'static str) -> Result<&'a S, AbiFailure> {
     if pointer.is_null() || !(pointer as usize).is_multiple_of(align_of::<S>()) {
         return Err(AbiFailure::invalid(format!(
             "{name} must be a non-null aligned live handle"
@@ -280,7 +295,10 @@ fn handle_ref<'a, O, S>(pointer: *const O, name: &'static str) -> Result<&'a S, 
     Ok(unsafe { &*(pointer.cast::<S>()) })
 }
 
-fn destroy_handle<O, S>(pointer: *mut O) {
+/// # Safety
+/// The caller transfers the exact live Box<S> allocation once, after all uses quiesce; null is
+/// permitted.
+unsafe fn destroy_handle<O, S>(pointer: *mut O) {
     if pointer.is_null() {
         return;
     }
@@ -291,7 +309,10 @@ fn destroy_handle<O, S>(pointer: *mut O) {
     unsafe { drop(Box::from_raw(pointer.cast::<S>())) };
 }
 
-fn checked_copy(destination: *mut u8, source: &[u8]) -> Result<(), AbiFailure> {
+/// # Safety
+/// The caller supplies exclusive writable storage for source.len() bytes, disjoint from source;
+/// null is rejected for a non-empty copy.
+unsafe fn checked_copy(destination: *mut u8, source: &[u8]) -> Result<(), AbiFailure> {
     if source.is_empty() {
         return Ok(());
     }
@@ -315,7 +336,10 @@ fn make_error(failure: &AbiFailure) -> Box<ErrorState> {
     })
 }
 
-fn write_error(
+/// # Safety
+/// The caller supplies null or exclusive writable storage for one error pointer, disjoint from
+/// inputs and other outputs.
+unsafe fn write_error(
     output: *mut *mut EmuellaJ2kError,
     failure: Option<&AbiFailure>,
 ) -> Result<(), AbiFailure> {
@@ -330,10 +354,14 @@ fn write_error(
     let value = failure.map_or(ptr::null_mut(), |failure| {
         Box::into_raw(make_error(failure)).cast::<EmuellaJ2kError>()
     });
-    checked_write(output, value, "error_output")
+    // SAFETY: The export contract supplies exclusive, disjoint output storage for this value.
+    unsafe { checked_write(output, value, "error_output") }
 }
 
-fn boundary<F>(
+/// # Safety
+/// The caller supplies a valid optional error output and a null or live workspace kept alive
+/// through panic recovery; operation preserves these obligations.
+unsafe fn boundary<F>(
     error_output: *mut *mut EmuellaJ2kError,
     poison_workspace: *const EmuellaJ2kWorkspace,
     operation: F,
@@ -346,7 +374,9 @@ where
     // pointer therefore cannot turn a successful operation into a leaking
     // failure after the fact.
     let result = catch_unwind(AssertUnwindSafe(|| {
-        write_error(error_output, None)?;
+        // SAFETY: The caller reserves this optional, disjoint error slot for the complete
+        // boundary call.
+        unsafe { write_error(error_output, None) }?;
         operation()
     }));
     match result {
@@ -354,7 +384,9 @@ where
         Ok(Err(failure)) => {
             let status = failure.status;
             match catch_unwind(AssertUnwindSafe(|| {
-                write_error(error_output, Some(&failure))
+                // SAFETY: The caller reserves this optional, disjoint error slot for the
+                // complete boundary call.
+                unsafe { write_error(error_output, Some(&failure)) }
             })) {
                 Ok(Ok(())) => status,
                 Ok(Err(_)) => EMUELLA_J2K_STATUS_INVALID_ARGUMENT,
@@ -366,16 +398,19 @@ where
             // barrier. If fallback diagnostics fail, the panic status remains
             // usable and no unwind reaches the foreign caller.
             let _ = catch_unwind(AssertUnwindSafe(|| {
-                if let Ok(workspace) =
+                // SAFETY: The caller keeps the workspace live through panic recovery.
+                if let Ok(workspace) = unsafe {
                     handle_ref::<EmuellaJ2kWorkspace, WorkspaceState>(poison_workspace, "workspace")
-                {
+                } {
                     workspace.poisoned.store(true, Ordering::Release);
                 }
                 let failure = AbiFailure {
                     status: EMUELLA_J2K_STATUS_PANIC,
                     message: "contained Rust panic".into(),
                 };
-                let _ = write_error(error_output, Some(&failure));
+                // SAFETY: The caller reserves this optional, disjoint error slot for the
+                // complete boundary call.
+                let _ = unsafe { write_error(error_output, Some(&failure)) };
             }));
             EMUELLA_J2K_STATUS_PANIC
         }
@@ -453,20 +488,45 @@ pub extern "C" fn emuella_j2k_package_version() -> *const c_char {
 
 #[unsafe(no_mangle)]
 /// Create a decoder that borrows the source descriptor's context and callback.
-pub extern "C" fn emuella_j2k_decoder_create(
+///
+/// # Safety
+/// `source` must contain a readable, initialised size/version prefix; if it
+/// advertises the supported full size, the complete source structure must be
+/// readable and initialised. The descriptor is copied. Its callback, context,
+/// stable length and immutable source bytes must remain valid until the returned
+/// decoder is destroyed and all its operations finish. The callback must support
+/// concurrent calls, fill each successful requested range, retain no destination,
+/// neither re-enter related handles nor destroy or mutate any Emuella handle,
+/// and return normally without unwinding. `output` must provide writable storage for one value
+/// of its declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_decoder_create(
     source: *const EmuellaJ2kSourceV0,
     output: *mut *mut EmuellaJ2kDecoder,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        checked_write(output, ptr::null_mut(), "decoder_output")?;
-        let header = checked_read(source.cast::<AbiHeader>(), "source")?;
+    let operation = || {
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, ptr::null_mut(), "decoder_output") }?;
+        // SAFETY: The export contract supplies initialised input storage; size validation
+        // precedes full-structure reads.
+        let header = unsafe { checked_read(source.cast::<AbiHeader>(), "source") }?;
         validate_header(
             header.struct_size,
             header.abi_version,
             size_of::<EmuellaJ2kSourceV0>(),
         )?;
-        let source = checked_read(source, "source")?;
+        // SAFETY: The export contract supplies initialised input storage; size validation
+        // precedes full-structure reads.
+        let source = unsafe { checked_read(source, "source") }?;
         if source.reserved != 0 {
             return Err(AbiFailure::invalid("source reserved field must be zero"));
         }
@@ -480,139 +540,287 @@ pub extern "C" fn emuella_j2k_decoder_create(
                 read_at,
             },
         });
-        checked_write(
-            output,
-            Box::into_raw(decoder).cast::<EmuellaJ2kDecoder>(),
-            "decoder_output",
-        )
-    })
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe {
+            checked_write(
+                output,
+                Box::into_raw(decoder).cast::<EmuellaJ2kDecoder>(),
+                "decoder_output",
+            )
+        }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Destroy a decoder after all calls and callbacks using it have quiesced.
-pub extern "C" fn emuella_j2k_decoder_destroy(decoder: *mut EmuellaJ2kDecoder) {
+///
+/// # Safety
+/// `decoder` must be null or the exact live decoder handle returned by this
+/// library. A non-null handle transfers ownership back exactly once; all calls,
+/// callbacks and borrowed observations using it must have quiesced. It must not
+/// be used again or destroyed concurrently.
+pub unsafe extern "C" fn emuella_j2k_decoder_destroy(decoder: *mut EmuellaJ2kDecoder) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        destroy_handle::<EmuellaJ2kDecoder, DecoderState>(decoder)
+        // SAFETY: The caller transfers this matching handle exactly once after all uses have
+        // quiesced.
+        unsafe { destroy_handle::<EmuellaJ2kDecoder, DecoderState>(decoder) }
     }));
 }
 
 #[unsafe(no_mangle)]
 /// Inspect raw Part 1 geometry without decoding packet bodies.
-pub extern "C" fn emuella_j2k_decoder_inspect(
+///
+/// # Safety
+/// `decoder` must be null or an exact live decoder from this library, kept
+/// alive for the call. Its creation-time source and callback obligations still
+/// apply, including concurrent callback safety. `output` must provide writable storage for one
+/// value of its declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_decoder_inspect(
     decoder: *const EmuellaJ2kDecoder,
     output: *mut *mut EmuellaJ2kInspection,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        checked_write(output, ptr::null_mut(), "inspection_output")?;
-        let decoder = handle_ref::<EmuellaJ2kDecoder, DecoderState>(decoder, "decoder")?;
+    let operation = || {
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, ptr::null_mut(), "inspection_output") }?;
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let decoder = unsafe { handle_ref::<EmuellaJ2kDecoder, DecoderState>(decoder, "decoder") }?;
         let inspected = inspect_part1_source(&decoder.source).map_err(AbiFailure::from)?;
         let inspection = Box::new(InspectionState {
             image: inspected.image,
             components: inspected.components,
         });
-        checked_write(
-            output,
-            Box::into_raw(inspection).cast::<EmuellaJ2kInspection>(),
-            "inspection_output",
-        )
-    })
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe {
+            checked_write(
+                output,
+                Box::into_raw(inspection).cast::<EmuellaJ2kInspection>(),
+                "inspection_output",
+            )
+        }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Destroy an immutable inspection handle.
-pub extern "C" fn emuella_j2k_inspection_destroy(inspection: *mut EmuellaJ2kInspection) {
+///
+/// # Safety
+/// `inspection` must be null or the exact live inspection handle returned by this
+/// library. A non-null handle transfers ownership back exactly once; all calls,
+/// callbacks and borrowed observations using it must have quiesced. It must not
+/// be used again or destroyed concurrently.
+pub unsafe extern "C" fn emuella_j2k_inspection_destroy(inspection: *mut EmuellaJ2kInspection) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        destroy_handle::<EmuellaJ2kInspection, InspectionState>(inspection)
+        // SAFETY: The caller transfers this matching handle exactly once after all uses have
+        // quiesced.
+        unsafe { destroy_handle::<EmuellaJ2kInspection, InspectionState>(inspection) }
     }));
 }
 
 #[unsafe(no_mangle)]
 /// Copy reference-image properties into caller-owned storage.
-pub extern "C" fn emuella_j2k_inspection_image_info(
+///
+/// # Safety
+/// `inspection` must be null or an exact live inspection handle from this library,
+/// kept alive without destruction throughout the call. Concurrent immutable
+/// observations are allowed. `output` must provide writable storage for one value of its
+/// declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_inspection_image_info(
     inspection: *const EmuellaJ2kInspection,
     output: *mut EmuellaJ2kImageInfoV0,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        let inspection =
-            handle_ref::<EmuellaJ2kInspection, InspectionState>(inspection, "inspection")?;
-        checked_write(output, image_info(&inspection.image), "image_info_output")
-    })
+    let operation = || {
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let inspection = unsafe {
+            handle_ref::<EmuellaJ2kInspection, InspectionState>(inspection, "inspection")
+        }?;
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, image_info(&inspection.image), "image_info_output") }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Copy one inspected component descriptor into caller-owned storage.
-pub extern "C" fn emuella_j2k_inspection_component_info(
+///
+/// # Safety
+/// `inspection` must be null or an exact live inspection handle from this library,
+/// kept alive without destruction throughout the call. Concurrent immutable
+/// observations are allowed. `output` must provide writable storage for one value of its
+/// declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_inspection_component_info(
     inspection: *const EmuellaJ2kInspection,
     component: u16,
     output: *mut EmuellaJ2kComponentInfoV0,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        let inspection =
-            handle_ref::<EmuellaJ2kInspection, InspectionState>(inspection, "inspection")?;
+    let operation = || {
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let inspection = unsafe {
+            handle_ref::<EmuellaJ2kInspection, InspectionState>(inspection, "inspection")
+        }?;
         let component = inspection
             .components
             .get(usize::from(component))
             .ok_or_else(|| AbiFailure::invalid("component index is out of bounds"))?;
-        checked_write(output, component_info(component)?, "component_info_output")
-    })
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, component_info(component)?, "component_info_output") }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Create an exclusively used, reusable decode workspace.
-pub extern "C" fn emuella_j2k_workspace_create(
+///
+/// # Safety
+/// `output` must provide writable storage for one value of its declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_workspace_create(
     output: *mut *mut EmuellaJ2kWorkspace,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        checked_write(output, ptr::null_mut(), "workspace_output")?;
+    let operation = || {
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, ptr::null_mut(), "workspace_output") }?;
         let workspace = Box::new(WorkspaceState {
             poisoned: AtomicBool::new(false),
             inner: Mutex::new(Part1DecodeWorkspace::new()),
         });
-        checked_write(
-            output,
-            Box::into_raw(workspace).cast::<EmuellaJ2kWorkspace>(),
-            "workspace_output",
-        )
-    })
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe {
+            checked_write(
+                output,
+                Box::into_raw(workspace).cast::<EmuellaJ2kWorkspace>(),
+                "workspace_output",
+            )
+        }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Destroy an idle workspace, including a workspace poisoned by panic.
-pub extern "C" fn emuella_j2k_workspace_destroy(workspace: *mut EmuellaJ2kWorkspace) {
+///
+/// # Safety
+/// `workspace` must be null or the exact live workspace handle returned by this
+/// library. A non-null handle transfers ownership back exactly once; all calls,
+/// callbacks and borrowed observations using it must have quiesced. It must not
+/// be used again or destroyed concurrently.
+pub unsafe extern "C" fn emuella_j2k_workspace_destroy(workspace: *mut EmuellaJ2kWorkspace) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        destroy_handle::<EmuellaJ2kWorkspace, WorkspaceState>(workspace)
+        // SAFETY: The caller transfers this matching handle exactly once after all uses have
+        // quiesced.
+        unsafe { destroy_handle::<EmuellaJ2kWorkspace, WorkspaceState>(workspace) }
     }));
 }
 
 #[unsafe(no_mangle)]
 /// Decode one component region into a new immutable Rust-owned image.
-pub extern "C" fn emuella_j2k_decode_component_region(
+///
+/// # Safety
+/// `decoder` and `workspace` must be null or exact live handles of their
+/// respective types from this library, kept alive for the call. No other active
+/// operation may use this workspace. The decoder creation-time source and
+/// callback obligations still apply, including concurrent callback safety.
+/// `request` must contain a readable, initialised size/version prefix and, when
+/// it advertises the supported full size, the complete initialised request. `output` must
+/// provide writable storage for one value of its declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_decode_component_region(
     decoder: *const EmuellaJ2kDecoder,
     workspace: *const EmuellaJ2kWorkspace,
     request: *const EmuellaJ2kDecodeRequestV0,
     output: *mut *mut EmuellaJ2kImage,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, workspace, || {
-        checked_write(output, ptr::null_mut(), "image_output")?;
-        let decoder = handle_ref::<EmuellaJ2kDecoder, DecoderState>(decoder, "decoder")?;
-        let workspace = handle_ref::<EmuellaJ2kWorkspace, WorkspaceState>(workspace, "workspace")?;
+    let operation = || {
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, ptr::null_mut(), "image_output") }?;
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let decoder = unsafe { handle_ref::<EmuellaJ2kDecoder, DecoderState>(decoder, "decoder") }?;
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let workspace =
+            unsafe { handle_ref::<EmuellaJ2kWorkspace, WorkspaceState>(workspace, "workspace") }?;
         if workspace.poisoned.load(Ordering::Acquire) {
             return Err(AbiFailure::invalid(
                 "workspace is poisoned and may only be destroyed",
             ));
         }
-        let header = checked_read(request.cast::<AbiHeader>(), "request")?;
+        // SAFETY: The export contract supplies initialised input storage; size validation
+        // precedes full-structure reads.
+        let header = unsafe { checked_read(request.cast::<AbiHeader>(), "request") }?;
         validate_header(
             header.struct_size,
             header.abi_version,
             size_of::<EmuellaJ2kDecodeRequestV0>(),
         )?;
-        let request = checked_read(request, "request")?;
+        // SAFETY: The export contract supplies initialised input storage; size validation
+        // precedes full-structure reads.
+        let request = unsafe { checked_read(request, "request") }?;
         if request.reserved != 0 || request.reserved_bytes != [0; 7] {
             return Err(AbiFailure::invalid("request reserved fields must be zero"));
         }
@@ -700,64 +908,136 @@ pub extern "C" fn emuella_j2k_decode_component_region(
                 data: ImageData::Planes(vec![samples]),
             },
         });
-        checked_write(
-            output,
-            Box::into_raw(image).cast::<EmuellaJ2kImage>(),
-            "image_output",
-        )
-    })
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe {
+            checked_write(
+                output,
+                Box::into_raw(image).cast::<EmuellaJ2kImage>(),
+                "image_output",
+            )
+        }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, workspace, operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Destroy an immutable decoded image.
-pub extern "C" fn emuella_j2k_image_destroy(image: *mut EmuellaJ2kImage) {
+///
+/// # Safety
+/// `image` must be null or the exact live image handle returned by this
+/// library. A non-null handle transfers ownership back exactly once; all calls,
+/// callbacks and borrowed observations using it must have quiesced. It must not
+/// be used again or destroyed concurrently.
+pub unsafe extern "C" fn emuella_j2k_image_destroy(image: *mut EmuellaJ2kImage) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        destroy_handle::<EmuellaJ2kImage, ImageState>(image)
+        // SAFETY: The caller transfers this matching handle exactly once after all uses have
+        // quiesced.
+        unsafe { destroy_handle::<EmuellaJ2kImage, ImageState>(image) }
     }));
 }
 
 #[unsafe(no_mangle)]
 /// Copy decoded image properties into caller-owned storage.
-pub extern "C" fn emuella_j2k_image_info(
+///
+/// # Safety
+/// `image` must be null or an exact live image handle from this library,
+/// kept alive without destruction throughout the call. Concurrent immutable
+/// observations are allowed. `output` must provide writable storage for one value of its
+/// declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_image_info(
     image: *const EmuellaJ2kImage,
     output: *mut EmuellaJ2kImageInfoV0,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        let image = handle_ref::<EmuellaJ2kImage, ImageState>(image, "image")?;
-        checked_write(output, image_info(&image.image.info), "image_info_output")
-    })
+    let operation = || {
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let image = unsafe { handle_ref::<EmuellaJ2kImage, ImageState>(image, "image") }?;
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, image_info(&image.image.info), "image_info_output") }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 /// Copy the single decoded component descriptor into caller-owned storage.
 #[unsafe(no_mangle)]
-pub extern "C" fn emuella_j2k_image_component_info(
+///
+/// # Safety
+/// `image` must be null or an exact live image handle from this library,
+/// kept alive without destruction throughout the call. Concurrent immutable
+/// observations are allowed. `output` must provide writable storage for one value of its
+/// declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_image_component_info(
     image: *const EmuellaJ2kImage,
     output: *mut EmuellaJ2kComponentInfoV0,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        let image = handle_ref::<EmuellaJ2kImage, ImageState>(image, "image")?;
+    let operation = || {
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let image = unsafe { handle_ref::<EmuellaJ2kImage, ImageState>(image, "image") }?;
         let component = image
             .image
             .component_info
             .first()
             .ok_or_else(|| AbiFailure::invalid("image has no component descriptor"))?;
-        checked_write(output, component_info(component)?, "component_info_output")
-    })
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, component_info(component)?, "component_info_output") }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Copy decoded rows into a bounded caller-owned buffer with explicit stride.
-pub extern "C" fn emuella_j2k_image_copy(
+///
+/// # Safety
+/// `image` must be null or an exact live image from this library, kept alive
+/// throughout the copy. `destination` must provide `capacity` exclusively writable
+/// bytes, disjoint from the image and all other inputs and outputs. The checked
+/// stride and capacity determine the rows written. A non-null `error_output`
+/// must provide writable storage for one error pointer, owned by the caller on
+/// return and released once with `emuella_j2k_error_destroy`.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_image_copy(
     image: *const EmuellaJ2kImage,
     destination: *mut u8,
     capacity: usize,
     stride_bytes: usize,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
-    boundary(error_output, ptr::null(), || {
-        let image = handle_ref::<EmuellaJ2kImage, ImageState>(image, "image")?;
+    let operation = || {
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let image = unsafe { handle_ref::<EmuellaJ2kImage, ImageState>(image, "image") }?;
         let ImageData::Planes(planes) = &image.image.data else {
             return Err(AbiFailure::invalid("image is not planar"));
         };
@@ -805,28 +1085,56 @@ pub extern "C" fn emuella_j2k_image_copy(
                 .checked_mul(stride_bytes)
                 .ok_or_else(|| AbiFailure::invalid("destination row offset overflowed"))?;
             let destination_row = destination.wrapping_add(destination_start);
-            checked_copy(
-                destination_row,
-                &source[source_start..source_start + row_bytes],
-            )?;
+            // SAFETY: Capacity and offsets were checked; the caller supplies exclusive
+            // destination storage disjoint from the source.
+            unsafe {
+                checked_copy(
+                    destination_row,
+                    &source[source_start..source_start + row_bytes],
+                )
+            }?;
         }
         Ok(())
-    })
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
 #[unsafe(no_mangle)]
 /// Destroy an immutable diagnostic handle.
-pub extern "C" fn emuella_j2k_error_destroy(error: *mut EmuellaJ2kError) {
+///
+/// # Safety
+/// `error` must be null or the exact live error handle returned by this
+/// library. A non-null handle transfers ownership back exactly once; all calls,
+/// callbacks and borrowed observations using it must have quiesced. It must not
+/// be used again or destroyed concurrently.
+pub unsafe extern "C" fn emuella_j2k_error_destroy(error: *mut EmuellaJ2kError) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        destroy_handle::<EmuellaJ2kError, ErrorState>(error)
+        // SAFETY: The caller transfers this matching handle exactly once after all uses have
+        // quiesced.
+        unsafe { destroy_handle::<EmuellaJ2kError, ErrorState>(error) }
     }));
 }
 
 #[unsafe(no_mangle)]
 /// Return the status retained by an immutable diagnostic handle.
-pub extern "C" fn emuella_j2k_error_status(error: *const EmuellaJ2kError) -> EmuellaJ2kStatus {
+///
+/// # Safety
+/// `error` must be null or an exact live diagnostic from this library, with
+/// no destruction during the call. Concurrent immutable observations are allowed.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_error_status(
+    error: *const EmuellaJ2kError,
+) -> EmuellaJ2kStatus {
     catch_unwind(AssertUnwindSafe(|| {
-        handle_ref::<EmuellaJ2kError, ErrorState>(error, "error")
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        unsafe { handle_ref::<EmuellaJ2kError, ErrorState>(error, "error") }
             .map_or(EMUELLA_J2K_STATUS_INVALID_ARGUMENT, |error| error.status)
     }))
     .unwrap_or(EMUELLA_J2K_STATUS_PANIC)
@@ -834,13 +1142,27 @@ pub extern "C" fn emuella_j2k_error_status(error: *const EmuellaJ2kError) -> Emu
 
 #[unsafe(no_mangle)]
 /// Return the diagnostic byte count, including its terminating NUL byte.
-pub extern "C" fn emuella_j2k_error_message_size(
+///
+/// # Safety
+/// `error` must be null or an exact live diagnostic from this library, with
+/// no destruction during the call. `output` must provide exclusive writable
+/// storage for one usize, disjoint from the diagnostic allocation.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_error_message_size(
     error: *const EmuellaJ2kError,
     output: *mut usize,
 ) -> EmuellaJ2kStatus {
     catch_unwind(AssertUnwindSafe(|| {
-        let error = handle_ref::<EmuellaJ2kError, ErrorState>(error, "error")?;
-        checked_write(output, error.message.len(), "message_size_output")
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let error = unsafe { handle_ref::<EmuellaJ2kError, ErrorState>(error, "error") }?;
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, error.message.len(), "message_size_output") }
     }))
     .map_or(EMUELLA_J2K_STATUS_PANIC, |result| {
         result.map_or_else(|failure| failure.status, |()| EMUELLA_J2K_STATUS_OK)
@@ -849,17 +1171,31 @@ pub extern "C" fn emuella_j2k_error_message_size(
 
 #[unsafe(no_mangle)]
 /// Copy the complete NUL-terminated UTF-8 diagnostic into caller storage.
-pub extern "C" fn emuella_j2k_error_message_copy(
+///
+/// # Safety
+/// `error` must be null or an exact live diagnostic from this library, with
+/// no destruction during the call. `destination` must provide `capacity`
+/// exclusively writable bytes disjoint from the diagnostic allocation.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_error_message_copy(
     error: *const EmuellaJ2kError,
     destination: *mut u8,
     capacity: usize,
 ) -> EmuellaJ2kStatus {
     catch_unwind(AssertUnwindSafe(|| {
-        let error = handle_ref::<EmuellaJ2kError, ErrorState>(error, "error")?;
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let error = unsafe { handle_ref::<EmuellaJ2kError, ErrorState>(error, "error") }?;
         if capacity < error.message.len() {
             return Err(AbiFailure::invalid("diagnostic destination is too small"));
         }
-        checked_copy(destination, &error.message)
+        // SAFETY: Capacity and offsets were checked; the caller supplies exclusive destination
+        // storage disjoint from the source.
+        unsafe { checked_copy(destination, &error.message) }
     }))
     .map_or(EMUELLA_J2K_STATUS_PANIC, |result| {
         result.map_or_else(|failure| failure.status, |()| EMUELLA_J2K_STATUS_OK)
@@ -970,11 +1306,15 @@ mod tests {
         }
     }
 
-    fn decoder(source: &mut TestSource) -> *mut EmuellaJ2kDecoder {
+    // SAFETY: the caller must keep the source allocation and bytes stable until
+    // the returned decoder is destroyed and all its callbacks have finished.
+    unsafe fn decoder(source: &mut TestSource) -> *mut EmuellaJ2kDecoder {
         let descriptor = source_descriptor(source);
         let mut decoder = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decoder_create(&descriptor, &mut decoder, ptr::null_mut()),
+            // SAFETY: The caller keeps the source stable; the descriptor and output are
+            // disjoint local storage.
+            unsafe { emuella_j2k_decoder_create(&descriptor, &mut decoder, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         assert!(!decoder.is_null());
@@ -991,11 +1331,15 @@ mod tests {
     #[test]
     fn invalid_null_outputs_are_rejected_without_ub() {
         assert_eq!(
-            emuella_j2k_workspace_create(ptr::null_mut(), ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_workspace_create(ptr::null_mut(), ptr::null_mut()) },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
         assert_eq!(
-            emuella_j2k_error_message_size(ptr::null(), ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_error_message_size(ptr::null(), ptr::null_mut()) },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
         let mut aligned_storage = [0_usize; 2];
@@ -1005,7 +1349,9 @@ mod tests {
             .wrapping_add(1)
             .cast::<*mut EmuellaJ2kWorkspace>();
         assert_eq!(
-            emuella_j2k_workspace_create(misaligned_output, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_workspace_create(misaligned_output, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
 
@@ -1016,7 +1362,9 @@ mod tests {
             .wrapping_add(1)
             .cast::<*mut EmuellaJ2kError>();
         assert_eq!(
-            emuella_j2k_workspace_create(&mut workspace, misaligned_error),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_workspace_create(&mut workspace, misaligned_error) },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
         assert!(workspace.is_null());
@@ -1025,32 +1373,57 @@ mod tests {
     #[test]
     fn inspect_decode_copy_and_workspace_reuse_are_failure_atomic() {
         let (mut source, expected) = fixture();
-        let decoder = decoder(&mut source);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut source) };
         let mut inspection = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decoder_inspect(decoder, &mut inspection, ptr::null_mut()),
+            // SAFETY: The source and decoder remain live; the local output slots are exclusive
+            // and disjoint.
+            unsafe { emuella_j2k_decoder_inspect(decoder, &mut inspection, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         let mut info = EmuellaJ2kImageInfoV0::default();
         assert_eq!(
-            emuella_j2k_inspection_image_info(inspection, &mut info, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_inspection_image_info(inspection, &mut info, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         assert_eq!((info.width, info.height, info.component_count), (4, 4, 1));
         let mut component = EmuellaJ2kComponentInfoV0::default();
         assert_eq!(
-            emuella_j2k_inspection_component_info(inspection, 0, &mut component, ptr::null_mut(),),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe {
+                emuella_j2k_inspection_component_info(
+                    inspection,
+                    0,
+                    &mut component,
+                    ptr::null_mut(),
+                )
+            },
             EMUELLA_J2K_STATUS_OK
         );
         assert_eq!((component.width, component.height), (4, 4));
         assert_eq!(
-            emuella_j2k_inspection_component_info(inspection, 1, &mut component, ptr::null_mut(),),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe {
+                emuella_j2k_inspection_component_info(
+                    inspection,
+                    1,
+                    &mut component,
+                    ptr::null_mut(),
+                )
+            },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
 
         let mut workspace = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         let request = EmuellaJ2kDecodeRequestV0 {
@@ -1069,18 +1442,26 @@ mod tests {
         for _ in 0..2 {
             let mut image = ptr::null_mut();
             assert_eq!(
-                emuella_j2k_decode_component_region(
-                    decoder,
-                    workspace,
-                    &request,
-                    &mut image,
-                    ptr::null_mut(),
-                ),
+                // SAFETY: The source and handles remain live; this call exclusively uses the
+                // workspace and local outputs.
+                unsafe {
+                    emuella_j2k_decode_component_region(
+                        decoder,
+                        workspace,
+                        &request,
+                        &mut image,
+                        ptr::null_mut(),
+                    )
+                },
                 EMUELLA_J2K_STATUS_OK
             );
             let mut decoded_component = EmuellaJ2kComponentInfoV0::default();
             assert_eq!(
-                emuella_j2k_image_component_info(image, &mut decoded_component, ptr::null_mut(),),
+                // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+                // pointers are rejected before access.
+                unsafe {
+                    emuella_j2k_image_component_info(image, &mut decoded_component, ptr::null_mut())
+                },
                 EMUELLA_J2K_STATUS_OK
             );
             assert_eq!(
@@ -1094,36 +1475,48 @@ mod tests {
             );
             let mut too_small = [0xa5; 3];
             assert_eq!(
-                emuella_j2k_image_copy(
-                    image,
-                    too_small.as_mut_ptr(),
-                    too_small.len(),
-                    2,
-                    ptr::null_mut(),
-                ),
+                // SAFETY: The handle is live and the disjoint local buffer has the stated
+                // capacity.
+                unsafe {
+                    emuella_j2k_image_copy(
+                        image,
+                        too_small.as_mut_ptr(),
+                        too_small.len(),
+                        2,
+                        ptr::null_mut(),
+                    )
+                },
                 EMUELLA_J2K_STATUS_INVALID_ARGUMENT
             );
             assert_eq!(too_small, [0xa5; 3]);
             let mut actual = [0_u8; 4];
             assert_eq!(
-                emuella_j2k_image_copy(
-                    image,
-                    actual.as_mut_ptr(),
-                    actual.len(),
-                    2,
-                    ptr::null_mut(),
-                ),
+                // SAFETY: The handle is live and the disjoint local buffer has the stated
+                // capacity.
+                unsafe {
+                    emuella_j2k_image_copy(
+                        image,
+                        actual.as_mut_ptr(),
+                        actual.len(),
+                        2,
+                        ptr::null_mut(),
+                    )
+                },
                 EMUELLA_J2K_STATUS_OK
             );
             assert_eq!(
                 actual,
                 [expected[5], expected[6], expected[9], expected[10]]
             );
-            emuella_j2k_image_destroy(image);
+            // SAFETY: This matching handle is released once, after its last synchronous use.
+            unsafe { emuella_j2k_image_destroy(image) };
         }
-        emuella_j2k_inspection_destroy(inspection);
-        emuella_j2k_workspace_destroy(workspace);
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_inspection_destroy(inspection) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_workspace_destroy(workspace) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
     }
 
     #[test]
@@ -1133,10 +1526,13 @@ mod tests {
             bytes: fixture.tnsot_zero,
             fail_reads: false,
         });
-        let decoder = decoder(&mut source);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut source) };
         let mut workspace = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         let request = EmuellaJ2kDecodeRequestV0 {
@@ -1154,24 +1550,32 @@ mod tests {
         };
         let mut image = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decode_component_region(
-                decoder,
-                workspace,
-                &request,
-                &mut image,
-                ptr::null_mut(),
-            ),
+            // SAFETY: The source and handles remain live; this call exclusively uses the
+            // workspace and local outputs.
+            unsafe {
+                emuella_j2k_decode_component_region(
+                    decoder,
+                    workspace,
+                    &request,
+                    &mut image,
+                    ptr::null_mut(),
+                )
+            },
             EMUELLA_J2K_STATUS_OK
         );
         let mut info = EmuellaJ2kImageInfoV0::default();
         assert_eq!(
-            emuella_j2k_image_info(image, &mut info, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_image_info(image, &mut info, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         assert_eq!((info.width, info.height, info.component_count), (7, 5, 1));
         let mut component = EmuellaJ2kComponentInfoV0::default();
         assert_eq!(
-            emuella_j2k_image_component_info(image, &mut component, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_image_component_info(image, &mut component, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         assert_eq!(
@@ -1184,7 +1588,10 @@ mod tests {
         );
         let mut actual = [0_u8; 35];
         assert_eq!(
-            emuella_j2k_image_copy(image, actual.as_mut_ptr(), actual.len(), 7, ptr::null_mut(),),
+            // SAFETY: The handle is live and the disjoint local buffer has the stated capacity.
+            unsafe {
+                emuella_j2k_image_copy(image, actual.as_mut_ptr(), actual.len(), 7, ptr::null_mut())
+            },
             EMUELLA_J2K_STATUS_OK
         );
         let mut expected = Vec::new();
@@ -1195,30 +1602,40 @@ mod tests {
             );
         }
         assert_eq!(actual.as_slice(), expected);
-        emuella_j2k_image_destroy(image);
-        emuella_j2k_workspace_destroy(workspace);
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_image_destroy(image) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_workspace_destroy(workspace) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
     }
 
     #[test]
     fn inspection_exposes_heterogeneous_component_metadata() {
         let mut source = heterogeneous_fixture();
-        let decoder = decoder(&mut source);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut source) };
         let mut inspection = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decoder_inspect(decoder, &mut inspection, ptr::null_mut()),
+            // SAFETY: The source and decoder remain live; the local output slots are exclusive
+            // and disjoint.
+            unsafe { emuella_j2k_decoder_inspect(decoder, &mut inspection, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         let expected = [(8, 0, 1, 1, 4, 4), (12, 1, 2, 1, 2, 4), (16, 0, 2, 2, 2, 2)];
         for (index, expected) in expected.into_iter().enumerate() {
             let mut component = EmuellaJ2kComponentInfoV0::default();
             assert_eq!(
-                emuella_j2k_inspection_component_info(
-                    inspection,
-                    u16::try_from(index).unwrap(),
-                    &mut component,
-                    ptr::null_mut(),
-                ),
+                // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+                // pointers are rejected before access.
+                unsafe {
+                    emuella_j2k_inspection_component_info(
+                        inspection,
+                        u16::try_from(index).unwrap(),
+                        &mut component,
+                        ptr::null_mut(),
+                    )
+                },
                 EMUELLA_J2K_STATUS_OK
             );
             assert_eq!(
@@ -1233,41 +1650,53 @@ mod tests {
                 expected
             );
         }
-        emuella_j2k_inspection_destroy(inspection);
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_inspection_destroy(inspection) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
     }
 
     #[test]
     fn callback_failure_is_source_io_with_owned_diagnostic() {
         let (mut source, _) = fixture();
         source.fail_reads = true;
-        let decoder = decoder(&mut source);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut source) };
         let mut inspection = ptr::null_mut();
         let mut error = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decoder_inspect(decoder, &mut inspection, &mut error),
+            // SAFETY: The source and decoder remain live; the local output slots are exclusive
+            // and disjoint.
+            unsafe { emuella_j2k_decoder_inspect(decoder, &mut inspection, &mut error) },
             EMUELLA_J2K_STATUS_SOURCE_IO
         );
         assert!(inspection.is_null());
         assert_eq!(
-            emuella_j2k_error_status(error),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_error_status(error) },
             EMUELLA_J2K_STATUS_SOURCE_IO
         );
         let mut required = 0;
         assert_eq!(
-            emuella_j2k_error_message_size(error, &mut required),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_error_message_size(error, &mut required) },
             EMUELLA_J2K_STATUS_OK
         );
         let mut message = vec![0; required];
         assert_eq!(
-            emuella_j2k_error_message_copy(error, message.as_mut_ptr(), message.len()),
+            // SAFETY: The handle is live and the disjoint local buffer has the stated capacity.
+            unsafe { emuella_j2k_error_message_copy(error, message.as_mut_ptr(), message.len()) },
             EMUELLA_J2K_STATUS_OK
         );
         let message = std::ffi::CStr::from_bytes_with_nul(&message).unwrap();
         assert!(message.to_string_lossy().contains("byte 0"));
         assert!(message.to_string_lossy().contains("status 91"));
-        emuella_j2k_error_destroy(error);
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_error_destroy(error) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
     }
 
     #[test]
@@ -1276,33 +1705,44 @@ mod tests {
         let eoc_prefix = malformed.bytes.len() - 2;
         assert_eq!(&malformed.bytes[eoc_prefix..], &[0xff, 0xd9]);
         malformed.bytes[eoc_prefix] = 0xfe;
-        let decoder = decoder(&mut malformed);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut malformed) };
         let mut inspection = ptr::null_mut();
         let mut error = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decoder_inspect(decoder, &mut inspection, &mut error),
+            // SAFETY: The source and decoder remain live; the local output slots are exclusive
+            // and disjoint.
+            unsafe { emuella_j2k_decoder_inspect(decoder, &mut inspection, &mut error) },
             EMUELLA_J2K_STATUS_INVALID_INPUT
         );
         assert!(inspection.is_null());
         assert_eq!(
-            emuella_j2k_error_status(error),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_error_status(error) },
             EMUELLA_J2K_STATUS_INVALID_INPUT
         );
-        emuella_j2k_error_destroy(error);
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_error_destroy(error) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
     }
 
     #[test]
     fn malformed_input_and_undersized_structures_are_rejected() {
         let (mut malformed, _) = fixture();
         malformed.bytes[1] = 0x50;
-        let decoder = decoder(&mut malformed);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut malformed) };
         let mut inspection = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decoder_inspect(decoder, &mut inspection, ptr::null_mut()),
+            // SAFETY: The source and decoder remain live; the local output slots are exclusive
+            // and disjoint.
+            unsafe { emuella_j2k_decoder_inspect(decoder, &mut inspection, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_INVALID_INPUT
         );
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
 
         let header = AbiHeader {
             struct_size: size_of::<AbiHeader>(),
@@ -1311,11 +1751,15 @@ mod tests {
         let sentinel = ptr::dangling_mut::<EmuellaJ2kDecoder>();
         let mut output = sentinel;
         assert_eq!(
-            emuella_j2k_decoder_create(
-                ptr::from_ref(&header).cast::<EmuellaJ2kSourceV0>(),
-                &mut output,
-                ptr::null_mut(),
-            ),
+            // SAFETY: The caller keeps the source stable; the descriptor and output are
+            // disjoint local storage.
+            unsafe {
+                emuella_j2k_decoder_create(
+                    ptr::from_ref(&header).cast::<EmuellaJ2kSourceV0>(),
+                    &mut output,
+                    ptr::null_mut(),
+                )
+            },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
         assert!(output.is_null());
@@ -1324,10 +1768,13 @@ mod tests {
     #[test]
     fn panic_is_contained_and_workspace_is_poisoned() {
         let (mut source, _) = fixture();
-        let decoder = decoder(&mut source);
+        let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.
+unsafe { decoder(&mut source) };
         let mut workspace = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()) },
             EMUELLA_J2K_STATUS_OK
         );
         let request = EmuellaJ2kDecodeRequestV0 {
@@ -1347,26 +1794,42 @@ mod tests {
         let mut image = ptr::null_mut();
         let mut error = ptr::null_mut();
         assert_eq!(
-            emuella_j2k_decode_component_region(
-                decoder, workspace, &request, &mut image, &mut error,
-            ),
+            // SAFETY: The source and handles remain live; this call exclusively uses the
+            // workspace and local outputs.
+            unsafe {
+                emuella_j2k_decode_component_region(
+                    decoder, workspace, &request, &mut image, &mut error,
+                )
+            },
             EMUELLA_J2K_STATUS_PANIC
         );
         assert!(image.is_null());
         assert!(!error.is_null());
-        assert_eq!(emuella_j2k_error_status(error), EMUELLA_J2K_STATUS_PANIC);
-        emuella_j2k_error_destroy(error);
         assert_eq!(
-            emuella_j2k_decode_component_region(
-                decoder,
-                workspace,
-                &request,
-                &mut image,
-                ptr::null_mut(),
-            ),
+            // SAFETY: Handles remain live and outputs are disjoint local storage; invalid
+            // pointers are rejected before access.
+            unsafe { emuella_j2k_error_status(error) },
+            EMUELLA_J2K_STATUS_PANIC
+        );
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_error_destroy(error) };
+        assert_eq!(
+            // SAFETY: The source and handles remain live; this call exclusively uses the
+            // workspace and local outputs.
+            unsafe {
+                emuella_j2k_decode_component_region(
+                    decoder,
+                    workspace,
+                    &request,
+                    &mut image,
+                    ptr::null_mut(),
+                )
+            },
             EMUELLA_J2K_STATUS_INVALID_ARGUMENT
         );
-        emuella_j2k_workspace_destroy(workspace);
-        emuella_j2k_decoder_destroy(decoder);
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_workspace_destroy(workspace) };
+        // SAFETY: This matching handle is released once, after its last synchronous use.
+        unsafe { emuella_j2k_decoder_destroy(decoder) };
     }
 }
