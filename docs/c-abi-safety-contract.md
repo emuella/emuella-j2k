@@ -308,7 +308,14 @@ The initial C API permits only these unsafe categories:
 
 Categories 2 through 5 retain six raw-operation sites: callback invocation,
 plain-data read, output write, opaque-handle borrow, allocation reconstruction
-and byte copy. `scripts/check-c-api.sh` checks this explicit inventory. Each
+and byte copy. `scripts/check-c-api.sh` checks a reviewed inventory of every
+production unsafe block, including helper delegation, through
+`scripts/audit-c-api-unsafe.py`. Changes to an operation or delegation expression
+require updating that inventory after review. Its deliberately narrow source
+recognition rejects unfamiliar block shapes; it complements the compiler lint
+and independent safety review rather than claiming to parse arbitrary Rust.
+Regression probes reject added operations before and after the decode test
+hook, within a delegation block, and inside nested blocks. Each
 raw operation must remain local, carry a `// SAFETY:` comment explaining its
 validity, alignment, aliasing, length, lifetime and concurrency preconditions,
 and immediately return to safe types.
