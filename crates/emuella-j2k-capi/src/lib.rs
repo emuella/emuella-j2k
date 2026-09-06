@@ -60,7 +60,7 @@ pub struct EmuellaJ2kSourceV0 {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-/// Reference-image properties or decoded single-plane properties.
+/// Reference-image properties or decoded image properties.
 pub struct EmuellaJ2kImageInfoV0 {
     pub struct_size: usize,
     pub abi_version: u32,
@@ -110,6 +110,73 @@ pub struct EmuellaJ2kDecodeRequestV0 {
     pub height: u32,
     pub discard_levels: u8,
     pub reserved_bytes: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+/// One to four distinct components in caller order, sharing one regional plan.
+/// The four-component bound belongs to this ABI, not codec admission. Unused
+/// component slots and reserved fields must be zero. Collection is opt-in.
+pub struct EmuellaJ2kDecodeComponentsRequestV0 {
+    pub struct_size: usize,
+    pub abi_version: u32,
+    pub reserved: u32,
+    pub component_count: u16,
+    /// Zero means all quality layers; otherwise the leading layer count.
+    pub max_quality_layers: u16,
+    pub components: [u16; 4],
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub discard_levels: u8,
+    /// Zero disables observations; one collects execution work counters.
+    pub collect_work: u8,
+    pub reserved_bytes: [u8; 6],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+/// Immutable observations for one successful decode with collect_work enabled.
+/// Work includes unrequested MCT dependencies. Capacities are retained storage,
+/// not allocation counts or per-call growth. Source callback bytes are excluded.
+pub struct EmuellaJ2kDecodeWorkV0 {
+    pub struct_size: usize,
+    pub abi_version: u32,
+    pub reserved: u32,
+    /// Exactly one preparation per successful call; plans are not cached.
+    pub preparation_count: u64,
+    pub code_blocks_decoded: u64,
+    pub tier1_coefficients: u64,
+    pub dwt_samples: u64,
+    pub synthesis_coefficients_loaded: u64,
+    pub synthesis_horizontal_values: u64,
+    pub synthesis_vertical_values: u64,
+    pub synthesis_lifting_updates: u64,
+    pub synthesis_output_samples: u64,
+    pub windowed_synthesis_component_tiles: u64,
+    pub full_synthesis_component_tiles: u64,
+    /// Logical bytes requested for the new C ABI owned output-plane buffers.
+    /// Excludes descriptors, plans, workspace, allocator metadata and copies.
+    pub output_allocation_bytes: u64,
+    /// Actual combined capacity in bytes of those output-plane buffers.
+    pub output_capacity_bytes: u64,
+    /// Largest retained code-block coefficient capacity, in sample slots.
+    pub coefficient_capacity: u64,
+    /// Retained fragmented codeword assembly capacity, in bytes.
+    pub segment_capacity: u64,
+    /// Largest retained tile-axis transform scratch capacity, in sample slots.
+    pub transform_capacity: u64,
+    /// Largest retained full coefficient-plane capacity, in sample slots.
+    pub full_coefficient_plane_capacity: u64,
+    /// Largest retained full-transform scratch capacity, in sample slots.
+    pub full_transform_scratch_capacity: u64,
+    /// Successful output-plane buffer reservation requests in this C ABI call.
+    /// Excludes all other allocations; this is not a process allocator count.
+    pub output_allocation_count: u64,
+    /// Capacity-based heap bytes retained by the complete workspace after this
+    /// execution, including private workers; excludes allocator metadata.
+    pub workspace_retained_heap_bytes: u64,
 }
 
 #[repr(C)]
@@ -200,6 +267,7 @@ struct WorkspaceState {
 
 struct ImageState {
     image: Image,
+    work: Option<EmuellaJ2kDecodeWorkV0>,
 }
 
 struct ErrorState {
@@ -829,11 +897,11 @@ pub unsafe extern "C" fn emuella_j2k_decode_component_region(
                 "request width and height must be non-zero",
             ));
         }
-        let component_indices = [request.component];
-        let prepared = prepare_part1_decode_from_source(
-            &decoder.source,
+        let image = decode_components(
+            decoder,
+            workspace,
             emuella_j2k::codestream::Part1ComponentDecodeRequest {
-                component_indices: &component_indices,
+                component_indices: &[request.component],
                 region: emuella_j2k::codestream::TileRegionRequest {
                     x: request.x,
                     y: request.y,
@@ -843,71 +911,8 @@ pub unsafe extern "C" fn emuella_j2k_decode_component_region(
                 discard_levels: request.discard_levels,
                 max_layers: (request.max_quality_layers != 0).then_some(request.max_quality_layers),
             },
-        )
-        .map_err(AbiFailure::from)?;
-        let info = prepared.info().clone();
-        let components = prepared.component_info().to_vec();
-        let component = components
-            .first()
-            .ok_or_else(|| AbiFailure::invalid("decode produced no component descriptor"))?;
-        let sample_bytes = usize::from(component.sample_format.bits_per_sample).div_ceil(8);
-        let stride = usize::try_from(component.width)
-            .ok()
-            .and_then(|width| width.checked_mul(sample_bytes))
-            .ok_or_else(|| AbiFailure {
-                status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
-                message: "decoded row byte size overflowed".into(),
-            })?;
-        let length = stride
-            .checked_mul(usize::try_from(component.height).map_err(|_| AbiFailure {
-                status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
-                message: "decoded height exceeds addressable storage".into(),
-            })?)
-            .ok_or_else(|| AbiFailure {
-                status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
-                message: "decoded image byte size overflowed".into(),
-            })?;
-        let mut samples = Vec::new();
-        samples.try_reserve_exact(length).map_err(|_| AbiFailure {
-            status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
-            message: "decoded image allocation failed".into(),
-        })?;
-        samples.resize(length, 0);
-        let plane = PlaneMut::new(
-            &mut samples,
-            component.width,
-            component.height,
-            stride,
-            component.sample_format,
-        )
-        .map_err(AbiFailure::from)?;
-        let mut planes = [plane];
-        let mut target = ImageViewMut::Planar {
-            info: &info,
-            planes: &mut planes,
-        };
-        let mut workspace = workspace.inner.lock().map_err(|_| AbiFailure {
-            status: EMUELLA_J2K_STATUS_PANIC,
-            message: "workspace mutex was poisoned".into(),
-        })?;
-        #[cfg(test)]
-        if FORCE_DECODE_PANIC.with(|force| force.replace(false)) {
-            panic!("C ABI panic containment test");
-        }
-        execute_prepared_part1_decode_into_with_workspace(
-            &prepared,
-            &mut target,
-            &mut workspace,
-            emuella_j2k::codestream::PreparedPart1ExecutionOptions::default(),
-        )
-        .map_err(AbiFailure::from)?;
-        let image = Box::new(ImageState {
-            image: Image {
-                info,
-                component_info: components,
-                data: ImageData::Planes(vec![samples]),
-            },
-        });
+            false,
+        )?;
         // SAFETY: The export contract supplies exclusive, disjoint output storage for this
         // value.
         unsafe {
@@ -921,6 +926,236 @@ pub unsafe extern "C" fn emuella_j2k_decode_component_region(
     // SAFETY: The export contract reserves the error slot and keeps any workspace alive
     // through panic recovery. The closure upholds each individual pointer obligation.
     unsafe { boundary(error_output, workspace, operation) }
+}
+
+#[unsafe(no_mangle)]
+/// Decode selected components of one region into a new immutable Rust-owned image.
+/// Planes follow request order. Failure clears output to null; workspace scratch
+/// may grow on failure. No partially decoded image is published.
+///
+/// # Safety
+/// `decoder` and `workspace` must be null or exact live handles of their
+/// respective types from this library, kept alive for the call. No other active
+/// operation may use this workspace. The decoder creation-time source and
+/// callback obligations still apply, including concurrent callback safety.
+/// `request` must contain a readable, initialised size/version prefix and, when
+/// it advertises the supported full size, the complete initialised request. `output` must
+/// provide writable storage for one value of its declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_decode_components_region(
+    decoder: *const EmuellaJ2kDecoder,
+    workspace: *const EmuellaJ2kWorkspace,
+    request: *const EmuellaJ2kDecodeComponentsRequestV0,
+    output: *mut *mut EmuellaJ2kImage,
+    error_output: *mut *mut EmuellaJ2kError,
+) -> EmuellaJ2kStatus {
+    let operation = || {
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, ptr::null_mut(), "image_output") }?;
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let decoder = unsafe { handle_ref::<EmuellaJ2kDecoder, DecoderState>(decoder, "decoder") }?;
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let workspace =
+            unsafe { handle_ref::<EmuellaJ2kWorkspace, WorkspaceState>(workspace, "workspace") }?;
+        if workspace.poisoned.load(Ordering::Acquire) {
+            return Err(AbiFailure::invalid(
+                "workspace is poisoned and may only be destroyed",
+            ));
+        }
+        // SAFETY: The export contract supplies initialised input storage; size validation
+        // precedes full-structure reads.
+        let header = unsafe { checked_read(request.cast::<AbiHeader>(), "request") }?;
+        validate_header(
+            header.struct_size,
+            header.abi_version,
+            size_of::<EmuellaJ2kDecodeComponentsRequestV0>(),
+        )?;
+        // SAFETY: The export contract supplies initialised input storage; size validation
+        // precedes full-structure reads.
+        let request = unsafe { checked_read(request, "request") }?;
+        if request.reserved != 0 || request.reserved_bytes != [0; 6] {
+            return Err(AbiFailure::invalid("request reserved fields must be zero"));
+        }
+        if request.width == 0 || request.height == 0 {
+            return Err(AbiFailure::invalid(
+                "request width and height must be non-zero",
+            ));
+        }
+        if request.collect_work > 1 {
+            return Err(AbiFailure::invalid("collect_work must be zero or one"));
+        }
+        let count = usize::from(request.component_count);
+        if !(1..=4).contains(&count) {
+            return Err(AbiFailure::invalid(
+                "component count must be between one and four",
+            ));
+        }
+        if request.components[count..]
+            .iter()
+            .any(|&component| component != 0)
+        {
+            return Err(AbiFailure::invalid("unused component slots must be zero"));
+        }
+        let indices = &request.components[..count];
+        if indices
+            .iter()
+            .enumerate()
+            .any(|(index, component)| indices[..index].contains(component))
+        {
+            return Err(AbiFailure::invalid("component indices must be distinct"));
+        }
+        let image = decode_components(
+            decoder,
+            workspace,
+            emuella_j2k::codestream::Part1ComponentDecodeRequest {
+                component_indices: indices,
+                region: emuella_j2k::codestream::TileRegionRequest {
+                    x: request.x,
+                    y: request.y,
+                    width: request.width,
+                    height: request.height,
+                },
+                discard_levels: request.discard_levels,
+                max_layers: (request.max_quality_layers != 0).then_some(request.max_quality_layers),
+            },
+            request.collect_work == 1,
+        )?;
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe {
+            checked_write(
+                output,
+                Box::into_raw(image).cast::<EmuellaJ2kImage>(),
+                "image_output",
+            )
+        }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, workspace, operation) }
+}
+
+fn decode_components(
+    decoder: &DecoderState,
+    workspace: &WorkspaceState,
+    request: emuella_j2k::codestream::Part1ComponentDecodeRequest<'_>,
+    collect_work: bool,
+) -> Result<Box<ImageState>, AbiFailure> {
+    let prepared =
+        prepare_part1_decode_from_source(&decoder.source, request).map_err(AbiFailure::from)?;
+    let info = prepared.info().clone();
+    let components = prepared.component_info().to_vec();
+    let mut samples = Vec::with_capacity(components.len());
+    let mut strides = Vec::with_capacity(components.len());
+    for component in &components {
+        let sample_bytes = usize::from(component.sample_format.bits_per_sample).div_ceil(8);
+        let stride = usize::try_from(component.width)
+            .ok()
+            .and_then(|width| width.checked_mul(sample_bytes))
+            .ok_or_else(|| AbiFailure {
+                status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
+                message: "decoded row byte size overflowed".into(),
+            })?;
+        let length = usize::try_from(component.height)
+            .ok()
+            .and_then(|height| stride.checked_mul(height))
+            .ok_or_else(|| AbiFailure {
+                status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
+                message: "decoded image byte size overflowed".into(),
+            })?;
+        let mut plane = Vec::new();
+        plane.try_reserve_exact(length).map_err(|_| AbiFailure {
+            status: EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
+            message: "decoded image allocation failed".into(),
+        })?;
+        plane.resize(length, 0);
+        samples.push(plane);
+        strides.push(stride);
+    }
+    let mut planes = samples
+        .iter_mut()
+        .zip(&components)
+        .zip(strides)
+        .map(|((samples, component), stride)| {
+            PlaneMut::new(
+                samples,
+                component.width,
+                component.height,
+                stride,
+                component.sample_format,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AbiFailure::from)?;
+    let mut target = ImageViewMut::Planar {
+        info: &info,
+        planes: &mut planes,
+    };
+    let mut workspace = workspace.inner.lock().map_err(|_| AbiFailure {
+        status: EMUELLA_J2K_STATUS_PANIC,
+        message: "workspace mutex was poisoned".into(),
+    })?;
+    #[cfg(test)]
+    if FORCE_DECODE_PANIC.with(|force| force.replace(false)) {
+        panic!("C ABI panic containment test");
+    }
+    let timings = execute_prepared_part1_decode_into_with_workspace(
+        &prepared,
+        &mut target,
+        &mut workspace,
+        emuella_j2k::codestream::PreparedPart1ExecutionOptions {
+            instrumentation: if collect_work {
+                emuella_j2k::codestream::DecodeInstrumentation::WorkCounters
+            } else {
+                emuella_j2k::codestream::DecodeInstrumentation::None
+            },
+            ..Default::default()
+        },
+    )
+    .map_err(AbiFailure::from)?;
+    let work = collect_work.then(|| EmuellaJ2kDecodeWorkV0 {
+        struct_size: size_of::<EmuellaJ2kDecodeWorkV0>(),
+        abi_version: EMUELLA_J2K_ABI_VERSION,
+        reserved: 0,
+        preparation_count: 1,
+        code_blocks_decoded: timings.code_blocks_decoded,
+        tier1_coefficients: timings.tier1_coefficients,
+        dwt_samples: timings.dwt_samples,
+        synthesis_coefficients_loaded: timings.synthesis_coefficients_loaded,
+        synthesis_horizontal_values: timings.synthesis_horizontal_values,
+        synthesis_vertical_values: timings.synthesis_vertical_values,
+        synthesis_lifting_updates: timings.synthesis_lifting_updates,
+        synthesis_output_samples: timings.synthesis_output_samples,
+        windowed_synthesis_component_tiles: timings.windowed_synthesis_component_tiles,
+        full_synthesis_component_tiles: timings.full_synthesis_component_tiles,
+        output_allocation_bytes: samples.iter().map(|plane| plane.len() as u64).sum(),
+        output_capacity_bytes: samples.iter().map(|plane| plane.capacity() as u64).sum(),
+        coefficient_capacity: workspace.coefficient_capacity() as u64,
+        segment_capacity: workspace.segment_capacity() as u64,
+        transform_capacity: workspace.transform_capacity() as u64,
+        full_coefficient_plane_capacity: workspace.full_coefficient_plane_capacity() as u64,
+        full_transform_scratch_capacity: workspace.full_transform_scratch_capacity() as u64,
+        output_allocation_count: samples.len() as u64,
+        workspace_retained_heap_bytes: workspace.retained_heap_bytes(),
+    });
+    Ok(Box::new(ImageState {
+        image: Image {
+            info,
+            component_info: components,
+            data: ImageData::Planes(samples),
+        },
+        work,
+    }))
 }
 
 #[unsafe(no_mangle)]
@@ -973,7 +1208,46 @@ pub unsafe extern "C" fn emuella_j2k_image_info(
     unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
-/// Copy the single decoded component descriptor into caller-owned storage.
+#[unsafe(no_mangle)]
+/// Copy opt-in work observations; return UNSUPPORTED without modifying output
+/// when collection was disabled for this image.
+///
+/// # Safety
+/// `image` must be null or an exact live image handle from this library,
+/// kept alive without destruction throughout the call. Concurrent immutable
+/// observations are allowed. `output` must provide writable storage for one value of its
+/// declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_image_decode_work(
+    image: *const EmuellaJ2kImage,
+    output: *mut EmuellaJ2kDecodeWorkV0,
+    error_output: *mut *mut EmuellaJ2kError,
+) -> EmuellaJ2kStatus {
+    let operation = || {
+        // SAFETY: The caller guarantees the matching live handle remains valid for this call;
+        // null and alignment are checked.
+        let image = unsafe { handle_ref::<EmuellaJ2kImage, ImageState>(image, "image") }?;
+        let work = image.work.ok_or_else(|| AbiFailure {
+            status: EMUELLA_J2K_STATUS_UNSUPPORTED,
+            message: "decode work collection was disabled".into(),
+        })?;
+        // SAFETY: The export contract supplies exclusive, disjoint output storage for this
+        // value.
+        unsafe { checked_write(output, work, "decode_work_output") }
+    };
+    // SAFETY: The export contract reserves the error slot and keeps any workspace alive
+    // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
+}
+
+/// Copy the first decoded component descriptor into caller-owned storage.
 #[unsafe(no_mangle)]
 ///
 /// # Safety
@@ -994,6 +1268,33 @@ pub unsafe extern "C" fn emuella_j2k_image_component_info(
     output: *mut EmuellaJ2kComponentInfoV0,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
+    // SAFETY: This legacy entry point forwards the same handle and storage
+    // obligations to the indexed operation for the first output component.
+    unsafe { emuella_j2k_image_component_info_at(image, 0, output, error_output) }
+}
+
+#[unsafe(no_mangle)]
+/// Copy the descriptor at a zero-based output position in request order.
+///
+/// # Safety
+/// `image` must be null or an exact live image handle from this library,
+/// kept alive without destruction throughout the call. Concurrent immutable
+/// observations are allowed. `output` must provide writable storage for one value of its
+/// declared type.
+/// A non-null `error_output` must provide writable storage for one error pointer.
+/// Returned handles belong to the caller and must be released exactly once with
+/// their matching destroy function; output slots do not release previous handles.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_image_component_info_at(
+    image: *const EmuellaJ2kImage,
+    output_index: u16,
+    output: *mut EmuellaJ2kComponentInfoV0,
+    error_output: *mut *mut EmuellaJ2kError,
+) -> EmuellaJ2kStatus {
     let operation = || {
         // SAFETY: The caller guarantees the matching live handle remains valid for this call;
         // null and alignment are checked.
@@ -1001,8 +1302,8 @@ pub unsafe extern "C" fn emuella_j2k_image_component_info(
         let component = image
             .image
             .component_info
-            .first()
-            .ok_or_else(|| AbiFailure::invalid("image has no component descriptor"))?;
+            .get(usize::from(output_index))
+            .ok_or_else(|| AbiFailure::invalid("output component index is out of bounds"))?;
         // SAFETY: The export contract supplies exclusive, disjoint output storage for this
         // value.
         unsafe { checked_write(output, component_info(component)?, "component_info_output") }
@@ -1013,7 +1314,7 @@ pub unsafe extern "C" fn emuella_j2k_image_component_info(
 }
 
 #[unsafe(no_mangle)]
-/// Copy decoded rows into a bounded caller-owned buffer with explicit stride.
+/// Copy the first output component into a bounded buffer with explicit row stride.
 ///
 /// # Safety
 /// `image` must be null or an exact live image from this library, kept alive
@@ -1034,6 +1335,45 @@ pub unsafe extern "C" fn emuella_j2k_image_copy(
     stride_bytes: usize,
     error_output: *mut *mut EmuellaJ2kError,
 ) -> EmuellaJ2kStatus {
+    // SAFETY: This legacy entry point forwards the same handle and storage
+    // obligations to the indexed operation for the first output component.
+    unsafe {
+        emuella_j2k_image_copy_component(
+            image,
+            0,
+            destination,
+            capacity,
+            stride_bytes,
+            error_output,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+/// Copy rows at a zero-based output position in request order with explicit stride.
+/// Bounds failure leaves destination bytes unchanged; successful copies preserve
+/// row padding. This operation does not decode directly into foreign storage.
+///
+/// # Safety
+/// `image` must be null or an exact live image from this library, kept alive
+/// throughout the copy. `destination` must provide `capacity` exclusively writable
+/// bytes, disjoint from the image and all other inputs and outputs. The checked
+/// stride and capacity determine the rows written. A non-null `error_output`
+/// must provide writable storage for one error pointer, owned by the caller on
+/// return and released once with `emuella_j2k_error_destroy`.
+/// All non-null storage pointers must be valid for the accessed extent and
+/// correctly aligned throughout this synchronous call. Writable storage must be
+/// exclusively accessible and disjoint from inputs, other outputs, live handle
+/// allocations and callback storage. Null or misaligned arguments are rejected
+/// where checked; these checks do not establish allocation validity.
+pub unsafe extern "C" fn emuella_j2k_image_copy_component(
+    image: *const EmuellaJ2kImage,
+    output_index: u16,
+    destination: *mut u8,
+    capacity: usize,
+    stride_bytes: usize,
+    error_output: *mut *mut EmuellaJ2kError,
+) -> EmuellaJ2kStatus {
     let operation = || {
         // SAFETY: The caller guarantees the matching live handle remains valid for this call;
         // null and alignment are checked.
@@ -1042,13 +1382,13 @@ pub unsafe extern "C" fn emuella_j2k_image_copy(
             return Err(AbiFailure::invalid("image is not planar"));
         };
         let source = planes
-            .first()
-            .ok_or_else(|| AbiFailure::invalid("image has no component plane"))?;
+            .get(usize::from(output_index))
+            .ok_or_else(|| AbiFailure::invalid("output component index is out of bounds"))?;
         let component = image
             .image
             .component_info
-            .first()
-            .ok_or_else(|| AbiFailure::invalid("image has no component descriptor"))?;
+            .get(usize::from(output_index))
+            .ok_or_else(|| AbiFailure::invalid("output component index is out of bounds"))?;
         let sample_bytes = usize::from(component.sample_format.bits_per_sample).div_ceil(8);
         let row_bytes = usize::try_from(component.width)
             .ok()
@@ -1517,6 +1857,438 @@ unsafe { decoder(&mut source) };
         unsafe { emuella_j2k_workspace_destroy(workspace) };
         // SAFETY: This matching handle is released once, after its last synchronous use.
         unsafe { emuella_j2k_decoder_destroy(decoder) };
+    }
+
+    #[test]
+    fn four_independent_components_use_all_inline_slots() {
+        let originals = [vec![11; 16], vec![23; 16], vec![37; 16], vec![49; 16]];
+        let bytes = emuella_j2k::codestream::encode_planar_u8_no_decomp_test_fixture(
+            4,
+            4,
+            &[&originals[0], &originals[1], &originals[2], &originals[3]],
+        )
+        .unwrap();
+        let mut source = Box::new(TestSource {
+            bytes,
+            fail_reads: false,
+        });
+        // SAFETY: The source and handles remain live; every output is disjoint local storage.
+        unsafe {
+            let decoder = decoder(&mut source);
+            let mut workspace = ptr::null_mut();
+            assert_eq!(
+                emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+                EMUELLA_J2K_STATUS_OK
+            );
+            let request = EmuellaJ2kDecodeComponentsRequestV0 {
+                struct_size: size_of::<EmuellaJ2kDecodeComponentsRequestV0>(),
+                component_count: 4,
+                components: [3, 1, 0, 2],
+                width: 4,
+                height: 4,
+                collect_work: 1,
+                ..Default::default()
+            };
+            let mut image = ptr::null_mut();
+            assert_eq!(
+                emuella_j2k_decode_components_region(
+                    decoder,
+                    workspace,
+                    &request,
+                    &mut image,
+                    ptr::null_mut()
+                ),
+                EMUELLA_J2K_STATUS_OK
+            );
+            for (index, source_component) in request.components.into_iter().enumerate() {
+                let mut samples = [0; 16];
+                assert_eq!(
+                    emuella_j2k_image_copy_component(
+                        image,
+                        index as u16,
+                        samples.as_mut_ptr(),
+                        16,
+                        4,
+                        ptr::null_mut()
+                    ),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!(samples.as_slice(), originals[source_component as usize]);
+            }
+            let mut work = EmuellaJ2kDecodeWorkV0::default();
+            assert_eq!(
+                emuella_j2k_image_decode_work(image, &mut work, ptr::null_mut()),
+                EMUELLA_J2K_STATUS_OK
+            );
+            assert_eq!(work.output_allocation_count, 4);
+            assert_eq!(work.output_allocation_bytes, 64);
+            emuella_j2k_image_destroy(image);
+            emuella_j2k_workspace_destroy(workspace);
+            emuella_j2k_decoder_destroy(decoder);
+        }
+    }
+
+    #[test]
+    fn combined_mct_preserves_order_and_reconstructs_dependencies_once() {
+        let fixture = emuella_j2k_test_support::native_planes::reversible_mct_region_fixture();
+        let mut source = Box::new(TestSource {
+            bytes: fixture.tnsot_one,
+            fail_reads: false,
+        });
+        // SAFETY: Source storage remains live and immutable through decoder destruction.
+        let decoder = unsafe { decoder(&mut source) };
+        let mut workspace = ptr::null_mut();
+        // SAFETY: All handles remain live and all outputs are disjoint local storage.
+        unsafe {
+            assert_eq!(
+                emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+                EMUELLA_J2K_STATUS_OK
+            );
+            let mut request = EmuellaJ2kDecodeComponentsRequestV0 {
+                struct_size: size_of::<EmuellaJ2kDecodeComponentsRequestV0>(),
+                component_count: 3,
+                components: [2, 0, 1, 0],
+                x: 61,
+                y: 63,
+                width: 7,
+                height: 5,
+                collect_work: 1,
+                ..Default::default()
+            };
+            let mut combined = EmuellaJ2kDecodeWorkV0::default();
+            for repetition in 0..2 {
+                let mut image = ptr::null_mut();
+                assert_eq!(
+                    emuella_j2k_decode_components_region(
+                        decoder,
+                        workspace,
+                        &request,
+                        &mut image,
+                        ptr::null_mut()
+                    ),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                let mut info = EmuellaJ2kImageInfoV0::default();
+                assert_eq!(
+                    emuella_j2k_image_info(image, &mut info, ptr::null_mut()),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!((info.width, info.height, info.component_count), (7, 5, 3));
+                let mut work = EmuellaJ2kDecodeWorkV0::default();
+                assert_eq!(
+                    emuella_j2k_image_decode_work(image, &mut work, ptr::null_mut()),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!(work.preparation_count, 1);
+                assert!(work.code_blocks_decoded > 0 && work.tier1_coefficients > 0);
+                assert!(work.synthesis_lifting_updates > 0);
+                assert_eq!(work.output_allocation_bytes, 105);
+                assert_eq!(work.output_allocation_count, 3);
+                assert!(work.output_capacity_bytes >= 105);
+                if repetition == 0 {
+                    combined = work;
+                } else {
+                    assert_eq!(
+                        work.workspace_retained_heap_bytes,
+                        combined.workspace_retained_heap_bytes
+                    );
+                    assert_eq!(work.code_blocks_decoded, combined.code_blocks_decoded);
+                }
+                for (index, source_index) in [2_usize, 0, 1].into_iter().enumerate() {
+                    let mut component = EmuellaJ2kComponentInfoV0::default();
+                    assert_eq!(
+                        emuella_j2k_image_component_info_at(
+                            image,
+                            index as u16,
+                            &mut component,
+                            ptr::null_mut()
+                        ),
+                        EMUELLA_J2K_STATUS_OK
+                    );
+                    assert_eq!(component.source_component as usize, source_index);
+                    assert_eq!(
+                        (
+                            component.x_origin,
+                            component.y_origin,
+                            component.width,
+                            component.height
+                        ),
+                        (61, 63, 7, 5)
+                    );
+                    let mut actual = [0xa5_u8; 45];
+                    assert_eq!(
+                        emuella_j2k_image_copy_component(
+                            image,
+                            index as u16,
+                            actual.as_mut_ptr(),
+                            actual.len(),
+                            9,
+                            ptr::null_mut()
+                        ),
+                        EMUELLA_J2K_STATUS_OK
+                    );
+                    for row in 0..5 {
+                        let start = (row + 63) * fixture.width as usize + 61;
+                        assert_eq!(
+                            &actual[row * 9..row * 9 + 7],
+                            &fixture.planes[source_index][start..start + 7]
+                        );
+                        assert_eq!(&actual[row * 9 + 7..row * 9 + 9], &[0xa5; 2]);
+                    }
+                    let sentinel = actual;
+                    for (bad_index, capacity, stride) in
+                        [(3, 45, 9), (0, 42, 9), (0, 45, 6), (0, 45, usize::MAX)]
+                    {
+                        assert_eq!(
+                            emuella_j2k_image_copy_component(
+                                image,
+                                bad_index,
+                                actual.as_mut_ptr(),
+                                capacity,
+                                stride,
+                                ptr::null_mut()
+                            ),
+                            EMUELLA_J2K_STATUS_INVALID_ARGUMENT
+                        );
+                        assert_eq!(actual, sentinel);
+                    }
+                    let sentinel_component = component.source_component;
+                    assert_eq!(
+                        emuella_j2k_image_component_info_at(
+                            image,
+                            3,
+                            &mut component,
+                            ptr::null_mut()
+                        ),
+                        EMUELLA_J2K_STATUS_INVALID_ARGUMENT
+                    );
+                    assert_eq!(component.source_component, sentinel_component);
+                }
+                let mut first = [0; 35];
+                let mut legacy = [0; 35];
+                assert_eq!(
+                    emuella_j2k_image_copy_component(
+                        image,
+                        0,
+                        first.as_mut_ptr(),
+                        35,
+                        7,
+                        ptr::null_mut()
+                    ),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!(
+                    emuella_j2k_image_copy(image, legacy.as_mut_ptr(), 35, 7, ptr::null_mut()),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!(first, legacy);
+                let mut component = EmuellaJ2kComponentInfoV0::default();
+                assert_eq!(
+                    emuella_j2k_image_component_info(image, &mut component, ptr::null_mut()),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!(component.source_component, 2);
+                emuella_j2k_image_destroy(image);
+            }
+            for index in 0..3 {
+                request.component_count = 1;
+                request.components = [index, 0, 0, 0];
+                let mut image = ptr::null_mut();
+                assert_eq!(
+                    emuella_j2k_decode_components_region(
+                        decoder,
+                        workspace,
+                        &request,
+                        &mut image,
+                        ptr::null_mut()
+                    ),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                let mut work = EmuellaJ2kDecodeWorkV0::default();
+                assert_eq!(
+                    emuella_j2k_image_decode_work(image, &mut work, ptr::null_mut()),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert_eq!(work.code_blocks_decoded, combined.code_blocks_decoded);
+                assert_eq!(work.tier1_coefficients, combined.tier1_coefficients);
+                assert_eq!(
+                    work.synthesis_lifting_updates,
+                    combined.synthesis_lifting_updates
+                );
+                assert_eq!(
+                    work.synthesis_output_samples,
+                    combined.synthesis_output_samples
+                );
+                assert_eq!(
+                    work.windowed_synthesis_component_tiles,
+                    combined.windowed_synthesis_component_tiles
+                );
+                assert_eq!(
+                    work.full_synthesis_component_tiles,
+                    combined.full_synthesis_component_tiles
+                );
+                assert_eq!(work.output_allocation_bytes, 35);
+                emuella_j2k_image_destroy(image);
+            }
+            request.collect_work = 0;
+            let mut image = ptr::null_mut();
+            assert_eq!(
+                emuella_j2k_decode_components_region(
+                    decoder,
+                    workspace,
+                    &request,
+                    &mut image,
+                    ptr::null_mut()
+                ),
+                EMUELLA_J2K_STATUS_OK
+            );
+            let mut work = EmuellaJ2kDecodeWorkV0 {
+                preparation_count: 99,
+                ..Default::default()
+            };
+            assert_eq!(
+                emuella_j2k_image_decode_work(image, &mut work, ptr::null_mut()),
+                EMUELLA_J2K_STATUS_UNSUPPORTED
+            );
+            assert_eq!(work.preparation_count, 99);
+            emuella_j2k_image_destroy(image);
+            emuella_j2k_workspace_destroy(workspace);
+            emuella_j2k_decoder_destroy(decoder);
+        }
+    }
+
+    #[test]
+    fn combined_requests_validate_before_publication_and_contain_panics() {
+        let (mut source, _) = fixture();
+        // SAFETY: Source storage remains live and immutable through decoder destruction.
+        let decoder = unsafe { decoder(&mut source) };
+        // SAFETY: All handles remain live, request storage is initialised and outputs are disjoint.
+        unsafe {
+            let mut workspace = ptr::null_mut();
+            assert_eq!(
+                emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+                EMUELLA_J2K_STATUS_OK
+            );
+            let valid = EmuellaJ2kDecodeComponentsRequestV0 {
+                struct_size: size_of::<EmuellaJ2kDecodeComponentsRequestV0>(),
+                component_count: 1,
+                width: 2,
+                height: 2,
+                ..Default::default()
+            };
+            let invalid = [
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    struct_size: size_of::<AbiHeader>(),
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    abi_version: 1,
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    component_count: 0,
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    component_count: 5,
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    component_count: 2,
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    components: [0, 1, 0, 0],
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    collect_work: 2,
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    reserved: 1,
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    reserved_bytes: [1; 6],
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 { width: 0, ..valid },
+            ];
+            for request in invalid {
+                let mut image = ptr::dangling_mut();
+                assert_eq!(
+                    emuella_j2k_decode_components_region(
+                        decoder,
+                        workspace,
+                        &request,
+                        &mut image,
+                        ptr::null_mut()
+                    ),
+                    EMUELLA_J2K_STATUS_INVALID_ARGUMENT
+                );
+                assert!(image.is_null());
+            }
+            for request in [
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    components: [1, 0, 0, 0],
+                    ..valid
+                },
+                EmuellaJ2kDecodeComponentsRequestV0 {
+                    x: u32::MAX,
+                    ..valid
+                },
+            ] {
+                let mut image = ptr::dangling_mut();
+                assert_ne!(
+                    emuella_j2k_decode_components_region(
+                        decoder,
+                        workspace,
+                        &request,
+                        &mut image,
+                        ptr::null_mut()
+                    ),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                assert!(image.is_null());
+            }
+            let mut image = ptr::null_mut();
+            assert_eq!(
+                emuella_j2k_decode_components_region(
+                    decoder,
+                    workspace,
+                    &valid,
+                    &mut image,
+                    ptr::null_mut()
+                ),
+                EMUELLA_J2K_STATUS_OK
+            );
+            emuella_j2k_image_destroy(image);
+            FORCE_DECODE_PANIC.with(|force| force.set(true));
+            assert_eq!(
+                emuella_j2k_decode_components_region(
+                    decoder,
+                    workspace,
+                    &valid,
+                    &mut image,
+                    ptr::null_mut()
+                ),
+                EMUELLA_J2K_STATUS_PANIC
+            );
+            assert!(image.is_null());
+            assert_eq!(
+                emuella_j2k_decode_components_region(
+                    decoder,
+                    workspace,
+                    &valid,
+                    &mut image,
+                    ptr::null_mut()
+                ),
+                EMUELLA_J2K_STATUS_INVALID_ARGUMENT
+            );
+            emuella_j2k_workspace_destroy(workspace);
+            emuella_j2k_decoder_destroy(decoder);
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 emuella_j2k_abi_version
 emuella_j2k_decode_component_region
+emuella_j2k_decode_components_region
 emuella_j2k_decoder_create
 emuella_j2k_decoder_destroy
 emuella_j2k_decoder_inspect
@@ -8,7 +9,10 @@ emuella_j2k_error_message_copy
 emuella_j2k_error_message_size
 emuella_j2k_error_status
 emuella_j2k_image_component_info
+emuella_j2k_image_component_info_at
 emuella_j2k_image_copy
+emuella_j2k_image_copy_component
+emuella_j2k_image_decode_work
 emuella_j2k_image_destroy
 emuella_j2k_image_info
 emuella_j2k_inspection_component_info

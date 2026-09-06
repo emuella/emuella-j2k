@@ -62,8 +62,8 @@ use emuella_j2k::{DecodeOptions, decode};
 Experimental native C and C++ consumers can use the separately packaged
 `emuella-j2k-capi` crate and its generated
 [`emuella_j2k.h`](crates/emuella-j2k-capi/include/emuella_j2k.h). The major-zero
-ABI exposes positioned raw Part 1 source inspection and one-component region
-decode into Rust-owned immutable images. Linux x86-64 C11 and C++17 consumers
+ABI exposes positioned raw Part 1 source inspection and single- or
+multi-component region decode into Rust-owned immutable planar images. Linux x86-64 C11 and C++17 consumers
 exercise both shared and static libraries in the canonical check. This
 qualifies the current experiment, not a cross-platform or ABI-major-one
 compatibility promise; the remaining gates and safety rules are recorded in the
