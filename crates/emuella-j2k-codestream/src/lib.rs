@@ -23479,6 +23479,39 @@ fn validate_one_tile_part_per_tile_with_unspecified_count(codestream: &Codestrea
     validate_one_tile_part_per_tile_inner(codestream, true)
 }
 
+// Consume TLM once: the iterator boundary also lets tests count entry visits.
+fn tlm_has_one_entry_per_tile<'a>(
+    tile_rects: &[TileRect],
+    entries: impl ExactSizeIterator<Item = &'a TilePartLengthEntry>,
+) -> bool {
+    if entries.len() != tile_rects.len() {
+        return false;
+    }
+    // Index by the actual grid indices, including any gaps from clipped tiles.
+    // Tile indices are u16, so this table has at most 65,536 slots.
+    let slots = tile_rects
+        .iter()
+        .map(|rect| usize::from(rect.tile_index) + 1)
+        .max()
+        .unwrap_or(0);
+    let mut expected = alloc::vec![false; slots];
+    for rect in tile_rects {
+        expected[usize::from(rect.tile_index)] = true;
+    }
+    for entry in entries {
+        let Some(unseen) = expected.get_mut(usize::from(entry.tile_index)) else {
+            return false;
+        };
+        if !*unseen {
+            return false;
+        }
+        *unseen = false;
+    }
+    tile_rects
+        .iter()
+        .all(|rect| !expected[usize::from(rect.tile_index)])
+}
+
 fn validate_one_tile_part_per_tile_inner(
     codestream: &Codestream,
     allow_unspecified_count: bool,
@@ -23487,15 +23520,7 @@ fn validate_one_tile_part_per_tile_inner(
     let complete_tlm_one_part_per_tile =
         codestream.tile_part_lengths.as_ref().is_some_and(|table| {
             table.fully_covers_codestream
-                && table.entries.len() == tile_rects.len()
-                && tile_rects.iter().all(|rect| {
-                    table
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.tile_index == rect.tile_index)
-                        .count()
-                        == 1
-                })
+                && tlm_has_one_entry_per_tile(&tile_rects, table.entries.iter())
         });
     if codestream.tiles.len() != tile_rects.len() && !complete_tlm_one_part_per_tile {
         return Err(unsupported(
@@ -23587,6 +23612,39 @@ mod one_tile_part_per_tile_validation_tests {
     use super::*;
 
     #[test]
+    fn complete_tlm_visits_each_entry_once_at_the_grid_index_limit() {
+        let samples = [128_u8; 16];
+        let bytes = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let mut parsed = parse(&bytes).unwrap();
+        // Exercise the entire u16 grid-index space, including the upper slot
+        // that SOT parsing independently reserves. Also check the SOT limit.
+        for tile_count in [u32::from(u16::MAX), u32::from(u16::MAX) + 1] {
+            parsed.siz.reference_grid_width = tile_count;
+            parsed.siz.reference_grid_height = 1;
+            parsed.siz.tile_width = 1;
+            parsed.siz.tile_height = 1;
+            let rects = tile_rects(&parsed).unwrap();
+            assert_eq!(rects.len(), tile_count as usize);
+            let entries: Vec<_> = rects
+                .iter()
+                .rev()
+                .map(|rect| TilePartLengthEntry {
+                    tile_index: rect.tile_index,
+                    tile_part_length: 14,
+                    sot_offset: 0,
+                    marker_offset: 0,
+                })
+                .collect();
+            let mut visits = 0;
+            assert!(tlm_has_one_entry_per_tile(
+                &rects,
+                entries.iter().inspect(|_| visits += 1)
+            ));
+            assert_eq!(visits, entries.len());
+        }
+    }
+
+    #[test]
     fn complete_tlm_can_prove_unretained_tiles_have_one_unspecified_part() {
         let samples = [128_u8; 16];
         let bytes = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
@@ -23617,8 +23675,33 @@ mod one_tile_part_per_tile_validation_tests {
         assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_ok());
         assert!(validate_one_tile_part_per_tile(&parsed).is_err());
 
+        let valid = parsed.clone();
         parsed.tile_part_lengths.as_mut().unwrap().entries[1].tile_index = 0;
         assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_err());
+
+        parsed = valid.clone();
+        parsed.tile_part_lengths.as_mut().unwrap().entries[1].tile_index = 2;
+        assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_err());
+
+        parsed = valid.clone();
+        parsed.tile_part_lengths.as_mut().unwrap().entries.pop();
+        assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_err());
+
+        parsed = valid.clone();
+        parsed
+            .tile_part_lengths
+            .as_mut()
+            .unwrap()
+            .fully_covers_codestream = false;
+        assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_err());
+
+        for (tile_index, part_index, part_count) in [(2, 0, None), (1, 1, None), (1, 0, Some(2))] {
+            parsed = valid.clone();
+            parsed.tiles[0].tile_index = tile_index;
+            parsed.tiles[0].tile_part_index = part_index;
+            parsed.tiles[0].tile_part_count = part_count;
+            assert!(validate_one_tile_part_per_tile_with_unspecified_count(&parsed).is_err());
+        }
     }
 }
 
