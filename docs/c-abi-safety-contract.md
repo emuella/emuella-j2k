@@ -36,8 +36,8 @@ capabilities are:
 
 - create a decoder over an immutable positioned-read source;
 - discover raw Part 1 image and component properties;
-- decode one admitted component/region/resolution request with a reusable
-  workspace;
+- decode one admitted region/resolution request selecting one or several
+  components with a reusable workspace;
 - retain decoded samples in Rust-owned immutable image storage;
 - copy a selected plane into a caller buffer; and
 - return structured status and diagnostic information.
@@ -50,7 +50,8 @@ zeroed reserved fields. Image and component descriptors carry their own size
 and ABI version. `emuella_j2k_abi_version` and
 `emuella_j2k_package_version` provide the minimal version queries. The source
 callback, inspection, reusable-workspace component-region decode, immutable
-image copy and owned diagnostic lifecycles are the complete current surface.
+image copy, opt-in work observations and owned diagnostic lifecycles comprise
+the current surface.
 
 One admitted reversible-MCT regional profile reconstructs the three required
 component dependencies privately and returns only the single component named
@@ -58,6 +59,31 @@ by the existing request. The image continues to contain exactly one plane and
 its descriptor retains that requested source-component identity. No ABI field,
 ownership rule or publication sequence changes: the handle is published only
 after all dependency reads, reconstruction and inverse RCT succeed.
+
+The additive `EmuellaJ2kDecodeComponentsRequestV0` selects one through four
+distinct indices in an inline array. The array avoids a new foreign-slice
+operation. Count bounds are checked before slicing, unused slots and reserved
+fields must be zero, and `collect_work` is zero or one. The four-component bound
+is a C request limit, not new codec admission. One existing safe prepared plan
+produces owned planar output in request order, reconstructing reversible-MCT
+dependencies once. Indexed descriptor and bounded-copy operations address
+output positions; the existing single-component request remains unchanged and
+legacy image accessors address position zero. Failure never publishes a partial
+image; rejected copies preserve destination bytes and row padding.
+
+Optional per-image work observations use `DecodeInstrumentation::WorkCounters`
+and immutable scalar snapshots. They include unrequested reconstruction
+dependencies. Output allocation observations count only successful C ABI
+output-plane reservation requests and their logical bytes and actual
+capacities. They exclude all other allocations and allocator metadata.
+Workspace fields report retained capacities after the call, including earlier
+reuse, rather than allocation counts or growth. Consumer callbacks own source
+byte attribution. A reused decoder preserves source identity and a reused
+workspace retains scratch, but this API caches neither a packet index nor a
+regional plan: every decode prepares one new plan. Observations are local to
+one execution and do not use shared counter deltas that concurrent calls could
+contaminate. Disabled collection returns `UNSUPPORTED` from the work accessor
+without changing the caller's output descriptor.
 
 Raw J2K is the first input route because it is a payload form delegated by a
 NITF `IC=C8` image segment. JP2 container traversal, HTJ2K/JPH exposure,
@@ -352,6 +378,10 @@ allow-list, layout assertions, and C11/C++17 compile, shared/static link and
 runtime source-inspect-decode-copy journeys. Rust tests cover ordinary pointer
 validation, callback failure and provenance, malformed input, bounds,
 workspace reuse, natural `Send`/`Sync`, panic containment and poisoning.
+The additive multi-component request, indexed copy/descriptor and work accessor
+retain these six raw-operation sites and extend the helper-delegation inventory.
+Native C11/C++17 shared and static tests also check their full layouts, reordered
+MCT samples, bounds, padding, reuse and dependency work counts.
 Compile-fail Rust consumer tests independently require unsafe calls for each
 pointer-dependent export, with safe version queries as positive controls. The
 reversible-MCT regional regression also checks exact one-plane output through

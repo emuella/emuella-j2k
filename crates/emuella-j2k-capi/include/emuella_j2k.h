@@ -71,6 +71,33 @@ typedef struct EmuellaJ2kDecodeRequestV0 {
 } EmuellaJ2kDecodeRequestV0;
 
 /**
+ * One to four distinct components in caller order, sharing one regional plan.
+ * The four-component bound belongs to this ABI, not codec admission. Unused
+ * component slots and reserved fields must be zero. Collection is opt-in.
+ */
+typedef struct EmuellaJ2kDecodeComponentsRequestV0 {
+  size_t struct_size;
+  uint32_t abi_version;
+  uint32_t reserved;
+  uint16_t component_count;
+  /**
+   * Zero means all quality layers; otherwise the leading layer count.
+   */
+  uint16_t max_quality_layers;
+  uint16_t components[4];
+  uint32_t x;
+  uint32_t y;
+  uint32_t width;
+  uint32_t height;
+  uint8_t discard_levels;
+  /**
+   * Zero disables observations; one collects execution work counters.
+   */
+  uint8_t collect_work;
+  uint8_t reserved_bytes[6];
+} EmuellaJ2kDecodeComponentsRequestV0;
+
+/**
  * A positioned-read callback fills the complete requested destination range.
  * Any non-zero return is translated to source I/O failure.
  */
@@ -112,7 +139,71 @@ typedef struct EmuellaJ2kComponentInfoV0 {
 } EmuellaJ2kComponentInfoV0;
 
 /**
- * Reference-image properties or decoded single-plane properties.
+ * Immutable observations for one successful decode with collect_work enabled.
+ * Work includes unrequested MCT dependencies. Capacities are retained storage,
+ * not allocation counts or per-call growth. Source callback bytes are excluded.
+ */
+typedef struct EmuellaJ2kDecodeWorkV0 {
+  size_t struct_size;
+  uint32_t abi_version;
+  uint32_t reserved;
+  /**
+   * Exactly one preparation per successful call; plans are not cached.
+   */
+  uint64_t preparation_count;
+  uint64_t code_blocks_decoded;
+  uint64_t tier1_coefficients;
+  uint64_t dwt_samples;
+  uint64_t synthesis_coefficients_loaded;
+  uint64_t synthesis_horizontal_values;
+  uint64_t synthesis_vertical_values;
+  uint64_t synthesis_lifting_updates;
+  uint64_t synthesis_output_samples;
+  uint64_t windowed_synthesis_component_tiles;
+  uint64_t full_synthesis_component_tiles;
+  /**
+   * Logical bytes requested for the new C ABI owned output-plane buffers.
+   * Excludes descriptors, plans, workspace, allocator metadata and copies.
+   */
+  uint64_t output_allocation_bytes;
+  /**
+   * Actual combined capacity in bytes of those output-plane buffers.
+   */
+  uint64_t output_capacity_bytes;
+  /**
+   * Largest retained code-block coefficient capacity, in sample slots.
+   */
+  uint64_t coefficient_capacity;
+  /**
+   * Retained fragmented codeword assembly capacity, in bytes.
+   */
+  uint64_t segment_capacity;
+  /**
+   * Largest retained tile-axis transform scratch capacity, in sample slots.
+   */
+  uint64_t transform_capacity;
+  /**
+   * Largest retained full coefficient-plane capacity, in sample slots.
+   */
+  uint64_t full_coefficient_plane_capacity;
+  /**
+   * Largest retained full-transform scratch capacity, in sample slots.
+   */
+  uint64_t full_transform_scratch_capacity;
+  /**
+   * Successful output-plane buffer reservation requests in this C ABI call.
+   * Excludes all other allocations; this is not a process allocator count.
+   */
+  uint64_t output_allocation_count;
+  /**
+   * Capacity-based heap bytes retained by the complete workspace after this
+   * execution, including private workers; excludes allocator metadata.
+   */
+  uint64_t workspace_retained_heap_bytes;
+} EmuellaJ2kDecodeWorkV0;
+
+/**
+ * Reference-image properties or decoded image properties.
  */
 typedef struct EmuellaJ2kImageInfoV0 {
   size_t struct_size;
@@ -174,6 +265,34 @@ EmuellaJ2kStatus emuella_j2k_decode_component_region(const struct EmuellaJ2kDeco
                                                      const struct EmuellaJ2kDecodeRequestV0 *request,
                                                      struct EmuellaJ2kImage **output,
                                                      struct EmuellaJ2kError **error_output);
+
+/**
+ * Decode selected components of one region into a new immutable Rust-owned image.
+ * Planes follow request order. Failure clears output to null; workspace scratch
+ * may grow on failure. No partially decoded image is published.
+ *
+ * # Safety
+ * `decoder` and `workspace` must be null or exact live handles of their
+ * respective types from this library, kept alive for the call. No other active
+ * operation may use this workspace. The decoder creation-time source and
+ * callback obligations still apply, including concurrent callback safety.
+ * `request` must contain a readable, initialised size/version prefix and, when
+ * it advertises the supported full size, the complete initialised request. `output` must
+ * provide writable storage for one value of its declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
+ */
+EmuellaJ2kStatus emuella_j2k_decode_components_region(const struct EmuellaJ2kDecoder *decoder,
+                                                      const struct EmuellaJ2kWorkspace *workspace,
+                                                      const struct EmuellaJ2kDecodeComponentsRequestV0 *request,
+                                                      struct EmuellaJ2kImage **output,
+                                                      struct EmuellaJ2kError **error_output);
 
 /**
  * Create a decoder that borrows the source descriptor's context and callback.
@@ -292,7 +411,7 @@ EmuellaJ2kStatus emuella_j2k_error_message_size(const struct EmuellaJ2kError *er
 EmuellaJ2kStatus emuella_j2k_error_status(const struct EmuellaJ2kError *error);
 
 /**
- * Copy the single decoded component descriptor into caller-owned storage.
+ * Copy the first decoded component descriptor into caller-owned storage.
  *
  * # Safety
  * `image` must be null or an exact live image handle from this library,
@@ -313,7 +432,29 @@ EmuellaJ2kStatus emuella_j2k_image_component_info(const struct EmuellaJ2kImage *
                                                   struct EmuellaJ2kError **error_output);
 
 /**
- * Copy decoded rows into a bounded caller-owned buffer with explicit stride.
+ * Copy the descriptor at a zero-based output position in request order.
+ *
+ * # Safety
+ * `image` must be null or an exact live image handle from this library,
+ * kept alive without destruction throughout the call. Concurrent immutable
+ * observations are allowed. `output` must provide writable storage for one value of its
+ * declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
+ */
+EmuellaJ2kStatus emuella_j2k_image_component_info_at(const struct EmuellaJ2kImage *image,
+                                                     uint16_t output_index,
+                                                     struct EmuellaJ2kComponentInfoV0 *output,
+                                                     struct EmuellaJ2kError **error_output);
+
+/**
+ * Copy the first output component into a bounded buffer with explicit row stride.
  *
  * # Safety
  * `image` must be null or an exact live image from this library, kept alive
@@ -333,6 +474,53 @@ EmuellaJ2kStatus emuella_j2k_image_copy(const struct EmuellaJ2kImage *image,
                                         size_t capacity,
                                         size_t stride_bytes,
                                         struct EmuellaJ2kError **error_output);
+
+/**
+ * Copy rows at a zero-based output position in request order with explicit stride.
+ * Bounds failure leaves destination bytes unchanged; successful copies preserve
+ * row padding. This operation does not decode directly into foreign storage.
+ *
+ * # Safety
+ * `image` must be null or an exact live image from this library, kept alive
+ * throughout the copy. `destination` must provide `capacity` exclusively writable
+ * bytes, disjoint from the image and all other inputs and outputs. The checked
+ * stride and capacity determine the rows written. A non-null `error_output`
+ * must provide writable storage for one error pointer, owned by the caller on
+ * return and released once with `emuella_j2k_error_destroy`.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
+ */
+EmuellaJ2kStatus emuella_j2k_image_copy_component(const struct EmuellaJ2kImage *image,
+                                                  uint16_t output_index,
+                                                  uint8_t *destination,
+                                                  size_t capacity,
+                                                  size_t stride_bytes,
+                                                  struct EmuellaJ2kError **error_output);
+
+/**
+ * Copy opt-in work observations; return UNSUPPORTED without modifying output
+ * when collection was disabled for this image.
+ *
+ * # Safety
+ * `image` must be null or an exact live image handle from this library,
+ * kept alive without destruction throughout the call. Concurrent immutable
+ * observations are allowed. `output` must provide writable storage for one value of its
+ * declared type.
+ * A non-null `error_output` must provide writable storage for one error pointer.
+ * Returned handles belong to the caller and must be released exactly once with
+ * their matching destroy function; output slots do not release previous handles.
+ * All non-null storage pointers must be valid for the accessed extent and
+ * correctly aligned throughout this synchronous call. Writable storage must be
+ * exclusively accessible and disjoint from inputs, other outputs, live handle
+ * allocations and callback storage. Null or misaligned arguments are rejected
+ * where checked; these checks do not establish allocation validity.
+ */
+EmuellaJ2kStatus emuella_j2k_image_decode_work(const struct EmuellaJ2kImage *image,
+                                               struct EmuellaJ2kDecodeWorkV0 *output,
+                                               struct EmuellaJ2kError **error_output);
 
 /**
  * Destroy an immutable decoded image.

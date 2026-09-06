@@ -215,3 +215,43 @@ unsafe {
     emuella_j2k_error_message_copy(std::ptr::null(), std::ptr::null_mut(), 0);
 }
 ```
+
+```compile_fail,E0133
+use emuella_j2k_capi::emuella_j2k_decode_components_region;
+emuella_j2k_decode_components_region(std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut());
+```
+```no_run
+use emuella_j2k_capi::emuella_j2k_decode_components_region;
+// SAFETY: Null pointers are rejected before access.
+unsafe { emuella_j2k_decode_components_region(std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut()); }
+```
+
+```compile_fail,E0133
+use emuella_j2k_capi::emuella_j2k_image_component_info_at;
+emuella_j2k_image_component_info_at(std::ptr::null(), 0, std::ptr::null_mut(), std::ptr::null_mut());
+```
+```no_run
+use emuella_j2k_capi::emuella_j2k_image_component_info_at;
+// SAFETY: Null pointers are rejected before access.
+unsafe { emuella_j2k_image_component_info_at(std::ptr::null(), 0, std::ptr::null_mut(), std::ptr::null_mut()); }
+```
+
+```compile_fail,E0133
+use emuella_j2k_capi::emuella_j2k_image_copy_component;
+emuella_j2k_image_copy_component(std::ptr::null(), 0, std::ptr::null_mut(), 0, 0, std::ptr::null_mut());
+```
+```no_run
+use emuella_j2k_capi::emuella_j2k_image_copy_component;
+// SAFETY: Null pointers are rejected before access.
+unsafe { emuella_j2k_image_copy_component(std::ptr::null(), 0, std::ptr::null_mut(), 0, 0, std::ptr::null_mut()); }
+```
+
+```compile_fail,E0133
+use emuella_j2k_capi::emuella_j2k_image_decode_work;
+emuella_j2k_image_decode_work(std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut());
+```
+```no_run
+use emuella_j2k_capi::emuella_j2k_image_decode_work;
+// SAFETY: Null pointers are rejected before access.
+unsafe { emuella_j2k_image_decode_work(std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut()); }
+```

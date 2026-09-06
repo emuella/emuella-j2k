@@ -39,6 +39,9 @@ cmp "$crate/exported-symbols.txt" "$actual_symbols"
 
 native_output="$CARGO_TARGET_DIR/emuella-j2k-capi-native"
 mkdir -p "$native_output"
+cargo run --manifest-path "$crate/Cargo.toml" --release --locked \
+  --example generate-native-fixture -- "$native_output"
+fixture="$native_output/rgb-mct-256x192.j2k"
 for language in c cc; do
   case "$language" in
     c) compiler=${CC:-cc}; standard=-std=c11 ;;
@@ -50,8 +53,8 @@ for language in c cc; do
   "$compiler" "$standard" -Wall -Wextra -Werror -I"$crate/include" "$source" \
     -L"$CARGO_TARGET_DIR/release" -lemuella_j2k_capi \
     -Wl,-rpath,"$CARGO_TARGET_DIR/release" -pthread -o "$shared"
-  "$shared"
+  "$shared" "$fixture"
   "$compiler" "$standard" -Wall -Wextra -Werror -I"$crate/include" "$source" \
     "$CARGO_TARGET_DIR/release/libemuella_j2k_capi.a" -ldl -pthread -lm -o "$static"
-  "$static"
+  "$static" "$fixture"
 done
