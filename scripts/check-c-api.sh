@@ -5,14 +5,9 @@ repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 crate="$repository_root/crates/emuella-j2k-capi"
 capi_source="$crate/src/lib.rs"
 
-production_unsafe_count=$(awk '
-  /#\[cfg\(test\)\]/ { exit }
-  /unsafe \{/ { count += 1 }
-  END { print count + 0 }
-' "$capi_source")
-total_unsafe_count=$(grep -c 'unsafe {' "$capi_source")
-test "$production_unsafe_count" -eq 6
-test "$total_unsafe_count" -eq 7
+# Review every production unsafe block, including explicit helper delegation.
+python3 "$repository_root/scripts/audit-c-api-unsafe.py"
+python3 "$repository_root/scripts/test-c-api-unsafe-audit.py"
 if grep -E 'unsafe (impl|trait)|transmute|static mut|extern "C-unwind"|from_raw_parts' \
   "$capi_source"; then
   echo "prohibited unsafe construct in C API boundary" >&2
