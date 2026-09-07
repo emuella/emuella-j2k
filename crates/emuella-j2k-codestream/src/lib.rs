@@ -27,6 +27,8 @@ pub use emuella_j2k_transform as transform;
 pub mod geometry;
 mod ht_high_component;
 #[cfg(feature = "std")]
+pub mod ht_indexed;
+#[cfg(feature = "std")]
 #[doc(hidden)]
 pub mod ht_lossy;
 #[cfg(all(test, feature = "std"))]
@@ -16097,8 +16099,25 @@ fn write_native_decomp_packets(
     component_subbands: &[Vec<NativeDecompSubband>],
     segments: &[u8],
 ) -> Result<()> {
+    write_native_decomp_packets_with_observer(
+        output,
+        decomposition_levels,
+        component_subbands,
+        segments,
+        |_, _, _, _, _| Ok(()),
+    )
+}
+
+fn write_native_decomp_packets_with_observer(
+    output: &mut Vec<u8>,
+    decomposition_levels: u8,
+    component_subbands: &[Vec<NativeDecompSubband>],
+    segments: &[u8],
+    mut observe: impl FnMut(u16, u8, usize, usize, usize) -> Result<()>,
+) -> Result<()> {
     for resolution in 0..=decomposition_levels {
-        for subbands in component_subbands {
+        for (component, subbands) in component_subbands.iter().enumerate() {
+            let start = output.len();
             let packet_subbands = subbands
                 .iter()
                 .filter(|subband| subband.resolution == resolution)
@@ -16128,6 +16147,7 @@ fn write_native_decomp_packets(
                 .try_reserve(writer.bytes().len())
                 .map_err(|_| CodestreamError::SizeOverflow)?;
             output.extend_from_slice(writer.bytes());
+            let body = output.len();
             for subband in packet_subbands {
                 for block in subband.code_blocks.iter().filter(|block| block.included) {
                     let segment = checked_slice(segments, block.segment_offset, block.segment_len)?;
@@ -16137,6 +16157,7 @@ fn write_native_decomp_packets(
                     output.extend_from_slice(segment);
                 }
             }
+            observe(component as u16, resolution, start, body, output.len())?;
         }
     }
     Ok(())

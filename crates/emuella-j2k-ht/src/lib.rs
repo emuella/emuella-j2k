@@ -19910,9 +19910,41 @@ impl<'a> HtCleanupPassVlcReverseBitCursor<'a> {
         context: HtVlcContext,
         zero_context_mel_event: Option<bool>,
     ) -> Result<HtVlcQuadCodeword, HtLayoutError> {
+        // A suppressed zero-context quad consumes no VLC bits. Do not require
+        // lookahead bytes for syntax which the MEL event has already removed.
+        if context.get() == 0 && zero_context_mel_event == Some(false) {
+            return Ok(HtVlcQuadCodeword::ZERO);
+        }
         let mut peek = self.clone();
-        let prefix_bits = peek.read_vlc_lsb_bits_in_place(7)? as u8;
-        let mut codeword = table.lookup(context, prefix_bits);
+        let mut codeword = match peek.read_vlc_lsb_bits_in_place(7) {
+            Ok(prefix) => table.lookup(context, prefix as u8),
+            Err(error @ HtLayoutError::StreamBitReadUnavailable { .. }) => {
+                // A short final codeword need not have seven physical lookup
+                // bits. Admit it only when every completion of the available
+                // prefix selects the identical word and its actual syntax fits.
+                // Consumption below still requires every real codeword bit.
+                let mut short = self.clone();
+                let mut prefix = 0_u8;
+                let mut resolved = None;
+                for bits in 1..=7 {
+                    let Ok(bit) = short.read_vlc_lsb_bits_in_place(1) else {
+                        break;
+                    };
+                    prefix |= (bit as u8) << (bits - 1);
+                    let word = table.lookup(context, prefix);
+                    if word.consumed_bits() <= bits
+                        && (0..(1_u16 << (7 - bits))).all(|suffix| {
+                            table.lookup(context, prefix | ((suffix as u8) << bits)) == word
+                        })
+                    {
+                        resolved = Some(word);
+                        break;
+                    }
+                }
+                resolved.ok_or(error)?
+            }
+            Err(error) => return Err(error),
+        };
         if context.get() == 0
             && let Some(mel_event) = zero_context_mel_event
         {
@@ -26229,6 +26261,9 @@ fn decode_required_vlc_quad_codeword_from_cursor(
     context: HtVlcContext,
     zero_context_mel_event: Option<bool>,
 ) -> Result<HtVlcQuadCodeword, HtLayoutError> {
+    if context.get() == 0 && zero_context_mel_event == Some(false) {
+        return Ok(HtVlcQuadCodeword::ZERO);
+    }
     if cursor.remaining_bits() < 7 {
         return Err(HtLayoutError::StreamBitReadUnavailable {
             stream: HtCleanupStreamKind::Vlc,
@@ -27090,4 +27125,57 @@ fn range_slice(bytes: &[u8], range: HtByteRange) -> Result<&[u8], HtLayoutError>
             required: end,
             actual: bytes.len(),
         })
+}
+
+#[cfg(test)]
+mod short_vlc_prefix_tests {
+    use super::*;
+
+    #[test]
+    fn short_word_uses_only_known_syntax_and_rejects_missing_bits() {
+        // Authored lookup with a three-bit word. All suffix completions agree;
+        // the two-byte trailer supplies only its four-bit VLC nibble.
+        let words = [0x13_u16; HT_VLC_LOOKUP_ENTRY_COUNT];
+        let table = HtVlcLookupTable::new(&words);
+        let context = HtVlcContext::new(0).unwrap();
+        let mut cursor = HtCleanupPassVlcReverseBitCursor::new(&[0xa0, 2]).unwrap();
+        assert_eq!(
+            cursor
+                .decode_required_vlc_quad_codeword(table, context, Some(true))
+                .unwrap()
+                .raw(),
+            0x13
+        );
+        assert!(matches!(
+            cursor.decode_required_vlc_quad_codeword(table, context, Some(true)),
+            Err(HtLayoutError::StreamBitReadUnavailable { .. })
+        ));
+        assert_eq!(
+            cursor
+                .decode_required_vlc_quad_codeword(table, context, Some(false))
+                .unwrap(),
+            HtVlcQuadCodeword::ZERO
+        );
+    }
+
+    #[test]
+    fn unavailable_suffix_cannot_select_between_distinct_words() {
+        let mut words = [0x13_u16; HT_VLC_LOOKUP_ENTRY_COUNT];
+        for (i, word) in words.iter_mut().enumerate() {
+            if i & 16 != 0 {
+                *word = 0x23;
+            }
+        }
+        let mut cursor = HtCleanupPassVlcReverseBitCursor::new(&[0xa0, 2]).unwrap();
+        let context = HtVlcContext::new(0).unwrap();
+        assert!(matches!(
+            cursor.decode_required_vlc_quad_codeword(
+                HtVlcLookupTable::new(&words),
+                context,
+                Some(true)
+            ),
+            Err(HtLayoutError::StreamBitReadUnavailable { .. })
+        ));
+        assert_eq!(cursor.consumed_bits(), 0);
+    }
 }

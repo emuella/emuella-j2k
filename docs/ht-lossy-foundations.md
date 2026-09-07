@@ -144,3 +144,11 @@ CSV-formatted text remains unchanged. The subsequent [public qualification](ht-l
 the complete input-layout matrix. Independent and locked-corpus qualification
 from the final merged source remain separate delivery gates; this foundation
 alone makes no final product or general conformance claim.
+
+## Experimental indexed tiling
+
+A separate implementation-facing module, `ht_indexed`, streams tile input into
+one codestream and retains packet/block metadata for repeated regional reads.
+Its [calibration contract](ht-indexed-foundation.md) documents the independent
+profile, per-tile rate allowance and current persistence/depth limits. The
+existing full-image facade and its resource admission remain unchanged.
