@@ -133,6 +133,17 @@ impl<'a> Decoder<'a> {
         decoder
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(super) fn consumed_prefix_len(&self) -> usize {
+        // BYTEIN advances to every real lookahead byte. At a synthetic marker
+        // it can stop advancing, so retain an explicit out-of-input result.
+        if self.synthetic_marker_reads != 0 {
+            self.bytes.len().saturating_add(1)
+        } else {
+            self.cursor.saturating_add(1)
+        }
+    }
+
     pub(super) fn read_bit(&mut self, context: &mut Context) -> u32 {
         let estimate = PROBABILITY_ESTIMATES[usize::from(context.state)];
         self.interval -= estimate.qe;
@@ -545,6 +556,15 @@ mod tests {
             .map(|index| decoder.read_bit(&mut contexts[index % CONTEXT_COUNT]))
             .collect::<Vec<_>>();
         assert_eq!(decoded, decisions);
+    }
+
+    #[test]
+    fn fixture_prefix_accounting_includes_lookahead_and_rejects_synthetic_input() {
+        assert!(Decoder::new(&[]).consumed_prefix_len() > 0);
+        assert!(Decoder::new(&[0x00]).consumed_prefix_len() > 1);
+        assert!(Decoder::new(&[0xff]).consumed_prefix_len() > 1);
+        assert_eq!(Decoder::new(&[0x00, 0x32, 0x17]).consumed_prefix_len(), 2);
+        assert_eq!(Decoder::new(&[0xff, 0x32, 0x17]).consumed_prefix_len(), 2);
     }
 
     #[test]

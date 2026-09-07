@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use emuella_j2k_core::{
@@ -123,6 +124,121 @@ fn execute_source(
     );
     assert_eq!(fixture.width, 256);
     (active, timings, metrics)
+}
+
+#[test]
+fn layers_stagger_first_inclusion_and_continue_mq_blocks_across_components_and_resolutions() {
+    let fixture = reversible_mct_region_fixture();
+    for bytes in [&fixture.tnsot_zero, &fixture.tnsot_one] {
+        let parsed = codestream::parse(bytes).unwrap();
+        let style = parsed.uniform_effective_coding_style().unwrap();
+        assert_eq!(style.code_block_style, 0);
+        assert_eq!(style.layers, 19);
+        assert_eq!(parsed.tiles.len(), 1);
+        let tile = &parsed.tiles[0];
+        let payload_start = tile.payload_offset.unwrap();
+        let payload_len = tile.payload_len.unwrap();
+        let payload = &bytes[payload_start..payload_start + payload_len];
+        let contributions = codestream::parse_default_precinct_lrcp_packets(
+            bytes,
+            &parsed,
+            codestream::TileRect {
+                tile_index: 0,
+                tile_x: 0,
+                tile_y: 0,
+                x: 0,
+                y: 0,
+                width: fixture.width,
+                height: fixture.height,
+            },
+            payload,
+        )
+        .unwrap();
+        let plt = marker(bytes, codestream::Marker::Plt.code().to_be_bytes());
+        let plt_len = usize::from(u16::from_be_bytes([bytes[plt + 2], bytes[plt + 3]]));
+        assert_eq!(bytes[plt + 4], 0);
+        let mut packet_ranges = Vec::new();
+        let mut packet_end = 0;
+        let mut length = 0;
+        for byte in &bytes[plt + 5..plt + 2 + plt_len] {
+            length = (length << 7) | usize::from(byte & 0x7f);
+            if byte & 0x80 == 0 {
+                packet_ranges.push(packet_end..packet_end + length);
+                packet_end += length;
+                length = 0;
+            }
+        }
+        assert_eq!(length, 0);
+        assert_eq!(packet_ranges.len(), 19 * 6 * 3);
+        assert_eq!(packet_end, payload.len());
+        let mut first_layers = BTreeSet::new();
+        let mut active_layers = vec![vec![BTreeSet::new(); 6]; 3];
+        let mut continued_blocks = [[0; 6]; 3];
+        let mut occupied_packets = BTreeSet::new();
+        for block in &contributions {
+            // Three positive byte ranges belong to one continuous MQ segment.
+            // The parser only appends a range for an included contribution with
+            // a positive coding-pass announcement.
+            assert_eq!(block.segment_ranges.len(), 3);
+            assert!(block.coding_passes >= 3);
+            assert!(block.coding_segments.len() <= 1);
+            if let Some(segment) = block.coding_segments.first() {
+                assert_eq!(segment.coding_passes, block.coding_passes);
+                assert_eq!(segment.byte_len, block.codeword_len);
+            }
+            let component = usize::from(block.component_index);
+            let resolution = usize::from(block.resolution);
+            let mut block_layers = Vec::new();
+            for range in &block.segment_ranges {
+                assert!(range.codeword_len > 0);
+                let packet_index = packet_ranges
+                    .iter()
+                    .position(|packet| {
+                        packet.contains(&range.payload_offset)
+                            && range.payload_offset + range.codeword_len <= packet.end
+                    })
+                    .unwrap();
+                assert_eq!(packet_index % 3, component);
+                assert_eq!((packet_index / 3) % 6, resolution);
+                let layer = packet_index / 18;
+                block_layers.push(layer);
+                occupied_packets.insert(packet_index);
+                active_layers[component][resolution].insert(layer);
+                assert_ne!(payload[range.payload_offset + range.codeword_len - 1], 0xff);
+            }
+            assert!(block_layers.windows(2).all(|pair| pair[0] < pair[1]));
+            assert_eq!(
+                block
+                    .segment_ranges
+                    .iter()
+                    .map(|range| range.codeword_len)
+                    .sum::<usize>(),
+                block.codeword_len
+            );
+            first_layers.insert(block_layers[0]);
+            continued_blocks[component][resolution] += 1;
+        }
+        assert_eq!(first_layers, (0..7).collect());
+        assert!(continued_blocks.iter().flatten().all(|count| *count > 0));
+        for ((first, second), third) in active_layers[0]
+            .iter()
+            .zip(&active_layers[1])
+            .zip(&active_layers[2])
+        {
+            assert_ne!(first, second);
+            assert_ne!(second, third);
+        }
+        for layers in &active_layers {
+            assert_ne!(layers[0], layers[1]);
+        }
+        assert!(occupied_packets.iter().any(|index| index / 18 == 18));
+        assert!(occupied_packets.len() < packet_ranges.len());
+        for (index, range) in packet_ranges.iter().enumerate() {
+            if !occupied_packets.contains(&index) {
+                assert_eq!(&payload[range.clone()], &[0, 0xff, 0x92]);
+            }
+        }
+    }
 }
 
 #[test]

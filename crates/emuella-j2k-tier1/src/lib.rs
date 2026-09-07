@@ -536,6 +536,55 @@ pub fn decode_baseline_code_block(
     decode_baseline_code_block_with_scratch(segment, spec, coefficients, &mut scratch)
 }
 
+/// Measure conservative pass-prefix lengths for project-authored style-zero
+/// fixtures. A length beyond the codeword means that pass used synthetic input;
+/// such an endpoint must not be selected for a non-final contribution.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn baseline_pass_prefix_lengths_test_fixture(
+    segment: &[u8],
+    spec: CodeBlockDecodeSpec,
+) -> Result<Vec<usize>> {
+    spec.validate()?;
+    if spec.style != CodeBlockStyle::NONE {
+        return Err(Tier1Error::MalformedBitstream {
+            reason: "continued MQ fixture requires code-block style zero",
+        });
+    }
+    let bitplanes = validate_bitplane_pass_count(spec)?;
+    let mut scratch = CodeBlockDecodeScratch::new();
+    let mut ctx = scratch.prepare(
+        usize::from(spec.dimensions.width()),
+        usize::from(spec.dimensions.height()),
+        spec.subband,
+    );
+    let mut decoder = ArithmeticDecoder::new(segment);
+    let mut lengths = Vec::with_capacity(usize::from(spec.coding_passes));
+    for pass in 0..spec.coding_passes {
+        set_decode_bit_position(&mut ctx, bitplanes, pass)?;
+        match coding_pass_for_index(pass) {
+            CodingPass::Cleanup => {
+                cleanup_pass::<false>(&mut ctx, &mut decoder)?;
+                ctx.reset_for_next_bitplane();
+            }
+            CodingPass::SignificancePropagation => {
+                significance_propagation_pass::<false>(&mut ctx, &mut decoder)?;
+            }
+            CodingPass::MagnitudeRefinement => {
+                magnitude_refinement_pass::<false>(&mut ctx, &mut decoder)?;
+            }
+        }
+        let mut length = decoder.consumed_prefix_len();
+        // Packet contributions must not end with 0xff. Include its following
+        // stuffed byte without changing the continuous MQ codeword.
+        if length != 0 && segment.get(length - 1) == Some(&0xff) {
+            length = length.saturating_add(1);
+        }
+        lengths.push(length);
+    }
+    Ok(lengths)
+}
+
 /// Decode one classic Part 1 code-block using caller-provided reusable scratch.
 pub fn decode_baseline_code_block_with_scratch(
     segment: &[u8],
@@ -3990,6 +4039,81 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn continuous_mq_pass_prefixes_reproduce_declared_passes() {
+        let mut checked_prefixes = 0;
+        let mut stuffed_codewords = 0;
+        for (width, height) in [(3, 5), (8, 8), (17, 11), (32, 19)] {
+            for subband in [
+                Subband::LowLow,
+                Subband::LowHigh,
+                Subband::HighLow,
+                Subband::HighHigh,
+            ] {
+                let dimensions = CodeBlockDimensions::new(width, height).unwrap();
+                let coefficients = (0..dimensions.coefficient_count())
+                    .map(|index| ((index * 73 + index / 7 + 19) % 2047) as i32 - 1023)
+                    .collect::<Vec<_>>();
+                let mut bytes = Vec::new();
+                let encoded = encode_baseline_code_block(
+                    &coefficients,
+                    CodeBlockEncodeSpec {
+                        dimensions,
+                        subband,
+                        available_bitplanes: 10,
+                        code_block_style: 0,
+                    },
+                    &mut bytes,
+                )
+                .unwrap();
+                stuffed_codewords += usize::from(bytes.contains(&0xff));
+                let spec = CodeBlockDecodeSpec {
+                    dimensions,
+                    subband,
+                    available_bitplanes: 10,
+                    missing_most_significant_bitplanes: encoded.missing_bitplanes,
+                    coding_passes: encoded.pass_count,
+                    style: CodeBlockStyle::NONE,
+                };
+                let lengths = baseline_pass_prefix_lengths_test_fixture(&bytes, spec).unwrap();
+                assert_eq!(lengths.len(), usize::from(encoded.pass_count));
+                assert!(lengths.windows(2).all(|pair| pair[0] <= pair[1]));
+                for (index, length) in lengths.into_iter().enumerate() {
+                    if length >= bytes.len() {
+                        continue;
+                    }
+                    assert!(length > 0);
+                    assert_ne!(bytes[length - 1], 0xff);
+                    let prefix_spec = CodeBlockDecodeSpec {
+                        coding_passes: (index + 1) as u16,
+                        ..spec
+                    };
+                    let mut full = alloc::vec![0; coefficients.len()];
+                    let mut prefix = full.clone();
+                    decode_baseline_code_block(&bytes, prefix_spec, &mut full).unwrap();
+                    decode_baseline_code_block(&bytes[..length], prefix_spec, &mut prefix).unwrap();
+                    assert_eq!(prefix, full);
+                    checked_prefixes += 1;
+                }
+                let mut full = alloc::vec![0; coefficients.len()];
+                decode_baseline_code_block(&bytes, spec, &mut full).unwrap();
+                assert_eq!(full, coefficients);
+                assert!(
+                    baseline_pass_prefix_lengths_test_fixture(
+                        &bytes,
+                        CodeBlockDecodeSpec {
+                            style: CodeBlockStyle::from_bits(CodeBlockStyle::TERMINATE_EACH_PASS),
+                            ..spec
+                        }
+                    )
+                    .is_err()
+                );
+            }
+        }
+        assert!(checked_prefixes > 100);
+        assert!(stuffed_codewords > 0);
     }
 
     #[cfg(feature = "test-fixtures")]

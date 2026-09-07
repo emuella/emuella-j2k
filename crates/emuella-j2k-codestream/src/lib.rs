@@ -11026,10 +11026,10 @@ pub fn encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
 /// Build the deterministic classic Part 1 fixture used to qualify bounded
 /// selective reversible-MCT regions with inline EPH, TLM and PLT signalling.
 ///
-/// This is test support, not an application encode profile. The first of 19
-/// LRCP layers carries every authored Tier-1 contribution and the remaining
-/// layers contain empty packets, preserving material multi-layer packet state
-/// without introducing a second rate-allocation implementation.
+/// This is test support, not an application encode profile. The 19 LRCP
+/// layers stagger first inclusion and continue the same MQ codewords with
+/// pass-aligned, independently checked prefixes. No MQ restart is inserted.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_part1_reversible_mct_region_test_fixture(
     input: RgbU8Encode<'_>,
@@ -16142,84 +16142,227 @@ fn write_native_decomp_packets(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+struct MctLayerBlockContribution {
+    layer: u16,
+    passes: u16,
+    bytes: core::ops::Range<usize>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn mct_layer_block_contributions(
+    component: usize,
+    subband: &NativeDecompSubband,
+    block: &EncodedCodeBlock,
+    segments: &[u8],
+) -> Result<Vec<MctLayerBlockContribution>> {
+    if !block.included {
+        return Ok(Vec::new());
+    }
+    let codeword = checked_slice(segments, block.segment_offset, block.segment_len)?;
+    let spec = tier1::CodeBlockDecodeSpec {
+        dimensions: tier1::CodeBlockDimensions::new(block.width, block.height)
+            .map_err(map_tier1_error)?,
+        available_bitplanes: subband.available_bitplanes,
+        missing_most_significant_bitplanes: block.missing_bitplanes - 1,
+        coding_passes: block.coding_passes,
+        style: tier1::CodeBlockStyle::NONE,
+        subband: subband.kind.tier1_subband(),
+    };
+    let lengths = tier1::baseline_pass_prefix_lengths_test_fixture(codeword, spec)
+        .map_err(map_tier1_error)?;
+    let mut endpoints = Vec::new();
+    let mut last_length = 0;
+    for (index, length) in lengths.into_iter().enumerate() {
+        if length > last_length
+            && length < codeword.len()
+            && index + 1 < usize::from(block.coding_passes)
+        {
+            endpoints.push((
+                u16::try_from(index + 1).map_err(|_| CodestreamError::SizeOverflow)?,
+                length,
+            ));
+            last_length = length;
+        }
+    }
+    let selected = if endpoints.len() >= 2 {
+        alloc::vec![
+            endpoints[endpoints.len() / 3],
+            endpoints[2 * endpoints.len() / 3]
+        ]
+    } else {
+        endpoints
+    };
+    let first_layer = u16::try_from(
+        (component
+            + usize::from(subband.resolution)
+            + usize::from(subband.index)
+            + usize::from(block.x)
+            + 2 * usize::from(block.y))
+            % 7,
+    )
+    .map_err(|_| CodestreamError::SizeOverflow)?;
+    let mut result = Vec::new();
+    let mut previous_passes = 0;
+    let mut previous_length = 0;
+    for (index, (passes, length)) in selected
+        .into_iter()
+        .chain(core::iter::once((block.coding_passes, codeword.len())))
+        .enumerate()
+    {
+        // Sufficient input is observed from the final codeword, including MQ
+        // lookahead. Verify the truncated prefix at its declared pass count
+        // before packetising it; this is a fixture check, not rate allocation.
+        let prefix_spec = tier1::CodeBlockDecodeSpec {
+            coding_passes: passes,
+            ..spec
+        };
+        let mut expected = alloc::vec![0; usize::from(block.width) * usize::from(block.height)];
+        let mut actual = expected.clone();
+        tier1::decode_baseline_code_block(codeword, prefix_spec, &mut expected)
+            .map_err(map_tier1_error)?;
+        tier1::decode_baseline_code_block(&codeword[..length], prefix_spec, &mut actual)
+            .map_err(map_tier1_error)?;
+        if actual != expected || codeword[length - 1] == 0xff {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        result.push(MctLayerBlockContribution {
+            layer: first_layer
+                + 6 * u16::try_from(index).map_err(|_| CodestreamError::SizeOverflow)?,
+            passes: passes - previous_passes,
+            bytes: block.segment_offset + previous_length..block.segment_offset + length,
+        });
+        previous_passes = passes;
+        previous_length = length;
+    }
+    Ok(result)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
 fn write_part1_mct_eph_packets(
     decomposition_levels: u8,
     layers: u16,
     component_subbands: &[Vec<NativeDecompSubband>],
     segments: &[u8],
 ) -> Result<(Vec<u8>, Vec<usize>)> {
-    if layers == 0 || component_subbands.len() != 3 {
+    if layers != 19 || component_subbands.len() != 3 {
         return Err(CodestreamError::SizeOverflow);
     }
-    let packet_count = usize::from(layers)
-        .checked_mul(usize::from(decomposition_levels) + 1)
-        .and_then(|count| count.checked_mul(component_subbands.len()))
-        .ok_or(CodestreamError::SizeOverflow)?;
+    let mut schedules = Vec::new();
+    let mut states = Vec::new();
+    for (component, subbands) in component_subbands.iter().enumerate() {
+        let mut component_schedules = Vec::new();
+        let mut component_states = Vec::new();
+        for subband in subbands {
+            let schedule = subband
+                .code_blocks
+                .iter()
+                .map(|block| mct_layer_block_contributions(component, subband, block, segments))
+                .collect::<Result<Vec<_>>>()?;
+            let state = if subband.code_blocks.is_empty() {
+                None
+            } else {
+                let mut state = QualityLayerHeaderState::new(subband)?;
+                state.inclusion = EncTagTree::new(
+                    subband.code_block_cols,
+                    subband.code_block_rows,
+                    schedule.iter().map(|block| {
+                        block
+                            .first()
+                            .map_or(u32::MAX, |entry| u32::from(entry.layer))
+                    }),
+                )?;
+                Some(state)
+            };
+            component_schedules.push(schedule);
+            component_states.push(state);
+        }
+        schedules.push(component_schedules);
+        states.push(component_states);
+    }
     let mut output = Vec::new();
     let mut packet_lengths = Vec::new();
-    packet_lengths
-        .try_reserve_exact(packet_count)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
     for layer in 0..layers {
         for resolution in 0..=decomposition_levels {
-            for subbands in component_subbands {
+            for (component, subbands) in component_subbands.iter().enumerate() {
                 let packet_start = output.len();
-                let packet_subbands = subbands
+                let present = subbands
                     .iter()
-                    .filter(|subband| subband.resolution == resolution)
-                    .collect::<Vec<_>>();
-                let mut writer = PacketBitWriter::new();
-                if layer == 0 {
-                    let has_contribution = packet_subbands
-                        .iter()
-                        .any(|subband| subband.code_blocks.iter().any(|block| block.included));
-                    writer.write_bit(u32::from(has_contribution))?;
-                    if has_contribution {
-                        for subband in packet_subbands
+                    .enumerate()
+                    .filter(|(_, subband)| subband.resolution == resolution)
+                    .any(|(index, _)| {
+                        schedules[component][index]
                             .iter()
-                            .filter(|subband| !subband.code_blocks.is_empty())
-                        {
-                            write_component_packet_header(
-                                &mut writer,
-                                subband.code_block_cols,
-                                subband.code_block_rows,
-                                &subband.code_blocks,
+                            .flatten()
+                            .any(|entry| entry.layer == layer)
+                    });
+                let mut writer = PacketBitWriter::new();
+                writer.write_bit(u32::from(present))?;
+                let mut bodies = Vec::new();
+                if present {
+                    for (index, subband) in subbands
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, subband)| subband.resolution == resolution)
+                    {
+                        let Some(state) = states[component][index].as_mut() else {
+                            continue;
+                        };
+                        for (block_index, block) in subband.code_blocks.iter().enumerate() {
+                            let schedule = &schedules[component][index][block_index];
+                            let contribution = schedule.iter().find(|entry| entry.layer == layer);
+                            let first_layer =
+                                schedule.first().map_or(u16::MAX, |entry| entry.layer);
+                            if layer <= first_layer {
+                                state.inclusion.encode(
+                                    &mut writer,
+                                    block.x,
+                                    block.y,
+                                    u32::from(layer) + 1,
+                                )?;
+                            } else {
+                                writer.write_bit(u32::from(contribution.is_some()))?;
+                            }
+                            let Some(contribution) = contribution else {
+                                continue;
+                            };
+                            if layer == first_layer {
+                                state
+                                    .missing
+                                    .encode(&mut writer, block.x, block.y, u32::MAX)?;
+                            }
+                            write_coding_pass_count(&mut writer, contribution.passes)?;
+                            let pass_bits = u8::try_from(u32::from(contribution.passes).ilog2())
+                                .map_err(|_| CodestreamError::SizeOverflow)?;
+                            let lblock = &mut state.l_block[block_index];
+                            let length = contribution.bytes.len();
+                            while (length as u128) >= (1_u128 << u32::from(*lblock + pass_bits)) {
+                                writer.write_bit(1)?;
+                                *lblock += 1;
+                            }
+                            writer.write_bit(0)?;
+                            writer.write_bits(
+                                u32::try_from(length).map_err(|_| CodestreamError::SizeOverflow)?,
+                                *lblock + pass_bits,
                             )?;
+                            bodies.push(contribution.bytes.clone());
                         }
                     }
-                } else {
-                    writer.write_bit(0)?;
                 }
                 writer.align();
-                output
-                    .try_reserve(writer.bytes().len().saturating_add(2))
-                    .map_err(|_| CodestreamError::SizeOverflow)?;
                 output.extend_from_slice(writer.bytes());
                 output.extend_from_slice(&Marker::Eph.code().to_be_bytes());
-                if layer == 0 {
-                    for subband in packet_subbands {
-                        for block in subband.code_blocks.iter().filter(|block| block.included) {
-                            let segment =
-                                checked_slice(segments, block.segment_offset, block.segment_len)?;
-                            output
-                                .try_reserve(segment.len())
-                                .map_err(|_| CodestreamError::SizeOverflow)?;
-                            output.extend_from_slice(segment);
-                        }
-                    }
+                for range in bodies {
+                    output.extend_from_slice(&segments[range]);
                 }
-                packet_lengths.push(
-                    output
-                        .len()
-                        .checked_sub(packet_start)
-                        .ok_or(CodestreamError::SizeOverflow)?,
-                );
+                packet_lengths.push(output.len() - packet_start);
             }
         }
     }
     Ok((output, packet_lengths))
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn packet_length_table_segment(packet_lengths: &[usize]) -> Result<Vec<u8>> {
     let mut encoded = Vec::new();
     for length in packet_lengths {

@@ -45,7 +45,7 @@ pub fn reversible_mct_region_fixture() -> ReversibleMctRegionFixture {
         }
     }
     let encode = |unspecified_tile_part_count| {
-        emuella_j2k_core::codestream::encode_part1_reversible_mct_region_test_fixture(
+        emuella_j2k_codestream::encode_part1_reversible_mct_region_test_fixture(
             emuella_j2k_core::codestream::RgbU8Encode {
                 width: WIDTH,
                 height: HEIGHT,
