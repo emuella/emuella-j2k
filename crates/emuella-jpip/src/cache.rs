@@ -47,6 +47,7 @@ pub struct Cache {
     limits: CacheLimits,
     clock: u64,
     bytes: usize,
+    evictions: u64,
 }
 impl Cache {
     pub fn new(limits: CacheLimits) -> Self {
@@ -56,6 +57,7 @@ impl Cache {
             limits,
             clock: 0,
             bytes: 0,
+            evictions: 0,
         }
     }
     /// Call before decoding each response. A changed identity discards all old
@@ -84,9 +86,14 @@ impl Cache {
     pub fn bin_count(&self) -> usize {
         self.bins.len()
     }
+    /// Cumulative whole-bin explicit/LRU evictions; identity resets are excluded.
+    pub fn eviction_count(&self) -> u64 {
+        self.evictions
+    }
     pub fn evict(&mut self, key: BinKey) -> bool {
         if let Some(bin) = self.bins.remove(&key) {
             self.bytes -= bin.bytes();
+            self.evictions = self.evictions.saturating_add(1);
             true
         } else {
             false

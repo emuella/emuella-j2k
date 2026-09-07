@@ -148,6 +148,7 @@ fn eviction_metadata_limits_empty_bins_and_identity() {
     c.read(key(0), 0, &mut [0]).unwrap();
     c.insert(msg(2, 0, true, &[6, 7])).unwrap();
     assert!(!c.model().contains_key(&key(1)));
+    assert_eq!(c.eviction_count(), 1);
     assert!(c.model().contains_key(&key(0)));
     assert_eq!(c.insert(msg(3, 0, true, &[0; 6])), Err(Error::Limit));
     assert_eq!(c.bytes(), 5);
@@ -161,6 +162,7 @@ fn eviction_metadata_limits_empty_bins_and_identity() {
     assert_eq!(c.bytes(), 5);
     assert!(c.bind_identity("immutable-b").unwrap());
     assert_eq!(c.bytes(), 0);
+    assert_eq!(c.eviction_count(), 1);
     assert!(c.model().is_empty());
     let mut small = Cache::new(CacheLimits {
         bytes: 10,
