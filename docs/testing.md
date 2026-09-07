@@ -1262,3 +1262,14 @@ requests, truncation and corrupt retained entropy at each discard preserve all
 caller bytes. The same failed workspace is then reused successfully. Existing
 full-resolution lossy raw/JPH, reversible HT, ROI, legacy reduced and classic
 Part 1 tests remain independent regression evidence.
+
+## Independent NITF source interoperability
+
+The optional `independent_nitf` integration test consumes the testdata-owned
+version-one pack at runtime. Four lossless native outputs match complete
+independent pixel hashes; lossy U11 output is compared with an integrity-bound
+independent PGM at a one-code-value peak limit. All five profiles compare three
+regions with complete same-source output at full resolution and discard one/two.
+Ordinary tests remain self-contained. See
+[the calibration and reproduction record](independent-nitf-ingestion-calibration.md)
+for exact inputs, limits, commands and the separate reduced-output claim.

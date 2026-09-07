@@ -41895,41 +41895,50 @@ fn read_single_node_tag_tree(reader: &mut PacketBitReader<'_>, max_value: u32) -
 }
 
 fn read_coding_pass_count(reader: &mut PacketBitReader<'_>) -> Result<u16> {
-    if reader.peek_bits_with_stuffing(9)? == 0x1ff {
-        reader.read_bits_with_stuffing(9)?;
-        return u16::try_from(reader.read_bits_with_stuffing(7)? + 37)
-            .map_err(|_| CodestreamError::SizeOverflow);
-    }
-    if reader.peek_bits_with_stuffing(4)? == 0x0f {
-        reader.read_bits_with_stuffing(4)?;
-        return u16::try_from(reader.read_bits_with_stuffing(5)? + 6)
-            .map_err(|_| CodestreamError::SizeOverflow);
-    }
-    if reader.peek_bits_with_stuffing(4)? == 0b1110 {
-        reader.read_bits_with_stuffing(4)?;
-        return Ok(5);
-    }
-    if reader.peek_bits_with_stuffing(4)? == 0b1101 {
-        reader.read_bits_with_stuffing(4)?;
-        return Ok(4);
-    }
-    if reader.peek_bits_with_stuffing(4)? == 0b1100 {
-        reader.read_bits_with_stuffing(4)?;
-        return Ok(3);
-    }
-    if reader.peek_bits_with_stuffing(2)? == 0b10 {
-        reader.read_bits_with_stuffing(2)?;
-        return Ok(2);
-    }
-    if reader.peek_bits_with_stuffing(1)? == 0 {
-        reader.read_bits_with_stuffing(1)?;
+    // Consume only the selected prefix: a short count may occupy the last
+    // bits of a PLT-bounded packet and must not inspect the following packet.
+    // ISO/IEC 15444-1:2024, B.10.6, Table B.4, PDF page 92.
+    if reader.read_bits_with_stuffing(1)? == 0 {
         return Ok(1);
     }
-    Err(invalid(
-        None,
-        Some(Marker::Sod),
-        "packet header contains an invalid coding-pass count codeword",
-    ))
+    if reader.read_bits_with_stuffing(1)? == 0 {
+        return Ok(2);
+    }
+    let short = reader.read_bits_with_stuffing(2)?;
+    if short < 3 {
+        return Ok(3 + short as u16);
+    }
+    let extended = reader.read_bits_with_stuffing(5)?;
+    if extended < 31 {
+        return Ok(6 + extended as u16);
+    }
+    Ok(37 + reader.read_bits_with_stuffing(7)? as u16)
+}
+
+#[test]
+fn short_continued_packet_does_not_require_neighbouring_bytes() {
+    // An included block can announce another pass without contributing bytes.
+    // Packet-present, already-included, one pass, unchanged Lblock and zero
+    // length fit in one byte. There is no following packet available to peek.
+    let mut reader = PacketBitReader::new(&[0xc0]);
+    assert_eq!(reader.read_bits_with_stuffing(2).unwrap(), 3);
+    assert_eq!(read_coding_pass_count(&mut reader).unwrap(), 1);
+    assert_eq!(reader.read_bits_with_stuffing(1).unwrap(), 0);
+    assert_eq!(reader.read_bits_with_stuffing(3).unwrap(), 0);
+    reader.align();
+    assert_eq!(reader.byte_pos(), 1);
+
+    // The smallest short count is valid even in the final bit of a bounded
+    // header. A prefix that actually needs further bits must still fail.
+    let mut reader = PacketBitReader::new(&[0]);
+    reader.read_bits_with_stuffing(7).unwrap();
+    assert_eq!(read_coding_pass_count(&mut reader).unwrap(), 1);
+    let mut reader = PacketBitReader::new(&[1]);
+    reader.read_bits_with_stuffing(7).unwrap();
+    assert!(matches!(
+        read_coding_pass_count(&mut reader),
+        Err(CodestreamError::TruncatedInput { .. })
+    ));
 }
 
 trait PacketByteSource {
@@ -42136,11 +42145,6 @@ impl<'a> PacketBitReader<'a> {
             }
         }
         Ok(value)
-    }
-
-    fn peek_bits_with_stuffing(&self, bit_size: u8) -> Result<u32> {
-        let mut clone = self.clone();
-        clone.read_bits_with_stuffing(bit_size)
     }
 
     fn align(&mut self) {
