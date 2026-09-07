@@ -201,6 +201,139 @@ fn single_stream_packet_ranges_and_sparse_cross_tile_match_full_decoder() {
 }
 
 #[test]
+fn reported_work_matches_executed_parts_across_tiles_components_and_reductions() {
+    let counters = |work: transform::WindowSynthesisWork| {
+        [
+            work.coefficients_loaded,
+            work.horizontal_values,
+            work.vertical_values,
+            work.lifting_updates,
+            work.output_samples,
+        ]
+    };
+    for levels in [2, 6] {
+        let (bytes, index) = encode_depth(512, 512, 256, 16, 3, levels);
+        let mut workspace = ht_lossy::LossyHtSpatialRegionWorkspace::new();
+        for discard in [0, 1, levels] {
+            let plan = index
+                .plan(
+                    TileRegionRequest {
+                        x: 191,
+                        y: 191,
+                        width: 130,
+                        height: 130,
+                    },
+                    discard,
+                    &[2, 0],
+                )
+                .unwrap();
+            assert_eq!(plan.parts.len(), 8);
+            let mut expected = [0_u64; 5];
+            for part in &plan.parts {
+                let tile = &index.tiles[part.tile];
+                let (_, report) = ht_lossy::decode_indexed_window::<u32>(
+                    tile.candidate,
+                    &tile.component,
+                    &tile.contributions,
+                    &part.synthesis,
+                    &part.selected,
+                    &part.accounting,
+                    &mut workspace,
+                    |contribution, buffer| {
+                        let offset = tile.payload_offset as usize + contribution.payload_offset;
+                        buffer
+                            .extend_from_slice(&bytes[offset..offset + contribution.codeword_len]);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    report.work.coefficients_loaded,
+                    part.accounting.compact_coefficient_samples
+                );
+                for (sum, count) in expected.iter_mut().zip(counters(report.work)) {
+                    *sum += count;
+                }
+            }
+            let mut reads = Vec::new();
+            let (planes, report) = plan
+                .decode_with_report(
+                    |offset, dst| {
+                        reads.push(offset..offset + dst.len() as u64);
+                        dst.copy_from_slice(&bytes[offset as usize..offset as usize + dst.len()]);
+                        Ok(())
+                    },
+                    &mut workspace,
+                )
+                .unwrap();
+            assert_eq!(counters(report.work), expected);
+            assert_eq!(reads, plan.block_ranges());
+            assert_eq!(planes, decode(&plan, &bytes, &mut Vec::new()));
+            assert_eq!(
+                report.work.output_samples,
+                u64::from(plan.output.width) * u64::from(plan.output.height) * 2
+            );
+            assert_eq!(
+                report.work.output_samples,
+                (planes[0].len() + planes[1].len()) as u64 / 2
+            );
+            if discard == levels {
+                assert_eq!(report.work.horizontal_values, 0);
+                assert_eq!(report.work.vertical_values, 0);
+                assert_eq!(report.work.lifting_updates, 0);
+            } else {
+                assert!(report.work.horizontal_values > 0);
+                assert!(report.work.vertical_values > 0);
+                assert!(report.work.lifting_updates > 0);
+            }
+            assert!(
+                plan.decode_with_report(|_, _| Err(resource_error()), &mut workspace)
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn reported_work_rejects_overflow_in_every_counter() {
+    for work in [
+        transform::WindowSynthesisWork {
+            coefficients_loaded: u64::MAX,
+            ..Default::default()
+        },
+        transform::WindowSynthesisWork {
+            horizontal_values: u64::MAX,
+            ..Default::default()
+        },
+        transform::WindowSynthesisWork {
+            vertical_values: u64::MAX,
+            ..Default::default()
+        },
+        transform::WindowSynthesisWork {
+            lifting_updates: u64::MAX,
+            ..Default::default()
+        },
+        transform::WindowSynthesisWork {
+            output_samples: u64::MAX,
+            ..Default::default()
+        },
+    ] {
+        let mut report = IndexedHtDecodeReport { work };
+        assert!(matches!(
+            report.add_work(transform::WindowSynthesisWork {
+                coefficients_loaded: 1,
+                horizontal_values: 1,
+                vertical_values: 1,
+                lifting_updates: 1,
+                output_samples: 1,
+            }),
+            Err(CodestreamError::SizeOverflow)
+        ));
+        assert_eq!(report.work, work);
+    }
+}
+
+#[test]
 fn sparse_repeated_plans_read_only_selected_bodies_and_fail_on_missing_data() {
     let (bytes, index, _) = encode(512, 512, 256, 16, 1);
     let mut workspace = ht_lossy::LossyHtSpatialRegionWorkspace::new();
@@ -388,12 +521,16 @@ fn odd_boundary_tiles_and_empty_packets_preserve_native_samples() {
         .unwrap();
     assert_eq!(plan.selected_code_blocks(), 0);
     assert_eq!(plan.precinct_indices().len(), 12);
-    let output = plan
-        .decode(
+    let (output, report) = plan
+        .decode_with_report(
             |_, _| panic!("empty packets need no entropy reads"),
             &mut ht_lossy::LossyHtSpatialRegionWorkspace::new(),
         )
         .unwrap();
+    assert_eq!(plan.selected_block_coefficients(), 0);
+    assert!(report.work.coefficients_loaded > 0);
+    assert!(report.work.lifting_updates > 0);
+    assert_eq!(report.work.output_samples, 100);
     assert!(
         output[0]
             .chunks_exact(2)

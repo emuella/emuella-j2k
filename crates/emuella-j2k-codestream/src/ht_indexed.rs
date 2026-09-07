@@ -535,6 +535,32 @@ impl IndexedLossyHt {
     }
 }
 
+/// Actual synthesis work from a successful indexed regional decode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IndexedHtDecodeReport {
+    /// Checked sums of the transform's executed work counters over every
+    /// selected tile/component part. Coefficients include the compact synthesis
+    /// support (including zero contributions); they are not entropy-decoded
+    /// block coefficients. Output samples count all requested component planes.
+    /// Horizontal/vertical values and lifting updates retain the transform's
+    /// counter units, including synthesis support beyond the requested window.
+    pub work: transform::WindowSynthesisWork,
+}
+
+impl IndexedHtDecodeReport {
+    fn add_work(&mut self, part: transform::WindowSynthesisWork) -> Result<()> {
+        let add = |a: u64, b: u64| a.checked_add(b).ok_or(CodestreamError::SizeOverflow);
+        self.work = transform::WindowSynthesisWork {
+            coefficients_loaded: add(self.work.coefficients_loaded, part.coefficients_loaded)?,
+            horizontal_values: add(self.work.horizontal_values, part.horizontal_values)?,
+            vertical_values: add(self.work.vertical_values, part.vertical_values)?,
+            lifting_updates: add(self.work.lifting_updates, part.lifting_updates)?,
+            output_samples: add(self.work.output_samples, part.output_samples)?,
+        };
+        Ok(())
+    }
+}
+
 impl IndexedHtRegion<'_> {
     pub fn output_region(&self) -> TileRegionRequest {
         self.output
@@ -569,9 +595,23 @@ impl IndexedHtRegion<'_> {
     /// coefficient/synthesis allocations, but does not cache decoded blocks.
     pub fn decode(
         &self,
-        mut read: impl FnMut(u64, &mut [u8]) -> Result<()>,
+        read: impl FnMut(u64, &mut [u8]) -> Result<()>,
         workspace: &mut ht_lossy::LossyHtSpatialRegionWorkspace,
     ) -> Result<Vec<Vec<u8>>> {
+        self.decode_with_report(read, workspace)
+            .map(|(planes, _)| planes)
+    }
+
+    /// Decode as [`Self::decode`], also returning actual aggregate synthesis
+    /// work. Counters describe this invocation only, including repeated work
+    /// when a workspace is reused. Planning estimates, entropy work, output
+    /// assembly copies and timings are excluded. Failure returns neither
+    /// partial output nor a partial report; counter overflow is a size error.
+    pub fn decode_with_report(
+        &self,
+        mut read: impl FnMut(u64, &mut [u8]) -> Result<()>,
+        workspace: &mut ht_lossy::LossyHtSpatialRegionWorkspace,
+    ) -> Result<(Vec<Vec<u8>>, IndexedHtDecodeReport)> {
         if self.required_workspace_bytes() > workspace.maximum_bytes() {
             return Err(resource_error());
         }
@@ -581,9 +621,10 @@ impl IndexedHtRegion<'_> {
         for _ in &self.components {
             planes.push(zeroed(stride * self.output.height as usize, 0_u8)?);
         }
+        let mut report = IndexedHtDecodeReport::default();
         for part in &self.parts {
             let tile = &self.index.tiles[part.tile];
-            let (samples, _) = ht_lossy::decode_indexed_window::<u32>(
+            let (samples, transform_report) = ht_lossy::decode_indexed_window::<u32>(
                 tile.candidate,
                 &tile.component,
                 &tile.contributions,
@@ -599,6 +640,7 @@ impl IndexedHtRegion<'_> {
                     read(tile.payload_offset + c.payload_offset as u64, buffer)
                 },
             )?;
+            report.add_work(transform_report.work)?;
             let plane = &mut planes[self
                 .components
                 .iter()
@@ -613,7 +655,7 @@ impl IndexedHtRegion<'_> {
                     .copy_from_slice(&samples[y * row_bytes..(y + 1) * row_bytes]);
             }
         }
-        Ok(planes)
+        Ok((planes, report))
     }
 }
 

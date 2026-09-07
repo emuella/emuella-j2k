@@ -39,6 +39,20 @@ was consulted or copied for this calibration.
 
 ## Persistence and immutable source identity
 
+`IndexedHtRegion::decode_with_report` returns the same selected planar output
+as `decode`, plus `IndexedHtDecodeReport::work`. Each successful invocation
+checks and sums the five existing `WindowSynthesisWork` counters returned by
+actual tile/component synthesis: compact coefficients loaded, horizontal and
+vertical values, lifting updates and output samples. Synthesis support includes
+zero contributions and halo work; loaded coefficients are distinct from
+`selected_block_coefficients()`, which counts entropy-block coefficients.
+Output samples sum the requested planes at the selected reduction. At the
+lowest resolution, synthesis still loads coefficients and produces output but
+performs no horizontal, vertical or lifting work. Reusing a workspace does not
+cache decoded blocks or carry counters between invocations. These counters
+exclude planning estimates, entropy work, output assembly copies and timings.
+Failure returns neither partial planes nor a partial report.
+
 `encode_tiled` still returns a complete retained `IndexedLossyHt`.
 `encode_tiled_to_descriptors` instead consumes synchronous pixel, codestream and
 per-tile descriptor callbacks and returns `TiledLossyHtSummary`: profile,
