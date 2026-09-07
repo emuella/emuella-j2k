@@ -985,7 +985,26 @@ A deterministic project-authored 256-by-192 fixture exercises the exact
 source-backed classic profile without retaining external codestream bytes or
 derived pixels. It carries five reversible 5/3 levels, 19 LRCP layers, default
 precincts, inline EPH, one TLM entry, a 342-packet PLT series and reversible
-MCT. The authored RGB sample formula is the oracle. Equivalent `TNsot=0` and
+MCT with code-block style zero. First inclusion varies across layers zero
+through six; each non-empty block then contributes two further positive-byte,
+positive-pass fragments, with activity varying by component and resolution and
+reaching layer eighteen. Structural tests parse the actual packet ranges,
+reconcile them with PLT, and require continuation in every component/resolution
+pair, staggered inclusion, differing activity and retained empty packets.
+
+The fixture retains each block's single continuous MQ codeword. Test-only
+Tier-1 accounting observes every input byte needed by each completed pass,
+including lookahead, and excludes endpoints that used synthetic input. Chosen
+prefixes include a following byte when needed to avoid a trailing `0xff`.
+Before packetisation, each prefix must decode identically to the same declared
+pass count from the full codeword. These are conservative fixture boundaries,
+not a rate-allocation algorithm or new application encode profile. The packet
+constraints and MQ termination basis are ISO/IEC 15444-1:2024, B.10.7,
+B.10.7.1 and D.4–D.4.3 (physical pages 93, 124–125; reviewed retrieval
+`34e5d1639b9f121807e620c001893ca9d2c8f977`). D.4.3 supplies informative
+truncation guidance; the sufficient-prefix choice is project-authored.
+
+The authored RGB sample formula is the oracle. Equivalent `TNsot=0` and
 `TNsot=1` forms decode all three full planes and one selected component across
 non-trivial code-block-boundary and image-edge regions.
 
@@ -1007,6 +1026,8 @@ non-one declared count, TLM and `Psot` disagreement, duplicate indices,
 inconsistent declarations, a well-formed but unsupported second part, a missing
 part and truncation. Existing sequence validation remains the authority; the
 profile-local `TNsot=0` permission is applied only after the complete parse.
+Independent opt-in Layer 2 evidence and its limits are recorded in the
+[MCT layer-continuation qualification](mct-layer-continuation-qualification.md).
 
 ### Native quality-layer truncation
 
