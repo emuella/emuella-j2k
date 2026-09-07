@@ -140,10 +140,18 @@ fn byte_budget(pixels: usize, rate: f32) -> Result<usize> {
     Ok((whole_bits as usize) / 8)
 }
 pub(super) fn analyse(width: u32, height: u32, planes: &mut [Vec<f32>]) -> Result<()> {
+    analyse_levels(width, height, planes, 2)
+}
+pub(super) fn analyse_levels(
+    width: u32,
+    height: u32,
+    planes: &mut [Vec<f32>],
+    levels: u8,
+) -> Result<()> {
     let mut scratch = zeroed(2 * width.max(height) as usize, 0.0)?;
     for plane in planes {
-        for level in 0..2 {
-            let (w, h) = resolution_dimensions(width, height, 2, 2 - level)?;
+        for level in 0..levels {
+            let (w, h) = resolution_dimensions(width, height, levels, levels - level)?;
             let config = transform::Irreversible97Config {
                 width: w as usize,
                 height: h as usize,
@@ -197,7 +205,17 @@ pub(super) fn search_tile(
     planes: &[Vec<f32>],
     budget: usize,
 ) -> Result<(EncodedLossyTile, u32, usize)> {
-    let specs = decomp_subband_specs(width, height, 2)?;
+    search_tile_levels(width, height, bits, planes, budget, 2)
+}
+pub(super) fn search_tile_levels(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[Vec<f32>],
+    budget: usize,
+    levels: u8,
+) -> Result<(EncodedLossyTile, u32, usize)> {
+    let specs = decomp_subband_specs(width, height, levels)?;
     let mut quantized_planes = reserved(planes.len())?;
     for plane in planes {
         quantized_planes.push(zeroed(plane.len(), 0_i32)?);
@@ -258,6 +276,7 @@ fn candidate(
     coarseness: u32,
     quantized_planes: &mut [Vec<i32>],
 ) -> Result<Option<EncodedLossyTile>> {
+    let levels = u8::try_from((specs.len() - 1) / 3).map_err(|_| resource_error())?;
     let octave = coarseness / 2048;
     let mantissa = u16::try_from(coarseness % 2048).map_err(|_| CodestreamError::SizeOverflow)?;
     let base_exponent = 31_u8
@@ -365,7 +384,7 @@ fn candidate(
     let mut packet_ranges = Vec::new();
     write_native_decomp_packets_with_observer(
         &mut packet,
-        2,
+        levels,
         &component_subbands,
         &segments,
         |component, resolution, start, body, end| {
@@ -381,7 +400,7 @@ fn candidate(
         bits_per_sample,
         u16::try_from(plane_refs.len()).map_err(|_| CodestreamError::SizeOverflow)?,
         false,
-        2,
+        levels,
         &qcd_steps,
         true,
     )?;
@@ -716,7 +735,10 @@ fn checked_count_bytes(count: usize, element_bytes: usize) -> Result<u64> {
         .ok_or(CodestreamError::SizeOverflow)
 }
 
-fn ht_block_layout_scratch_ceiling_bytes(width: u16, height: u16) -> Result<u64> {
+fn ht_block_layout_scratch_ceiling_bytes<M: ht::HtCleanupMagnitude>(
+    width: u16,
+    height: u16,
+) -> Result<u64> {
     let dimensions =
         ht::HtCodeBlockDimensions::new(width, height).map_err(|_| CodestreamError::SizeOverflow)?;
     let block = ht::HtBlockLayout::new(dimensions);
@@ -729,7 +751,7 @@ fn ht_block_layout_scratch_ceiling_bytes(width: u16, height: u16) -> Result<u64>
         logical_bytes,
         checked_count_bytes(
             coefficients,
-            core::mem::size_of::<ht::HtVlcCleanupCoefficientOutput>(),
+            core::mem::size_of::<ht::HtVlcCleanupCoefficientOutput<M>>(),
         )?,
     )?;
     logical_bytes = checked_add_u64(
@@ -748,6 +770,17 @@ fn ht_block_layout_scratch_ceiling_bytes(width: u16, height: u16) -> Result<u64>
 }
 
 pub(super) fn lossy_ht_window_storage_accounting(
+    synthesis: &SynthesisWindowPlan,
+    contributions: &[PacketCodeBlockContribution],
+    selected_contribution_indices: &[usize],
+) -> Result<LossyHtSpatialRegionAccounting> {
+    lossy_ht_window_storage_accounting_with_magnitude::<u16>(
+        synthesis,
+        contributions,
+        selected_contribution_indices,
+    )
+}
+pub(super) fn lossy_ht_window_storage_accounting_with_magnitude<M: ht::HtCleanupMagnitude>(
     synthesis: &SynthesisWindowPlan,
     contributions: &[PacketCodeBlockContribution],
     selected_contribution_indices: &[usize],
@@ -807,7 +840,7 @@ pub(super) fn lossy_ht_window_storage_accounting(
         selected_block_coefficients = checked_add_u64(selected_block_coefficients, coefficients)?;
         maximum_block_coefficients = maximum_block_coefficients.max(coefficients);
         maximum_layout_scratch_bytes = maximum_layout_scratch_bytes.max(
-            ht_block_layout_scratch_ceiling_bytes(contribution.width, contribution.height)?,
+            ht_block_layout_scratch_ceiling_bytes::<M>(contribution.width, contribution.height)?,
         );
         maximum_segment_bytes = maximum_segment_bytes.max(
             u64::try_from(contribution.codeword_len).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -959,7 +992,7 @@ pub fn decode_prepared_lossy_ht_spatial_region(
         .components
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
-    decode_indexed_window(
+    decode_indexed_window::<u16>(
         plan.prepared.candidate,
         component,
         &plan.prepared.contributions,
@@ -980,7 +1013,7 @@ pub fn decode_prepared_lossy_ht_spatial_region(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn decode_indexed_window(
+pub(super) fn decode_indexed_window<M: ht::HtCleanupMagnitude>(
     candidate: HtCodestreamDecodeCandidate,
     component: &ComponentParameters,
     contributions: &[PacketCodeBlockContribution],
@@ -997,7 +1030,7 @@ pub(super) fn decode_indexed_window(
     // cleanup boundary. Its scratch layout is public and mechanically planned;
     // no private accelerated-backend representation participates in admission.
     let mut block_scratch = Vec::<u16>::new();
-    let mut cleanup_outputs = Vec::<ht::HtVlcCleanupCoefficientOutput>::new();
+    let mut cleanup_outputs = Vec::<ht::HtVlcCleanupCoefficientOutput<M>>::new();
     let mut context_states = Vec::<ht::HtVlcContextProgression>::new();
     let mut mel_state = ht::HtMelEventState::new();
     let mut block_coefficients = Vec::<i32>::new();
@@ -1097,7 +1130,7 @@ pub(super) fn decode_indexed_window(
                 .ok_or(CodestreamError::SizeOverflow)?,
             significant: false,
             magnitude_sign_bits: 0,
-            magnitude_sign_value: 0,
+            magnitude_sign_value: M::default(),
             embedded_magnitude_bit: false,
             magnitude_exponent_reduction: false,
         };

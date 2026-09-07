@@ -1,7 +1,9 @@
 # Indexed tiled HT exploration
 
-Status: provisional two-level foundation; 256 selected for the initial
-default-precinct probe, pending deeper-profile calibration.
+Status: historical two-level foundation. The current experimental depth and
+durable sparse index contract is in [ht-indexed-persistence.md](ht-indexed-persistence.md);
+its next composed candidate uses 512-pixel tiles and six levels. The observations
+below retain the original two-level calibration context.
 Source baseline: `aa7090c23cce62437cefe5b441e971b1bd4320b5`.
 
 The question is whether the existing project-authored lossy HT algorithms can

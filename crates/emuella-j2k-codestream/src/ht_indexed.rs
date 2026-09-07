@@ -7,13 +7,15 @@ use super::ht_lossy::{reserved, resource_error, zeroed};
 use super::*;
 use core::ops::Range;
 
-/// Fixed two-level, one-layer, no-MCT, default-precinct HTONLY profile.
+/// Configurable-depth, one-layer, no-MCT, default-precinct HTONLY profile.
 #[derive(Debug, Clone, Copy)]
 pub struct TiledLossyHtProfile {
     pub width: u32,
     pub height: u32,
     /// Supported square tile edges: 256, 512 and 1024 samples.
     pub tile_edge: u32,
+    /// Number of 9/7 decomposition levels: 2, 5 or 6.
+    pub decomposition_levels: u8,
     pub bits_per_sample: u8,
     pub components: u16,
     /// Per-tile rate target, in bits per reference pixel, plus a 128-byte
@@ -41,10 +43,11 @@ struct IndexedTile {
     candidate: HtCodestreamDecodeCandidate,
     payload_offset: u64,
     contributions: Vec<PacketCodeBlockContribution>,
+    descriptor: Vec<u8>,
 }
 
-/// Encoder-built reusable metadata. It retains no source samples or encoded
-/// payload. It is deliberately not a deserialisation or arbitrary-file parser.
+/// Reusable admitted metadata, either encoder-built or imported per tile.
+/// It retains headers and dependencies, never source samples or entropy bodies.
 pub struct IndexedLossyHt {
     profile: TiledLossyHtProfile,
     main_header: Range<u64>,
@@ -53,6 +56,7 @@ pub struct IndexedLossyHt {
     tiles: Vec<IndexedTile>,
     encoded_bytes: u64,
     contribution_heap_bytes: usize,
+    peak_tile_index_bytes: u64,
 }
 
 impl IndexedLossyHt {
@@ -79,6 +83,11 @@ impl IndexedLossyHt {
             + self.precincts.capacity() * core::mem::size_of::<IndexedHtPrecinct>()
             + self.tile_headers.capacity() * core::mem::size_of::<Range<u64>>();
         n += self.contribution_heap_bytes;
+        n += self
+            .tiles
+            .iter()
+            .map(|t| t.descriptor.capacity())
+            .sum::<usize>();
         n as u64
     }
 }
@@ -89,7 +98,8 @@ fn validate_profile(p: TiledLossyHtProfile) -> Result<usize> {
         || !matches!(p.tile_edge, 256 | 512 | 1024)
         || (!p.width.is_multiple_of(p.tile_edge) && p.width % p.tile_edge < 4)
         || (!p.height.is_multiple_of(p.tile_edge) && p.height % p.tile_edge < 4)
-        || !matches!(p.bits_per_sample, 8 | 16)
+        || !matches!(p.decomposition_levels, 2 | 5 | 6)
+        || !matches!(p.bits_per_sample, 8..=16)
         || !matches!(p.components, 1 | 3)
         || !p.bits_per_pixel.is_finite()
         || p.bits_per_pixel <= 0.0
@@ -113,18 +123,81 @@ fn validate_profile(p: TiledLossyHtProfile) -> Result<usize> {
 /// is allocated internally. The optional application sink may of course buffer.
 pub fn encode_tiled(
     profile: TiledLossyHtProfile,
+    read_tile: impl FnMut(TileRect, &mut [Vec<u8>]) -> Result<()>,
+    write: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<IndexedLossyHt> {
+    encode_tiled_internal(profile, read_tile, write, |_, _| Ok(()), true)
+}
+
+/// Small completion record for streaming preparation. The caller publishes
+/// codestream, descriptors and immutable manifest together only after success.
+#[derive(Debug, Clone)]
+pub struct TiledLossyHtSummary {
+    pub profile: TiledLossyHtProfile,
+    pub main_header: Range<u64>,
+    pub encoded_bytes: u64,
+    pub tile_count: u16,
+    pub descriptor_bytes: u64,
+    /// Maximum admitted per-tile dynamic metadata capacity, excluding allocator
+    /// overhead and transient encoding/admission buffers.
+    pub peak_tile_index_bytes: u64,
+}
+
+/// Write a codestream and durable per-tile descriptors without retaining a
+/// global index. Pixel, encoding and admission storage scale with one tile.
+/// Both sinks consume borrowed bytes synchronously. An error can leave either
+/// sink incomplete; no summary is returned and publication remains caller-owned.
+pub fn encode_tiled_to_descriptors(
+    profile: TiledLossyHtProfile,
+    read_tile: impl FnMut(TileRect, &mut [Vec<u8>]) -> Result<()>,
+    write: impl FnMut(&[u8]) -> Result<()>,
+    mut write_tile_descriptor: impl FnMut(u16, &[u8]) -> Result<()>,
+) -> Result<TiledLossyHtSummary> {
+    let mut descriptor_bytes = 0_u64;
+    let index = encode_tiled_internal(
+        profile,
+        read_tile,
+        write,
+        |tile, bytes| {
+            descriptor_bytes = descriptor_bytes
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(resource_error)?;
+            write_tile_descriptor(tile, bytes)
+        },
+        false,
+    )?;
+    Ok(TiledLossyHtSummary {
+        profile,
+        main_header: index.main_header,
+        encoded_bytes: index.encoded_bytes,
+        tile_count: u16::try_from(validate_profile(profile)?).map_err(|_| resource_error())?,
+        descriptor_bytes,
+        peak_tile_index_bytes: index.peak_tile_index_bytes,
+    })
+}
+
+fn encode_tiled_internal(
+    profile: TiledLossyHtProfile,
     mut read_tile: impl FnMut(TileRect, &mut [Vec<u8>]) -> Result<()>,
     mut write: impl FnMut(&[u8]) -> Result<()>,
+    mut write_tile_descriptor: impl FnMut(u16, &[u8]) -> Result<()>,
+    retain: bool,
 ) -> Result<IndexedLossyHt> {
     let count = validate_profile(profile)?;
+    let retained_count = if retain { count } else { 1 };
     let mut index = IndexedLossyHt {
         profile,
         main_header: 0..0,
-        tile_headers: reserved(count)?,
-        precincts: reserved(count * usize::from(profile.components) * 3)?,
-        tiles: reserved(count)?,
+        tile_headers: reserved(retained_count)?,
+        precincts: reserved(
+            retained_count
+                * usize::from(profile.components)
+                * (usize::from(profile.decomposition_levels) + 1),
+        )?,
+        tiles: reserved(retained_count)?,
         encoded_bytes: 0,
         contribution_heap_bytes: 0,
+        peak_tile_index_bytes: 0,
     };
     let cols = profile.width.div_ceil(profile.tile_edge);
     for ordinal in 0..count {
@@ -142,7 +215,7 @@ pub fn encode_tiled(
             height: profile.tile_edge.min(profile.height - y),
         };
         let pixels = rect.width as usize * rect.height as usize;
-        let plane_bytes = pixels * usize::from(profile.bits_per_sample / 8);
+        let plane_bytes = pixels * usize::from(profile.bits_per_sample.div_ceil(8));
         let mut planes = reserved(usize::from(profile.components))?;
         for _ in 0..profile.components {
             planes.push(zeroed(plane_bytes, 0_u8)?);
@@ -154,34 +227,43 @@ pub fn encode_tiled(
         let mut analysed = reserved(planes.len())?;
         for plane in &planes {
             let mut values = reserved(pixels)?;
-            for sample in plane.chunks_exact(usize::from(profile.bits_per_sample / 8)) {
+            for sample in plane.chunks_exact(usize::from(profile.bits_per_sample.div_ceil(8))) {
                 let v = if profile.bits_per_sample == 8 {
                     u16::from(sample[0])
                 } else {
                     u16::from_le_bytes([sample[0], sample[1]])
                 };
+                if u32::from(v) >= 1_u32 << profile.bits_per_sample {
+                    return Err(resource_error());
+                }
                 values.push(f32::from(v) - (1_u32 << (profile.bits_per_sample - 1)) as f32);
             }
             analysed.push(values);
         }
         drop(planes);
-        ht_lossy::analyse(rect.width, rect.height, &mut analysed)?;
+        ht_lossy::analyse_levels(
+            rect.width,
+            rect.height,
+            &mut analysed,
+            profile.decomposition_levels,
+        )?;
         let raw_budget = ht_lossy::encode_byte_budget(
             rect.width,
             rect.height,
-            profile.bits_per_sample,
+            if profile.bits_per_sample == 8 { 8 } else { 16 },
             usize::from(profile.components),
             profile.bits_per_pixel,
         )?;
         // A fixed allowance admits narrow boundary tiles without assigning a
         // negative packet budget. Total overhead remains bounded by tile count.
         let budget = raw_budget.checked_add(128).ok_or_else(resource_error)?;
-        let (tile, _, _) = ht_lossy::search_tile(
+        let (tile, _, _) = ht_lossy::search_tile_levels(
             rect.width,
             rect.height,
             profile.bits_per_sample,
             &analysed,
             budget,
+            profile.decomposition_levels,
         )?;
         if tile.len() > budget {
             return Err(resource_error());
@@ -241,7 +323,8 @@ pub fn encode_tiled(
             index.encoded_bytes = header.len() as u64;
             index.main_header = 0..index.encoded_bytes;
         }
-        let qcd = &tile.header[tile.header.len() - 19..];
+        let qcd =
+            &tile.header[tile.header.len() - (7 + 6 * usize::from(profile.decomposition_levels))..];
         let part_len =
             u32::try_from(14 + qcd.len() + tile.packets.len()).map_err(|_| resource_error())?;
         let mut part_header = reserved(33)?;
@@ -276,7 +359,23 @@ pub fn encode_tiled(
             candidate,
             payload_offset,
             contributions,
+            descriptor: persistence::encode_descriptor(rect.tile_index, payload_offset, &tile)?,
         });
+        if index.retained_heap_bytes() > 256 * 1024 * 1024 {
+            return Err(resource_error());
+        }
+        write_tile_descriptor(
+            rect.tile_index,
+            &index.tiles.last().ok_or_else(resource_error)?.descriptor,
+        )?;
+        if !retain {
+            index.peak_tile_index_bytes =
+                index.peak_tile_index_bytes.max(index.retained_heap_bytes());
+            index.tiles.clear();
+            index.precincts.clear();
+            index.tile_headers.clear();
+            index.contribution_heap_bytes = 0;
+        }
     }
     write(&[0xff, 0xd9])?;
     index.encoded_bytes += 2;
@@ -303,7 +402,7 @@ pub struct IndexedHtRegion<'a> {
 }
 
 impl IndexedLossyHt {
-    /// Plan contained full-grid half-open coordinates; discard 0, 1 or 2 levels.
+    /// Plan contained full-grid half-open coordinates; discard up to the profile depth.
     /// Only intersecting tiles' retained block metadata is visited. No source
     /// byte is read and no packet header is parsed. Output is bounded to 64 MiB.
     pub fn plan(
@@ -313,7 +412,7 @@ impl IndexedLossyHt {
         components: &[u16],
     ) -> Result<IndexedHtRegion<'_>> {
         let p = self.profile;
-        if discard > 2
+        if discard > p.decomposition_levels
             || region.width == 0
             || region.height == 0
             || components.is_empty()
@@ -343,7 +442,7 @@ impl IndexedLossyHt {
         let bytes = u64::from(output.width)
             * u64::from(output.height)
             * components.len() as u64
-            * u64::from(p.bits_per_sample / 8);
+            * u64::from(p.bits_per_sample.div_ceil(8));
         if bytes == 0 || bytes > 64 * 1024 * 1024 {
             return Err(resource_error());
         }
@@ -359,7 +458,11 @@ impl IndexedLossyHt {
         for ty in region.y / p.tile_edge..=(region.y + region.height - 1) / p.tile_edge {
             for tx in region.x / p.tile_edge..=(region.x + region.width - 1) / p.tile_edge {
                 let ordinal = (ty * cols + tx) as usize;
-                let tile = &self.tiles[ordinal];
+                let tile_position = self
+                    .tiles
+                    .binary_search_by_key(&(ordinal as u16), |t| t.rect.tile_index)
+                    .map_err(|_| invalid(None, None, "indexed HT tile descriptor is absent"))?;
+                let tile = &self.tiles[tile_position];
                 let x0 = region.x.max(tile.rect.x);
                 let y0 = region.y.max(tile.rect.y);
                 let x1 = (region.x + region.width).min(tile.rect.x + tile.rect.width);
@@ -377,14 +480,14 @@ impl IndexedLossyHt {
                     let synthesis = plan_synthesis_window(
                         tile.rect.width.div_ceil(scale),
                         tile.rect.height.div_ceil(scale),
-                        2 - discard,
+                        p.decomposition_levels - discard,
                         local,
                         WaveletTransform::Irreversible97,
                     )?;
                     let mut selected = Vec::new();
                     for (i, c) in tile.contributions.iter().enumerate() {
                         if c.component_index == component
-                            && c.resolution <= 2 - discard
+                            && c.resolution <= p.decomposition_levels - discard
                             && synthesis_window_dependency_selects_contribution(&synthesis, c)?
                         {
                             selected.try_reserve(1).map_err(|_| resource_error())?;
@@ -396,21 +499,24 @@ impl IndexedLossyHt {
                             );
                         }
                     }
-                    for resolution in 0..=2 - discard {
+                    for resolution in 0..=p.decomposition_levels - discard {
                         // Empty packets also belong to dependency metadata.
                         plan.precinct_indices.push(
-                            ordinal * usize::from(p.components) * 3
-                                + usize::from(resolution) * usize::from(p.components)
-                                + usize::from(component),
+                            self.precincts
+                                .binary_search_by_key(
+                                    &(ordinal as u16, resolution, component),
+                                    |p| (p.tile, p.resolution, p.component),
+                                )
+                                .map_err(|_| resource_error())?,
                         );
                     }
-                    let accounting = ht_lossy::lossy_ht_window_storage_accounting(
-                        &synthesis,
-                        &tile.contributions,
-                        &selected,
+                    let accounting = ht_lossy::lossy_ht_window_storage_accounting_with_magnitude::<
+                        u32,
+                    >(
+                        &synthesis, &tile.contributions, &selected
                     )?;
                     plan.parts.push(WindowPart {
-                        tile: ordinal,
+                        tile: tile_position,
                         component,
                         synthesis,
                         selected,
@@ -469,7 +575,7 @@ impl IndexedHtRegion<'_> {
         if self.required_workspace_bytes() > workspace.maximum_bytes() {
             return Err(resource_error());
         }
-        let sample_bytes = usize::from(self.index.profile.bits_per_sample / 8);
+        let sample_bytes = usize::from(self.index.profile.bits_per_sample.div_ceil(8));
         let stride = self.output.width as usize * sample_bytes;
         let mut planes = reserved(self.components.len())?;
         for _ in &self.components {
@@ -477,7 +583,7 @@ impl IndexedHtRegion<'_> {
         }
         for part in &self.parts {
             let tile = &self.index.tiles[part.tile];
-            let (samples, _) = ht_lossy::decode_indexed_window(
+            let (samples, _) = ht_lossy::decode_indexed_window::<u32>(
                 tile.candidate,
                 &tile.component,
                 &tile.contributions,
@@ -510,6 +616,8 @@ impl IndexedHtRegion<'_> {
         Ok(planes)
     }
 }
+
+mod persistence;
 
 #[cfg(test)]
 mod tests;
