@@ -36,6 +36,8 @@ mod ht_lossy_calibration;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub mod ht_lossy_test_support;
+#[cfg(all(test, feature = "std"))]
+mod ht_quality_calibration;
 #[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
 #[doc(hidden)]
 pub use ht_high_component::encode_htj2k_high_component_entropy_failure_test_fixture;
