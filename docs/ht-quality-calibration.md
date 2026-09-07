@@ -122,7 +122,7 @@ none of these rows promises lossless image reconstruction.
 ## Observations and disposition
 
 Measured on 2026-09-07, AMD Ryzen 9 9950X3D, Linux, Rust 1.97.1,
-optimised default-feature build. [Complete measurements](ht-quality-calibration.csv)
+optimised default-feature build. [Complete measurements](ht-quality-calibration.json)
 include every stage's bytes, work, native error, timing and input identity.
 
 | Input | Single-set stored bytes | Two-set stored bytes | Premium | Coarse full-resolution delivered bytes | Half-resolution delivered bytes |
@@ -243,4 +243,8 @@ Provisional source binding before the coordinator creates the checkpoint:
 |---|---|
 | `crates/emuella-j2k-codestream/src/ht_quality_calibration.rs` | `d842664034a0a5489decd77a65ec94fd768d15b6a2aa35060817c8fdcd8bf8ae` |
 | `crates/emuella-j2k-codestream/src/lib.rs` | `f6066e1c2c0ebfc0983b2aea0a8415d0edd43472fe8321c1494e6cda1815d788` |
-| `docs/ht-quality-calibration.csv` | `cfa7cc8d29c5a578efd607ecab1429cc46a5a69a20925711bbd7af8e7477b35e` |
+| `docs/ht-quality-calibration.json` | `c4d01610c3ea6f7e6ff0ab473ca233612ae51f11cfcbb1f268c4f04f48f011f7` |
+
+The checked-in JSON retains raw CSV field strings without rounding and records
+the raw CSV digest. The runnable probe still emits CSV; this lossless record
+form follows the existing public-tree file-type policy.

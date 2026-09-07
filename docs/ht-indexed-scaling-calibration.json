@@ -1,0 +1,37 @@
+{
+  "raw_csv_sha256": "3f0e40040690b9af5001733af4f640a5e62ff976dbca5c126d0870d9df24da5b",
+  "records": [
+    {
+      "dimension": "4096",
+      "bits": "11",
+      "components": "1",
+      "source_tile": "524288",
+      "stream": "4180893",
+      "descriptors": "26417",
+      "retained": "1058816",
+      "sparse": "16445",
+      "blocks": "28",
+      "coefficients": "77824",
+      "workspace": "760476",
+      "overview_pixels": "4096",
+      "overview_packet": "4271",
+      "prepare_ms": "2509"
+    },
+    {
+      "dimension": "2048",
+      "bits": "16",
+      "components": "3",
+      "source_tile": "1572864",
+      "stream": "1027591",
+      "descriptors": "13945",
+      "retained": "550256",
+      "sparse": "34249",
+      "blocks": "28",
+      "coefficients": "77824",
+      "workspace": "759669",
+      "overview_pixels": "1024",
+      "overview_packet": "853",
+      "prepare_ms": "1507"
+    }
+  ]
+}

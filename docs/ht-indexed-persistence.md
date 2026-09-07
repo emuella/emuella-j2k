@@ -99,7 +99,7 @@ edges with component offsets. It clips to the declared precision. All 27 geometr
 cells use 1040×1138 pixels at 2 bpp and component-zero 8×8 requests at (500,500).
 The dimensions deliberately include a final 16-pixel width at every tile edge
 and a final 114-pixel height for edges 256/512. RGB sources encode all planes.
-Complete per-cell counters are in [the depth CSV](ht-indexed-depth-calibration.csv).
+Complete per-cell counters are in [the depth records](ht-indexed-depth-calibration.json).
 
 Retain 512/six levels for the next composition. On RGB16 it uses 1,572,864 source
 tile bytes, 5,908 total descriptor bytes across nine tiles, and roughly 34 KiB
@@ -115,7 +115,7 @@ and 10752² at two. The six-level selected window adds three small blocks over
 five levels in this probe. This is resolution progression; it is not a quality
 layer, HT placeholder payload, refinement pass or multiple-set measurement.
 
-The [scaling CSV](ht-indexed-scaling-calibration.csv) compares authored U11 grey
+The [scaling records](ht-indexed-scaling-calibration.json) compares authored U11 grey
 at 2048² and 4096² and RGB16 at 2048², using 512/six levels. U11 source tile
 storage remains 524288 bytes, selected sparse index 16445 bytes, selected work
 28 blocks/77824 coefficients and workspace 760476 bytes while source area
