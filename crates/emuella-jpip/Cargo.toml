@@ -1,0 +1,17 @@
+[package]
+name = "emuella-jpip"
+description = "Bounded stateless JPP framing, requests and compressed databin cache."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

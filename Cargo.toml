@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/emuella-jpip",
   "crates/emuella-j2k",
   "crates/emuella-j2k-capi",
   "crates/emuella-j2k-accel",

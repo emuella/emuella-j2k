@@ -10246,6 +10246,42 @@ fn encode_part1_lossless_into(
     validate_encode_options(options)?;
     let info = image_info(image);
     validate_encode_image_info(info)?;
+    if (9..=15).contains(&info.sample_format.bits_per_sample) {
+        if info.components != 1 || !matches!(options.quality, EncodeQuality::Lossless) {
+            return Err(unsupported(
+                UnsupportedFeature::ComponentLayout,
+                "9–15-bit Part 1 encode requires lossless greyscale",
+            ));
+        }
+        let (samples, stride_bytes) = match image {
+            ImageView::Planar { planes, .. } => (planes[0].samples, planes[0].stride_bytes),
+            ImageView::Interleaved {
+                samples,
+                stride_bytes,
+                ..
+            } => (samples, stride_bytes),
+        };
+        let bytes = codestream::encode_grayscale_u16_le_with_precision(
+            codestream::GrayscaleU16LeEncode {
+                width: info.width,
+                height: info.height,
+                samples,
+                stride_bytes,
+            },
+            info.sample_format.bits_per_sample,
+            options.decomposition_levels,
+            options.tile_size.map(|tile| codestream::TileSize {
+                width: tile.width,
+                height: tile.height,
+            }),
+        )
+        .map_err(map_codestream_error)?;
+        match options.format {
+            OutputFormat::J2kCodestream => output.extend_from_slice(&bytes),
+            OutputFormat::Jp2 => write_jp2_encode_output(info, &bytes, options, output)?,
+        }
+        return Ok(());
+    }
     if let EncodeQuality::TargetRate { bits_per_pixel } = options.quality {
         let budget = target_rate_codestream_byte_budget(info, bits_per_pixel)?;
         let codestream = encode_native_target_rate(image, budget, options.decomposition_levels)?;
@@ -11556,7 +11592,7 @@ fn validate_encode_image_info(info: &ImageInfo) -> Result<()> {
             "baseline encode supports unsigned samples only",
         ));
     }
-    if info.sample_format.bits_per_sample == 16
+    if info.sample_format.bits_per_sample > 8
         && info.sample_format.byte_order != Some(SampleEndian::Little)
     {
         return Err(unsupported(
@@ -11564,10 +11600,10 @@ fn validate_encode_image_info(info: &ImageInfo) -> Result<()> {
             "baseline encode accepts 16-bit sample buffers as SampleFormat::U16_LE only",
         ));
     }
-    if !matches!(info.sample_format.bits_per_sample, 8 | 16) {
+    if !(8..=16).contains(&info.sample_format.bits_per_sample) {
         return Err(unsupported(
             UnsupportedFeature::ComponentLayout,
-            "baseline encode currently supports 8-bit and 16-bit unsigned samples only",
+            "baseline encode supports unsigned precision in 8..=16",
         ));
     }
 

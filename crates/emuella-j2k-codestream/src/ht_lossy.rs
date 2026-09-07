@@ -7,7 +7,7 @@ const IRREVERSIBLE_QCD_GUARD_BITS: u8 = 3;
 pub const MAX_CODESTREAM_BYTES: usize = 32 * 1024 * 1024;
 const MAX_PIXELS: usize = 1_048_576;
 
-fn resource_error() -> CodestreamError {
+pub(super) fn resource_error() -> CodestreamError {
     unsupported(
         None,
         Some(Marker::Siz),
@@ -15,14 +15,14 @@ fn resource_error() -> CodestreamError {
         "irreversible HT resource limit or working allocation exceeded",
     )
 }
-fn reserved<T>(len: usize) -> Result<Vec<T>> {
+pub(super) fn reserved<T>(len: usize) -> Result<Vec<T>> {
     let mut values = Vec::new();
     values
         .try_reserve_exact(len)
         .map_err(|_| resource_error())?;
     Ok(values)
 }
-fn zeroed<T: Clone>(len: usize, value: T) -> Result<Vec<T>> {
+pub(super) fn zeroed<T: Clone>(len: usize, value: T) -> Result<Vec<T>> {
     let mut values = reserved(len)?;
     values.resize(len, value);
     Ok(values)
@@ -140,10 +140,18 @@ fn byte_budget(pixels: usize, rate: f32) -> Result<usize> {
     Ok((whole_bits as usize) / 8)
 }
 pub(super) fn analyse(width: u32, height: u32, planes: &mut [Vec<f32>]) -> Result<()> {
+    analyse_levels(width, height, planes, 2)
+}
+pub(super) fn analyse_levels(
+    width: u32,
+    height: u32,
+    planes: &mut [Vec<f32>],
+    levels: u8,
+) -> Result<()> {
     let mut scratch = zeroed(2 * width.max(height) as usize, 0.0)?;
     for plane in planes {
-        for level in 0..2 {
-            let (w, h) = resolution_dimensions(width, height, 2, 2 - level)?;
+        for level in 0..levels {
+            let (w, h) = resolution_dimensions(width, height, levels, levels - level)?;
             let config = transform::Irreversible97Config {
                 width: w as usize,
                 height: h as usize,
@@ -167,7 +175,47 @@ pub(super) fn search(
     planes: &[Vec<f32>],
     budget: usize,
 ) -> Result<(Vec<u8>, u32, usize)> {
-    let specs = decomp_subband_specs(width, height, 2)?;
+    let (tile, selected, visits) = search_tile(width, height, bits, planes, budget)?;
+    Ok((tile.into_codestream()?, selected, visits))
+}
+
+pub(super) struct EncodedLossyTile {
+    pub header: Vec<u8>,
+    pub packets: Vec<u8>,
+    pub packet_ranges: Vec<(u16, u8, usize, usize, usize)>,
+}
+impl EncodedLossyTile {
+    pub fn len(&self) -> usize {
+        self.header.len() + self.packets.len() + 16
+    }
+    pub fn into_codestream(self) -> Result<Vec<u8>> {
+        let mut output = self.header;
+        output
+            .try_reserve(self.packets.len() + 16)
+            .map_err(|_| resource_error())?;
+        write_tile_part(&mut output, 0, &self.packets, true)?;
+        Ok(output)
+    }
+}
+
+pub(super) fn search_tile(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[Vec<f32>],
+    budget: usize,
+) -> Result<(EncodedLossyTile, u32, usize)> {
+    search_tile_levels(width, height, bits, planes, budget, 2)
+}
+pub(super) fn search_tile_levels(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[Vec<f32>],
+    budget: usize,
+    levels: u8,
+) -> Result<(EncodedLossyTile, u32, usize)> {
+    let specs = decomp_subband_specs(width, height, levels)?;
     let mut quantized_planes = reserved(planes.len())?;
     for plane in planes {
         quantized_planes.push(zeroed(plane.len(), 0_i32)?);
@@ -227,7 +275,8 @@ fn candidate(
     specs: &[DecompSubbandSpec],
     coarseness: u32,
     quantized_planes: &mut [Vec<i32>],
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<EncodedLossyTile>> {
+    let levels = u8::try_from((specs.len() - 1) / 3).map_err(|_| resource_error())?;
     let octave = coarseness / 2048;
     let mantissa = u16::try_from(coarseness % 2048).map_err(|_| CodestreamError::SizeOverflow)?;
     let base_exponent = 31_u8
@@ -332,13 +381,18 @@ fn candidate(
         return Err(resource_error());
     }
     let mut packet = reserved(capacity)?;
-    write_native_decomp_packets(&mut packet, 2, &component_subbands, &segments)?;
-    let mut codestream = reserved(
-        packet
-            .len()
-            .checked_add(128)
-            .ok_or(CodestreamError::SizeOverflow)?,
+    let mut packet_ranges = Vec::new();
+    write_native_decomp_packets_with_observer(
+        &mut packet,
+        levels,
+        &component_subbands,
+        &segments,
+        |component, resolution, start, body, end| {
+            packet_ranges.push((component, resolution, start, body, end));
+            Ok(())
+        },
     )?;
+    let mut codestream = reserved(128)?;
     write_irreversible_main_header(
         &mut codestream,
         width,
@@ -346,15 +400,18 @@ fn candidate(
         bits_per_sample,
         u16::try_from(plane_refs.len()).map_err(|_| CodestreamError::SizeOverflow)?,
         false,
-        2,
+        levels,
         &qcd_steps,
         true,
     )?;
-    write_tile_part(&mut codestream, 0, &packet, true)?;
-    if codestream.len() > MAX_CODESTREAM_BYTES {
+    if codestream.len() + packet.len() + 16 > MAX_CODESTREAM_BYTES {
         return Err(resource_error());
     }
-    Ok(Some(codestream))
+    Ok(Some(EncodedLossyTile {
+        header: codestream,
+        packets: packet,
+        packet_ranges,
+    }))
 }
 
 fn selected_transform(codestream: &Codestream) -> bool {
@@ -536,16 +593,16 @@ impl LossyHtSpatialRegionRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct LossyHtSpatialRegionAccounting {
-    total_code_blocks: u64,
-    selected_code_blocks: u64,
-    selected_block_coefficients: u64,
-    maximum_block_coefficients: u64,
-    maximum_segment_bytes: u64,
-    entropy_scratch_ceiling_bytes: u64,
-    compact_coefficient_samples: u64,
-    synthesis_workspace_ceiling_samples: u64,
-    output_samples: u64,
-    deterministic_workspace_ceiling_bytes: u64,
+    pub(super) total_code_blocks: u64,
+    pub(super) selected_code_blocks: u64,
+    pub(super) selected_block_coefficients: u64,
+    pub(super) maximum_block_coefficients: u64,
+    pub(super) maximum_segment_bytes: u64,
+    pub(super) entropy_scratch_ceiling_bytes: u64,
+    pub(super) compact_coefficient_samples: u64,
+    pub(super) synthesis_workspace_ceiling_samples: u64,
+    pub(super) output_samples: u64,
+    pub(super) deterministic_workspace_ceiling_bytes: u64,
 }
 
 pub struct PreparedLossyHtSpatialRegion<'a> {
@@ -678,7 +735,10 @@ fn checked_count_bytes(count: usize, element_bytes: usize) -> Result<u64> {
         .ok_or(CodestreamError::SizeOverflow)
 }
 
-fn ht_block_layout_scratch_ceiling_bytes(width: u16, height: u16) -> Result<u64> {
+fn ht_block_layout_scratch_ceiling_bytes<M: ht::HtCleanupMagnitude>(
+    width: u16,
+    height: u16,
+) -> Result<u64> {
     let dimensions =
         ht::HtCodeBlockDimensions::new(width, height).map_err(|_| CodestreamError::SizeOverflow)?;
     let block = ht::HtBlockLayout::new(dimensions);
@@ -691,7 +751,7 @@ fn ht_block_layout_scratch_ceiling_bytes(width: u16, height: u16) -> Result<u64>
         logical_bytes,
         checked_count_bytes(
             coefficients,
-            core::mem::size_of::<ht::HtVlcCleanupCoefficientOutput>(),
+            core::mem::size_of::<ht::HtVlcCleanupCoefficientOutputWithMagnitude<M>>(),
         )?,
     )?;
     logical_bytes = checked_add_u64(
@@ -709,7 +769,18 @@ fn ht_block_layout_scratch_ceiling_bytes(width: u16, height: u16) -> Result<u64>
         .ok_or(CodestreamError::SizeOverflow)
 }
 
-fn lossy_ht_window_storage_accounting(
+pub(super) fn lossy_ht_window_storage_accounting(
+    synthesis: &SynthesisWindowPlan,
+    contributions: &[PacketCodeBlockContribution],
+    selected_contribution_indices: &[usize],
+) -> Result<LossyHtSpatialRegionAccounting> {
+    lossy_ht_window_storage_accounting_with_magnitude::<u16>(
+        synthesis,
+        contributions,
+        selected_contribution_indices,
+    )
+}
+pub(super) fn lossy_ht_window_storage_accounting_with_magnitude<M: ht::HtCleanupMagnitude>(
     synthesis: &SynthesisWindowPlan,
     contributions: &[PacketCodeBlockContribution],
     selected_contribution_indices: &[usize],
@@ -769,7 +840,7 @@ fn lossy_ht_window_storage_accounting(
         selected_block_coefficients = checked_add_u64(selected_block_coefficients, coefficients)?;
         maximum_block_coefficients = maximum_block_coefficients.max(coefficients);
         maximum_layout_scratch_bytes = maximum_layout_scratch_bytes.max(
-            ht_block_layout_scratch_ceiling_bytes(contribution.width, contribution.height)?,
+            ht_block_layout_scratch_ceiling_bytes::<M>(contribution.width, contribution.height)?,
         );
         maximum_segment_bytes = maximum_segment_bytes.max(
             u64::try_from(contribution.codeword_len).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -913,17 +984,6 @@ pub fn decode_prepared_lossy_ht_spatial_region(
     plan: &PreparedLossyHtSpatialRegion<'_>,
     workspace: &mut LossyHtSpatialRegionWorkspace,
 ) -> Result<(Vec<u8>, transform::WindowSynthesisReport)> {
-    if plan.accounting.deterministic_workspace_ceiling_bytes > workspace.maximum_bytes {
-        return Err(resource_error());
-    }
-    // Keep this bounded route on the project-authored, caller-owned direct
-    // cleanup boundary. Its scratch layout is public and mechanically planned;
-    // no private accelerated-backend representation participates in admission.
-    let mut block_scratch = Vec::<u16>::new();
-    let mut cleanup_outputs = Vec::<ht::HtVlcCleanupCoefficientOutput>::new();
-    let mut context_states = Vec::<ht::HtVlcContextProgression>::new();
-    let mut mel_state = ht::HtMelEventState::new();
-    let mut block_coefficients = Vec::<i32>::new();
     let (_, payload) = single_part1_profile_tile(plan.prepared.input, &plan.prepared.codestream)?;
     let component = plan
         .prepared
@@ -932,21 +992,59 @@ pub fn decode_prepared_lossy_ht_spatial_region(
         .components
         .first()
         .ok_or(CodestreamError::SizeOverflow)?;
+    decode_indexed_window::<u16>(
+        plan.prepared.candidate,
+        component,
+        &plan.prepared.contributions,
+        &plan.synthesis,
+        &plan.selected_contribution_indices,
+        &plan.accounting,
+        workspace,
+        |contribution, output| {
+            let mut scratch = Vec::new();
+            let bytes = code_block_segment_for_decode(payload, contribution, &mut scratch)?;
+            output
+                .try_reserve(bytes.len())
+                .map_err(|_| resource_error())?;
+            output.extend_from_slice(bytes);
+            Ok(())
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn decode_indexed_window<M: ht::HtCleanupMagnitude>(
+    candidate: HtCodestreamDecodeCandidate,
+    component: &ComponentParameters,
+    contributions: &[PacketCodeBlockContribution],
+    synthesis: &SynthesisWindowPlan,
+    selected_contribution_indices: &[usize],
+    accounting: &LossyHtSpatialRegionAccounting,
+    workspace: &mut LossyHtSpatialRegionWorkspace,
+    mut read_segment: impl FnMut(&PacketCodeBlockContribution, &mut Vec<u8>) -> Result<()>,
+) -> Result<(Vec<u8>, transform::WindowSynthesisReport)> {
+    if accounting.deterministic_workspace_ceiling_bytes > workspace.maximum_bytes {
+        return Err(resource_error());
+    }
+    // Keep this bounded route on the project-authored, caller-owned direct
+    // cleanup boundary. Its scratch layout is public and mechanically planned;
+    // no private accelerated-backend representation participates in admission.
+    let mut block_scratch = Vec::<u16>::new();
+    let mut cleanup_outputs = Vec::<ht::HtVlcCleanupCoefficientOutputWithMagnitude<M>>::new();
+    let mut context_states = Vec::<ht::HtVlcContextProgression>::new();
+    let mut mel_state = ht::HtMelEventState::new();
+    let mut block_coefficients = Vec::<i32>::new();
     if let Some(coefficients) = &mut workspace.coefficients {
-        coefficients.reset_for_plan(&plan.synthesis)?;
+        coefficients.reset_for_plan(synthesis)?;
     } else {
-        workspace.coefficients = Some(transform::WindowCoefficientPlane::<f32>::new(
-            &plan.synthesis,
-        )?);
+        workspace.coefficients = Some(transform::WindowCoefficientPlane::<f32>::new(synthesis)?);
     }
     let coefficients_plane = workspace
         .coefficients
         .as_mut()
         .ok_or(CodestreamError::SizeOverflow)?;
-    for &index in &plan.selected_contribution_indices {
-        let contribution = plan
-            .prepared
-            .contributions
+    for &index in selected_contribution_indices {
+        let contribution = contributions
             .get(index)
             .ok_or(CodestreamError::SizeOverflow)?;
         let expanded_coding_set = contribution
@@ -968,8 +1066,12 @@ pub fn decode_prepared_lossy_ht_spatial_region(
         let active_dimensions =
             ht::HtCodeBlockDimensions::new(contribution.width, contribution.height)
                 .map_err(|_| CodestreamError::SizeOverflow)?;
-        let code_block_segment =
-            code_block_segment_for_decode(payload, contribution, &mut workspace.segment)?;
+        workspace.segment.clear();
+        read_segment(contribution, &mut workspace.segment)?;
+        if workspace.segment.len() != contribution.codeword_len {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let code_block_segment = workspace.segment.as_slice();
         let (segment, cleanup_len, missing_most_significant_bitplanes) =
             if let Some(coding_set) = expanded_coding_set {
                 let end = coding_set
@@ -1003,7 +1105,7 @@ pub fn decode_prepared_lossy_ht_spatial_region(
             ht::HtCleanupPassSegmentLayout::from_cleanup_pass_bytes(cleanup_segment)
                 .map_err(ht_cleanup_pass_segment_layout_error)?;
         let code_block_input = HtCodestreamCodeBlockInput {
-            candidate: plan.prepared.candidate,
+            candidate,
             active_dimensions,
             missing_most_significant_bitplanes,
             coding_passes,
@@ -1022,13 +1124,13 @@ pub fn decode_prepared_lossy_ht_spatial_region(
         }
         block_scratch.resize(scratch_words, 0);
         let block = ht::HtBlockLayout::new(active_dimensions);
-        let empty_cleanup_output = ht::HtVlcCleanupCoefficientOutput {
+        let empty_cleanup_output = ht::HtVlcCleanupCoefficientOutputWithMagnitude {
             position: block
                 .coefficient_position(0, 0)
                 .ok_or(CodestreamError::SizeOverflow)?,
             significant: false,
             magnitude_sign_bits: 0,
-            magnitude_sign_value: 0,
+            magnitude_sign_value: M::default(),
             embedded_magnitude_bit: false,
             magnitude_exponent_reduction: false,
         };
@@ -1053,7 +1155,7 @@ pub fn decode_prepared_lossy_ht_spatial_region(
                 .map_err(|_| resource_error())?;
         }
         block_coefficients.resize(coefficient_count, 0);
-        let decode = ht::HtCodeBlockDirectCleanupDecodeScratchRequest::new(
+        let decode = ht::HtCodeBlockDirectCleanupDecodeScratchRequestWithMagnitude::new(
             request,
             scratch_layout,
             &mut block_scratch,
@@ -1108,20 +1210,19 @@ pub fn decode_prepared_lossy_ht_spatial_region(
             |coefficient| coefficient as f32 / alignment * (0.5 * delta),
         )?;
     }
-    if coefficients_plane.sample_count() != plan.accounting.compact_coefficient_samples {
+    if coefficients_plane.sample_count() != accounting.compact_coefficient_samples {
         return Err(CodestreamError::SizeOverflow);
     }
-    workspace.synthesis.reserve_for_plan(&plan.synthesis)?;
+    workspace.synthesis.reserve_for_plan(synthesis)?;
     let report = transform::inverse_irreversible_9_7_window(
         coefficients_plane,
-        &plan.synthesis,
+        synthesis,
         &mut workspace.synthesis,
         false,
     )?;
-    if report.work.output_samples != plan.accounting.output_samples
+    if report.work.output_samples != accounting.output_samples
         || report.peak_value_bytes
-            > plan
-                .accounting
+            > accounting
                 .synthesis_workspace_ceiling_samples
                 .checked_mul(core::mem::size_of::<f32>() as u64)
                 .ok_or(CodestreamError::SizeOverflow)?
@@ -2545,6 +2646,8 @@ mod tests {
         ] {
             let raw = candidate(1024, 1024, 16, &planes, &specs, coarseness, &mut quantized)
                 .unwrap()
+                .unwrap()
+                .into_codestream()
                 .unwrap();
             let parsed = parse(&raw).unwrap();
             let (rect, payload) = single_part1_profile_tile(&raw, &parsed).unwrap();
