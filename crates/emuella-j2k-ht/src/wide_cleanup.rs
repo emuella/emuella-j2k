@@ -13,7 +13,7 @@ pub trait HtCleanupMagnitude: sealed::Sealed + Copy + Default + Into<u32> {
     const MAX_BITS: u16;
     fn from_u32(value: u32) -> Result<Self, HtLayoutError>;
     fn reconstruct(
-        output: HtVlcCleanupCoefficientOutput<Self>,
+        output: HtVlcCleanupCoefficientOutputWithMagnitude<Self>,
         missing_msbs: u8,
     ) -> Result<i32, HtLayoutError>;
 }
@@ -23,7 +23,7 @@ impl HtCleanupMagnitude for u16 {
         Self::try_from(value).map_err(|_| HtLayoutError::SizeOverflow)
     }
     fn reconstruct(
-        output: HtVlcCleanupCoefficientOutput<Self>,
+        output: HtVlcCleanupCoefficientOutputWithMagnitude<Self>,
         missing_msbs: u8,
     ) -> Result<i32, HtLayoutError> {
         output.reconstruct_cleanup_coefficient(missing_msbs)
@@ -35,7 +35,7 @@ impl HtCleanupMagnitude for u32 {
         Ok(value)
     }
     fn reconstruct(
-        output: HtVlcCleanupCoefficientOutput<Self>,
+        output: HtVlcCleanupCoefficientOutputWithMagnitude<Self>,
         missing_msbs: u8,
     ) -> Result<i32, HtLayoutError> {
         // This follows the project-authored scalar direct reconstruction in
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn wide_materialisation_checks_ranges_before_mutating_output() {
         let block = HtBlockLayout::new(HtCodeBlockDimensions::new(1, 1).unwrap());
-        let seed = HtVlcCleanupCoefficientOutput::<u32> {
+        let seed = HtVlcCleanupCoefficientOutputWithMagnitude::<u32> {
             position: block.coefficient_position(0, 0).unwrap(),
             significant: true,
             magnitude_sign_bits: 18,
@@ -144,21 +144,21 @@ mod tests {
         for (record, missing) in [
             (seed, 0),
             (
-                HtVlcCleanupCoefficientOutput {
+                HtVlcCleanupCoefficientOutputWithMagnitude {
                     magnitude_sign_bits: 19,
                     ..seed
                 },
                 29,
             ),
             (
-                HtVlcCleanupCoefficientOutput {
+                HtVlcCleanupCoefficientOutputWithMagnitude {
                     magnitude_sign_value: 1 << 18,
                     ..seed
                 },
                 29,
             ),
             (
-                HtVlcCleanupCoefficientOutput {
+                HtVlcCleanupCoefficientOutputWithMagnitude {
                     significant: false,
                     ..seed
                 },
@@ -168,7 +168,11 @@ mod tests {
             let mut output = [123_i32];
             assert!(
                 block
-                    .materialize_vlc_cleanup_coefficient_outputs(&[record], missing, &mut output)
+                    .materialize_vlc_cleanup_coefficient_outputs_with_magnitude(
+                        &[record],
+                        missing,
+                        &mut output
+                    )
                     .is_err()
             );
             assert_eq!(output, [123]);

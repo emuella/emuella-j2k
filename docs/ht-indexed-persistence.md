@@ -159,16 +159,21 @@ explicit magnitude/sign bits. The legacy direct output stored that field in
 support 17-bit transformed magnitudes, which can need 18 explicit bits including
 sign. This was independent of HTTP, JPP and odd-origin geometry.
 
-The additive `HtVlcCleanupCoefficientOutput<M = u16>` and direct scratch request
-support sealed `u16` and `u32` storage. Existing callers retain their 16-bit
-checked boundary. Indexed reconstruction opts into `u32`, admits at most 18
-explicit bits, preserves those bits through south predictors, and checks the
+The existing `HtVlcCleanupCoefficientOutput` and both direct request names
+remain concrete `u16` aliases. Their existing methods retain concrete `u16`
+signatures, including unsuffixed integer literals and empty-slice inference.
+The additive `HtVlcCleanupCoefficientOutputWithMagnitude<M>`, request types
+ending in `WithMagnitude`, and methods ending in `_with_magnitude` support
+sealed `u16` and `u32` storage. Indexed reconstruction opts into `u32`, admits
+at most 18 explicit bits, preserves those bits through south predictors, and checks the
 midpoint, shift and signed output range before materialisation. Its accounting
 includes the wider records. Legacy two-level encoding and regional decoding
 retain their original storage choice and accounting. The project-authored
 scalar reconstruction in `lib.rs` supplies the wide arithmetic; closed derived
 implementation files were neither inspected nor changed for this repair.
 
+Downstream compile regressions retain the original unsuffixed-literal caller
+and unannotated empty storage at all five methods and both request constructors.
 Regression inputs include positive/negative 17/18-bit words, legacy rejection
 without cursor movement, invalid declared widths, out-of-width values,
 insignificant data and overflow without output mutation. The composed signal
@@ -208,20 +213,29 @@ HT coding sets remain unproved by this component increment. Full-scene descripto
 size is content-dependent; do not replace measurement with small-fixture
 extrapolation. Canonical clean-commit verification remains coordinator-owned.
 
-Focused verification on the final component candidate passed 241 codestream
+Focused verification before the API compatibility repair passed 241 codestream
 unit tests and seven HT unit tests (five optional codestream probes omitted),
 all-target Clippy with warnings denied for both affected crates, and the
 codestream `wasm32-unknown-unknown` check. The 27-cell depth and three-cell
 scaling probes were rerun after the wide scratch-accounting change; their CSVs
 contain the current counters. No canonical clean-commit gate is claimed here.
 
-Final implementation SHA-256 identities, relative to `crates/`:
+The compatibility repair passed 242 codestream unit tests (six optional probes
+omitted), seven HT unit tests and three downstream API regression tests.
+All-target Clippy passed with warnings denied for both affected crates. The
+codestream no-default-features `wasm32-unknown-unknown` check passed with the
+existing codestream dead-code warnings. The repair changes API naming and
+inference only; the wide arithmetic, quantisation and storage sizes are unchanged.
+Canonical verification of the repaired committed candidate remains coordinator-owned.
+
+Implementation SHA-256 identities after the API compatibility repair, relative
+to `crates/`:
 
 | File | SHA-256 |
 |---|---|
 | `emuella-j2k-codestream/src/ht_indexed.rs` | `2bc09c4f1d5dbecee39487f9d7f0b9f376623e3f081d18fd42b8242b231d50e4` |
 | `emuella-j2k-codestream/src/ht_indexed/persistence.rs` | `808a7b4d161f4c26c8fe13a6b4a42abf243fc1c546cf272dc2522a51a898d6b9` |
 | `emuella-j2k-codestream/src/ht_indexed/tests.rs` | `31dba3f99eb7443abb875c643566a6e9279b9684596e4c929c185b887a5f0915` |
-| `emuella-j2k-codestream/src/ht_lossy.rs` | `4c4c150ca47b40f2be3ee66b22d066c634d1670914c69913890d42ac0d13d2f3` |
-| `emuella-j2k-ht/src/lib.rs` | `cd725eeff18cef680d6ad3a8fde34a410a4e7333d347754c50fc6c198d8e0a54` |
-| `emuella-j2k-ht/src/wide_cleanup.rs` | `81e0c26b1871c6eace4d9bb56ebeefab75ddd0092b27cc6e17fae80f90c795de` |
+| `emuella-j2k-codestream/src/ht_lossy.rs` | `96d5d3664ad86bf8f88c329ce91d88d5b849dfb534b6763dbf87c8b78284d641` |
+| `emuella-j2k-ht/src/lib.rs` | `7bcd959bcf2f3872bc97fb17967838060b8f7830f241a02596517ed06b5c88ed` |
+| `emuella-j2k-ht/src/wide_cleanup.rs` | `f295326fd8cfe18da16df06a26bdab4ac8baa778bc7ceaf423b08cbd2f030670` |

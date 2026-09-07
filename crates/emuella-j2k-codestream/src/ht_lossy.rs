@@ -751,7 +751,7 @@ fn ht_block_layout_scratch_ceiling_bytes<M: ht::HtCleanupMagnitude>(
         logical_bytes,
         checked_count_bytes(
             coefficients,
-            core::mem::size_of::<ht::HtVlcCleanupCoefficientOutput<M>>(),
+            core::mem::size_of::<ht::HtVlcCleanupCoefficientOutputWithMagnitude<M>>(),
         )?,
     )?;
     logical_bytes = checked_add_u64(
@@ -1030,7 +1030,7 @@ pub(super) fn decode_indexed_window<M: ht::HtCleanupMagnitude>(
     // cleanup boundary. Its scratch layout is public and mechanically planned;
     // no private accelerated-backend representation participates in admission.
     let mut block_scratch = Vec::<u16>::new();
-    let mut cleanup_outputs = Vec::<ht::HtVlcCleanupCoefficientOutput<M>>::new();
+    let mut cleanup_outputs = Vec::<ht::HtVlcCleanupCoefficientOutputWithMagnitude<M>>::new();
     let mut context_states = Vec::<ht::HtVlcContextProgression>::new();
     let mut mel_state = ht::HtMelEventState::new();
     let mut block_coefficients = Vec::<i32>::new();
@@ -1124,7 +1124,7 @@ pub(super) fn decode_indexed_window<M: ht::HtCleanupMagnitude>(
         }
         block_scratch.resize(scratch_words, 0);
         let block = ht::HtBlockLayout::new(active_dimensions);
-        let empty_cleanup_output = ht::HtVlcCleanupCoefficientOutput {
+        let empty_cleanup_output = ht::HtVlcCleanupCoefficientOutputWithMagnitude {
             position: block
                 .coefficient_position(0, 0)
                 .ok_or(CodestreamError::SizeOverflow)?,
@@ -1155,7 +1155,7 @@ pub(super) fn decode_indexed_window<M: ht::HtCleanupMagnitude>(
                 .map_err(|_| resource_error())?;
         }
         block_coefficients.resize(coefficient_count, 0);
-        let decode = ht::HtCodeBlockDirectCleanupDecodeScratchRequest::new(
+        let decode = ht::HtCodeBlockDirectCleanupDecodeScratchRequestWithMagnitude::new(
             request,
             scratch_layout,
             &mut block_scratch,

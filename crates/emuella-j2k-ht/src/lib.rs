@@ -752,7 +752,7 @@ impl<'request, 'scratch, 'output> HtCodeBlockDecodeScratchRequest<'request, 'scr
     > {
         let (scratch_layout, scratch, buffer) = self.into_parts();
         let (request, output) = buffer.into_parts();
-        HtCodeBlockDirectCleanupDecodeScratchRequest::new(
+        HtCodeBlockDirectCleanupDecodeScratchRequestWithMagnitude::new(
             request,
             scratch_layout,
             scratch,
@@ -817,6 +817,22 @@ pub fn plan_code_block_direct_cleanup_decode(
     })
 }
 
+/// Checked direct cleanup request using the original `u16` output storage.
+pub type HtCodeBlockDirectCleanupDecodeScratchRequest<
+    'request,
+    'scratch,
+    'cleanup,
+    'context,
+    'output,
+> = HtCodeBlockDirectCleanupDecodeScratchRequestWithMagnitude<
+    'request,
+    'scratch,
+    'cleanup,
+    'context,
+    'output,
+    u16,
+>;
+
 /// Checked code-block direct cleanup decode request bound to caller-owned
 /// scratch, VLC cleanup outputs, context state, MEL state, and coefficient
 /// output.
@@ -825,7 +841,7 @@ pub fn plan_code_block_direct_cleanup_decode(
 /// path. It exposes the already-implemented real cleanup-segment group
 /// materializer without requiring `HtBlockScratchBuffer`, while still keeping
 /// all mutable caller storage behind one preflighted handoff.
-pub struct HtCodeBlockDirectCleanupDecodeScratchRequest<
+pub struct HtCodeBlockDirectCleanupDecodeScratchRequestWithMagnitude<
     'request,
     'scratch,
     'cleanup,
@@ -835,14 +851,21 @@ pub struct HtCodeBlockDirectCleanupDecodeScratchRequest<
 > {
     scratch_layout: HtBlockScratchLayout,
     scratch: &'scratch mut [u16],
-    cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutput<M>],
+    cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
     context_states: &'context mut [HtVlcContextProgression],
     mel_state: &'context mut HtMelEventState,
     buffer: HtCodeBlockDecodeBufferRequest<'request, 'output>,
 }
 
 impl<'request, 'scratch, 'cleanup, 'context, 'output, M: HtCleanupMagnitude>
-    HtCodeBlockDirectCleanupDecodeScratchRequest<'request, 'scratch, 'cleanup, 'context, 'output, M>
+    HtCodeBlockDirectCleanupDecodeScratchRequestWithMagnitude<
+        'request,
+        'scratch,
+        'cleanup,
+        'context,
+        'output,
+        M,
+    >
 {
     /// Validate one direct cleanup decode request against caller-owned
     /// workspace and coefficient output.
@@ -851,7 +874,7 @@ impl<'request, 'scratch, 'cleanup, 'context, 'output, M: HtCleanupMagnitude>
         request: HtCodeBlockDecodeRequest<'request>,
         scratch_layout: HtBlockScratchLayout,
         scratch: &'scratch mut [u16],
-        cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutput<M>],
+        cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
         context_states: &'context mut [HtVlcContextProgression],
         mel_state: &'context mut HtMelEventState,
         output: &'output mut [i32],
@@ -946,7 +969,7 @@ impl<'request, 'scratch, 'cleanup, 'context, 'output, M: HtCleanupMagnitude>
         *mel_state = HtMelEventState::new();
 
         let Some(progress) = scratch_layout
-            .try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize(
+            .try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize_with_magnitude(
                 scratch,
                 &mut segment_cursors,
                 &mut context_states[..required_context_states],
@@ -4605,6 +4628,10 @@ impl<'side_inputs, 'cleanup> HtVlcCleanupOutputMaterializationRequest<'side_inpu
     }
 }
 
+/// Checked direct cleanup request using the original `u16` output storage.
+pub type HtVlcCleanupOutputSegmentGroupMaterializationRequest<'cleanup> =
+    HtVlcCleanupOutputSegmentGroupMaterializationRequestWithMagnitude<'cleanup, u16>;
+
 /// Fully checked real-segment VLC cleanup-output segment-group materialization
 /// request.
 ///
@@ -4614,25 +4641,25 @@ impl<'side_inputs, 'cleanup> HtVlcCleanupOutputMaterializationRequest<'side_inpu
 /// scratch capacity, and coefficient-output capacity before direct segment-group
 /// traversal can clear scratch, advance segment cursors, mutate context/MEL
 /// state, fill cleanup-output storage, or write coefficient output.
-pub struct HtVlcCleanupOutputSegmentGroupMaterializationRequest<
+pub struct HtVlcCleanupOutputSegmentGroupMaterializationRequestWithMagnitude<
     'cleanup,
     M: HtCleanupMagnitude = u16,
 > {
     scratch_layout: HtBlockScratchLayout,
-    cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutput<M>],
+    cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
     missing_most_significant_bitplanes: u8,
     required: usize,
 }
 
 impl<'cleanup, M: HtCleanupMagnitude>
-    HtVlcCleanupOutputSegmentGroupMaterializationRequest<'cleanup, M>
+    HtVlcCleanupOutputSegmentGroupMaterializationRequestWithMagnitude<'cleanup, M>
 {
     /// Validate and bundle one caller-owned real-segment VLC cleanup-output
     /// segment-group materialization request.
     pub fn new(
         scratch_layout: HtBlockScratchLayout,
         context_states: &[HtVlcContextProgression],
-        cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutput<M>],
+        cleanup_outputs: &'cleanup mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
         missing_most_significant_bitplanes: u8,
         scratch: &[u16],
         output: &[i32],
@@ -4685,7 +4712,13 @@ impl<'cleanup, M: HtCleanupMagnitude>
     }
 
     /// Split the checked request into decode and materialization parts.
-    pub fn into_parts(self) -> (&'cleanup mut [HtVlcCleanupCoefficientOutput<M>], u8, usize) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        &'cleanup mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
+        u8,
+        usize,
+    ) {
         (
             self.cleanup_outputs,
             self.missing_most_significant_bitplanes,
@@ -4716,7 +4749,7 @@ impl<'cleanup> HtVlcCleanupOutputPairedSegmentGroupMaterializationRequest<'clean
         scratch: &[u16],
         output: &[i32],
     ) -> Result<Option<Self>, HtLayoutError> {
-        let request = HtVlcCleanupOutputSegmentGroupMaterializationRequest::new(
+        let request = HtVlcCleanupOutputSegmentGroupMaterializationRequestWithMagnitude::new(
             scratch_layout,
             context_states,
             cleanup_outputs,
@@ -5320,13 +5353,28 @@ impl HtBlockLayout {
     /// every real coefficient in HT quad traversal order. Capacity, position
     /// order, cleanup bitplane support, and every coefficient reconstruction
     /// are checked before `output` is mutated.
-    pub fn materialize_vlc_cleanup_coefficient_outputs<M: HtCleanupMagnitude>(
+    pub fn materialize_vlc_cleanup_coefficient_outputs(
         self,
-        outputs: &[HtVlcCleanupCoefficientOutput<M>],
+        outputs: &[HtVlcCleanupCoefficientOutput],
         missing_most_significant_bitplanes: u8,
         output: &mut [i32],
     ) -> Result<Option<()>, HtLayoutError> {
-        self.materialize_vlc_cleanup_coefficient_outputs_with_progress(
+        self.materialize_vlc_cleanup_coefficient_outputs_with_magnitude(
+            outputs,
+            missing_most_significant_bitplanes,
+            output,
+        )
+    }
+
+    /// Storage-selecting companion to [`Self::materialize_vlc_cleanup_coefficient_outputs`].
+    /// `u16` preserves the 16-bit bound; `u32` admits up to 18 explicit bits.
+    pub fn materialize_vlc_cleanup_coefficient_outputs_with_magnitude<M: HtCleanupMagnitude>(
+        self,
+        outputs: &[HtVlcCleanupCoefficientOutputWithMagnitude<M>],
+        missing_most_significant_bitplanes: u8,
+        output: &mut [i32],
+    ) -> Result<Option<()>, HtLayoutError> {
+        self.materialize_vlc_cleanup_coefficient_outputs_with_progress_with_magnitude(
             outputs,
             missing_most_significant_bitplanes,
             output,
@@ -5338,12 +5386,29 @@ impl HtBlockLayout {
     /// row-major signed coefficients and report the completed handoff counts.
     ///
     /// This is the progress-reporting companion to
-    /// [`Self::materialize_vlc_cleanup_coefficient_outputs`]. It lets staged
+    /// [`Self::materialize_vlc_cleanup_coefficient_outputs_with_magnitude`]. It lets staged
     /// HT block decoders prove that the parsed VLC cleanup-output prefix and
     /// row-major coefficient plane covered the same real coefficient count.
-    pub fn materialize_vlc_cleanup_coefficient_outputs_with_progress<M: HtCleanupMagnitude>(
+    pub fn materialize_vlc_cleanup_coefficient_outputs_with_progress(
         self,
-        outputs: &[HtVlcCleanupCoefficientOutput<M>],
+        outputs: &[HtVlcCleanupCoefficientOutput],
+        missing_most_significant_bitplanes: u8,
+        output: &mut [i32],
+    ) -> Result<Option<HtVlcCleanupOutputMaterializationProgress>, HtLayoutError> {
+        self.materialize_vlc_cleanup_coefficient_outputs_with_progress_with_magnitude(
+            outputs,
+            missing_most_significant_bitplanes,
+            output,
+        )
+    }
+
+    /// Storage-selecting companion to [`Self::materialize_vlc_cleanup_coefficient_outputs_with_progress`].
+    /// `u16` preserves the 16-bit bound; `u32` admits up to 18 explicit bits.
+    pub fn materialize_vlc_cleanup_coefficient_outputs_with_progress_with_magnitude<
+        M: HtCleanupMagnitude,
+    >(
+        self,
+        outputs: &[HtVlcCleanupCoefficientOutputWithMagnitude<M>],
         missing_most_significant_bitplanes: u8,
         output: &mut [i32],
     ) -> Result<Option<HtVlcCleanupOutputMaterializationProgress>, HtLayoutError> {
@@ -7543,7 +7608,7 @@ impl HtBlockScratchLayout {
 
         if self
             .block
-            .materialize_vlc_cleanup_coefficient_outputs(
+            .materialize_vlc_cleanup_coefficient_outputs_with_magnitude(
                 &cleanup_outputs[..required],
                 missing_most_significant_bitplanes,
                 output,
@@ -7564,7 +7629,31 @@ impl HtBlockScratchLayout {
     /// values from the segment VLC cursor, so it does not fill or borrow the
     /// temporary traversal-order side-input buffers.
     #[allow(clippy::too_many_arguments)]
-    pub fn try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize<
+    pub fn try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize(
+        self,
+        scratch: &mut [u16],
+        segment_cursors: &mut HtCleanupPassSegmentBitCursors<'_>,
+        context_states: &mut [HtVlcContextProgression],
+        mel_state: &mut HtMelEventState,
+        cleanup_outputs: &mut [HtVlcCleanupCoefficientOutput],
+        missing_most_significant_bitplanes: u8,
+        output: &mut [i32],
+    ) -> Result<Option<HtVlcBlockCleanupSegmentProgress>, HtLayoutError> {
+        self.try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize_with_magnitude(
+            scratch,
+            segment_cursors,
+            context_states,
+            mel_state,
+            cleanup_outputs,
+            missing_most_significant_bitplanes,
+            output,
+        )
+    }
+
+    /// Storage-selecting companion to [`Self::try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize`].
+    /// `u16` preserves the 16-bit bound; `u32` admits up to 18 explicit bits.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize_with_magnitude<
         M: HtCleanupMagnitude,
     >(
         self,
@@ -7572,11 +7661,11 @@ impl HtBlockScratchLayout {
         segment_cursors: &mut HtCleanupPassSegmentBitCursors<'_>,
         context_states: &mut [HtVlcContextProgression],
         mel_state: &mut HtMelEventState,
-        cleanup_outputs: &mut [HtVlcCleanupCoefficientOutput<M>],
+        cleanup_outputs: &mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
         missing_most_significant_bitplanes: u8,
         output: &mut [i32],
     ) -> Result<Option<HtVlcBlockCleanupSegmentProgress>, HtLayoutError> {
-        let request = HtVlcCleanupOutputSegmentGroupMaterializationRequest::new(
+        let request = HtVlcCleanupOutputSegmentGroupMaterializationRequestWithMagnitude::new(
             self,
             context_states,
             cleanup_outputs,
@@ -7590,7 +7679,7 @@ impl HtBlockScratchLayout {
         let progress = {
             let mut views = self.prepare_cleanup_decode(scratch, empty_stream_layout, &[])?;
             let Some(progress) = views
-                .try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress(
+                .try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress_with_magnitude(
                     self.block,
                     segment_cursors,
                     context_states,
@@ -7605,7 +7694,7 @@ impl HtBlockScratchLayout {
 
         if self
             .block
-            .materialize_vlc_cleanup_coefficient_outputs(
+            .materialize_vlc_cleanup_coefficient_outputs_with_magnitude(
                 &cleanup_outputs[..required],
                 missing_most_significant_bitplanes,
                 output,
@@ -7670,7 +7759,7 @@ impl HtBlockScratchLayout {
 
         if self
             .block
-            .materialize_vlc_cleanup_coefficient_outputs(
+            .materialize_vlc_cleanup_coefficient_outputs_with_magnitude(
                 &cleanup_outputs[..required],
                 missing_most_significant_bitplanes,
                 output,
@@ -7931,7 +8020,7 @@ fn check_magnitude_sign_value_count(
 
 fn validate_vlc_cleanup_coefficient_output_plane<M: HtCleanupMagnitude>(
     layout: HtBlockLayout,
-    outputs: &[HtVlcCleanupCoefficientOutput<M>],
+    outputs: &[HtVlcCleanupCoefficientOutputWithMagnitude<M>],
 ) -> Result<Option<()>, HtLayoutError> {
     let required = layout.dimensions().coefficient_count();
     if outputs.len() != required {
@@ -11950,7 +12039,7 @@ impl HtBlockScratchBuffer {
             let mut views =
                 scratch_layout.prepare_cleanup_decode(&mut self.words, empty_stream_layout, &[])?;
             let Some(progress) = views
-                .try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress(
+                .try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress_with_magnitude(
                     block,
                     &mut segment_cursors,
                     &mut self.vlc_context_states[..required_context_states],
@@ -12402,15 +12491,16 @@ impl HtBlockScratchBuffer {
             scratch_layout,
         );
 
-        scratch_layout.try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize(
-            &mut self.words,
-            &mut segment_cursors,
-            &mut self.vlc_context_states[..required_context_states],
-            &mut self.vlc_mel_state,
-            &mut self.vlc_cleanup_outputs[..required],
-            request.missing_most_significant_bitplanes(),
-            output,
-        )
+        scratch_layout
+            .try_decode_vlc_cleanup_segment_groups_to_outputs_and_materialize_with_magnitude(
+                &mut self.words,
+                &mut segment_cursors,
+                &mut self.vlc_context_states[..required_context_states],
+                &mut self.vlc_mel_state,
+                &mut self.vlc_cleanup_outputs[..required],
+                request.missing_most_significant_bitplanes(),
+                output,
+            )
     }
 
     /// Decode a preflighted cleanup-output request through reusable state and
@@ -14082,7 +14172,7 @@ impl<'stream> HtCleanupDecodeViews<'stream> {
     ///
     /// The caller-owned `outputs` plane is filled in block quad traversal
     /// order and can be passed to
-    /// [`HtBlockLayout::materialize_vlc_cleanup_coefficient_outputs`] after
+    /// [`HtBlockLayout::materialize_vlc_cleanup_coefficient_outputs_with_magnitude`] after
     /// this traversal succeeds.
     pub fn try_decode_vlc_cleanup_outputs_with_standard_tables_segment_side_inputs_progress(
         &mut self,
@@ -14157,7 +14247,20 @@ impl<'stream> HtCleanupDecodeViews<'stream> {
     /// This side-input-free route handles both paired quad-group steps and odd
     /// final single-quad steps. Odd-tail `u` values are decoded from the segment
     /// VLC cursor before the direct cleanup-output materializer runs.
-    pub fn try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress<
+    pub fn try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress(
+        &mut self,
+        layout: HtBlockLayout,
+        segment_cursors: &mut HtCleanupPassSegmentBitCursors<'_>,
+        context_states: &mut [HtVlcContextProgression],
+        mel_state: &mut HtMelEventState,
+        outputs: &mut [HtVlcCleanupCoefficientOutput],
+    ) -> Result<Option<HtVlcBlockCleanupSegmentProgress>, HtLayoutError> {
+        self.try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress_with_magnitude(layout, segment_cursors, context_states, mel_state, outputs)
+    }
+
+    /// Storage-selecting companion to [`Self::try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress`].
+    /// `u16` preserves the 16-bit bound; `u32` admits up to 18 explicit bits.
+    pub fn try_decode_vlc_cleanup_outputs_with_standard_tables_segment_groups_progress_with_magnitude<
         M: HtCleanupMagnitude,
     >(
         &mut self,
@@ -14165,7 +14268,7 @@ impl<'stream> HtCleanupDecodeViews<'stream> {
         segment_cursors: &mut HtCleanupPassSegmentBitCursors<'_>,
         context_states: &mut [HtVlcContextProgression],
         mel_state: &mut HtMelEventState,
-        outputs: &mut [HtVlcCleanupCoefficientOutput<M>],
+        outputs: &mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
     ) -> Result<Option<HtVlcBlockCleanupSegmentProgress>, HtLayoutError> {
         let required_context_states = layout.line_pair_count();
         if context_states.len() < required_context_states {
@@ -14197,7 +14300,7 @@ impl<'stream> HtCleanupDecodeViews<'stream> {
                 return Ok(None);
             };
             let Some(decode) = line_pair
-                .try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups(
+                .try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups_with_magnitude(
                     segment_cursors,
                     &mut context_states[line_pair_index],
                     mel_state,
@@ -16256,7 +16359,7 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
         codeword: HtVlcQuadCodeword,
         group: HtQuadGroup,
         u_value: u16,
-        output: &mut [HtVlcCleanupCoefficientOutput<M>],
+        output: &mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
     ) -> Result<Option<usize>, HtLayoutError> {
         if group
             .line_pair_local_index(self.line_pair_group())
@@ -16275,7 +16378,7 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
             return Ok(Some(0));
         };
 
-        let seed_output = HtVlcCleanupCoefficientOutput {
+        let seed_output = HtVlcCleanupCoefficientOutputWithMagnitude {
             position: seed_position,
             significant: false,
             magnitude_sign_bits: 0,
@@ -16314,7 +16417,7 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
         uvlc_pair: HtVlcUvlcPair,
         first_group: HtQuadGroup,
         second_group: HtQuadGroup,
-        output: &mut [HtVlcCleanupCoefficientOutput<M>],
+        output: &mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
     ) -> Result<Option<HtVlcQuadPairCleanupDecode>, HtLayoutError> {
         let Some(first_index) = first_group.line_pair_local_index(self.line_pair_group()) else {
             return Ok(None);
@@ -16339,7 +16442,7 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
             return Ok(None);
         };
 
-        let first_seed_output = HtVlcCleanupCoefficientOutput {
+        let first_seed_output = HtVlcCleanupCoefficientOutputWithMagnitude {
             position: first_seed,
             significant: false,
             magnitude_sign_bits: 0,
@@ -16347,7 +16450,7 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
             embedded_magnitude_bit: false,
             magnitude_exponent_reduction: false,
         };
-        let second_seed_output = HtVlcCleanupCoefficientOutput {
+        let second_seed_output = HtVlcCleanupCoefficientOutputWithMagnitude {
             position: second_seed,
             significant: false,
             magnitude_sign_bits: 0,
@@ -16681,7 +16784,20 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
     /// Odd final single-quad steps decode their own tail `u` value from the same
     /// cursor, so this direct-output traversal does not need the temporary
     /// traversal-order side-input buffers.
-    pub fn try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups<
+    pub fn try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups(
+        &mut self,
+        segment_cursors: &mut HtCleanupPassSegmentBitCursors<'_>,
+        context_state: &mut HtVlcContextProgression,
+        mel_state: &mut HtMelEventState,
+        south_predictors: Option<&[u32]>,
+        output: &mut [HtVlcCleanupCoefficientOutput],
+    ) -> Result<Option<HtVlcLinePairCleanupDecode>, HtLayoutError> {
+        self.try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups_with_magnitude(segment_cursors, context_state, mel_state, south_predictors, output)
+    }
+
+    /// Storage-selecting companion to [`Self::try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups`].
+    /// `u16` preserves the 16-bit bound; `u32` admits up to 18 explicit bits.
+    pub fn try_decode_vlc_line_pair_cleanup_outputs_with_standard_tables_from_segment_groups_with_magnitude<
         M: HtCleanupMagnitude,
     >(
         &mut self,
@@ -16689,7 +16805,7 @@ impl HtLinePairCleanupDecodeViewMut<'_, '_> {
         context_state: &mut HtVlcContextProgression,
         mel_state: &mut HtMelEventState,
         south_predictors: Option<&[u32]>,
-        output: &mut [HtVlcCleanupCoefficientOutput<M>],
+        output: &mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
     ) -> Result<Option<HtVlcLinePairCleanupDecode>, HtLayoutError> {
         let required = self
             .quad_groups()
@@ -21591,10 +21707,14 @@ impl HtVlcQuadCleanupSyntax {
     }
 }
 
+/// Coefficient-local cleanup output with the original checked `u16` storage.
+pub type HtVlcCleanupCoefficientOutput = HtVlcCleanupCoefficientOutputWithMagnitude<u16>;
+
 /// Coefficient-local output read from a VLC cleanup decode plan and the
 /// magnitude/sign stream.
+/// Explicitly select `u32` for up to 18 magnitude/sign bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HtVlcCleanupCoefficientOutput<M = u16> {
+pub struct HtVlcCleanupCoefficientOutputWithMagnitude<M> {
     pub position: HtCoefficientPosition,
     pub significant: bool,
     pub magnitude_sign_bits: u16,
@@ -23126,7 +23246,7 @@ impl<'a> HtVlcCleanupOutputDecodeOutcome<'a> {
         output: &mut [i32],
     ) -> Result<Option<HtVlcCleanupOutputMaterializationProgress>, HtLayoutError> {
         self.block()
-            .materialize_vlc_cleanup_coefficient_outputs_with_progress(
+            .materialize_vlc_cleanup_coefficient_outputs_with_progress_with_magnitude(
                 self.outputs,
                 missing_most_significant_bitplanes,
                 output,
@@ -24013,7 +24133,7 @@ fn ht_cleanup_full_quad_kappa(codeword: HtVlcQuadCodeword, south_west: u32, sout
 
 fn rebuild_ht_cleanup_south_predictors<M: HtCleanupMagnitude>(
     south_predictors: &mut [u32],
-    outputs: &[HtVlcCleanupCoefficientOutput<M>],
+    outputs: &[HtVlcCleanupCoefficientOutputWithMagnitude<M>],
 ) -> Result<(), HtLayoutError> {
     south_predictors.fill(0);
     for output in outputs {
@@ -26326,7 +26446,7 @@ fn read_required_vlc_cleanup_coefficient_from_cursors(
 fn read_required_vlc_cleanup_coefficient_from_segment_magnitude_sign<M: HtCleanupMagnitude>(
     magnitude_sign: &mut HtForwardBitCursor<'_>,
     plan: HtVlcQuadCoefficientDecodePlan,
-) -> Result<HtVlcCleanupCoefficientOutput<M>, HtLayoutError> {
+) -> Result<HtVlcCleanupCoefficientOutputWithMagnitude<M>, HtLayoutError> {
     if plan.magnitude_sign_bits > M::MAX_BITS {
         return Err(HtLayoutError::StreamBitReadUnavailable {
             stream: HtCleanupStreamKind::CleanupForward,
@@ -26351,7 +26471,7 @@ fn read_required_vlc_cleanup_coefficient_from_segment_magnitude_sign<M: HtCleanu
         M::default()
     };
 
-    Ok(HtVlcCleanupCoefficientOutput {
+    Ok(HtVlcCleanupCoefficientOutputWithMagnitude {
         position: plan.position,
         significant: plan.significant,
         magnitude_sign_bits: plan.magnitude_sign_bits,
@@ -26457,7 +26577,7 @@ fn decode_required_vlc_quad_cleanup_outputs_from_segment_codeword<M: HtCleanupMa
     codeword: HtVlcQuadCodeword,
     group: HtQuadGroup,
     u_value: u16,
-    output: &mut [HtVlcCleanupCoefficientOutput<M>],
+    output: &mut [HtVlcCleanupCoefficientOutputWithMagnitude<M>],
 ) -> Result<Option<usize>, HtLayoutError> {
     let required = group.present_count();
     if output.len() < required {
@@ -26485,7 +26605,7 @@ fn decode_required_vlc_quad_cleanup_outputs_from_segment_codeword<M: HtCleanupMa
         return Ok(None);
     };
 
-    let seed_output = HtVlcCleanupCoefficientOutput {
+    let seed_output = HtVlcCleanupCoefficientOutputWithMagnitude {
         position: seed_position,
         significant: false,
         magnitude_sign_bits: 0,
