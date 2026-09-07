@@ -1860,6 +1860,149 @@ unsafe { decoder(&mut source) };
     }
 
     #[test]
+    fn satellite_precision_and_rgb16_cross_tile_regions_preserve_native_words() {
+        use emuella_j2k::{
+            ColorModel, ComponentLayout, EncodeOptions, ImageInfo, ImageView, OutputFormat,
+            SampleEndian, SampleFormat, TileSize, encode,
+        };
+        for (bits, bands) in [(11, 1_u16), (16, 3)] {
+            let format =
+                SampleFormat::with_byte_order(bits, false, Some(SampleEndian::Little)).unwrap();
+            let info = ImageInfo::new(
+                67,
+                53,
+                bands,
+                format,
+                if bands == 1 {
+                    ColorModel::Grayscale
+                } else {
+                    ColorModel::Rgb
+                },
+                ComponentLayout::Interleaved,
+            )
+            .unwrap();
+            let value = |x: u32, y: u32, c: u16| {
+                ((x * 997 + y * 617 + x * y * 13 + u32::from(c) * 1237) & ((1_u32 << bits) - 1))
+                    as u16
+            };
+            let mut samples = Vec::new();
+            for y in 0..53 {
+                for x in 0..67 {
+                    for c in 0..bands {
+                        samples.extend_from_slice(&value(x, y, c).to_le_bytes());
+                    }
+                }
+            }
+            let bytes = encode(
+                ImageView::Interleaved {
+                    info: &info,
+                    samples: &samples,
+                    stride_bytes: 67 * usize::from(bands) * 2,
+                },
+                &EncodeOptions {
+                    format: OutputFormat::J2kCodestream,
+                    decomposition_levels: 2,
+                    tile_size: Some(TileSize {
+                        width: 32,
+                        height: 32,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut source = Box::new(TestSource {
+                bytes,
+                fail_reads: false,
+            });
+            // SAFETY: Source storage and handles remain live; all destinations are disjoint local buffers.
+            unsafe {
+                let decoder = decoder(&mut source);
+                let mut workspace = ptr::null_mut();
+                assert_eq!(
+                    emuella_j2k_workspace_create(&mut workspace, ptr::null_mut()),
+                    EMUELLA_J2K_STATUS_OK
+                );
+                let request = EmuellaJ2kDecodeComponentsRequestV0 {
+                    struct_size: size_of::<EmuellaJ2kDecodeComponentsRequestV0>(),
+                    component_count: bands,
+                    components: if bands == 3 { [2, 0, 1, 0] } else { [0; 4] },
+                    x: 29,
+                    y: 27,
+                    width: 9,
+                    height: 11,
+                    collect_work: 1,
+                    ..Default::default()
+                };
+                for _ in 0..2 {
+                    let mut image = ptr::null_mut();
+                    assert_eq!(
+                        emuella_j2k_decode_components_region(
+                            decoder,
+                            workspace,
+                            &request,
+                            &mut image,
+                            ptr::null_mut()
+                        ),
+                        EMUELLA_J2K_STATUS_OK
+                    );
+                    for index in 0..bands {
+                        let mut component = EmuellaJ2kComponentInfoV0::default();
+                        assert_eq!(
+                            emuella_j2k_image_component_info_at(
+                                image,
+                                index,
+                                &mut component,
+                                ptr::null_mut()
+                            ),
+                            EMUELLA_J2K_STATUS_OK
+                        );
+                        assert_eq!(component.bits_per_sample, bits);
+                        assert_eq!(component.is_signed, 0);
+                        assert_eq!((component.width, component.height), (9, 11));
+
+                        let mut output = [0xa5; 25 * 11 + 7];
+                        assert_eq!(
+                            emuella_j2k_image_copy_component(
+                                image,
+                                index,
+                                output.as_mut_ptr(),
+                                output.len(),
+                                25,
+                                ptr::null_mut()
+                            ),
+                            EMUELLA_J2K_STATUS_OK
+                        );
+                        for y in 0..11 {
+                            for x in 0..9 {
+                                let offset = y * 25 + x * 2;
+                                assert_eq!(
+                                    u16::from_le_bytes([output[offset], output[offset + 1]]),
+                                    value(
+                                        29 + x as u32,
+                                        27 + y as u32,
+                                        request.components[index as usize]
+                                    )
+                                );
+                            }
+                            assert!(output[y * 25 + 18..(y + 1) * 25].iter().all(|v| *v == 0xa5));
+                        }
+                        assert!(output[25 * 11..].iter().all(|v| *v == 0xa5));
+                    }
+                    let mut work = EmuellaJ2kDecodeWorkV0::default();
+                    assert_eq!(
+                        emuella_j2k_image_decode_work(image, &mut work, ptr::null_mut()),
+                        EMUELLA_J2K_STATUS_OK
+                    );
+                    assert_eq!(work.output_allocation_bytes, 9 * 11 * 2 * u64::from(bands));
+                    emuella_j2k_image_destroy(image);
+                }
+                emuella_j2k_workspace_destroy(workspace);
+                emuella_j2k_decoder_destroy(decoder);
+            }
+        }
+    }
+
+    #[test]
     fn four_independent_components_use_all_inline_slots() {
         let originals = [vec![11; 16], vec![23; 16], vec![37; 16], vec![49; 16]];
         let bytes = emuella_j2k::codestream::encode_planar_u8_no_decomp_test_fixture(

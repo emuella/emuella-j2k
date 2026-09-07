@@ -39,14 +39,21 @@ greyscale, RGB or straight RGBA. Full shape, owned and padded caller decode
 agree in both layouts; alpha preserves colour samples even when zero.
 
 The positioned-source regional route also admits reversible MCT within the
-existing classic Part 1 EPH envelope: three matching unsigned 8-bit
-unit-sampled components, reversible 5/3, default-precinct LRCP packets, and
+classic Part 1 envelope: three matching unsigned 8–16-bit
+unit-sampled components, reversible 5/3, default-precinct LRCP packets with optional EPH and no SOP, and
 exactly one `TPsot=0` part per SIZ tile. `TNsot` may declare one part or leave
 the count unspecified; complete sequence validation must still prove the
 single part and reconcile SOT, any TLM, `Psot` and terminal EOC. Regional
 reconstruction retains all three RCT dependencies but publishes only requested
 native RGB components. Other tile-part counts, interleaving, reductions, layer
 limits and MCT shapes remain unsupported.
+
+Lossless Part 1 greyscale encode also accepts genuine 9–15-bit unsigned
+precision in little-endian two-byte storage, with zero through two reversible
+levels and optional two-level tiling. Input words must fit the declared
+precision. RGB and target-rate encode at these intermediate precisions remain
+outside this additive route. The [precision qualification](docs/part1-precision.md)
+records authored regional oracles, C ABI coverage and an in-place satellite probe.
 
 Applications should normally depend on the facade package and import its
 underscore-form Rust crate name:

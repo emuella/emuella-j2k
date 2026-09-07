@@ -10231,6 +10231,104 @@ pub fn encode_grayscale_u8_two_decomp(input: GrayscaleU8Encode<'_>) -> Result<Ve
     )
 }
 
+/// Encode unsigned 9–16-bit greyscale stored as little-endian words.
+/// Supports zero through two reversible levels; explicit tiling requires two.
+/// Samples exceeding the declared precision are rejected before entropy coding.
+pub fn encode_grayscale_u16_le_with_precision(
+    input: GrayscaleU16LeEncode<'_>,
+    bits_per_sample: u8,
+    decomposition_levels: u8,
+    tile_size: Option<TileSize>,
+) -> Result<Vec<u8>> {
+    validate_grayscale_u16_le_encode(input)?;
+    validate_u16_stored_precision(bits_per_sample)?;
+    if decomposition_levels > 2 || (tile_size.is_some() && decomposition_levels != 2) {
+        return Err(unsupported(
+            None,
+            Some(Marker::Cod),
+            UnsupportedConstruct::WaveletTransform,
+            "precision-aware greyscale encode requires zero through two levels and two for tiling",
+        ));
+    }
+    if let Some(tile_size) = tile_size {
+        validate_native_multitile_dwt2_tile_size(input.width, input.height, tile_size)?;
+        let tiles = native_encode_tile_rects(input.width, input.height, tile_size)?;
+        let mut transformed = Vec::new();
+        transformed
+            .try_reserve_exact(tiles.len())
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        for tile in tiles {
+            let x_bytes = usize::try_from(tile.x)
+                .ok()
+                .and_then(|x| x.checked_mul(2))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let offset = usize::try_from(tile.y)
+                .map_err(|_| CodestreamError::SizeOverflow)?
+                .checked_mul(input.stride_bytes)
+                .and_then(|offset| offset.checked_add(x_bytes))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            let tile_input = GrayscaleU16LeEncode {
+                width: tile.width,
+                height: tile.height,
+                samples: input
+                    .samples
+                    .get(offset..)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+                stride_bytes: input.stride_bytes,
+            };
+            let mut coefficients =
+                level_shift_grayscale_u16_le_plane_with_precision(tile_input, bits_per_sample)?;
+            forward_reversible_5_3_levels(
+                tile.width,
+                tile.height,
+                &mut coefficients,
+                2,
+                "precision-aware greyscale tile transform failed",
+            )?;
+            transformed.push(NativeDecompTile {
+                tile_rect: tile,
+                component_planes: alloc::vec![coefficients],
+            });
+        }
+        return encode_native_two_decomp_multitile_transformed(
+            input.width,
+            input.height,
+            tile_size,
+            &transformed,
+            bits_per_sample,
+            1,
+            false,
+            "precision-aware greyscale encode",
+        );
+    }
+    let mut component =
+        level_shift_grayscale_u16_le_component_with_precision(input, bits_per_sample)?;
+    if decomposition_levels == 0 {
+        return encode_native_no_decomp(NativeNoDecompEncode {
+            width: input.width,
+            height: input.height,
+            bits_per_sample,
+            components: &[component],
+            multiple_component_transform: false,
+        });
+    }
+    forward_reversible_5_3_levels(
+        input.width,
+        input.height,
+        &mut component.coefficients,
+        decomposition_levels,
+        "precision-aware greyscale transform failed",
+    )?;
+    encode_native_decomp_transformed(
+        input.width,
+        input.height,
+        bits_per_sample,
+        decomposition_levels,
+        &[component.coefficients.as_slice()],
+        false,
+    )
+}
+
 /// Encode a single-tile unsigned 16-bit grayscale Part 1 codestream using the
 /// repo-owned no-decomposition baseline slice.
 pub fn encode_grayscale_u16_le_no_decomp(input: GrayscaleU16LeEncode<'_>) -> Result<Vec<u8>> {
@@ -12135,11 +12233,11 @@ fn encode_native_no_decomp(input: NativeNoDecompEncode<'_>) -> Result<Vec<u8>> {
             "native no-decomposition encode supports one to 255 components",
         ));
     }
-    if !matches!(input.bits_per_sample, 8 | 16) {
+    if !(8..=16).contains(&input.bits_per_sample) {
         return Err(invalid(
             None,
             Some(Marker::Siz),
-            "native no-decomposition encode supports unsigned 8-bit or 16-bit precision",
+            "native no-decomposition encode supports unsigned precision in 8..=16",
         ));
     }
     let component_samples = checked_component_sample_count(input.width, input.height)?;
@@ -13279,12 +13377,12 @@ fn encode_native_decomp_transformed(
     component_planes: &[&[i32]],
     multiple_component_transform: bool,
 ) -> Result<Vec<u8>> {
-    if !matches!(bits_per_sample, 8 | 16) {
+    if !(8..=16).contains(&bits_per_sample) {
         return Err(unsupported(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::SamplePrecision,
-            "native decomposition encode supports unsigned 8-bit or 16-bit profiles",
+            "native decomposition encode supports unsigned precision in 8..=16",
         ));
     }
     if !matches!(component_planes.len(), 1 | 3) {
@@ -13709,11 +13807,11 @@ fn encode_native_two_decomp_multitile_transformed_with_siz(
             "native multi-tile DWT2 encode supports one or three components",
         ));
     }
-    if !matches!(bits_per_sample, 8 | 16) {
+    if !(8..=16).contains(&bits_per_sample) {
         return Err(invalid(
             None,
             Some(Marker::Siz),
-            "native multi-tile DWT2 encode supports unsigned 8-bit or 16-bit precision",
+            "native multi-tile DWT2 encode supports unsigned precision in 8..=16",
         ));
     }
     if multiple_component_transform != (component_count == 3) {
@@ -25572,7 +25670,8 @@ fn validate_selective_reversible_mct_region_profile(
 ) -> Result<()> {
     if codestream.siz.component_count() != 3
         || codestream.siz.components.iter().any(|component| {
-            component.bits_per_sample != 8
+            !(8..=16).contains(&component.bits_per_sample)
+                || component.bits_per_sample != codestream.siz.components[0].bits_per_sample
                 || component.signed
                 || component.horizontal_separation != 1
                 || component.vertical_separation != 1
@@ -25582,7 +25681,7 @@ fn validate_selective_reversible_mct_region_profile(
             None,
             Some(Marker::Siz),
             UnsupportedConstruct::ComponentSampling,
-            "selective reversible MCT regions require three matching unsigned 8-bit unit-sampled components",
+            "selective reversible MCT regions require three matching unsigned 8–16-bit unit-sampled components",
         ));
     }
     if request.discard_levels != 0 || request.max_layers.is_some() {
@@ -25594,7 +25693,6 @@ fn validate_selective_reversible_mct_region_profile(
         ));
     }
     if coding_style.progression_order != ProgressionOrder::Lrcp
-        || !coding_style.eph_markers
         || coding_style.sop_markers
         || coding_style.precincts_declared
     {
@@ -25602,7 +25700,7 @@ fn validate_selective_reversible_mct_region_profile(
             None,
             Some(Marker::Cod),
             UnsupportedConstruct::PacketDecode,
-            "selective reversible MCT regions require default-precinct LRCP packets with EPH and without SOP",
+            "selective reversible MCT regions require default-precinct LRCP packets without SOP",
         ));
     }
     Ok(())
@@ -29931,8 +30029,11 @@ fn decode_prepared_part1_tile_component_samples(
         #[cfg(feature = "std")]
         let stage_started =
             (detailed_profile || coarse_stage_timings).then(std::time::Instant::now);
-        let components =
-            rgb_u8_inverse_rct_planes_to_selected_bytes(&planes, &prepared.component_indices)?;
+        let components = rgb_unsigned_inverse_rct_planes_to_selected_bytes(
+            &planes,
+            &prepared.component_indices,
+            prepared.codestream.siz.components[0].bits_per_sample,
+        )?;
         #[cfg(feature = "std")]
         if let Some(stage_started) = stage_started {
             record_stage(
@@ -47657,9 +47758,10 @@ fn rgb_u8_inverse_rct_planes_to_bytes(mut planes: Vec<Vec<i32>>) -> Result<Vec<V
     rgb_u8_inverse_rct_plane_slices_to_bytes(&y, &db, &dr)
 }
 
-fn rgb_u8_inverse_rct_planes_to_selected_bytes(
+fn rgb_unsigned_inverse_rct_planes_to_selected_bytes(
     planes: &[Vec<i32>],
     component_indices: &[u16],
+    bits_per_sample: u8,
 ) -> Result<Vec<Vec<u8>>> {
     let [y, db, dr] = planes else {
         return Err(CodestreamError::SizeOverflow);
@@ -47667,6 +47769,11 @@ fn rgb_u8_inverse_rct_planes_to_selected_bytes(
     if y.len() != db.len() || y.len() != dr.len() {
         return Err(CodestreamError::SizeOverflow);
     }
+    let bytes_per_sample = usize::from(bits_per_sample).div_ceil(8);
+    let byte_len = y
+        .len()
+        .checked_mul(bytes_per_sample)
+        .ok_or(CodestreamError::SizeOverflow)?;
     let mut selected = Vec::new();
     selected
         .try_reserve_exact(component_indices.len())
@@ -47677,23 +47784,25 @@ fn rgb_u8_inverse_rct_planes_to_selected_bytes(
         }
         let mut samples = Vec::new();
         samples
-            .try_reserve_exact(y.len())
+            .try_reserve_exact(byte_len)
             .map_err(|_| CodestreamError::SizeOverflow)?;
-        samples.resize(y.len(), 0_u8);
-        for (output, ((y, db), dr)) in samples.iter_mut().zip(
+        samples.resize(byte_len, 0_u8);
+        for (output, ((y, db), dr)) in samples.chunks_exact_mut(bytes_per_sample).zip(
             y.iter()
                 .copied()
                 .zip(db.iter().copied())
                 .zip(dr.iter().copied()),
         ) {
-            let green = y.wrapping_sub(inverse_rct_chroma_quarter(db, dr));
+            let green = i64::from(y) - ((i64::from(db) + i64::from(dr)) >> 2);
             let value = match *component_index {
-                0 => dr.wrapping_add(green),
+                0 => i64::from(dr) + green,
                 1 => green,
-                2 => db.wrapping_add(green),
+                2 => i64::from(db) + green,
                 _ => return Err(CodestreamError::SizeOverflow),
             };
-            *output = value.wrapping_add(128).clamp(0, 255) as u8;
+            let sample = (value + (1_i64 << (bits_per_sample - 1)))
+                .clamp(0, (1_i64 << bits_per_sample) - 1) as u16;
+            output.copy_from_slice(&sample.to_le_bytes()[..bytes_per_sample]);
         }
         selected.push(samples);
     }
