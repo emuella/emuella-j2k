@@ -7977,6 +7977,176 @@ mod part1_source_index_tests {
         }
     }
 
+    struct HeaderOnlySource {
+        bytes: Vec<u8>,
+        sot: usize,
+        later_reads: core::sync::atomic::AtomicUsize,
+    }
+
+    impl source::CodestreamSource for HeaderOnlySource {
+        fn len(&self) -> core::result::Result<u64, source::SourceError> {
+            Ok(self.bytes.len() as u64)
+        }
+
+        fn read_exact_at(
+            &self,
+            offset: u64,
+            destination: &mut [u8],
+        ) -> core::result::Result<(), source::SourceError> {
+            if offset.saturating_add(destination.len() as u64) > self.bytes.len() as u64 {
+                self.later_reads
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
+            source::SliceSource::new(&self.bytes).read_exact_at(offset, destination)
+        }
+    }
+
+    fn header_only_source(tlm_segments: usize, entries_per_segment: usize) -> HeaderOnlySource {
+        let samples = [7_u8; 16];
+        let mut bytes = encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples]).unwrap();
+        let sot = find_marker(&bytes, 0, Marker::Sot).unwrap();
+        bytes.truncate(sot);
+        for index in 0..tlm_segments {
+            bytes.extend_from_slice(&Marker::Tlm.code().to_be_bytes());
+            bytes.extend_from_slice(&(4_u16 + 3 * entries_per_segment as u16).to_be_bytes());
+            bytes.extend_from_slice(&[index as u8, 0x10]);
+            for _ in 0..entries_per_segment {
+                bytes.extend_from_slice(&[0, 0, 14]);
+            }
+        }
+        let sot = bytes.len();
+        // The scanner can identify SOT, but its body is deliberately unavailable.
+        bytes.extend_from_slice(&Marker::Sot.code().to_be_bytes());
+        HeaderOnlySource {
+            bytes,
+            sot,
+            later_reads: core::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn one_part_limits() -> Part1SourceIndexLimits {
+        Part1SourceIndexLimits {
+            header_bytes: 4 * 1024 * 1024,
+            markers: 128,
+            tile_parts: 1,
+        }
+    }
+
+    fn assert_budget_before_sot(source: &HeaderOnlySource) {
+        assert!(
+            matches!(Part1SourceIndex::new_with_limits(source, one_part_limits()),
+            Err(CodestreamError::Unsupported { message, .. }) if message.contains("source index exceeds"))
+        );
+        assert_eq!(
+            source
+                .later_reads
+                .load(core::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn indexed_tlm_budget_precedes_entry_expansion_and_later_source_reads() {
+        for (segments, entries) in [(1, 2), (2, 1), (64, 20_000)] {
+            let source = header_only_source(segments, entries);
+            assert_budget_before_sot(&source);
+        }
+        // The entry-count preflight precedes decoding individual records: an
+        // invalid first record in an oversized segment cannot reach expansion.
+        let mut source = header_only_source(1, 2);
+        let tlm = find_marker(&source.bytes, 0, Marker::Tlm).unwrap();
+        source.bytes[tlm + 6] = 1; // Outside this one-tile SIZ grid.
+        assert_budget_before_sot(&source);
+
+        // Legacy scanning still parses declarations without the indexed cap.
+        let source = header_only_source(2, 1);
+        assert!(matches!(inspect_part1_source(&source),
+            Err(CodestreamError::Source { offset, requested: 12, .. }) if offset == source.sot as u64));
+        assert_eq!(
+            source
+                .later_reads
+                .load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn indexed_tlm_syntax_validation_precedes_entry_count_admission() {
+        let mut source = header_only_source(1, 2);
+        let tlm = find_marker(&source.bytes, 0, Marker::Tlm).unwrap();
+        // Five record bytes cannot form two complete three-byte records.
+        source.bytes.remove(source.sot - 1);
+        source.sot -= 1;
+        source.bytes[tlm + 2..tlm + 4].copy_from_slice(&9_u16.to_be_bytes());
+        assert!(matches!(
+            Part1SourceIndex::new_with_limits(&source, one_part_limits()),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Tlm),
+                ..
+            })
+        ));
+        assert_eq!(
+            source
+                .later_reads
+                .load(core::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn indexed_siz_grid_budget_precedes_rectangle_allocation_and_later_reads() {
+        for (width, height, tile_width, tile_height) in
+            [(8, 4, 4_u32, 4_u32), (u32::MAX, u32::MAX, 1, 1)]
+        {
+            let mut source = header_only_source(0, 0);
+            source.bytes[8..12].copy_from_slice(&width.to_be_bytes());
+            source.bytes[12..16].copy_from_slice(&height.to_be_bytes());
+            source.bytes[24..28].copy_from_slice(&tile_width.to_be_bytes());
+            source.bytes[28..32].copy_from_slice(&tile_height.to_be_bytes());
+            assert_budget_before_sot(&source);
+            if width == 8 {
+                assert!(matches!(inspect_part1_source(&source),
+                    Err(CodestreamError::Source { offset, requested: 12, .. }) if offset == source.sot as u64));
+            } else {
+                // Even an explicitly sufficient part budget cannot admit a
+                // grid whose tile identifiers exceed the existing u16 model.
+                source.bytes[8..12].copy_from_slice(&65_537_u32.to_be_bytes());
+                source.bytes[12..16].copy_from_slice(&1_u32.to_be_bytes());
+                assert!(matches!(
+                    Part1SourceIndex::new_with_limits(
+                        &source,
+                        Part1SourceIndexLimits {
+                            tile_parts: 65_537,
+                            ..one_part_limits()
+                        }
+                    ),
+                    Err(CodestreamError::SizeOverflow)
+                ));
+                assert_eq!(
+                    source
+                        .later_reads
+                        .load(core::sync::atomic::Ordering::Relaxed),
+                    0
+                );
+            }
+        }
+        let mut source = header_only_source(0, 0);
+        source.bytes[24..28].copy_from_slice(&0_u32.to_be_bytes());
+        assert!(matches!(
+            Part1SourceIndex::new_with_limits(&source, one_part_limits()),
+            Err(CodestreamError::InvalidMarker {
+                marker: Some(Marker::Siz),
+                ..
+            })
+        ));
+        assert_eq!(
+            source
+                .later_reads
+                .load(core::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
     #[test]
     fn index_rejects_malformed_terminal_marker_and_preserves_source_range_failure() {
         let samples = [7_u8; 16];
@@ -8041,15 +8211,19 @@ impl Default for Part1SourceIndexLimits {
 impl Part1SourceIndexLimits {
     fn check(self, bytes: usize, markers: usize, parts: usize) -> Result<()> {
         if bytes > self.header_bytes || markers > self.markers || parts > self.tile_parts {
-            return Err(unsupported(
-                None,
-                None,
-                UnsupportedConstruct::MarkerSegment,
-                "Part 1 source index exceeds its header byte, marker or tile-part limit",
-            ));
+            return Err(source_index_limit_error());
         }
         Ok(())
     }
+}
+
+fn source_index_limit_error() -> CodestreamError {
+    unsupported(
+        None,
+        None,
+        UnsupportedConstruct::MarkerSegment,
+        "Part 1 source index exceeds its header byte, marker or tile-part limit",
+    )
 }
 
 fn scan_part1_source_headers_with_limits(
@@ -8201,8 +8375,25 @@ fn scan_part1_source_headers_with_limits(
             "non-zero-origin source decode requires exactly one ordered main-header SOC, SIZ, COD and QCD sequence",
         ));
     }
-    let declared =
-        parse_declared_tile_part_lengths(&marker_bytes, &siz, &markers, marker_bytes.len())?;
+    if let Some(limits) = limits {
+        // Every SIZ tile needs at least one part. Reject the declared grid
+        // before materialising rectangles or any TLM entry vector. Compute in
+        // u64 so an oversized grid cannot overflow a u32 product first.
+        let tile_count = u64::from(siz.tile_count_x()?) * u64::from(siz.tile_count_y()?);
+        if tile_count > limits.tile_parts as u64 {
+            return Err(source_index_limit_error());
+        }
+        if tile_count > u64::from(u16::MAX) + 1 {
+            return Err(CodestreamError::SizeOverflow);
+        }
+    }
+    let declared = parse_declared_tile_part_lengths_with_limit(
+        &marker_bytes,
+        &siz,
+        &markers,
+        marker_bytes.len(),
+        limits.map(|limits| limits.tile_parts),
+    )?;
     let tile_rects = tile_rects_for_siz(&siz)?;
     let mut selected_tiles = alloc::vec![false; tile_rects.len()];
     for tile in &tile_rects {
@@ -9066,6 +9257,16 @@ fn parse_declared_tile_part_lengths(
     markers: &[MarkerSegment],
     main_header_end: usize,
 ) -> Result<Option<Vec<DeclaredTilePartLength>>> {
+    parse_declared_tile_part_lengths_with_limit(input, siz, markers, main_header_end, None)
+}
+
+fn parse_declared_tile_part_lengths_with_limit(
+    input: &[u8],
+    siz: &SizMarker,
+    markers: &[MarkerSegment],
+    main_header_end: usize,
+    max_declared_entries: Option<usize>,
+) -> Result<Option<Vec<DeclaredTilePartLength>>> {
     let tlm_segments = markers
         .iter()
         .filter(|segment| segment.marker == Marker::Tlm && segment.offset < main_header_end)
@@ -9124,6 +9325,14 @@ fn parse_declared_tile_part_lengths(
             ));
         }
 
+        // Count declarations before expanding them into metadata. A compact
+        // TLM can otherwise amplify a small header into a large entry vector
+        // even when no corresponding SOT is present in the source.
+        if let Some(limit) = max_declared_entries
+            && entries.len() / entry_len > limit.saturating_sub(declared.len())
+        {
+            return Err(source_index_limit_error());
+        }
         for entry in entries.chunks_exact(entry_len) {
             let tile_index = match tile_index_bytes {
                 0 => u32::try_from(declared.len()).map_err(|_| CodestreamError::SizeOverflow)?,

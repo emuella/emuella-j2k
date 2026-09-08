@@ -34,8 +34,14 @@ retained structure grows. Rust `new` defaults to 16 MiB of compact marker bytes,
 is linear in marker, component and tile-part counts, with per-tile marker ranges
 and payload spans in bounded maps. The complete tile sequence and rectangle
 catalogue are retained; without TLM, a second metadata-only tile-state vector
-preserves the existing complete-coverage validator contract. No allocation is
-proportional to full-image pixel count. Exceeding an index ceiling is reported
+preserves the existing complete-coverage validator contract. The SIZ grid is
+preflighted against the part budget and existing tile-identifier range before
+rectangle allocation. Each framed TLM segment's aggregate declaration count is
+checked against the remaining part budget before its records expand into a
+metadata vector. This includes declarations without corresponding SOT bytes;
+observed-part limits alone would not bound that temporary allocation. The legacy
+scanner applies neither of these new indexed resource ceilings. No allocation
+is proportional to full-image pixel count. Exceeding an index ceiling is reported
 as unsupported input, including through the C ABI.
 
 Per request, main-header descriptors, the physical tile-part sequence, and
@@ -128,6 +134,18 @@ and recover after source I/O failure. C ABI tests cover explicit option
 validation, separate legacy admission, lazy index retention,
 failed-build retry, metadata-only reinspection, new windows and existing MCT,
 precision, panic, failure-atomicity and natural `Send`/`Sync` checks.
+
+Construction-budget repair regressions use header-only sources whose SOT bodies
+are deliberately unavailable. The largest probe contains 64 TLM segments with
+20,000 entries each: a 1,280,000-entry declaration under a 4 MiB header budget,
+128-marker ceiling and one-part ceiling. It now returns the index-budget error
+before record expansion or any attempted SOT-body read. A two-segment probe
+checks cumulative accounting. Malformed TLM framing, an invalid zero tile extent,
+and a grid whose tile-count product exceeds u32 are rejected before rectangle
+expansion or later source reads. Small legacy probes still reach the unavailable
+SOT body, proving the one-shot route keeps its prior admission. This repair
+addresses the pre-SOT allocation gap found during independent review of
+`33a29edc14ed3843aa020e4eabfea4f2551ed16c`.
 
 Focused commands:
 
