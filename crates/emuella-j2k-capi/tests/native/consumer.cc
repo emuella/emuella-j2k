@@ -21,6 +21,13 @@ ASSERT_OFFSET(EmuellaJ2kSourceV0, reserved, 12);
 ASSERT_OFFSET(EmuellaJ2kSourceV0, length, 16);
 ASSERT_OFFSET(EmuellaJ2kSourceV0, context, 24);
 ASSERT_OFFSET(EmuellaJ2kSourceV0, read_at, 32);
+ASSERT_LAYOUT(EmuellaJ2kSourceIndexOptionsV0, 32, 8);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, struct_size, 0);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, abi_version, 8);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, reserved, 12);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, max_header_bytes, 16);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, max_markers, 24);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, max_tile_parts, 28);
 
 ASSERT_LAYOUT(EmuellaJ2kImageInfoV0, 40, 8);
 ASSERT_OFFSET(EmuellaJ2kImageInfoV0, struct_size, 0);
@@ -181,12 +188,15 @@ static void decode_concurrently(ConcurrentDecode *decode) {
 
 int main(int argc, char **argv) {
   assert(argc == 2);
-  test_multi_component(argv[1]);
+  test_multi_component(argv[1], 0);
+  test_multi_component(argv[1], 1);
   SourceContext source_context{CODESTREAM, sizeof(CODESTREAM)};
   EmuellaJ2kSourceV0 source{sizeof(source), EMUELLA_J2K_ABI_VERSION, 0,
                             sizeof(CODESTREAM), &source_context, read_at};
   EmuellaJ2kDecoder *decoder = nullptr;
-  assert(emuella_j2k_decoder_create(&source, &decoder, nullptr) == EMUELLA_J2K_STATUS_OK);
+  EmuellaJ2kSourceIndexOptionsV0 index_options = {
+      sizeof(index_options), EMUELLA_J2K_ABI_VERSION, 0, 16 * 1024 * 1024, 65536, 65536};
+  assert(emuella_j2k_decoder_create_indexed(&source, &index_options, &decoder, nullptr) == EMUELLA_J2K_STATUS_OK);
   EmuellaJ2kInspection *inspection = nullptr;
   assert(emuella_j2k_decoder_inspect(decoder, &inspection, nullptr) == EMUELLA_J2K_STATUS_OK);
   EmuellaJ2kComponentInfoV0 component{};

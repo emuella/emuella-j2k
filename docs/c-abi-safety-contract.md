@@ -79,8 +79,9 @@ capacities. They exclude all other allocations and allocator metadata.
 Workspace fields report retained capacities after the call, including earlier
 reuse, rather than allocation counts or growth. Consumer callbacks own source
 byte attribution. A reused decoder preserves source identity and a reused
-workspace retains scratch, but this API caches neither a packet index nor a
-regional plan: every decode prepares one new plan. Observations are local to
+workspace retains scratch. The explicit indexed constructor also retains
+validated header and tile-part metadata; selected packet plans are rebuilt for
+each request in both constructor modes. Observations are local to
 one execution and do not use shared counter deltas that concurrent calls could
 contaminate. Disabled collection returns `UNSUPPORTED` from the work accessor
 without changing the caller's output descriptor.
@@ -211,6 +212,16 @@ The C++ consumer must catch all exceptions within its callback and translate
 them to the callback's I/O status. No C++ exception may enter Rust. Callback
 failure is reported as an I/O error with logical range provenance where
 available; the ABI does not depend on ambient `errno`.
+
+The additive `emuella_j2k_decoder_create_indexed` constructor takes explicit
+positive byte/count ceilings and lazily retains one successful codec-owned
+[Part 1 source index](part1-source-index.md) across inspection and different
+regional requests. It fails over-budget requests without fallback; the original
+`emuella_j2k_decoder_create` retains its prior one-shot source admission. Only
+index construction is serialised; published metadata is
+immutable and independent workspaces can decode concurrently. Failed construction
+publishes no state and can retry transient source failures. Index budgets bound
+retained headers and metadata; compressed bodies stay with the callback source.
 
 The first implementation may serialise a cursor-based source internally or in
 the consumer adapter, but that serialisation must not weaken the public

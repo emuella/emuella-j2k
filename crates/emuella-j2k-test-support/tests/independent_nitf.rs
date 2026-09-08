@@ -1,7 +1,8 @@
 //! Optional source interoperability; inputs remain with the testdata owner.
 use emuella_j2k_core::{
-    ImageViewMut, Part1DecodeWorkspace, PlaneMut, codestream as c,
-    execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
+    ImageViewMut, Part1DecodeWorkspace, Part1SourceIndex, PlaneMut, PreparedPart1Decode,
+    codestream as c, execute_prepared_part1_decode_into_with_workspace,
+    prepare_part1_decode_from_source,
 };
 use sha2::{Digest, Sha256};
 
@@ -30,6 +31,10 @@ fn decode(
         },
     )
     .expect("prepare independent source");
+    execute(prepared, bands, bits)
+}
+
+fn execute(prepared: PreparedPart1Decode<'_>, bands: u16, bits: u8) -> (u32, u32, Vec<Vec<u8>>) {
     assert_eq!(prepared.info().sample_format.bits_per_sample, bits);
     let width = prepared.info().width;
     let height = prepared.info().height;
@@ -115,6 +120,20 @@ fn independent_source_full_pixels_and_regions_agree() {
         let input = std::fs::read(root.join(format!("{name}.j2k"))).expect("read locked input");
         assert_eq!(digest(&input), input_hash, "input identity: {name}");
         let source = c::source::SliceSource::new(&input);
+        let index = Part1SourceIndex::new(&source).expect("index independent source once");
+        let retained_headers = (index.header_bytes(), index.tile_part_count());
+        let indexed_components = (0..bands).collect::<Vec<_>>();
+        let decode_indexed = |region, discard| {
+            let prepared = index
+                .prepare(c::Part1ComponentDecodeRequest {
+                    component_indices: &indexed_components,
+                    region,
+                    discard_levels: discard,
+                    max_layers: None,
+                })
+                .expect("prepare retained independent source index");
+            execute(prepared, bands, bits)
+        };
         let full = c::TileRegionRequest {
             x: 0,
             y: 0,
@@ -123,7 +142,13 @@ fn independent_source_full_pixels_and_regions_agree() {
         };
         let sample_bytes = usize::from(bits).div_ceil(8);
         for discard in 0..=2 {
-            let (full_width, _, reference) = decode(&source, bands, bits, full, discard);
+            let legacy_full = decode(&source, bands, bits, full, discard);
+            let indexed_full = decode_indexed(full, discard);
+            assert!(
+                legacy_full == indexed_full,
+                "indexed/legacy complete samples: {name}, discard {discard}"
+            );
+            let (full_width, _, reference) = legacy_full;
             if discard == 0 {
                 let mut interleaved = Vec::new();
                 for tile_x in (0..width).step_by(1024) {
@@ -237,8 +262,13 @@ fn independent_source_full_pixels_and_regions_agree() {
                     width: rw,
                     height: rh,
                 };
-                let (regional_width, regional_height, actual) =
-                    decode(&source, bands, bits, region, discard);
+                let legacy_region = decode(&source, bands, bits, region, discard);
+                let indexed_region = decode_indexed(region, discard);
+                assert!(
+                    legacy_region == indexed_region,
+                    "indexed/legacy regional samples: {name}, discard {discard}, region {region:?}"
+                );
+                let (regional_width, regional_height, actual) = legacy_region;
                 let step = 1_u32 << discard;
                 let ox = x.div_ceil(step);
                 let oy = y.div_ceil(step);
@@ -256,7 +286,17 @@ fn independent_source_full_pixels_and_regions_agree() {
                     }
                 }
             }
-            println!("PASS {name}: discard {discard}, complete and three exact regions");
+            assert!(
+                decode_indexed(full, discard) == indexed_full,
+                "indexed complete revisit after regions: {name}, discard {discard}"
+            );
+            assert_eq!(
+                (index.header_bytes(), index.tile_part_count()),
+                retained_headers
+            );
+            println!(
+                "PASS {name}: discard {discard}, legacy/indexed complete and three exact regions, indexed complete revisit"
+            );
         }
     }
 }

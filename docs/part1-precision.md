@@ -84,7 +84,9 @@ Reported counters are codec work/capacity observations, not total process RSS
 or physical storage operations. No full-image allocation or full payload scan
 was observed. Inspection and new regional plans still traverse tile-part
 metadata; repeated execution of a retained plan reads selected codewords only.
-A reusable header index across different regions is a separate optimisation.
+The later additive [source index](part1-source-index.md) provides reusable
+headers across different regions; this precision calibration used the one-shot
+source route.
 
 The real source already worked at the baseline codec revision. Its plugin
 admission, GDAL routing, comparison against an independent decoder and larger

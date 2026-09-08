@@ -9,14 +9,15 @@ use std::ffi::{c_char, c_void};
 use std::mem::{align_of, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use emuella_j2k::codestream::source::{CodestreamSource, SourceError, SourceErrorKind};
 use emuella_j2k::{
     ComponentInfo, Image, ImageData, ImageInfo, ImageViewMut, J2kError, Part1DecodeWorkspace,
-    PlaneMut, SampleEndian, SampleFormat, execute_prepared_part1_decode_into_with_workspace,
-    inspect_part1_source, prepare_part1_decode_from_source,
+    Part1SourceIndex, Part1SourceIndexLimits, PlaneMut, SampleEndian, SampleFormat,
+    execute_prepared_part1_decode_into_with_workspace, inspect_part1_source,
+    prepare_part1_decode_from_source,
 };
 
 pub type EmuellaJ2kStatus = u32;
@@ -56,6 +57,20 @@ pub struct EmuellaJ2kSourceV0 {
     pub length: u64,
     pub context: *mut c_void,
     pub read_at: EmuellaJ2kReadAtFn,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+/// Explicit positive ceilings for required retained Part 1 source indexing.
+/// Marker bytes exclude metadata overhead; counts bound retained descriptors.
+/// Zero ceilings or a non-zero reserved field are invalid arguments.
+pub struct EmuellaJ2kSourceIndexOptionsV0 {
+    pub struct_size: usize,
+    pub abi_version: u32,
+    pub reserved: u32,
+    pub max_header_bytes: u64,
+    pub max_markers: u32,
+    pub max_tile_parts: u32,
 }
 
 #[repr(C)]
@@ -253,6 +268,34 @@ impl CodestreamSource for CallbackSource {
 
 struct DecoderState {
     source: CallbackSource,
+    index_limits: Option<Part1SourceIndexLimits>,
+    index: OnceLock<Part1SourceIndex<CallbackSource>>,
+    index_initialisation: Mutex<()>,
+}
+
+impl DecoderState {
+    fn index(&self) -> Result<&Part1SourceIndex<CallbackSource>, AbiFailure> {
+        if let Some(index) = self.index.get() {
+            return Ok(index);
+        }
+        // Only construction is serialised. A failed attempt publishes nothing;
+        // transient callback failures can be retried. A contained construction panic
+        // also leaves no partial index, so a poisoned construction lock is safe
+        // to recover. Successful reads and decodes share immutable metadata.
+        let _guard = self
+            .index_initialisation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = self.index.get() {
+            return Ok(index);
+        }
+        let limits = self.index_limits.ok_or_else(|| {
+            AbiFailure::invalid("decoder did not request retained source indexing")
+        })?;
+        let index =
+            Part1SourceIndex::new_with_limits(self.source, limits).map_err(AbiFailure::from)?;
+        Ok(self.index.get_or_init(|| index))
+    }
 }
 
 struct InspectionState {
@@ -584,30 +627,8 @@ pub unsafe extern "C" fn emuella_j2k_decoder_create(
         // SAFETY: The export contract supplies exclusive, disjoint output storage for this
         // value.
         unsafe { checked_write(output, ptr::null_mut(), "decoder_output") }?;
-        // SAFETY: The export contract supplies initialised input storage; size validation
-        // precedes full-structure reads.
-        let header = unsafe { checked_read(source.cast::<AbiHeader>(), "source") }?;
-        validate_header(
-            header.struct_size,
-            header.abi_version,
-            size_of::<EmuellaJ2kSourceV0>(),
-        )?;
-        // SAFETY: The export contract supplies initialised input storage; size validation
-        // precedes full-structure reads.
-        let source = unsafe { checked_read(source, "source") }?;
-        if source.reserved != 0 {
-            return Err(AbiFailure::invalid("source reserved field must be zero"));
-        }
-        let read_at = source
-            .read_at
-            .ok_or_else(|| AbiFailure::invalid("source read_at callback is required"))?;
-        let decoder = Box::new(DecoderState {
-            source: CallbackSource {
-                context_address: source.context.expose_provenance(),
-                length: source.length,
-                read_at,
-            },
-        });
+        // SAFETY: The export supplies the complete source descriptor and callback lifetime.
+        let decoder = unsafe { decoder_from_source(source, None) }?;
         // SAFETY: The export contract supplies exclusive, disjoint output storage for this
         // value.
         unsafe {
@@ -620,6 +641,111 @@ pub unsafe extern "C" fn emuella_j2k_decoder_create(
     };
     // SAFETY: The export contract reserves the error slot and keeps any workspace alive
     // through panic recovery. The closure upholds each individual pointer obligation.
+    unsafe { boundary(error_output, ptr::null(), operation) }
+}
+
+// SAFETY: The caller supplies a readable source prefix and, after size
+// validation, a complete source descriptor; the callback contract remains valid
+// for the lifetime of the returned decoder. This helper publishes no raw handle.
+unsafe fn decoder_from_source(
+    source: *const EmuellaJ2kSourceV0,
+    index_limits: Option<Part1SourceIndexLimits>,
+) -> Result<Box<DecoderState>, AbiFailure> {
+    // SAFETY: The export contract supplies initialised input storage; size validation
+    // precedes full-structure reads.
+    let header = unsafe { checked_read(source.cast::<AbiHeader>(), "source") }?;
+    validate_header(
+        header.struct_size,
+        header.abi_version,
+        size_of::<EmuellaJ2kSourceV0>(),
+    )?;
+    // SAFETY: The export contract supplies initialised input storage; size validation
+    // precedes full-structure reads.
+    let source = unsafe { checked_read(source, "source") }?;
+    if source.reserved != 0 {
+        return Err(AbiFailure::invalid("source reserved field must be zero"));
+    }
+    let read_at = source
+        .read_at
+        .ok_or_else(|| AbiFailure::invalid("source read_at callback is required"))?;
+    let decoder = Box::new(DecoderState {
+        index_limits,
+        index: OnceLock::new(),
+        index_initialisation: Mutex::new(()),
+        source: CallbackSource {
+            context_address: source.context.expose_provenance(),
+            length: source.length,
+            read_at,
+        },
+    });
+    Ok(decoder)
+}
+
+#[unsafe(no_mangle)]
+/// Create a decoder that requires a retained Part 1 source index with explicit limits.
+///
+/// Creation validates and copies descriptors without reading source bytes. The
+/// first inspection or decode builds the index; exceeding any ceiling fails as
+/// unsupported input, without falling back to repeated header traversal. A
+/// successful index is shared by subsequent inspection and regional requests.
+/// Existing `emuella_j2k_decoder_create` retains its one-shot source semantics.
+///
+/// # Safety
+/// All source, callback, context, output and error-output obligations of
+/// `emuella_j2k_decoder_create` apply. `options` must provide a readable,
+/// initialised size/version prefix and, when the full size is advertised, the
+/// complete initialised options structure. Its storage must remain valid and
+/// correctly aligned for this call, and disjoint from writable outputs.
+pub unsafe extern "C" fn emuella_j2k_decoder_create_indexed(
+    source: *const EmuellaJ2kSourceV0,
+    options: *const EmuellaJ2kSourceIndexOptionsV0,
+    output: *mut *mut EmuellaJ2kDecoder,
+    error_output: *mut *mut EmuellaJ2kError,
+) -> EmuellaJ2kStatus {
+    let operation = || {
+        // SAFETY: The export supplies exclusive, disjoint output storage.
+        unsafe { checked_write(output, ptr::null_mut(), "decoder_output") }?;
+        // SAFETY: The export supplies a readable options prefix before full-size validation.
+        let header = unsafe { checked_read(options.cast::<AbiHeader>(), "index_options") }?;
+        validate_header(
+            header.struct_size,
+            header.abi_version,
+            size_of::<EmuellaJ2kSourceIndexOptionsV0>(),
+        )?;
+        // SAFETY: The export supplies the full readable options structure after size validation.
+        let options = unsafe { checked_read(options, "index_options") }?;
+        if options.reserved != 0
+            || options.max_header_bytes == 0
+            || options.max_markers == 0
+            || options.max_tile_parts == 0
+        {
+            return Err(AbiFailure::invalid(
+                "index ceilings must be positive and reserved must be zero",
+            ));
+        }
+        let limits = Part1SourceIndexLimits {
+            header_bytes: usize::try_from(options.max_header_bytes).map_err(|_| {
+                AbiFailure::invalid("index header ceiling exceeds addressable memory")
+            })?,
+            markers: usize::try_from(options.max_markers).map_err(|_| {
+                AbiFailure::invalid("index marker ceiling exceeds addressable memory")
+            })?,
+            tile_parts: usize::try_from(options.max_tile_parts).map_err(|_| {
+                AbiFailure::invalid("index tile-part ceiling exceeds addressable memory")
+            })?,
+        };
+        // SAFETY: The export supplies the complete source descriptor and callback lifetime.
+        let decoder = unsafe { decoder_from_source(source, Some(limits)) }?;
+        // SAFETY: The export supplies exclusive, disjoint output storage for the new handle.
+        unsafe {
+            checked_write(
+                output,
+                Box::into_raw(decoder).cast::<EmuellaJ2kDecoder>(),
+                "decoder_output",
+            )
+        }
+    };
+    // SAFETY: The export reserves the error slot; the closure upholds pointer obligations.
     unsafe { boundary(error_output, ptr::null(), operation) }
 }
 
@@ -667,7 +793,12 @@ pub unsafe extern "C" fn emuella_j2k_decoder_inspect(
         // SAFETY: The caller guarantees the matching live handle remains valid for this call;
         // null and alignment are checked.
         let decoder = unsafe { handle_ref::<EmuellaJ2kDecoder, DecoderState>(decoder, "decoder") }?;
-        let inspected = inspect_part1_source(&decoder.source).map_err(AbiFailure::from)?;
+        let inspected = if decoder.index_limits.is_some() {
+            decoder.index()?.inspect()
+        } else {
+            inspect_part1_source(&decoder.source)
+        }
+        .map_err(AbiFailure::from)?;
         let inspection = Box::new(InspectionState {
             image: inspected.image,
             components: inspected.components,
@@ -1051,8 +1182,12 @@ fn decode_components(
     request: emuella_j2k::codestream::Part1ComponentDecodeRequest<'_>,
     collect_work: bool,
 ) -> Result<Box<ImageState>, AbiFailure> {
-    let prepared =
-        prepare_part1_decode_from_source(&decoder.source, request).map_err(AbiFailure::from)?;
+    let prepared = if decoder.index_limits.is_some() {
+        decoder.index()?.prepare(request)
+    } else {
+        prepare_part1_decode_from_source(&decoder.source, request)
+    }
+    .map_err(AbiFailure::from)?;
     let info = prepared.info().clone();
     let components = prepared.component_info().to_vec();
     let mut samples = Vec::with_capacity(components.len());
@@ -1555,6 +1690,7 @@ mod tests {
     struct TestSource {
         bytes: Vec<u8>,
         fail_reads: bool,
+        reads: Mutex<Vec<(u64, usize)>>,
     }
 
     unsafe extern "C" fn test_read_at(
@@ -1570,6 +1706,7 @@ mod tests {
         // reference escapes this synchronous callback.
         unsafe {
             let source = &*(context.cast::<TestSource>());
+            source.reads.lock().unwrap().push((offset, length));
             if source.fail_reads {
                 return 91;
             }
@@ -1595,6 +1732,7 @@ mod tests {
         (
             Box::new(TestSource {
                 bytes,
+                reads: Mutex::new(Vec::new()),
                 fail_reads: false,
             }),
             samples,
@@ -1631,6 +1769,7 @@ mod tests {
         bytes[48] = 0x0f;
         Box::new(TestSource {
             bytes,
+            reads: Mutex::new(Vec::new()),
             fail_reads: false,
         })
     }
@@ -1667,6 +1806,171 @@ mod tests {
     assert_impl_all!(InspectionState: Send, Sync);
     assert_impl_all!(ImageState: Send, Sync);
     assert_impl_all!(ErrorState: Send, Sync);
+
+    #[test]
+    fn decoder_retains_successful_index_retries_io_failure_and_reuses_it_for_new_windows() {
+        let (mut source, _) = fixture();
+        let payload_start = emuella_j2k::codestream::parse(&source.bytes).unwrap().tiles[0]
+            .payload_offset
+            .unwrap() as u64;
+        let descriptor = source_descriptor(&mut source);
+        let decoder = DecoderState {
+            source: CallbackSource {
+                context_address: descriptor.context.expose_provenance(),
+                length: descriptor.length,
+                read_at: descriptor.read_at.unwrap(),
+            },
+            index_limits: Some(Part1SourceIndexLimits::default()),
+            index: OnceLock::new(),
+            index_initialisation: Mutex::new(()),
+        };
+        source.fail_reads = true;
+        assert!(matches!(
+            decoder.index(),
+            Err(AbiFailure {
+                status: EMUELLA_J2K_STATUS_SOURCE_IO,
+                ..
+            })
+        ));
+        assert!(decoder.index.get().is_none());
+        source.fail_reads = false;
+        let index = decoder
+            .index()
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(index.inspect().unwrap().image.width, 4);
+        source.reads.lock().unwrap().clear();
+        source.fail_reads = true;
+        // Inspection is served entirely by immutable metadata after construction.
+        assert!(
+            decoder
+                .index()
+                .unwrap_or_else(|error| panic!("{}", error.message))
+                .inspect()
+                .is_ok()
+        );
+        assert!(source.reads.lock().unwrap().is_empty());
+        source.fail_reads = false;
+        let workspace = WorkspaceState {
+            poisoned: AtomicBool::new(false),
+            inner: Mutex::new(Part1DecodeWorkspace::new()),
+        };
+        for x in [0, 2] {
+            let request = emuella_j2k::codestream::Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: emuella_j2k::codestream::TileRegionRequest {
+                    x,
+                    y: 0,
+                    width: 2,
+                    height: 4,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            };
+            let image = decode_components(&decoder, &workspace, request, true)
+                .unwrap_or_else(|error| panic!("{}", error.message));
+            assert_eq!(image.image.info.width, 2);
+        }
+        assert!(!source.reads.lock().unwrap().is_empty());
+        assert!(
+            source
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(offset, _)| *offset >= payload_start)
+        );
+    }
+
+    #[test]
+    fn indexed_constructor_validates_options_and_keeps_legacy_admission_separate() {
+        let (mut source, _) = fixture();
+        let descriptor = source_descriptor(&mut source);
+        let valid = EmuellaJ2kSourceIndexOptionsV0 {
+            struct_size: size_of::<EmuellaJ2kSourceIndexOptionsV0>(),
+            abi_version: EMUELLA_J2K_ABI_VERSION,
+            reserved: 0,
+            max_header_bytes: 8,
+            max_markers: 65_536,
+            max_tile_parts: 65_536,
+        };
+        for options in [
+            EmuellaJ2kSourceIndexOptionsV0 {
+                struct_size: 0,
+                ..valid
+            },
+            EmuellaJ2kSourceIndexOptionsV0 {
+                abi_version: u32::MAX,
+                ..valid
+            },
+            EmuellaJ2kSourceIndexOptionsV0 {
+                reserved: 1,
+                ..valid
+            },
+            EmuellaJ2kSourceIndexOptionsV0 {
+                max_header_bytes: 0,
+                ..valid
+            },
+            EmuellaJ2kSourceIndexOptionsV0 {
+                max_markers: 0,
+                ..valid
+            },
+            EmuellaJ2kSourceIndexOptionsV0 {
+                max_tile_parts: 0,
+                ..valid
+            },
+        ] {
+            let mut decoder = ptr::null_mut();
+            // SAFETY: Complete descriptors and disjoint outputs remain live for this call.
+            assert_eq!(
+                unsafe {
+                    emuella_j2k_decoder_create_indexed(
+                        &descriptor,
+                        &options,
+                        &mut decoder,
+                        ptr::null_mut(),
+                    )
+                },
+                EMUELLA_J2K_STATUS_INVALID_ARGUMENT
+            );
+            assert!(decoder.is_null());
+        }
+        assert!(source.reads.lock().unwrap().is_empty());
+        let mut indexed = ptr::null_mut();
+        // SAFETY: The boxed immutable bytes and callback remain live through decoder destruction.
+        assert_eq!(
+            unsafe {
+                emuella_j2k_decoder_create_indexed(
+                    &descriptor,
+                    &valid,
+                    &mut indexed,
+                    ptr::null_mut(),
+                )
+            },
+            EMUELLA_J2K_STATUS_OK
+        );
+        assert!(source.reads.lock().unwrap().is_empty());
+        let mut inspection = ptr::null_mut();
+        // SAFETY: The decoder is live and the output is disjoint writable storage.
+        assert_eq!(
+            unsafe { emuella_j2k_decoder_inspect(indexed, &mut inspection, ptr::null_mut()) },
+            EMUELLA_J2K_STATUS_UNSUPPORTED
+        );
+        assert!(inspection.is_null());
+        // SAFETY: No operation remains active and this transfers the handle exactly once.
+        unsafe { emuella_j2k_decoder_destroy(indexed) };
+        // SAFETY: The same source remains stable and valid through decoder destruction.
+        let legacy = unsafe { decoder(&mut source) };
+        // SAFETY: The legacy decoder is live and the output is disjoint writable storage.
+        assert_eq!(
+            unsafe { emuella_j2k_decoder_inspect(legacy, &mut inspection, ptr::null_mut()) },
+            EMUELLA_J2K_STATUS_OK
+        );
+        // SAFETY: Both handles are live and quiescent and are released exactly once.
+        unsafe {
+            emuella_j2k_inspection_destroy(inspection);
+            emuella_j2k_decoder_destroy(legacy);
+        }
+    }
 
     #[test]
     fn invalid_null_outputs_are_rejected_without_ub() {
@@ -1912,6 +2216,7 @@ unsafe { decoder(&mut source) };
             .unwrap();
             let mut source = Box::new(TestSource {
                 bytes,
+                reads: Mutex::new(Vec::new()),
                 fail_reads: false,
             });
             // SAFETY: Source storage and handles remain live; all destinations are disjoint local buffers.
@@ -2013,6 +2318,7 @@ unsafe { decoder(&mut source) };
         .unwrap();
         let mut source = Box::new(TestSource {
             bytes,
+            reads: Mutex::new(Vec::new()),
             fail_reads: false,
         });
         // SAFETY: The source and handles remain live; every output is disjoint local storage.
@@ -2076,6 +2382,7 @@ unsafe { decoder(&mut source) };
         let fixture = emuella_j2k_test_support::native_planes::reversible_mct_region_fixture();
         let mut source = Box::new(TestSource {
             bytes: fixture.tnsot_one,
+            reads: Mutex::new(Vec::new()),
             fail_reads: false,
         });
         // SAFETY: Source storage remains live and immutable through decoder destruction.
@@ -2439,6 +2746,7 @@ unsafe { decoder(&mut source) };
         let fixture = emuella_j2k_test_support::native_planes::reversible_mct_region_fixture();
         let mut source = Box::new(TestSource {
             bytes: fixture.tnsot_zero,
+            reads: Mutex::new(Vec::new()),
             fail_reads: false,
         });
         let decoder = // SAFETY: The boxed source stays live and unchanged until the decoder is destroyed.

@@ -119,6 +119,20 @@ typedef struct EmuellaJ2kSourceV0 {
 } EmuellaJ2kSourceV0;
 
 /**
+ * Explicit positive ceilings for required retained Part 1 source indexing.
+ * Marker bytes exclude metadata overhead; counts bound retained descriptors.
+ * Zero ceilings or a non-zero reserved field are invalid arguments.
+ */
+typedef struct EmuellaJ2kSourceIndexOptionsV0 {
+  size_t struct_size;
+  uint32_t abi_version;
+  uint32_t reserved;
+  uint64_t max_header_bytes;
+  uint32_t max_markers;
+  uint32_t max_tile_parts;
+} EmuellaJ2kSourceIndexOptionsV0;
+
+/**
  * Native raw-component geometry and sample representation.
  */
 typedef struct EmuellaJ2kComponentInfoV0 {
@@ -319,6 +333,27 @@ EmuellaJ2kStatus emuella_j2k_decode_components_region(const struct EmuellaJ2kDec
 EmuellaJ2kStatus emuella_j2k_decoder_create(const struct EmuellaJ2kSourceV0 *source,
                                             struct EmuellaJ2kDecoder **output,
                                             struct EmuellaJ2kError **error_output);
+
+/**
+ * Create a decoder that requires a retained Part 1 source index with explicit limits.
+ *
+ * Creation validates and copies descriptors without reading source bytes. The
+ * first inspection or decode builds the index; exceeding any ceiling fails as
+ * unsupported input, without falling back to repeated header traversal. A
+ * successful index is shared by subsequent inspection and regional requests.
+ * Existing `emuella_j2k_decoder_create` retains its one-shot source semantics.
+ *
+ * # Safety
+ * All source, callback, context, output and error-output obligations of
+ * `emuella_j2k_decoder_create` apply. `options` must provide a readable,
+ * initialised size/version prefix and, when the full size is advertised, the
+ * complete initialised options structure. Its storage must remain valid and
+ * correctly aligned for this call, and disjoint from writable outputs.
+ */
+EmuellaJ2kStatus emuella_j2k_decoder_create_indexed(const struct EmuellaJ2kSourceV0 *source,
+                                                    const struct EmuellaJ2kSourceIndexOptionsV0 *options,
+                                                    struct EmuellaJ2kDecoder **output,
+                                                    struct EmuellaJ2kError **error_output);
 
 /**
  * Destroy a decoder after all calls and callbacks using it have quiesced.

@@ -78,7 +78,12 @@ normalised sample hash against the owner and enforces the peak limit.
 
 Every profile passes complete reconstruction and three interior, edge and
 (where present) tile-crossing regions at discard levels zero, one and two.
-These 15 complete and 45 regional requests preserve declared sample precision.
+The one-shot route performs 15 complete and 45 regional requests. A single
+retained `Part1SourceIndex` is constructed for each fixture and reused across
+all resolutions and windows; its 15 complete, 45 regional and 15 complete-revisit
+requests equal one-shot samples and geometry exactly. Complete revisits run
+after the regional requests, and retained header-byte/tile-part counts remain
+unchanged. Both routes preserve declared sample precision.
 Regional samples equal the corresponding complete same-source reconstruction
 exactly at all three resolutions. Only full resolution has an independent
 sample oracle; reduced results establish regional/full consistency, not a new
@@ -104,6 +109,10 @@ verification and reviewed source identity remain integration-owned gates.
 Focused checks pass: 245 codestream tests (six explicitly ignored), three
 precision tests, six reversible-MCT regional tests, the optional five-profile
 qualification in default and parallel builds, and strict clippy for that harness.
+The retained-index extension also passes both builds on all five independent
+TLM/PLT fixtures, preserving the same external lossy limit and exact
+indexed/one-shot comparisons. Source-header read exclusion and construction
+failure behaviour are covered separately by the source-index regressions.
 The composed provisional GDAL/plugin C ABI probe also reports zero mismatches
 for all four complete lossless NITF rasters. That observation precedes an exact
 candidate commit; final committed integration evidence belongs to the owning PR.
