@@ -9453,6 +9453,12 @@ pub fn inspect_part1_source(
     source: &dyn codestream::source::CodestreamSource,
 ) -> Result<Part1SourceInspection> {
     let inspected = codestream::inspect_part1_source(source).map_err(map_codestream_error)?;
+    part1_source_inspection(inspected)
+}
+
+fn part1_source_inspection(
+    inspected: codestream::Part1SourceInspection,
+) -> Result<Part1SourceInspection> {
     let first = inspected
         .components
         .first()
@@ -9678,6 +9684,65 @@ pub fn prepare_part1_decode_from_source<'a>(
 ) -> Result<PreparedPart1Decode<'a>> {
     let codestream = codestream::prepare_part1_component_decode_from_source(source, request)
         .map_err(map_codestream_error)?;
+    prepared_part1_source_decode(codestream, request)
+}
+
+/// Explicit retained-resource ceilings for a Part 1 source index.
+pub use codestream::Part1SourceIndexLimits;
+
+/// Reusable validated raw Part 1 headers bound to one immutable positioned source.
+/// See [`codestream::Part1SourceIndex`] for construction budgets and source lifetime.
+pub struct Part1SourceIndex<S>(codestream::Part1SourceIndex<S>);
+
+impl<S: codestream::source::CodestreamSource> Part1SourceIndex<S> {
+    /// Validate and index using explicit retained header and metadata ceilings.
+    pub fn new_with_limits(source: S, limits: Part1SourceIndexLimits) -> Result<Self> {
+        codestream::Part1SourceIndex::new_with_limits(source, limits)
+            .map(Self)
+            .map_err(map_codestream_error)
+    }
+
+    /// Read and validate the bounded header index once, retaining no image pixels.
+    pub fn new(source: S) -> Result<Self> {
+        codestream::Part1SourceIndex::new(source)
+            .map(Self)
+            .map_err(map_codestream_error)
+    }
+
+    /// Inspect retained image and component metadata without source reads.
+    pub fn inspect(&self) -> Result<Part1SourceInspection> {
+        part1_source_inspection(self.0.inspect().map_err(map_codestream_error)?)
+    }
+
+    /// Prepare a window without rereading unrelated tile headers.
+    pub fn prepare(
+        &self,
+        request: codestream::Part1ComponentDecodeRequest<'_>,
+    ) -> Result<PreparedPart1Decode<'_>> {
+        let prepared = self.0.prepare(request).map_err(map_codestream_error)?;
+        prepared_part1_source_decode(prepared, request)
+    }
+
+    /// Access the immutable source and its physical read metrics.
+    pub fn source(&self) -> &S {
+        self.0.source()
+    }
+
+    /// Retained marker bytes, excluding metadata and allocator overhead.
+    pub fn header_bytes(&self) -> usize {
+        self.0.header_bytes()
+    }
+
+    /// Validated tile-part count.
+    pub fn tile_part_count(&self) -> usize {
+        self.0.tile_part_count()
+    }
+}
+
+fn prepared_part1_source_decode<'a>(
+    codestream: codestream::PreparedPart1ComponentDecode<'a>,
+    request: codestream::Part1ComponentDecodeRequest<'_>,
+) -> Result<PreparedPart1Decode<'a>> {
     if request.max_layers.is_some() && codestream.codestream_declared_quality_layers() != Some(1) {
         let (image_width, image_height) = codestream.codestream_image_dimensions();
         if request.max_layers == Some(0) {

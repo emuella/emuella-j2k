@@ -28,7 +28,7 @@ static uint8_t rgb_expected(uint16_t component, uint32_t x, uint32_t y) {
   }
 }
 
-static void test_multi_component(const char *fixture_path) {
+static void test_multi_component(const char *fixture_path, int indexed) {
   FILE *file = fopen(fixture_path, "rb");
   assert(file != NULL);
   assert(fseek(file, 0, SEEK_END) == 0);
@@ -44,7 +44,13 @@ static void test_multi_component(const char *fixture_path) {
                              (uint64_t)file_length, &context, multi_read_at};
   EmuellaJ2kDecoder *decoder = NULL;
   EmuellaJ2kWorkspace *workspace = NULL;
-  assert(emuella_j2k_decoder_create(&source, &decoder, NULL) == EMUELLA_J2K_STATUS_OK);
+  if (indexed) {
+    EmuellaJ2kSourceIndexOptionsV0 options = {
+        sizeof(options), EMUELLA_J2K_ABI_VERSION, 0, 16 * 1024 * 1024, 65536, 65536};
+    assert(emuella_j2k_decoder_create_indexed(&source, &options, &decoder, NULL) == EMUELLA_J2K_STATUS_OK);
+  } else {
+    assert(emuella_j2k_decoder_create(&source, &decoder, NULL) == EMUELLA_J2K_STATUS_OK);
+  }
   assert(emuella_j2k_workspace_create(&workspace, NULL) == EMUELLA_J2K_STATUS_OK);
   EmuellaJ2kDecodeComponentsRequestV0 request;
   memset(&request, 0, sizeof(request));

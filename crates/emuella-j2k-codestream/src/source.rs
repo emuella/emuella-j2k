@@ -85,8 +85,8 @@ pub struct SourceMetrics {
 /// Immutable cursor-independent byte source.
 ///
 /// Implementations must keep bytes stable for the lifetime of every prepared
-/// plan bound to the source. Mutating or replacing backing storage while a plan
-/// exists violates the contract.
+/// plan or reusable index bound to the source. Mutating or replacing backing
+/// storage while a plan or index exists violates the contract.
 pub trait CodestreamSource: Send + Sync {
     fn len(&self) -> Result<u64, SourceError>;
 

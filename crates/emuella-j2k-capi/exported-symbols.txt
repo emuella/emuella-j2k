@@ -2,6 +2,7 @@ emuella_j2k_abi_version
 emuella_j2k_decode_component_region
 emuella_j2k_decode_components_region
 emuella_j2k_decoder_create
+emuella_j2k_decoder_create_indexed
 emuella_j2k_decoder_destroy
 emuella_j2k_decoder_inspect
 emuella_j2k_error_destroy

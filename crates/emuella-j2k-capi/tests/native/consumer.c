@@ -24,6 +24,13 @@ ASSERT_OFFSET(EmuellaJ2kSourceV0, reserved, 12);
 ASSERT_OFFSET(EmuellaJ2kSourceV0, length, 16);
 ASSERT_OFFSET(EmuellaJ2kSourceV0, context, 24);
 ASSERT_OFFSET(EmuellaJ2kSourceV0, read_at, 32);
+ASSERT_LAYOUT(EmuellaJ2kSourceIndexOptionsV0, 32, 8);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, struct_size, 0);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, abi_version, 8);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, reserved, 12);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, max_header_bytes, 16);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, max_markers, 24);
+ASSERT_OFFSET(EmuellaJ2kSourceIndexOptionsV0, max_tile_parts, 28);
 
 ASSERT_LAYOUT(EmuellaJ2kImageInfoV0, 40, 8);
 ASSERT_OFFSET(EmuellaJ2kImageInfoV0, struct_size, 0);
@@ -175,7 +182,8 @@ static void *decode_concurrently(void *opaque) {
 
 int main(int argc, char **argv) {
   assert(argc == 2);
-  test_multi_component(argv[1]);
+  test_multi_component(argv[1], 0);
+  test_multi_component(argv[1], 1);
   assert(emuella_j2k_abi_version() == EMUELLA_J2K_ABI_VERSION);
   assert(strcmp(emuella_j2k_package_version(), "0.1.0") == 0);
   SourceContext source_context = {
@@ -187,7 +195,9 @@ int main(int argc, char **argv) {
       &source_context, read_at,
   };
   EmuellaJ2kDecoder *decoder = NULL;
-  assert(emuella_j2k_decoder_create(&source, &decoder, NULL) == EMUELLA_J2K_STATUS_OK);
+  EmuellaJ2kSourceIndexOptionsV0 index_options = {
+      sizeof(index_options), EMUELLA_J2K_ABI_VERSION, 0, 16 * 1024 * 1024, 65536, 65536};
+  assert(emuella_j2k_decoder_create_indexed(&source, &index_options, &decoder, NULL) == EMUELLA_J2K_STATUS_OK);
   EmuellaJ2kInspection *inspection = NULL;
   assert(emuella_j2k_decoder_inspect(decoder, &inspection, NULL) == EMUELLA_J2K_STATUS_OK);
   EmuellaJ2kImageInfoV0 info = {0};

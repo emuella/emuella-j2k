@@ -25,6 +25,18 @@ unsafe {
 ```
 
 ```compile_fail,E0133
+use emuella_j2k_capi::emuella_j2k_decoder_create_indexed;
+emuella_j2k_decoder_create_indexed(std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut());
+```
+```no_run
+use emuella_j2k_capi::emuella_j2k_decoder_create_indexed;
+// SAFETY: null pointers are rejected before access.
+unsafe {
+    emuella_j2k_decoder_create_indexed(std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut());
+}
+```
+
+```compile_fail,E0133
 use emuella_j2k_capi::emuella_j2k_decoder_destroy;
 emuella_j2k_decoder_destroy(std::ptr::null_mut());
 ```

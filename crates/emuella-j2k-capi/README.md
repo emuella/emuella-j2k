@@ -13,6 +13,24 @@ buffer. Error status values are stable within this experimental header;
 optional Rust-owned error handles provide a NUL-terminated UTF-8 diagnostic.
 `emuella_j2k_error_message_size` includes that terminating NUL byte.
 
+Use `emuella_j2k_decoder_create_indexed` to require reusable validated Part 1
+headers across inspection and different windows. Supply positive
+`max_header_bytes`, `max_markers` and `max_tile_parts` in
+`EmuellaJ2kSourceIndexOptionsV0`, with its full `struct_size`, current
+`abi_version` and zero `reserved`. Construction is lazy and reads no bytes at
+creation; the first inspection or decode builds the index within those limits.
+Exceeding a limit fails as `UNSUPPORTED`, with no fallback to repeated scanning.
+The original `emuella_j2k_decoder_create` keeps its previous one-shot source
+behaviour and admission. Only the indexed constructor promises retained headers.
+
+Header-byte limits count compact retained marker bytes, excluding metadata and
+allocator overhead; marker and tile-part ceilings separately bound metadata.
+For example, an application can choose 16 MiB, 65,536 markers and 65,536 tile
+parts. Source bytes remain immutable for the decoder lifetime. Index construction
+validates headers, not complete packet support, and retains no compressed bodies
+or image pixels. See the repository
+[source-index contract and calibration](../../docs/part1-source-index.md).
+
 All calls are synchronous. Output pointer locations must be writable and
 mutually disjoint. Consumers must destroy every successfully returned decoder,
 inspection, workspace, image and error exactly once, and must not use or destroy
@@ -45,8 +63,10 @@ returns `UNSUPPORTED` without modifying the output descriptor. Work counters
 include all reconstructed dependencies, including unrequested MCT components;
 they use the codec's inexpensive `WorkCounters` mode, without detailed
 per-block timing. Each successful call prepares one fresh regional plan.
-Decoder reuse preserves source identity, and workspace reuse retains scratch;
-neither means that a packet index or regional plan is cached across calls.
+Decoder reuse preserves source identity, and workspace reuse retains scratch.
+The explicit indexed constructor additionally retains validated main/tile headers
+and tile-part spans. Selected packet plans remain per request in both modes;
+geometry and profile-validation work can still scale with total tile count.
 
 `output_allocation_count` counts successful new C ABI output-plane buffer
 reservation requests only. `output_allocation_bytes` is their total logical
