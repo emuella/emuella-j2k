@@ -7890,7 +7890,8 @@ fn decoded_sample_format(decoded: &codestream::DecodedImage) -> Result<SampleFor
 /// allocating a second full output image. Other profiles remain conservative
 /// caller-owned-buffer adapters over [`decode`].
 /// The bounded independent U8 plane profile described in `docs/native-planes.md`
-/// always finishes in private storage before publishing any caller samples.
+/// and eight-component full decode always finish in private storage before
+/// publishing any caller samples. See `docs/native-eight-components.md`.
 pub fn decode_into(
     input: &[u8],
     target: &mut ImageViewMut<'_>,

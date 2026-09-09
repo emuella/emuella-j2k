@@ -23,7 +23,10 @@ pub(super) fn is_scalable_lossless(image: ImageView<'_>, options: &EncodeOptions
 /// Check the conservative working allocation envelope before encoding.
 ///
 /// Accepts only raw, single-tile, lossless reversible D2, LRCP, unsigned U8/U16
-/// greyscale/RGB and no metadata. Other profiles return an error; no limit is
+/// greyscale/RGB, or exactly eight U16_LE components with `ColorModel::Unknown`,
+/// and no metadata. Eight components preserve positional native samples without
+/// MCT and admit at most 32 Mi pixels (256 Mi aggregate samples).
+/// Other profiles return an error; no limit is
 /// silently ignored. This validates geometry/options, not caller sample storage.
 /// See `docs/scalable-lossless.md` for accounting and runtime output admission.
 pub fn lossless_encode_requirements(

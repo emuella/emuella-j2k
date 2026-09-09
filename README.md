@@ -53,7 +53,11 @@ RGB up to 64 Mi pixels, including full 6650 × 7054 inputs. The additive
 `encode_with_limits` and `lossless_encode_requirements` APIs expose checked
 working-memory and output-capacity admission. See the
 [scalable lossless contract](docs/scalable-lossless.md) for the exact profile,
-allocation model and opt-in authored probes.
+allocation model and opt-in authored probes. Exactly eight positional native
+U16_LE components also support this raw D2 route without MCT, with both layouts
+and at most 32 Mi pixels. Use `ColorModel::Unknown` and decode in component mode;
+the [native eight-component contract](docs/native-eight-components.md) defines
+band order, limits and failure-atomic caller output.
 
 Lossless Part 1 greyscale encode also accepts genuine 9–15-bit unsigned
 precision in little-endian two-byte storage, with zero through two reversible
