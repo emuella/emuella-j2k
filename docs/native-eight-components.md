@@ -94,7 +94,7 @@ Project-authored implementation and tests follow ISO/IEC 15444-1:2024 / ITU-T
 T.800 V4 (July 2024), reviewed retrieval revision
 `34e5d1639b9f121807e620c001893ca9d2c8f977`:
 
-- A.5.1, Tables A.9 and A.11, PDF pages 41–44: SIZ records component count,
+- A.5.1, Tables A.9 and A.11, PDF pages 41–42 and 44: SIZ records component count,
   precision, signedness and sampling. Eight unsigned 16-bit unit-sampled
   components use `Csiz=8`, eight `Ssiz=15, XRsiz=1, YRsiz=1` records and `Lsiz=62`.
 - A.6.1, Tables A.14, A.17 and A.20, PDF pages 47–49: `MCT=0` disables the

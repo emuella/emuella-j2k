@@ -4917,9 +4917,6 @@ pub enum InputFormat {
     /// Raw HTJ2K codestream.
     Htj2kCodestream,
     /// Input family has not been classified yet.
-    /// No inferred colour interpretation. For native eight-component lossless
-    /// encoding, positions are independent unsigned U16 bands; decode with
-    /// `DecodeMode::Components` preserves those positions.
     Unknown,
 }
 
@@ -5032,6 +5029,9 @@ pub enum ColorModel {
     /// Red, green, blue and straight (unassociated) alpha for bounded JP2 output.
     Rgba,
     YCbCr,
+    /// No inferred colour interpretation. For native eight-component lossless
+    /// encoding, positions are independent unsigned U16 bands; decode with
+    /// `DecodeMode::Components` preserves those positions.
     Unknown,
 }
 

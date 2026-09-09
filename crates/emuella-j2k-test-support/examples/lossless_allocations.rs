@@ -146,8 +146,11 @@ fn main() {
     )
     .unwrap();
     assert_eq!(decoded.data, ImageData::Interleaved(samples));
+    let spatial_pixels = u64::from(w) * u64::from(h);
+    let aggregate_samples = requirements.total_component_samples;
+    let max_working_bytes = LosslessEncodeLimits::default().max_working_bytes;
     println!(
-        "width={w} height={h} components={c} bits={bits} planar={planar} input_sha256={input_hash} output_sha256={output_hash} seconds={seconds:.6} bytes={} retained_capacity={retained} peak_requested_encoder_bytes={peak} working_bound={} output_limit={} exact=true",
+        "spatial_pixels={spatial_pixels} aggregate_samples={aggregate_samples} max_working_bytes={max_working_bytes} width={w} height={h} components={c} bits={bits} planar={planar} input_sha256={input_hash} output_sha256={output_hash} seconds={seconds:.6} bytes={} retained_capacity={retained} peak_requested_encoder_bytes={peak} working_bound={} output_limit={} exact=true",
         stream.len(),
         requirements.working_bytes,
         requirements.output_capacity_limit
