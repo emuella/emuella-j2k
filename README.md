@@ -48,6 +48,13 @@ reconstruction retains all three RCT dependencies but publishes only requested
 native RGB components. Other tile-part counts, interleaving, reductions, layer
 limits and MCT shapes remain unsupported.
 
+Raw single-tile classic lossless D2 encode supports U8/U16_LE greyscale and
+RGB up to 64 Mi pixels, including full 6650 × 7054 inputs. The additive
+`encode_with_limits` and `lossless_encode_requirements` APIs expose checked
+working-memory and output-capacity admission. See the
+[scalable lossless contract](docs/scalable-lossless.md) for the exact profile,
+allocation model and opt-in authored probes.
+
 Lossless Part 1 greyscale encode also accepts genuine 9–15-bit unsigned
 precision in little-endian two-byte storage, with zero through two reversible
 levels and optional two-level tiling. Input words must fit the declared

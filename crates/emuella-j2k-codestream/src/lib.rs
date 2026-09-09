@@ -107,6 +107,12 @@ const fn parallel_decode_dispatch_available() -> bool {
     true
 }
 
+mod scalable_lossless;
+pub use scalable_lossless::{
+    LosslessD2Plane, LosslessEncodeLimits, LosslessEncodeRequirements, encode_lossless_d2,
+    lossless_d2_requirements,
+};
+
 const MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES: u64 = 16 * 1024 * 1024;
 const MAX_NATIVE_PART1_COMPONENT_DECODE_SAMPLES: u64 = 64 * 1024 * 1024;
 const MAX_NATIVE_PART1_TOTAL_DECODE_SAMPLES: u64 = 256 * 1024 * 1024;
@@ -14823,6 +14829,26 @@ fn encode_decomp_subband(
     segments: &mut Vec<u8>,
     tier1_encode_scratch: &mut tier1::CodeBlockEncodeScratch,
 ) -> Result<NativeDecompSubband> {
+    encode_decomp_subband_with_output_limit(
+        image_width,
+        plane,
+        spec,
+        available_bitplanes,
+        segments,
+        tier1_encode_scratch,
+        None,
+    )
+}
+
+fn encode_decomp_subband_with_output_limit(
+    image_width: u32,
+    plane: &[i32],
+    spec: DecompSubbandSpec,
+    available_bitplanes: u8,
+    segments: &mut Vec<u8>,
+    tier1_encode_scratch: &mut tier1::CodeBlockEncodeScratch,
+    output_limit: Option<usize>,
+) -> Result<NativeDecompSubband> {
     let grid_x1 = spec
         .grid_x0
         .checked_add(u64::from(spec.width))
@@ -14855,6 +14881,7 @@ fn encode_decomp_subband(
     let subband_x = usize::try_from(spec.x).map_err(|_| CodestreamError::SizeOverflow)?;
     let subband_y = usize::try_from(spec.y).map_err(|_| CodestreamError::SizeOverflow)?;
 
+    let mut block_segment = Vec::new();
     for block_y in 0..code_block_rows {
         for block_x in 0..code_block_cols {
             let code_block_x0 = first_code_block_x
@@ -14916,6 +14943,7 @@ fn encode_decomp_subband(
                 .ok_or(CodestreamError::SizeOverflow)?;
 
             let segment_offset = segments.len();
+            block_segment.clear();
             let encoded = tier1::encode_baseline_code_block_with_strided_scratch(
                 source,
                 image_width_usize,
@@ -14925,10 +14953,18 @@ fn encode_decomp_subband(
                     available_bitplanes,
                     code_block_style: 0,
                 },
-                segments,
+                if output_limit.is_some() {
+                    &mut block_segment
+                } else {
+                    segments
+                },
                 tier1_encode_scratch,
             )
             .map_err(map_tier1_error)?;
+            if let Some(maximum) = output_limit {
+                scalable_lossless::reserve_output(segments, block_segment.len(), maximum)?;
+                segments.extend_from_slice(&block_segment);
+            }
             code_blocks.push(EncodedCodeBlock {
                 x: block_x,
                 y: block_y,

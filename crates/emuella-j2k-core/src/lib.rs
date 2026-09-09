@@ -10025,8 +10025,20 @@ fn decode_partial_part1_components_into_direct(
     Ok(true)
 }
 
+#[cfg(feature = "std")]
+mod scalable_lossless;
+#[cfg(feature = "std")]
+pub use scalable_lossless::{
+    LosslessEncodeLimits, LosslessEncodeRequirements, encode_with_limits,
+    lossless_encode_requirements,
+};
+
 /// Convenience encode that owns the returned codestream or container bytes.
 pub fn encode(image: ImageView<'_>, options: &EncodeOptions) -> Result<Vec<u8>> {
+    #[cfg(feature = "std")]
+    if scalable_lossless::is_scalable_lossless(image, options) {
+        return encode_with_limits(image, options, &LosslessEncodeLimits::default());
+    }
     validate_image_view(&image)?;
 
     let mut output = Vec::new();
@@ -10298,6 +10310,15 @@ pub fn encode_into(
     output: &mut Vec<u8>,
     options: &EncodeOptions,
 ) -> Result<()> {
+    #[cfg(feature = "std")]
+    if scalable_lossless::is_scalable_lossless(image, options) {
+        let bytes = encode_with_limits(image, options, &LosslessEncodeLimits::default())?;
+        output
+            .try_reserve(bytes.len())
+            .map_err(|_| sample_size_overflow())?;
+        output.extend_from_slice(&bytes);
+        return Ok(());
+    }
     validate_image_view(&image)?;
     encode_part1_lossless_into(image, output, options)
 }
