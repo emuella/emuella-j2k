@@ -171,3 +171,89 @@ verification. It reports total encoder peak as a conservative upper bound on
 additional working memory, because final output capacity alone cannot identify
 the output allocation at every earlier peak. It asserts that even this total
 peak fits the working bound, and separately checks retained output capacity.
+
+## Opt-in production-path stage diagnostics
+
+`encode_lossless_d2_profiled` in the low-level codestream crate measures the
+same validated scalable writer. Its ordinary entry point instantiates the
+shared implementation with profiling disabled at compile time. It preserves
+existing sample, arithmetic, budget and output checks. This is an additive
+`std` diagnostic API; it changes neither facade options nor encode admission.
+
+The non-published test-support example reads an already-authorised packed RAW
+input and its matching raw codestream once, then reports aggregate JSON only:
+
+```sh
+CARGO_TARGET_DIR=/your/authorised/scratch/target \
+  cargo build --profile perf -p emuella-j2k-test-support \
+  --features parallel,simd --example lossless_diagnostics
+EMUELLA_DIAGNOSTIC_REVISION="$(git rev-parse HEAD)" RAYON_NUM_THREADS=1 \
+  /your/authorised/scratch/target/perf/examples/lossless_diagnostics \
+  /your/approved-store/input.raw /your/approved-store/input.j2k \
+  4851 2752 1 16 interleaved
+```
+
+Arguments are RAW path, codestream path, width, height, components (1/3/8),
+bits (8/16, eight components require 16), and `planar` or `interleaved`.
+RAW storage must be packed in the supplied layout, with U16 words little-endian.
+The bounded driver accepts matching unsigned unit-sampled classic D2, reversible
+5/3, LRCP, one layer/tile, default precincts, style-zero 64×64 blocks, zero
+origins, and no SOP/EPH. RGB decode permits existing no-MCT or RCT streams;
+encoding retains the existing RGB RCT policy. Eight-band decode uses the full
+owned native component route. No prepared selective route is substituted.
+Invalid, mismatched or unsupported input returns an error JSON and nonzero exit.
+A parity or measured allocation failure also exits nonzero. Inputs, generated
+streams and reconstructed pixels remain in memory; the driver never saves them.
+Its only file reads are the two explicitly supplied paths.
+
+For the corresponding RGB8 dimensions use `4851 2752 3 8`; for native eight-band
+U16 use `1213 688 8 16`. The example does not acquire inputs or grant rights to
+use a path. Keep any redirected JSON with its authorised evidence owner.
+The revision environment field is explicitly a caller-supplied label, not
+proof of binary provenance. Record source/tree, toolchain, build command and
+binary hash externally. Feature booleans reflect this example's feature
+selection; they do not assert that a particular SIMD kernel executed.
+
+Encode reports disjoint conversion/level-shift/RCT, forward DWT, subband and
+block preparation, checked Tier-1, packet header and assembly intervals.
+Assembly includes output appends, moving each current packet body to insert its
+header, and closure. Total also contains validation, accounting, local
+allocation/destruction and loop overhead; the remainder is reported explicitly.
+The Tier-1 interval includes its internal block preparation. Completed calls,
+included blocks, coefficient slots, coding passes and codeword bytes are actual
+work counters. Inner entropy-operation counts are unavailable and reported as
+`null`, not invented zeros. The writer remains sequential checked baseline
+Tier-1 with both optional features enabled.
+
+Decode reuses the existing full owned stage collector and actual Tier-1 backend
+counters, including the optional entropy-operation collector. Its outer interval
+includes native output packing and release of intermediate planes. Verification,
+input reads and hashes are outside both measured intervals. The example verifies
+native samples against RAW, ordinary decode against RAW, its encode round trip,
+and profiled versus ordinary core encode bytes. The supplied decode stream need
+not equal the generated stream: in particular, RGB no-MCT and RCT differ.
+
+Requested encoder allocation accounting resets immediately before profiled
+encode and is captured immediately after it, before decode or verification.
+It excludes already-loaded inputs; the total peak conservatively includes
+output reallocation overlap. This is requested allocation traffic, not RSS.
+The example-only allocator follows the existing allocation probe's forwarding
+contract and is never linked into codec libraries.
+
+Clock reads, work counters and the allocation meter perturb execution. The
+existing decode collector suppresses some parallel dispatch; these are diagnostic
+stage observations, not headline throughput or proof of ordinary parallel
+backend selection. Use a separate ordinary uninstrumented process for timing,
+with matched inputs/build settings and explicit thread policy. Do not add nested
+decode substage timings to their parent total. Fields for unsupported telemetry
+are omitted; zero observed work, such as inverse RCT without MCT, remains zero.
+
+Focused authored checks cover grey/RGB U8/U16 and eight-band U16, full-range
+words, both layouts, block boundaries, ordinary byte identity, native decode
+parity, work-counter toggling, no-MCT RGB D2 and unchanged resource/error gates:
+
+```sh
+cargo test -p emuella-j2k-test-support --test lossless_diagnostics
+cargo test -p emuella-j2k-test-support --test lossless_diagnostics --features parallel,simd
+cargo test -p emuella-j2k-test-support --example lossless_diagnostics
+```

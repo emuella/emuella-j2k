@@ -3,6 +3,7 @@ use emuella_j2k_core::{
     encode,
 };
 
+pub mod lossless_diagnostics;
 pub mod native_planes;
 
 /// Generate deterministic grayscale samples without an external image source.

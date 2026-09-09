@@ -112,6 +112,8 @@ pub use scalable_lossless::{
     LosslessD2Plane, LosslessEncodeLimits, LosslessEncodeRequirements, encode_lossless_d2,
     lossless_d2_requirements,
 };
+#[cfg(feature = "std")]
+pub use scalable_lossless::{LosslessEncodeTimings, encode_lossless_d2_profiled};
 
 const MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES: u64 = 16 * 1024 * 1024;
 const MAX_NATIVE_PART1_COMPONENT_DECODE_SAMPLES: u64 = 64 * 1024 * 1024;
@@ -14829,7 +14831,7 @@ fn encode_decomp_subband(
     segments: &mut Vec<u8>,
     tier1_encode_scratch: &mut tier1::CodeBlockEncodeScratch,
 ) -> Result<NativeDecompSubband> {
-    encode_decomp_subband_with_output_limit(
+    encode_decomp_subband_with_output_limit::<false>(
         image_width,
         plane,
         spec,
@@ -14837,10 +14839,12 @@ fn encode_decomp_subband(
         segments,
         tier1_encode_scratch,
         None,
+        &mut scalable_lossless::LosslessEncodeTimings::default(),
     )
 }
 
-fn encode_decomp_subband_with_output_limit(
+#[allow(clippy::too_many_arguments)]
+fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
     image_width: u32,
     plane: &[i32],
     spec: DecompSubbandSpec,
@@ -14848,7 +14852,9 @@ fn encode_decomp_subband_with_output_limit(
     segments: &mut Vec<u8>,
     tier1_encode_scratch: &mut tier1::CodeBlockEncodeScratch,
     output_limit: Option<usize>,
+    timings: &mut scalable_lossless::LosslessEncodeTimings,
 ) -> Result<NativeDecompSubband> {
+    let start = scalable_lossless::EncodeClock::start::<PROFILE>();
     let grid_x1 = spec
         .grid_x0
         .checked_add(u64::from(spec.width))
@@ -14882,8 +14888,12 @@ fn encode_decomp_subband_with_output_limit(
     let subband_y = usize::try_from(spec.y).map_err(|_| CodestreamError::SizeOverflow)?;
 
     let mut block_segment = Vec::new();
+    if PROFILE {
+        timings.block_preparation_ns += start.ns();
+    }
     for block_y in 0..code_block_rows {
         for block_x in 0..code_block_cols {
+            let start = scalable_lossless::EncodeClock::start::<PROFILE>();
             let code_block_x0 = first_code_block_x
                 .checked_add(u64::from(block_x))
                 .and_then(|value| value.checked_mul(64))
@@ -14944,6 +14954,10 @@ fn encode_decomp_subband_with_output_limit(
 
             let segment_offset = segments.len();
             block_segment.clear();
+            if PROFILE {
+                timings.block_preparation_ns += start.ns();
+            }
+            let start = scalable_lossless::EncodeClock::start::<PROFILE>();
             let encoded = tier1::encode_baseline_code_block_with_strided_scratch(
                 source,
                 image_width_usize,
@@ -14961,10 +14975,23 @@ fn encode_decomp_subband_with_output_limit(
                 tier1_encode_scratch,
             )
             .map_err(map_tier1_error)?;
+            if PROFILE {
+                timings.tier1_ns += start.ns();
+                timings.checked_tier1_blocks += 1;
+                timings.included_tier1_blocks += u64::from(encoded.included);
+                timings.tier1_coefficients += u64::from(width) * u64::from(height);
+                timings.tier1_coding_passes += u64::from(encoded.pass_count);
+                timings.tier1_codeword_bytes += encoded.byte_len as u64;
+            }
+            let start = scalable_lossless::EncodeClock::start::<PROFILE>();
             if let Some(maximum) = output_limit {
                 scalable_lossless::reserve_output(segments, block_segment.len(), maximum)?;
                 segments.extend_from_slice(&block_segment);
             }
+            if PROFILE {
+                timings.assembly_ns += start.ns();
+            }
+            let start = scalable_lossless::EncodeClock::start::<PROFILE>();
             code_blocks.push(EncodedCodeBlock {
                 x: block_x,
                 y: block_y,
@@ -14979,6 +15006,9 @@ fn encode_decomp_subband_with_output_limit(
                 segment_offset,
                 segment_len: encoded.byte_len,
             });
+            if PROFILE {
+                timings.block_preparation_ns += start.ns();
+            }
         }
     }
 

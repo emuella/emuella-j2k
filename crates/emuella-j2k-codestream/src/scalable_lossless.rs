@@ -147,6 +147,82 @@ pub(super) fn reserve_output(
     Ok(())
 }
 
+/// Opt-in timings for the unchanged scalable D2 writer. Stage intervals are
+/// disjoint; total also includes validation, accounting and local destruction.
+/// Counters describe completed successful calls, not an allocation or RSS meter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LosslessEncodeTimings {
+    pub total_ns: u128,
+    pub conversion_level_shift_rct_ns: u128,
+    pub forward_dwt_ns: u128,
+    /// Subband exponent scans and block geometry/descriptor preparation.
+    pub block_preparation_ns: u128,
+    /// Existing checked baseline Tier-1 call, including its internal preparation.
+    pub tier1_ns: u128,
+    pub packet_headers_ns: u128,
+    /// Main header, output appends, packet insertion and codestream closure.
+    pub assembly_ns: u128,
+    pub component_samples: u64,
+    pub rct_pixels: u64,
+    pub checked_tier1_blocks: u64,
+    pub included_tier1_blocks: u64,
+    pub tier1_coefficients: u64,
+    pub tier1_coding_passes: u64,
+    pub tier1_codeword_bytes: u64,
+    pub packets: u64,
+    pub packet_header_bytes: u64,
+    pub packet_body_bytes_moved: u64,
+}
+
+// A false const parameter removes clock reads and accounting from ordinary
+// instantiations, including no-std builds. It does not select a different codec.
+pub(super) struct EncodeClock {
+    #[cfg(feature = "std")]
+    started: Option<std::time::Instant>,
+}
+impl EncodeClock {
+    #[inline]
+    pub(super) fn start<const PROFILE: bool>() -> Self {
+        Self {
+            #[cfg(feature = "std")]
+            started: if PROFILE {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            },
+        }
+    }
+    #[inline]
+    pub(super) fn ns(self) -> u128 {
+        #[cfg(feature = "std")]
+        {
+            self.started.map_or(0, |s| s.elapsed().as_nanos())
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            0
+        }
+    }
+}
+
+/// Profile the same admitted D2 writer, with the same validation and bytes.
+/// This diagnostic adds clock/accounting overhead; ordinary encoding remains
+/// authoritative for throughput. No Tier-1 inner-operation counts are inferred.
+#[cfg(feature = "std")]
+pub fn encode_lossless_d2_profiled(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[LosslessD2Plane<'_>],
+    limits: LosslessEncodeLimits,
+) -> Result<(Vec<u8>, LosslessEncodeTimings)> {
+    let start = EncodeClock::start::<true>();
+    let mut timings = LosslessEncodeTimings::default();
+    let bytes = encode_lossless_d2_impl::<true>(width, height, bits, planes, limits, &mut timings)?;
+    timings.total_ns = start.ns();
+    Ok((bytes, timings))
+}
+
 /// Encode the bounded profile without packed input or complete packet copies.
 /// Eight unsigned U16 components are coded independently without MCT.
 pub fn encode_lossless_d2(
@@ -155,6 +231,24 @@ pub fn encode_lossless_d2(
     bits: u8,
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
+) -> Result<Vec<u8>> {
+    encode_lossless_d2_impl::<false>(
+        width,
+        height,
+        bits,
+        planes,
+        limits,
+        &mut LosslessEncodeTimings::default(),
+    )
+}
+
+fn encode_lossless_d2_impl<const PROFILE: bool>(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[LosslessD2Plane<'_>],
+    limits: LosslessEncodeLimits,
+    timings: &mut LosslessEncodeTimings,
 ) -> Result<Vec<u8>> {
     lossless_d2_requirements(
         width,
@@ -191,6 +285,7 @@ pub fn encode_lossless_d2(
             ));
         }
     }
+    let start = EncodeClock::start::<PROFILE>();
     let mut coefficients = Vec::with_capacity(planes.len());
     for plane in planes {
         let mut values = Vec::new();
@@ -220,6 +315,12 @@ pub fn encode_lossless_d2(
         transform::forward_reversible_color_transform_bounded(red, green, blue)
             .map_err(|_| CodestreamError::SizeOverflow)?;
     }
+    if PROFILE {
+        timings.conversion_level_shift_rct_ns = start.ns();
+        timings.component_samples = count as u64 * planes.len() as u64;
+        timings.rct_pixels = if planes.len() == 3 { count as u64 } else { 0 };
+    }
+    let start = EncodeClock::start::<PROFILE>();
     let mut transform_scratch = Vec::new();
     for plane in &mut coefficients {
         forward_reversible_5_3_levels_with_scratch(
@@ -232,12 +333,20 @@ pub fn encode_lossless_d2(
         )?;
     }
     drop(transform_scratch);
+    if PROFILE {
+        timings.forward_dwt_ns = start.ns();
+    }
+    let start = EncodeClock::start::<PROFILE>();
     let specs = decomp_subband_specs(width, height, 2)?;
     let refs = coefficients.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let exponents = specs
         .iter()
         .map(|spec| max_component_subband_available_bitplanes(width, &refs, *spec))
         .collect::<Result<Vec<_>>>()?;
+    if PROFILE {
+        timings.block_preparation_ns += start.ns();
+    }
+    let start = EncodeClock::start::<PROFILE>();
     let maximum =
         usize::try_from(limits.max_output_bytes).map_err(|_| CodestreamError::SizeOverflow)?;
     let mut output = Vec::new();
@@ -257,6 +366,9 @@ pub fn encode_lossless_d2(
     let sot = output.len();
     output.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0x93]);
     let mut scratch = tier1::CodeBlockEncodeScratch::new();
+    if PROFILE {
+        timings.assembly_ns += start.ns();
+    }
     for resolution in 0..=2 {
         for plane in &coefficients {
             let body_start = output.len();
@@ -266,7 +378,7 @@ pub fn encode_lossless_d2(
                 .zip(&exponents)
                 .filter(|(spec, _)| spec.resolution == resolution)
             {
-                bands.push(encode_decomp_subband_with_output_limit(
+                bands.push(encode_decomp_subband_with_output_limit::<PROFILE>(
                     width,
                     plane,
                     *spec,
@@ -274,8 +386,10 @@ pub fn encode_lossless_d2(
                     &mut output,
                     &mut scratch,
                     Some(maximum),
+                    timings,
                 )?);
             }
+            let start = EncodeClock::start::<PROFILE>();
             let mut header = PacketBitWriter::new();
             let present = bands
                 .iter()
@@ -293,16 +407,30 @@ pub fn encode_lossless_d2(
             }
             header.align();
             let header = header.bytes();
+            if PROFILE {
+                timings.packet_headers_ns += start.ns();
+                timings.packets += 1;
+                timings.packet_header_bytes += header.len() as u64;
+                timings.packet_body_bytes_moved += (output.len() - body_start) as u64;
+            }
+            let start = EncodeClock::start::<PROFILE>();
             reserve_output(&mut output, header.len(), maximum)?;
             let old_len = output.len();
             output.resize(old_len + header.len(), 0);
             output.copy_within(body_start..old_len, body_start + header.len());
             output[body_start..body_start + header.len()].copy_from_slice(header);
+            if PROFILE {
+                timings.assembly_ns += start.ns();
+            }
         }
     }
+    let start = EncodeClock::start::<PROFILE>();
     let tile_len = u32::try_from(output.len() - sot).map_err(|_| CodestreamError::SizeOverflow)?;
     output[sot + 6..sot + 10].copy_from_slice(&tile_len.to_be_bytes());
     reserve_output(&mut output, 2, maximum)?;
     output.extend_from_slice(&[0xff, 0xd9]);
+    if PROFILE {
+        timings.assembly_ns += start.ns();
+    }
     Ok(output)
 }
