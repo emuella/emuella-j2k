@@ -8,6 +8,11 @@ Each axis is 4–32768 and each component has at most 64 Mi samples. This includ
 reversible component transform. This is a bounded implementation profile,
 not a claim of general JPEG 2000 conformance.
 
+An additive [eight-component native U16 route](native-eight-components.md) uses
+the same writer without MCT, with `ColorModel::Unknown` and at most 32 Mi
+pixels (256 Mi aggregate samples). Its supplied positions have no inferred
+colour or spectral interpretation; both layouts retain every band.
+
 `encode_with_limits(image, &options, &limits)` is additive; existing
 `EncodeOptions` struct literals remain valid. `lossless_encode_requirements`
 checks geometry, options and the working budget without reading samples.
@@ -16,7 +21,8 @@ options and other component models. It never silently ignores a requested
 limit. Ordinary `encode` retains the previous routes for those cases,
 including 9–15-bit greyscale and previously accepted thin D2 images with
 axes below four or above 32768. Explicit limits continue to reject these shapes.
-HT APIs and all decoder admission rules remain unchanged. The new D2 writer
+HT APIs and all decoder admission rules remain unchanged. Eight-component full
+caller decode now stages complete output to preserve destination bytes on failure. The new D2 writer
 runs sequentially even with the `parallel` feature; byte identity does not
 imply unchanged throughput.
 
@@ -109,8 +115,8 @@ The constant and every old use are retained. Its inventory comprises:
   scalar-derived and six-level reduced envelopes, and lossless multitile decode;
 - the alias `MAX_HTJ2K_REDUCED_COMPONENT_SAMPLES` and its independent users.
 
-The new route bypasses none of those decoder or HT checks. Its upper geometry
-also fits the existing full native decoder's separate 64 Mi samples/component
+The new route bypasses none of those decoder or HT checks. Grey/RGB upper geometry
+and the eight-component route’s separate 32 Mi-pixel ceiling fit the existing full native decoder's separate 64 Mi samples/component
 and 256 Mi aggregate sample ceilings. Decode capability is independently
 exercised by roundtrips; encoder admission is not itself decode proof.
 
@@ -148,7 +154,8 @@ CARGO_TARGET_DIR=/your/authorised/scratch/target \
   --example lossless_allocations -- 8001 8003 3 16
 ```
 
-Arguments are width, height, components (1/3), bits (8/16) and optional
+Arguments are width, height, components (1/3/8), bits (8/16, with 16 required
+for eight components) and optional
 `planar`/`interleaved` layout (default interleaved). It prints input
 and output SHA-256, encode duration, output length/capacity, requested encoder
 allocation peak, admission bound and exact decode result. Inputs and decoded

@@ -38,7 +38,8 @@ pub struct LosslessD2Plane<'a> {
     pub sample_step_bytes: usize,
 }
 
-/// Geometry-only admission for unsigned U8/U16 grey/RGB raw D2 encoding.
+/// Geometry-only admission for raw D2 grey/RGB or eight native components.
+/// Eight-component encoding requires U16 at the sample-bearing entry point.
 pub fn lossless_d2_requirements(
     width: u32,
     height: u32,
@@ -53,10 +54,11 @@ pub fn lossless_d2_requirements(
         || width > 32768
         || height > 32768
         || pixels > 64 * 1024 * 1024
-        || !matches!(components, 1 | 3)
+        || !matches!(components, 1 | 3 | 8)
+        || (components == 8 && pixels > 32 * 1024 * 1024)
     {
         return Err(resource_error(
-            "lossless D2 requires 4..=32768 axes, at most 64 Mi pixels and one or three components",
+            "lossless D2 requires 4..=32768 axes, at most 64 Mi pixels for grey/RGB or 32 Mi pixels for eight components",
         ));
     }
     if limits.max_output_bytes < 128 {
@@ -145,7 +147,8 @@ pub(super) fn reserve_output(
     Ok(())
 }
 
-/// Encode the bounded profile without packed RGB or complete packet copies.
+/// Encode the bounded profile without packed input or complete packet copies.
+/// Eight unsigned U16 components are coded independently without MCT.
 pub fn encode_lossless_d2(
     width: u32,
     height: u32,
@@ -159,7 +162,7 @@ pub fn encode_lossless_d2(
         u16::try_from(planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
         limits,
     )?;
-    if !matches!(bits, 8 | 16) {
+    if !matches!(bits, 8 | 16) || (planes.len() == 8 && bits != 16) {
         return Err(resource_error(
             "lossless D2 requires unsigned 8-bit or 16-bit input",
         ));

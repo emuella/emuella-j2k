@@ -5029,6 +5029,9 @@ pub enum ColorModel {
     /// Red, green, blue and straight (unassociated) alpha for bounded JP2 output.
     Rgba,
     YCbCr,
+    /// No inferred colour interpretation. For native eight-component lossless
+    /// encoding, positions are independent unsigned U16 bands; decode with
+    /// `DecodeMode::Components` preserves those positions.
     Unknown,
 }
 
@@ -7887,7 +7890,8 @@ fn decoded_sample_format(decoded: &codestream::DecodedImage) -> Result<SampleFor
 /// allocating a second full output image. Other profiles remain conservative
 /// caller-owned-buffer adapters over [`decode`].
 /// The bounded independent U8 plane profile described in `docs/native-planes.md`
-/// always finishes in private storage before publishing any caller samples.
+/// and eight-component full decode always finish in private storage before
+/// publishing any caller samples. See `docs/native-eight-components.md`.
 pub fn decode_into(
     input: &[u8],
     target: &mut ImageViewMut<'_>,
@@ -7961,7 +7965,11 @@ fn decode_part1_components_into_direct(
         return Ok(false);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-    if native_planes::is_atomic_profile(codestream_bytes, &parsed) {
+    // Eight-component full output publishes only after every band succeeds.
+    // This changes publication, not the existing codestream admission rules.
+    if parsed.siz.component_count() == 8
+        || native_planes::is_atomic_profile(codestream_bytes, &parsed)
+    {
         return Ok(false);
     }
     if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {

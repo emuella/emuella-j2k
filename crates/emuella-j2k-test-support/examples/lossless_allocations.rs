@@ -48,7 +48,7 @@ fn main() {
     let c: u16 = a.get(3).map_or(1, |s| s.parse().unwrap());
     let bits: u8 = a.get(4).map_or(16, |s| s.parse().unwrap());
     let b = usize::from(bits / 8);
-    assert!(matches!(c, 1 | 3) && matches!(bits, 8 | 16));
+    assert!(matches!(c, 1 | 3 | 8) && matches!(bits, 8 | 16) && (c != 8 || bits == 16));
     let planar = a.get(5).is_some_and(|s| s == "planar");
     assert!(
         a.get(5)
@@ -65,8 +65,10 @@ fn main() {
         },
         if c == 1 {
             ColorModel::Grayscale
-        } else {
+        } else if c == 3 {
             ColorModel::Rgb
+        } else {
+            ColorModel::Unknown
         },
         ComponentLayout::Interleaved,
     )
@@ -144,8 +146,11 @@ fn main() {
     )
     .unwrap();
     assert_eq!(decoded.data, ImageData::Interleaved(samples));
+    let spatial_pixels = u64::from(w) * u64::from(h);
+    let aggregate_samples = requirements.total_component_samples;
+    let max_working_bytes = LosslessEncodeLimits::default().max_working_bytes;
     println!(
-        "width={w} height={h} components={c} bits={bits} planar={planar} input_sha256={input_hash} output_sha256={output_hash} seconds={seconds:.6} bytes={} retained_capacity={retained} peak_requested_encoder_bytes={peak} working_bound={} output_limit={} exact=true",
+        "spatial_pixels={spatial_pixels} aggregate_samples={aggregate_samples} max_working_bytes={max_working_bytes} width={w} height={h} components={c} bits={bits} planar={planar} input_sha256={input_hash} output_sha256={output_hash} seconds={seconds:.6} bytes={} retained_capacity={retained} peak_requested_encoder_bytes={peak} working_bound={} output_limit={} exact=true",
         stream.len(),
         requirements.working_bytes,
         requirements.output_capacity_limit
