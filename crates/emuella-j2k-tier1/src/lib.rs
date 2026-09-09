@@ -3669,7 +3669,7 @@ fn context_label_zero_coding_at<const VERTICAL_CAUSAL: bool>(
     index: usize,
     ctx: &BitPlaneDecodeContext<'_>,
 ) -> u8 {
-    zero_coding_context(
+    zero_coding_context_formula(
         ctx.subband,
         neighborhood_at::<VERTICAL_CAUSAL>(ctx.coefficient_states, index, ctx.padded_width),
     )
@@ -3747,26 +3747,96 @@ pub(crate) fn sign_context(horizontal: i8, vertical: i8) -> (u8, u8) {
     }
 }
 
+// Generated only from this module's project-authored count formula. The three
+// counts occupy independent base-three/base-five digits, so all 45 entries in
+// each subband row are reachable and no neighbourhoods with different counts
+// share an entry. No external implementation or transcribed table is an input.
+const ZERO_CODING_CONTEXTS: [[u8; 45]; 4] = make_zero_coding_contexts();
+
+const fn zero_context_count_index(horizontal: u8, vertical: u8, diagonal: u8) -> usize {
+    horizontal as usize + 3 * vertical as usize + 9 * diagonal as usize
+}
+
+const fn make_zero_coding_contexts() -> [[u8; 45]; 4] {
+    let subbands = [
+        Subband::LowLow,
+        Subband::LowHigh,
+        Subband::HighLow,
+        Subband::HighHigh,
+    ];
+    let mut table = [[0; 45]; 4];
+    let mut band = 0;
+    while band < subbands.len() {
+        let mut diagonal = 0;
+        while diagonal <= 4 {
+            let mut vertical = 0;
+            while vertical <= 2 {
+                let mut horizontal = 0;
+                while horizontal <= 2 {
+                    table[band][zero_context_count_index(horizontal, vertical, diagonal)] =
+                        zero_coding_context_from_counts(
+                            subbands[band],
+                            horizontal,
+                            vertical,
+                            diagonal,
+                        );
+                    horizontal += 1;
+                }
+                vertical += 1;
+            }
+            diagonal += 1;
+        }
+        band += 1;
+    }
+    table
+}
+
+#[inline]
 pub(crate) fn zero_coding_context(subband: Subband, neighbors: Neighborhood) -> u8 {
-    let horizontal = neighbors.horizontal_count();
-    let vertical = neighbors.vertical_count();
-    let diagonal = neighbors.diagonal_count();
+    ZERO_CODING_CONTEXTS[subband as usize][zero_context_count_index(
+        neighbors.horizontal_count(),
+        neighbors.vertical_count(),
+        neighbors.diagonal_count(),
+    )]
+}
+
+// The checked decoder retains the formula as a runtime reference backend.
+fn zero_coding_context_formula(subband: Subband, neighbors: Neighborhood) -> u8 {
+    zero_coding_context_from_counts(
+        subband,
+        neighbors.horizontal_count(),
+        neighbors.vertical_count(),
+        neighbors.diagonal_count(),
+    )
+}
+
+// Retain the original branch-based model as the generator and exhaustive oracle.
+const fn zero_coding_context_from_counts(
+    subband: Subband,
+    horizontal: u8,
+    vertical: u8,
+    diagonal: u8,
+) -> u8 {
     match subband {
         Subband::LowLow | Subband::LowHigh => {
             zero_coding_context_hv(horizontal, vertical, diagonal)
         }
         Subband::HighLow => zero_coding_context_hv(vertical, horizontal, diagonal),
-        Subband::HighHigh => match diagonal {
-            0 => (horizontal + vertical).min(2),
-            1 => 3 + (horizontal + vertical).min(2),
-            2 if horizontal + vertical == 0 => 6,
-            2 => 7,
-            _ => 8,
-        },
+        Subband::HighHigh => {
+            let cardinal = horizontal + vertical;
+            let bounded_cardinal = if cardinal < 2 { cardinal } else { 2 };
+            match diagonal {
+                0 => bounded_cardinal,
+                1 => 3 + bounded_cardinal,
+                2 if cardinal == 0 => 6,
+                2 => 7,
+                _ => 8,
+            }
+        }
     }
 }
 
-fn zero_coding_context_hv(primary: u8, secondary: u8, diagonal: u8) -> u8 {
+const fn zero_coding_context_hv(primary: u8, secondary: u8, diagonal: u8) -> u8 {
     match (primary, secondary, diagonal) {
         (2, _, _) => 8,
         (1, 1..=2, _) => 7,
@@ -3777,7 +3847,7 @@ fn zero_coding_context_hv(primary: u8, secondary: u8, diagonal: u8) -> u8 {
         (0, 0, 2..=4) => 2,
         (0, 0, 1) => 1,
         (0, 0, 0) => 0,
-        _ => unreachable!("neighbour counts are bounded by Annex D"),
+        _ => panic!("neighbour counts are bounded by Annex D"),
     }
 }
 
@@ -3899,6 +3969,45 @@ mod tests {
                 Subband::HighHigh,
             ] {
                 assert!(zero_coding_context(subband, neighbors) <= 8);
+            }
+        }
+    }
+
+    #[test]
+    fn generated_zero_contexts_match_every_neighbourhood_and_count_index() {
+        let mut indices = [false; 45];
+        for horizontal in 0..=2 {
+            for vertical in 0..=2 {
+                for diagonal in 0..=4 {
+                    let index = zero_context_count_index(horizontal, vertical, diagonal);
+                    assert!(!indices[index], "count-index collision");
+                    indices[index] = true;
+                }
+            }
+        }
+        assert!(indices.into_iter().all(|seen| seen));
+
+        for mask in 0_u8..=u8::MAX {
+            let neighbours = Neighborhood::from_mask(mask);
+            // Check the existing direction-to-mask mapping independently of
+            // the count methods used by the lookup and its generator.
+            let horizontal = (mask & 0b0001_0100).count_ones() as u8;
+            let vertical = (mask & 0b0100_0001).count_ones() as u8;
+            let diagonal = (mask & 0b1010_1010).count_ones() as u8;
+            assert_eq!(neighbours.horizontal_count(), horizontal);
+            assert_eq!(neighbours.vertical_count(), vertical);
+            assert_eq!(neighbours.diagonal_count(), diagonal);
+            for subband in [
+                Subband::LowLow,
+                Subband::LowHigh,
+                Subband::HighLow,
+                Subband::HighHigh,
+            ] {
+                assert_eq!(
+                    zero_coding_context(subband, neighbours),
+                    zero_coding_context_formula(subband, neighbours),
+                    "{subband:?} neighbourhood {mask:#04x}",
+                );
             }
         }
     }
