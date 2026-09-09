@@ -15,8 +15,8 @@ pub(super) fn is_scalable_lossless(image: ImageView<'_>, options: &EncodeOptions
             || is_native_rgb_u8_encode(info)
             || is_native_grayscale_u16_le_encode(info)
             || is_native_rgb_u16_le_encode(info))
-        && info.width >= 4
-        && info.height >= 4
+        && (4..=32768).contains(&info.width)
+        && (4..=32768).contains(&info.height)
 }
 
 /// Check the conservative working allocation envelope before encoding.

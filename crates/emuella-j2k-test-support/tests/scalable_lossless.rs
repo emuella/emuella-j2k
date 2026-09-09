@@ -297,8 +297,8 @@ fn planar_metadata_and_storage_are_checked_before_coding() {
 }
 
 #[test]
-fn previous_d2_bytes_and_tiny_precision_routes_are_preserved() {
-    for (w, h) in [(1, 1), (2, 3), (3, 7), (67, 65)] {
+fn previous_d2_bytes_and_legacy_geometry_routes_are_preserved() {
+    for (w, h) in [(1, 1), (2, 3), (3, 7), (67, 65), (32769, 4), (4, 32769)] {
         for c in [1, 3] {
             for bits in [8, 16] {
                 let base = info(w, h, c, bits, ComponentLayout::Interleaved);
@@ -346,9 +346,30 @@ fn previous_d2_bytes_and_tiny_precision_routes_are_preserved() {
                     _ => unreachable!(),
                 };
                 match (current, old) {
-                    (Ok(a), Ok(b)) => assert_eq!(a, b),
+                    (Ok(a), Ok(b)) => {
+                        assert_eq!(a, b);
+                        let view = ImageView::Interleaved {
+                            info: &base,
+                            samples: &samples,
+                            stride_bytes: stride,
+                        };
+                        let mut appended = vec![0xa5; 7];
+                        encode_into(view, &mut appended, &options()).unwrap();
+                        assert_eq!(&appended[..7], &[0xa5; 7]);
+                        assert_eq!(&appended[7..], b);
+                        if w > 32768 || h > 32768 {
+                            assert!(
+                                encode_with_limits(
+                                    view,
+                                    &options(),
+                                    &LosslessEncodeLimits::default()
+                                )
+                                .is_err()
+                            );
+                        }
+                    }
                     (Err(_), Err(_)) => {}
-                    _ => panic!("changed tiny or existing D2 acceptance"),
+                    _ => panic!("changed legacy D2 acceptance"),
                 }
             }
         }

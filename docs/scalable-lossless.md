@@ -14,7 +14,8 @@ checks geometry, options and the working budget without reading samples.
 The explicit API rejects JP2, metadata, tiles, D0/D1, other precisions, lossy
 options and other component models. It never silently ignores a requested
 limit. Ordinary `encode` retains the previous routes for those cases,
-including 9–15-bit greyscale and any previously accepted thin D2 images.
+including 9–15-bit greyscale and previously accepted thin D2 images with
+axes below four or above 32768. Explicit limits continue to reject these shapes.
 HT APIs and all decoder admission rules remain unchanged. The new D2 writer
 runs sequentially even with the `parallel` feature; byte identity does not
 imply unchanged throughput.
@@ -134,7 +135,7 @@ budget tests. Larger qualification binds the measured source revision and
 build to its evidence; this baseline checkpoint is not final large-image proof.
 
 The self-contained `scalable_lossless` integration test covers U8/U16,
-grey/RGB, both layouts, odd and 64/128/256 processing boundaries, tiny legacy
+grey/RGB, both layouts, odd and 64/128/256 processing boundaries, tiny and long/thin legacy
 route agreement, exact byte identity, input metadata/extent checks, checked
 geometry/arithmetic, exact working-budget boundaries and runtime output-budget
 failure. It also checks that old HT and D1 guards still reject the larger shape.
