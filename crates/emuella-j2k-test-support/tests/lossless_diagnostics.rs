@@ -1,9 +1,23 @@
 use emuella_j2k_codestream as cs;
 use emuella_j2k_core::*;
-use emuella_j2k_test_support::lossless_diagnostics::decode_native_profiled;
 
 #[test]
 fn stage_accounting_and_native_parity() {
+    single_thread(stage_accounting);
+}
+
+fn single_thread(f: impl FnOnce() + Send) {
+    #[cfg(feature = "parallel")]
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(f);
+    #[cfg(not(feature = "parallel"))]
+    f();
+}
+
+fn stage_accounting() {
     for (components, bits) in [(1, 8), (1, 16), (3, 8), (3, 16), (8, 16)] {
         for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
             let (width, height) = (67, 65);
@@ -121,22 +135,73 @@ fn stage_accounting_and_native_parity() {
                         + e.assembly_ns
             );
             let expected = if layout == ComponentLayout::Planar {
-                ImageData::Planes(planar)
+                ImageData::Planes(planar.clone())
             } else {
                 ImageData::Interleaved(packed)
             };
+            let options = DecodeOptions {
+                mode: DecodeMode::Components,
+                target_layout: layout,
+                ..Default::default()
+            };
+            let (native, production) = decode_native_d2_profiled(&stream, &options).unwrap();
+            assert_eq!(native.info.components, components);
+            assert_eq!(native.data, expected);
+            let d = &production.codestream;
+            assert!(d.production_one_worker);
+            let disjoint_ns = production.core_preparation_ns
+                + production.output_construction_ns
+                + d.marker_parse_ns
+                + d.support_classification_ns
+                + d.tile_payload_ns
+                + d.packet_header_parse_ns
+                + d.tier1_decode_ns
+                + d.coefficient_placement_ns
+                + d.inverse_reversible_5_3_ns
+                + d.inverse_rct_ns
+                + d.sample_conversion_ns
+                + d.fused_rgb8_conversion_ns;
+            assert!(production.total_ns >= disjoint_ns);
+            assert!(production.output_construction_ns >= production.packing_ns);
+            // The noisy authored population must exercise actual packed work,
+            // not merely report the recommendation or a checked replacement.
+            assert!(d.tier1_routes.executed_packed_dense.blocks > 0);
+            assert_eq!(d.tier1_work_counters.cleanup_positions_visited, 0);
+            assert_eq!(
+                d.fused_rgb8_component_tiles > 0,
+                components == 3 && bits == 8
+            );
+            if components == 3 && bits == 8 {
+                assert_eq!(d.inverse_rct_ns, 0);
+                assert_eq!(d.sample_conversion_ns, 0);
+            }
+            assert_eq!(
+                production.packing_route,
+                match (layout, components, bits) {
+                    (ComponentLayout::Planar, _, _) => NativePackingRoute::PlanarMove,
+                    (_, 1, _) => NativePackingRoute::SinglePlaneMove,
+                    (_, 3, 8) => NativePackingRoute::RgbU8,
+                    (_, 3, 16) => NativePackingRoute::RgbU16,
+                    _ => NativePackingRoute::GenericInterleaved,
+                }
+            );
             for counters in [false, true] {
-                let native = decode_native_profiled(&stream, layout, counters).unwrap();
-                assert_eq!(native.components, components as usize);
-                assert_eq!(native.data, expected);
-                let d = native.timings;
-                let routes = d.tier1_routes;
-                assert!(
-                    routes.executed_checked.blocks
-                        + routes.executed_packed_dense.blocks
-                        + routes.executed_packed_sparse.blocks
-                        > 0
+                let (reference, d) =
+                    cs::decode_baseline_owned_components_profiled_with_work_counters(
+                        &stream, counters,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    reference
+                        .components
+                        .iter()
+                        .map(|c| &c.samples)
+                        .collect::<Vec<_>>(),
+                    planar.iter().collect::<Vec<_>>()
                 );
+                assert!(!d.production_one_worker);
+                assert!(d.tier1_routes.executed_checked.blocks > 0);
+                assert_eq!(d.tier1_routes.executed_packed_dense.blocks, 0);
                 assert_eq!(
                     d.tier1_work_counters.cleanup_positions_visited > 0,
                     counters
@@ -211,11 +276,25 @@ fn errors_preserve_profile_and_resource_gates() {
         )
         .is_err()
     );
-    assert!(decode_native_profiled(&[0, 1, 2], ComponentLayout::Planar, true).is_err());
+    single_thread(|| {
+        assert!(
+            decode_native_d2_profiled(
+                &[0, 1, 2],
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        )
+    });
 }
 
 #[test]
 fn no_mct_rgb_d2_uses_full_owned_diagnostics() {
+    single_thread(no_mct_rgb);
+}
+fn no_mct_rgb() {
     // Reinterpret the project's existing RCT coefficient stream as independent
     // components. The authored oracle is the forward RCT result plus level shift;
     // changing COD's MCT flag therefore requires no entropy-data modification.
@@ -253,9 +332,17 @@ fn no_mct_rgb_d2_uses_full_owned_diagnostics() {
             .unwrap()
             .multiple_component_transform
     );
-    let native = decode_native_profiled(&stream, ComponentLayout::Interleaved, true).unwrap();
+    let (native, timing) = decode_native_d2_profiled(
+        &stream,
+        &DecodeOptions {
+            mode: DecodeMode::Components,
+            target_layout: ComponentLayout::Interleaved,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(native.data, ImageData::Interleaved(expected));
-    assert_eq!(native.timings.inverse_rct_ns, 0);
+    assert_eq!(timing.codestream.inverse_rct_ns, 0);
     assert_eq!(
         decode(
             &stream,
@@ -269,4 +356,110 @@ fn no_mct_rgb_d2_uses_full_owned_diagnostics() {
         .data,
         native.data
     );
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn production_diagnostic_rejects_multiple_workers() {
+    let samples = vec![128; 64];
+    let stream = cs::encode_lossless_d2(
+        8,
+        8,
+        8,
+        &[cs::LosslessD2Plane {
+            samples: &samples,
+            stride_bytes: 8,
+            sample_step_bytes: 1,
+        }],
+        LosslessEncodeLimits::default(),
+    )
+    .unwrap();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap()
+        .install(|| {
+            assert!(
+                decode_native_d2_profiled(
+                    &stream,
+                    &DecodeOptions {
+                        mode: DecodeMode::Components,
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+            assert!(cs::decode_baseline_owned_components_production_profiled(&stream).is_err());
+            assert!(
+                decode(
+                    &stream,
+                    &DecodeOptions {
+                        mode: DecodeMode::Components,
+                        ..Default::default()
+                    }
+                )
+                .is_ok()
+            );
+        });
+}
+
+#[test]
+fn production_diagnostic_retains_native_options_and_decode_errors() {
+    single_thread(|| {
+        let samples = vec![17; 64];
+        let info = ImageInfo::new(
+            8,
+            8,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Interleaved,
+        )
+        .unwrap();
+        let view = ImageView::Interleaved {
+            info: &info,
+            samples: &samples,
+            stride_bytes: 8,
+        };
+        let decode_options = DecodeOptions {
+            mode: DecodeMode::Components,
+            ..Default::default()
+        };
+        let d1 = encode(
+            view,
+            &EncodeOptions {
+                format: OutputFormat::J2kCodestream,
+                decomposition_levels: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(decode(&d1, &decode_options).is_ok());
+        assert!(decode_native_d2_profiled(&d1, &decode_options).is_err());
+        let d2 = encode(
+            view,
+            &EncodeOptions {
+                format: OutputFormat::J2kCodestream,
+                decomposition_levels: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for options in [
+            DecodeOptions::default(),
+            DecodeOptions {
+                max_quality_layers: Some(1),
+                ..decode_options.clone()
+            },
+            DecodeOptions {
+                requested_components: ComponentSelection::Indices(vec![0]),
+                ..decode_options.clone()
+            },
+        ] {
+            assert!(decode_native_d2_profiled(&d2, &options).is_err());
+        }
+        let truncated = &d2[..d2.len() - 3];
+        assert!(decode(truncated, &decode_options).is_err());
+        assert!(decode_native_d2_profiled(truncated, &decode_options).is_err());
+    });
 }

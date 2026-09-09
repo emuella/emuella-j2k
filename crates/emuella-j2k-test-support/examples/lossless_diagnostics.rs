@@ -4,7 +4,6 @@
 mod allocation_meter;
 use emuella_j2k_codestream as cs;
 use emuella_j2k_core::*;
-use emuella_j2k_test_support::lossless_diagnostics::decode_native_profiled;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::time::Instant;
@@ -136,12 +135,17 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
     let encode_ns = start.elapsed().as_nanos();
     let peak = allocation_meter::peak_since(baseline);
     // Freeze encoder allocation measurement before decode and all verification.
+    let decode_options = DecodeOptions {
+        mode: DecodeMode::Components,
+        target_layout: layout,
+        ..Default::default()
+    };
     let start = Instant::now();
-    let native = decode_native_profiled(&input_stream, layout, true)?;
+    let (native, production) = decode_native_d2_profiled(&input_stream, &decode_options)?;
     let decode_ns = start.elapsed().as_nanos();
     let data = &native.data;
-    let d = &native.timings;
-    let packing_ns = native.packing_ns;
+    let d = &production.codestream;
+    let packing_ns = production.packing_ns;
     let expected = if layout == ComponentLayout::Planar {
         ImageData::Planes(
             samples
@@ -180,11 +184,11 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
         }
     };
     let ordinary_encoded = encode(view, &options)?;
-    let exact = native.width == width
-        && native.height == height
-        && native.bits_per_sample == bits
-        && !native.signed
-        && native.components == usize::from(components)
+    let exact = native.info.width == width
+        && native.info.height == height
+        && native.info.sample_format.bits_per_sample == bits
+        && !native.info.sample_format.signed
+        && native.info.components == components
         && *data == expected
         && ordinary_decoded.data == expected
         && encoded_decoded.data == expected
@@ -192,7 +196,19 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
     let allocation_within_limits = peak as u64 <= requirements.working_bytes
         && encoded.capacity() as u64 <= limits.max_output_bytes;
     let routes = d.tier1_routes;
-    let work = &d.tier1_work_counters;
+    let fused = d.fused_rgb8_component_tiles > 0;
+    let decode_stages = production.core_preparation_ns
+        + production.output_construction_ns
+        + d.marker_parse_ns
+        + d.support_classification_ns
+        + d.tile_payload_ns
+        + d.packet_header_parse_ns
+        + d.tier1_decode_ns
+        + d.coefficient_placement_ns
+        + d.inverse_reversible_5_3_ns
+        + d.inverse_rct_ns
+        + d.sample_conversion_ns
+        + d.fused_rgb8_conversion_ns;
     let stage_sum = e.conversion_level_shift_rct_ns
         + e.forward_dwt_ns
         + e.block_preparation_ns
@@ -200,16 +216,22 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
         + e.packet_headers_ns
         + e.assembly_ns;
     Ok(json!({
-        "schema": "emuella-lossless-diagnostics-v1", "exact": exact, "allocation_within_limits": allocation_within_limits,
+        "schema": "emuella-lossless-diagnostics-v2", "exact": exact, "allocation_within_limits": allocation_within_limits,
         "input": { "sha256": input_hash, "codestream_sha256": stream_hash, "width": width, "height": height, "components": components, "bits": bits, "layout": args[7], "decode_mct": mct },
         "build": { "source_revision_label": std::env::var("EMUELLA_DIAGNOSTIC_REVISION").ok(), "parallel_feature": cfg!(feature="parallel"), "simd_feature": cfg!(feature="simd") },
         "verification": { "native_sample_exact": *data == expected, "ordinary_decode_exact": ordinary_decoded.data == expected, "encoded_roundtrip_exact": encoded_decoded.data == expected, "ordinary_encode_byte_exact": encoded == ordinary_encoded },
         "encode": { "wall_ns": encode_ns, "internal_total_ns": e.total_ns, "conversion_level_shift_rct_ns": e.conversion_level_shift_rct_ns, "forward_dwt_ns": e.forward_dwt_ns, "block_preparation_ns": e.block_preparation_ns, "tier1_ns": e.tier1_ns, "packet_headers_ns": e.packet_headers_ns, "assembly_ns": e.assembly_ns, "unattributed_ns": e.total_ns.saturating_sub(stage_sum), "tier1_backend": "checked-baseline-sequential", "component_samples": e.component_samples, "rct_pixels": e.rct_pixels, "tier1_blocks": e.checked_tier1_blocks, "included_tier1_blocks": e.included_tier1_blocks, "tier1_coefficients": e.tier1_coefficients, "tier1_coding_passes": e.tier1_coding_passes, "tier1_codeword_bytes": e.tier1_codeword_bytes, "packets": e.packets, "packet_header_bytes": e.packet_header_bytes, "packet_body_bytes_moved": e.packet_body_bytes_moved, "tier1_inner_operation_counts": null, "bytes": encoded.len(), "capacity": encoded.capacity(), "sha256": hash(&encoded), "peak_requested_bytes": peak, "working_bound": requirements.working_bytes },
-        "decode": { "wall_including_native_packing_ns": decode_ns, "internal_total_ns": d.total_ns, "native_packing_ns": packing_ns, "marker_parse_ns": d.marker_parse_ns, "support_classification_ns": d.support_classification_ns, "tile_payload_ns": d.tile_payload_ns, "packet_headers_ns": d.packet_header_parse_ns, "segment_acquisition_ns": d.code_block_segment_acquisition_ns, "tier1_ns": d.tier1_decode_ns, "coefficient_placement_ns": d.coefficient_placement_ns, "inverse_dwt_ns": d.inverse_reversible_5_3_ns, "inverse_rct_ns": d.inverse_rct_ns, "sample_conversion_ns": d.sample_conversion_ns,
+        "decode": { "identity": "production-one-worker", "wall_including_native_packing_ns": decode_ns,
+        "core_total_ns": production.total_ns, "codestream_total_ns": d.total_ns,
+        "core_preparation_ns": production.core_preparation_ns, "output_construction_ns": production.output_construction_ns,
+        "native_packing_ns": packing_ns, "native_packing_route": format!("{:?}", production.packing_route),
+        "unattributed_ns": production.total_ns.saturating_sub(decode_stages), "marker_parse_ns": d.marker_parse_ns, "diagnostic_profile_validation_ns": d.support_classification_ns, "tile_payload_ns": d.tile_payload_ns, "packet_headers_ns": d.packet_header_parse_ns, "segment_acquisition_ns": null, "tier1_ns": d.tier1_decode_ns, "coefficient_placement_ns": d.coefficient_placement_ns, "inverse_dwt_ns": d.inverse_reversible_5_3_ns, "inverse_rct_ns": (!fused).then_some(d.inverse_rct_ns), "sample_conversion_ns": (!fused).then_some(d.sample_conversion_ns),
+        "fused_inverse_rct_sample_conversion_ns": fused.then_some(d.fused_rgb8_conversion_ns), "fused_rgb8_component_tiles": d.fused_rgb8_component_tiles,
         "checked": { "blocks": routes.executed_checked.blocks, "coefficients": routes.executed_checked.coefficients, "segment_bytes": routes.executed_checked.segment_bytes },
         "packed_dense": { "blocks": routes.executed_packed_dense.blocks, "coefficients": routes.executed_packed_dense.coefficients, "segment_bytes": routes.executed_packed_dense.segment_bytes },
         "packed_sparse": { "blocks": routes.executed_packed_sparse.blocks, "coefficients": routes.executed_packed_sparse.coefficients, "segment_bytes": routes.executed_packed_sparse.segment_bytes },
-        "work": { "cleanup_positions_visited": work.cleanup_positions_visited, "cleanup_mq_reads": work.cleanup_mq_reads, "significance_positions_visited": work.significance_positions_visited, "significance_mq_reads": work.significance_mq_reads, "magnitude_positions_visited": work.magnitude_positions_visited, "magnitude_mq_reads": work.magnitude_mq_reads, "sign_mq_reads": work.sign_mq_reads, "run_mode_mq_reads": work.run_mode_mq_reads }, "parallel_dispatch_suppressed_by_profiling": true }
+        "work": null, "execution_workers": 1, "parallel_fidelity": "unsupported" }
+
     }))
 }
 fn main() {
@@ -224,7 +246,7 @@ fn main() {
         Err(error) => {
             println!(
                 "{}",
-                json!({"schema":"emuella-lossless-diagnostics-v1", "status":"error", "error":error.to_string()})
+                json!({"schema":"emuella-lossless-diagnostics-v2", "status":"error", "error":error.to_string()})
             );
             std::process::exit(1);
         }
@@ -237,6 +259,17 @@ mod tests {
 
     #[test]
     fn driver_reports_json_exactness_after_measurement() {
+        #[cfg(feature = "parallel")]
+        return rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(driver_smoke);
+        #[cfg(not(feature = "parallel"))]
+        driver_smoke();
+    }
+
+    fn driver_smoke() {
         let root = std::env::temp_dir().join(format!(
             "emuella-lossless-diagnostics-{}",
             std::process::id()
@@ -278,6 +311,18 @@ mod tests {
             );
             assert!(report["encode"]["tier1_inner_operation_counts"].is_null());
             assert_eq!(report["input"]["decode_mct"], components == 3);
+            assert_eq!(report["decode"]["identity"], "production-one-worker");
+            assert!(report["decode"]["work"].is_null());
+            assert_eq!(
+                report["decode"]["native_packing_route"],
+                if components == 1 {
+                    "SinglePlaneMove"
+                } else if components == 3 {
+                    "RgbU16"
+                } else {
+                    "GenericInterleaved"
+                }
+            );
             assert_eq!(std::fs::read(raw_path).unwrap(), bytes);
             assert_eq!(std::fs::read(stream_path).unwrap(), stream);
         }

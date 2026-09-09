@@ -6100,6 +6100,11 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
     metadata_from_container(input, container, options)
 }
 
+mod native_diagnostics;
+#[cfg(feature = "std")]
+pub use native_diagnostics::decode_native_d2_profiled;
+pub use native_diagnostics::{NativeDecodeTimings, NativePackingRoute};
+
 /// Convenience full decode that owns the returned image buffers.
 ///
 /// The bounded mapped JP2 route resolves palette, channel order and straight
@@ -6108,6 +6113,17 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
 /// Bounded two-level irreversible HT supports full native component output in
 /// raw codestreams and JPH; it does not enable rendered projection.
 pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
+    decode_impl(input, options, None)
+}
+
+#[cfg_attr(not(feature = "std"), allow(unused_mut))]
+fn decode_impl(
+    input: &[u8],
+    options: &DecodeOptions,
+    mut timings: Option<&mut NativeDecodeTimings>,
+) -> Result<Image> {
+    #[cfg(feature = "std")]
+    let start = timings.as_ref().map(|_| std::time::Instant::now());
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
             needed: 1,
@@ -6156,7 +6172,11 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     {
         return Ok(image);
     }
-    if let Some(image) = decode_owned_baseline(input, &metadata, options)? {
+    #[cfg(feature = "std")]
+    if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
+        timings.core_preparation_ns = start.elapsed().as_nanos();
+    }
+    if let Some(image) = decode_owned_baseline(input, &metadata, options, timings)? {
         return Ok(image);
     }
 
@@ -6317,7 +6337,10 @@ fn decode_owned_baseline(
     input: &[u8],
     metadata: &Metadata,
     options: &DecodeOptions,
+    mut timings: Option<&mut NativeDecodeTimings>,
 ) -> Result<Option<Image>> {
+    #[cfg(feature = "std")]
+    let start = timings.as_ref().map(|_| std::time::Instant::now());
     let codestream_bytes = primary_part1_codestream_bytes(input, metadata)?;
     let Some(codestream_bytes) = codestream_bytes else {
         return Ok(None);
@@ -6326,6 +6349,10 @@ fn decode_owned_baseline(
         return Ok(None);
     }
 
+    #[cfg(feature = "std")]
+    if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
+        timings.core_preparation_ns += start.elapsed().as_nanos();
+    }
     let decoded = if options.max_quality_layers.is_some() {
         let indices = requested_component_indices(metadata, &options.requested_components)?;
         codestream::decode_baseline_owned_components_selected_with_max_layers(
@@ -6339,6 +6366,19 @@ fn decode_owned_baseline(
                 codestream::decode_baseline_owned_rendered(codestream_bytes)
             }
             (DecodeMode::Components, ComponentSelection::All) => {
+                #[cfg(feature = "std")]
+                if let Some(timings) = timings.as_deref_mut() {
+                    let (image, stages) =
+                        codestream::decode_baseline_owned_components_production_profiled(
+                            codestream_bytes,
+                        )
+                        .map_err(map_codestream_error)?;
+                    timings.codestream = stages;
+                    Ok(image)
+                } else {
+                    codestream::decode_baseline_owned_components(codestream_bytes)
+                }
+                #[cfg(not(feature = "std"))]
                 codestream::decode_baseline_owned_components(codestream_bytes)
             }
             (DecodeMode::Components, ComponentSelection::Indices(indices)) => {
@@ -6347,6 +6387,8 @@ fn decode_owned_baseline(
         }
     }
     .map_err(map_codestream_error)?;
+    #[cfg(feature = "std")]
+    let start = timings.as_ref().map(|_| std::time::Instant::now());
     let component_info = if options.mode == DecodeMode::Components {
         Some(part1_component_info(
             codestream_bytes,
@@ -6356,7 +6398,17 @@ fn decode_owned_baseline(
     } else {
         None
     };
-    decoded_baseline_to_image_with_component_info(decoded, options, component_info).map(Some)
+    let image = decoded_baseline_to_image_with_component_info_impl(
+        decoded,
+        options,
+        component_info,
+        timings.as_deref_mut(),
+    )?;
+    #[cfg(feature = "std")]
+    if let (Some(timings), Some(start)) = (timings, start) {
+        timings.output_construction_ns = start.elapsed().as_nanos();
+    }
+    Ok(Some(image))
 }
 
 fn decode_bounded_jp2_sycc_420(
@@ -7423,6 +7475,15 @@ fn decoded_baseline_to_image_with_component_info(
     options: &DecodeOptions,
     component_info: Option<Vec<ComponentInfo>>,
 ) -> Result<Image> {
+    decoded_baseline_to_image_with_component_info_impl(decoded, options, component_info, None)
+}
+
+fn decoded_baseline_to_image_with_component_info_impl(
+    decoded: codestream::DecodedImage,
+    options: &DecodeOptions,
+    component_info: Option<Vec<ComponentInfo>>,
+    mut timings: Option<&mut NativeDecodeTimings>,
+) -> Result<Image> {
     let component_len = decoded.components.len();
     if component_len == 0 || component_len > usize::from(u16::MAX) {
         return Err(unsupported(
@@ -7483,16 +7544,33 @@ fn decoded_baseline_to_image_with_component_info(
         ));
     }
 
-    match options.target_layout {
-        ComponentLayout::Planar => Ok(Image {
-            component_info,
-            info,
-            data: ImageData::Planes(planes),
-        }),
+    #[cfg(feature = "std")]
+    let start = timings.as_ref().map(|_| std::time::Instant::now());
+    let result = match options.target_layout {
+        ComponentLayout::Planar => {
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.packing_route = NativePackingRoute::PlanarMove;
+            }
+            Ok(Image {
+                component_info,
+                info,
+                data: ImageData::Planes(planes),
+            })
+        }
         ComponentLayout::Interleaved => {
             let samples = if planes.len() == 1 {
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.packing_route = NativePackingRoute::SinglePlaneMove;
+                }
                 planes.into_iter().next().ok_or_else(sample_size_overflow)?
             } else {
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.packing_route = match (planes.len(), info.sample_format) {
+                        (3, SampleFormat::U8) => NativePackingRoute::RgbU8,
+                        (3, SampleFormat::U16_LE) => NativePackingRoute::RgbU16,
+                        _ => NativePackingRoute::GenericInterleaved,
+                    };
+                }
                 interleave_planes(&planes, decoded.width, decoded.height, info.sample_format)?
             };
             Ok(Image {
@@ -7501,7 +7579,12 @@ fn decoded_baseline_to_image_with_component_info(
                 info,
             })
         }
+    };
+    #[cfg(feature = "std")]
+    if let (Some(timings), Some(start)) = (timings, start) {
+        timings.packing_ns = start.elapsed().as_nanos();
     }
+    result
 }
 
 fn is_direct_selective_part1_component_profile(codestream_bytes: &[u8]) -> bool {

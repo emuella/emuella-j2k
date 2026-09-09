@@ -201,6 +201,12 @@ The bounded driver accepts matching unsigned unit-sampled classic D2, reversible
 origins, and no SOP/EPH. RGB decode permits existing no-MCT or RCT streams;
 encoding retains the existing RGB RCT policy. Eight-band decode uses the full
 owned native component route. No prepared selective route is substituted.
+`decode_native_d2_profiled` shares the ordinary core `decode` implementation,
+including inspection, component metadata and native output construction. The
+one-worker gate is checked against the current Rayon pool when enabled; multiple
+workers are explicitly unsupported by this diagnostic. Component coding or
+quantisation overrides, tile COD/QCD overrides, ROI and POC are outside the
+frozen diagnostic profile; ordinary decoder admission remains unchanged.
 Invalid, mismatched or unsupported input returns an error JSON and nonzero exit.
 A parity or measured allocation failure also exits nonzero. Inputs, generated
 streams and reconstructed pixels remain in memory; the driver never saves them.
@@ -225,13 +231,26 @@ work counters. Inner entropy-operation counts are unavailable and reported as
 `null`, not invented zeros. The writer remains sequential checked baseline
 Tier-1 with both optional features enabled.
 
-Decode reuses the existing full owned stage collector and actual Tier-1 backend
-counters, including the optional entropy-operation collector. Its outer interval
-includes native output packing and release of intermediate planes. Verification,
-input reads and hashes are outside both measured intervals. The example verifies
-native samples against RAW, ordinary decode against RAW, its encode round trip,
-and profiled versus ordinary core encode bytes. The supplied decode stream need
-not equal the generated stream: in particular, RGB no-MCT and RCT differ.
+Decode's `production-one-worker` identity retains the ordinary adaptive Tier-1
+call and records the backend that actually ran, including packed dense blocks.
+It preserves the ordinary fused inverse-RCT/sample-conversion routine for RGB8.
+That interval is combined; its separate RCT and conversion fields are `null`.
+Without that fused route, the existing separate intervals remain measurable.
+Inner Tier-1 operation counters and segment-acquisition attribution are unavailable
+in this collector and explicitly `null`. The existing detailed checked profiler
+is unchanged and may be run separately for reference work counts; it must have a
+separate identity and its timings must not supply production stage fractions.
+
+The core output builder is shared, including PAN's move-only output,
+specialised RGB U8/U16 interleaving, generic native-band interleaving and planar
+moves. The recorded packing route is set in that actual branch. Core output
+construction includes packing and metadata, so its nested packing interval must
+not be added again. The outer interval includes full core decode; an explicit
+remainder retains work not attributed to the named intervals. Input reads,
+hashes and verification are outside both measured operations. The example
+verifies native samples against RAW, ordinary decode against RAW, its encode
+round trip, and profiled versus ordinary core encode bytes. The supplied decode
+stream need not equal the generated stream: RGB no-MCT and RCT differ.
 
 Requested encoder allocation accounting resets immediately before profiled
 encode and is captured immediately after it, before decode or verification.
@@ -240,20 +259,27 @@ output reallocation overlap. This is requested allocation traffic, not RSS.
 The example-only allocator follows the existing allocation probe's forwarding
 contract and is never linked into codec libraries.
 
-Clock reads, work counters and the allocation meter perturb execution. The
-existing decode collector suppresses some parallel dispatch; these are diagnostic
-stage observations, not headline throughput or proof of ordinary parallel
-backend selection. Use a separate ordinary uninstrumented process for timing,
-with matched inputs/build settings and explicit thread policy. Do not add nested
-decode substage timings to their parent total. Fields for unsupported telemetry
-are omitted; zero observed work, such as inverse RCT without MCT, remains zero.
+Clock reads and the allocation meter perturb execution. Production collection
+is qualified only at one worker, where the ordinary tile, block and component
+parallel gates are also closed. Its full-D2 dispatch keeps the ordinary adaptive
+backend, fused conversion and packing branches. It is not proof of parallel
+fidelity or an uninstrumented throughput result. Use a separate ordinary process
+for headline timing, with matched inputs/build settings and explicit thread
+policy. The retained checked detailed collector intentionally changes Tier-1
+and fused-conversion routes; sample equality does not make its stage fractions
+representative of ordinary decode. Zero observed work, such as inverse RCT
+without MCT, remains zero rather than implying an unavailable measurement.
 
 Focused authored checks cover grey/RGB U8/U16 and eight-band U16, full-range
 words, both layouts, block boundaries, ordinary byte identity, native decode
-parity, work-counter toggling, no-MCT RGB D2 and unchanged resource/error gates:
+parity, actual packed-dense dispatch, fused RGB8 conversion, shared PAN output
+allocation identity, separate checked-reference counters, no-MCT RGB D2 and
+unchanged resource/error gates. Parallel-feature tests use a local one-worker
+pool and separately verify rejection at two workers:
 
 ```sh
 cargo test -p emuella-j2k-test-support --test lossless_diagnostics
 cargo test -p emuella-j2k-test-support --test lossless_diagnostics --features parallel,simd
 cargo test -p emuella-j2k-test-support --example lossless_diagnostics
+cargo test -p emuella-j2k-core shared_pan_output_moves_the_original_plane
 ```

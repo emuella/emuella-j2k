@@ -108,7 +108,7 @@ pub fn lossless_d2_requirements(
     })
 }
 
-fn resource_error(message: &'static str) -> CodestreamError {
+pub(super) fn resource_error(message: &'static str) -> CodestreamError {
     unsupported(
         None,
         Some(Marker::Siz),

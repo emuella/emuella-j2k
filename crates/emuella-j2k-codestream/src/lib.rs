@@ -5626,6 +5626,12 @@ impl PhaseWorkerTelemetry {
 /// Stage-level timing counters for opt-in release benchmark profiling.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DecodeStageTimings {
+    /// Preserve the ordinary one-worker adaptive Tier-1 and fused RGB8 routes.
+    /// Only the bounded production diagnostic enables this; inner checked
+    /// pass timings/work counters are unavailable in this mode.
+    pub production_one_worker: bool,
+    pub fused_rgb8_conversion_ns: u128,
+    pub fused_rgb8_component_tiles: u64,
     pub collect_tier1_work_counters: bool,
     /// Nanoseconds spent normalizing and structurally validating a retained
     /// selective Part 1 plan.
@@ -6039,6 +6045,11 @@ impl DecodeStageTimings {
     }
 
     pub fn add_assign(&mut self, other: &Self) {
+        self.production_one_worker |= other.production_one_worker;
+        self.fused_rgb8_conversion_ns += other.fused_rgb8_conversion_ns;
+        self.fused_rgb8_component_tiles = self
+            .fused_rgb8_component_tiles
+            .saturating_add(other.fused_rgb8_component_tiles);
         let other_collects_tier1_work_counters = other.collect_tier1_work_counters;
         self.collect_tier1_work_counters |= other_collects_tier1_work_counters;
         self.prepare_ns += other.prepare_ns;
@@ -6557,6 +6568,16 @@ fn decode_tier1_code_block_with_optional_profile(
             scratch,
         );
     };
+
+    if stage_timings.production_one_worker {
+        return decode_tier1_code_block_fast(
+            segment,
+            coding_segments,
+            decode_spec,
+            coefficients,
+            scratch,
+        );
+    }
 
     let mut code_block_timings = tier1::CodeBlockDecodeTimings::default();
     if stage_timings.collect_tier1_work_counters {
@@ -25167,13 +25188,14 @@ fn append_profile_code_block_segments<'a>(
 fn decode_supported_part1_reversible53_default_precinct(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style = validate_supported_part1_reversible53_default_precinct(codestream)?;
     decode_supported_part1_reversible53_default_precinct_validated(
         input,
         codestream,
         coding_style,
-        None,
+        timings,
     )
 }
 
@@ -25207,18 +25229,26 @@ fn decode_supported_part1_reversible53_default_precinct_validated(
 
     let rgb_u8_components =
         component_count == 3 && codestream_components_are_unsigned_u8(codestream, 3);
-    if rgb_u8_components && timings.is_none() {
+    if rgb_u8_components && timings.as_ref().is_none_or(|t| t.production_one_worker) {
         let first_component = codestream
             .siz
             .components
             .first()
             .ok_or(CodestreamError::SizeOverflow)?;
+        let start = timings
+            .as_ref()
+            .map(|_| scalable_lossless::EncodeClock::start::<true>());
+        let components = rgb_u8_inverse_rct_planes_to_components(planes)?;
+        if let Some(timings) = timings.as_deref_mut() {
+            timings.fused_rgb8_conversion_ns += start.map_or(0, scalable_lossless::EncodeClock::ns);
+            timings.fused_rgb8_component_tiles += 1;
+        }
         return Ok(DecodedImage {
             width: tile_rect.width,
             height: tile_rect.height,
             bits_per_sample: first_component.bits_per_sample,
             signed: first_component.signed,
-            components: rgb_u8_inverse_rct_planes_to_components(planes)?,
+            components,
         });
     }
 
@@ -25351,19 +25381,20 @@ pub fn decode_baseline_owned(input: &[u8]) -> Result<DecodedImage> {
 /// rendered/display components.
 pub fn decode_baseline_owned_rendered(input: &[u8]) -> Result<DecodedImage> {
     let codestream = parse(input)?;
-    decode_supported_part1_reversible53_default_precinct(input, &codestream).or_else(|error| {
-        if uniform_effective_coding_style(&codestream)
+    decode_supported_part1_reversible53_default_precinct(input, &codestream, None).or_else(
+        |error| {
+            if uniform_effective_coding_style(&codestream)
             .is_ok_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
         {
             decode_supported_part1_irreversible97_default_precinct(input, &codestream)
         } else if is_supported_grayscale_u8_two_decomposition_multitile_encode_compatible_profile(
             &codestream,
         ) {
-            decode_native_grayscale_u8_two_decomp_multitile(input, &codestream)
+            decode_native_grayscale_u8_two_decomp_multitile(input, &codestream, None)
         } else if is_supported_rgb_u8_two_decomposition_multitile_encode_compatible_profile(
             &codestream,
         ) {
-            decode_native_rgb_u8_two_decomp_multitile(input, &codestream)
+            decode_native_rgb_u8_two_decomp_multitile(input, &codestream, None)
         } else if uniform_effective_coding_style(&codestream)
             .is_ok_and(|coding_style| coding_style.precincts_declared)
             && matches!(codestream.siz.component_count(), 1 | 3)
@@ -25374,56 +25405,149 @@ pub fn decode_baseline_owned_rendered(input: &[u8]) -> Result<DecodedImage> {
                 .all(|component| component.bits_per_sample == 8 && !component.signed)
             && is_supported_native_component_multitile_profile(&codestream)
         {
-            decode_native_component_multitile(input, &codestream)
+            decode_native_component_multitile(input, &codestream, None)
         } else if is_supported_part1_multitile_grayscale_profile(&codestream) {
-            decode_profiled_multitile_grayscale(input, &codestream)
+            decode_profiled_multitile_grayscale(input, &codestream, None)
         } else if is_supported_part1_high_bit_depth_component_profile(&codestream) {
-            decode_profiled_high_bit_depth_component(input, &codestream)
+            decode_profiled_high_bit_depth_component(input, &codestream, None)
         } else {
             Err(error)
         }
-    })
+        },
+    )
 }
 
 /// Decode the repo-owned profile-scoped native Part 1 subset as component
 /// planes. Three-component profile rows apply inverse RCT and return RGB
 /// component planes because that is the currently supported rendered profile.
 pub fn decode_baseline_owned_components(input: &[u8]) -> Result<DecodedImage> {
+    decode_baseline_owned_components_impl(input, None)
+}
+
+/// One-worker production stage collection for the frozen native classic D2
+/// profile. Uses ordinary dispatch; detailed checked counters remain separate.
+#[cfg(feature = "std")]
+pub fn decode_baseline_owned_components_production_profiled(
+    input: &[u8],
+) -> Result<(DecodedImage, DecodeStageTimings)> {
+    if parallel_worker_count().is_some_and(|workers| workers != 1) {
+        return Err(scalable_lossless::resource_error(
+            "production diagnostics require exactly one Rayon worker",
+        ));
+    }
+    let start = std::time::Instant::now();
+    let mut timings = DecodeStageTimings {
+        production_one_worker: true,
+        ..Default::default()
+    };
+    let image = decode_baseline_owned_components_impl(input, Some(&mut timings))?;
+    timings.total_ns = start.elapsed().as_nanos();
+    Ok((image, timings))
+}
+
+fn decode_baseline_owned_components_impl(
+    input: &[u8],
+    mut timings: Option<&mut DecodeStageTimings>,
+) -> Result<DecodedImage> {
+    let start = timings
+        .as_ref()
+        .map(|_| scalable_lossless::EncodeClock::start::<true>());
     let codestream = parse(input)?;
+    if let Some(timings) = timings.as_deref_mut() {
+        timings.marker_parse_ns = start.map_or(0, scalable_lossless::EncodeClock::ns);
+        let start = scalable_lossless::EncodeClock::start::<true>();
+        validate_production_d2_diagnostic(&codestream)?;
+        timings.support_classification_ns += start.ns();
+    }
     if is_supported_part1_native_subsampled_component_profile(&codestream) {
         return decode_native_subsampled_components(input, &codestream);
     }
-    decode_supported_part1_reversible53_default_precinct(input, &codestream).or_else(|error| {
+    decode_supported_part1_reversible53_default_precinct(input, &codestream, timings.as_deref_mut()).or_else(|error| {
         if uniform_effective_coding_style(&codestream)
             .is_ok_and(|coding_style| coding_style.transform == WaveletTransform::Irreversible97)
         {
             decode_supported_part1_irreversible97_default_precinct(input, &codestream)
         } else if is_supported_part1_multitile_grayscale_profile(&codestream) {
-            decode_profiled_multitile_grayscale(input, &codestream)
+            decode_profiled_multitile_grayscale(input, &codestream, timings.as_deref_mut())
         } else if is_supported_grayscale_u8_two_decomposition_multitile_encode_compatible_profile(
             &codestream,
         ) {
-            decode_native_grayscale_u8_two_decomp_multitile(input, &codestream)
+            decode_native_grayscale_u8_two_decomp_multitile(input, &codestream, timings.as_deref_mut())
         } else if is_supported_rgb_u8_two_decomposition_multitile_encode_compatible_profile(
             &codestream,
         ) {
-            decode_native_rgb_u8_two_decomp_multitile(input, &codestream)
+            decode_native_rgb_u8_two_decomp_multitile(input, &codestream, timings.as_deref_mut())
         } else if is_supported_grayscale_u16_two_decomposition_multitile_encode_compatible_profile(
             &codestream,
         ) {
-            decode_native_grayscale_u16_two_decomp_multitile(input, &codestream)
+            decode_native_grayscale_u16_two_decomp_multitile(input, &codestream, timings.as_deref_mut())
         } else if is_supported_rgb_u16_two_decomposition_multitile_encode_compatible_profile(
             &codestream,
         ) {
-            decode_native_rgb_u16_two_decomp_multitile(input, &codestream)
+            decode_native_rgb_u16_two_decomp_multitile(input, &codestream, timings.as_deref_mut())
         } else if is_supported_native_component_multitile_profile(&codestream) {
-            decode_native_component_multitile(input, &codestream)
+            decode_native_component_multitile(input, &codestream, timings.as_deref_mut())
         } else if is_supported_part1_high_bit_depth_component_profile(&codestream) {
-            decode_profiled_high_bit_depth_component(input, &codestream)
+            decode_profiled_high_bit_depth_component(input, &codestream, timings)
         } else {
             Err(error)
         }
     })
+}
+
+fn validate_production_d2_diagnostic(c: &Codestream) -> Result<()> {
+    let Some(style) = c.coding_style else {
+        return Err(scalable_lossless::resource_error(
+            "production diagnostics require COD",
+        ));
+    };
+    let components = c.siz.component_count();
+    let bits = c.siz.components.first().map(|p| p.bits_per_sample);
+    if !matches!(components, 1 | 3 | 8)
+        || !matches!(bits, Some(8 | 16))
+        || (components == 8 && bits != Some(16))
+        || c.siz.components.iter().any(|p| {
+            Some(p.bits_per_sample) != bits
+                || p.signed
+                || p.horizontal_separation != 1
+                || p.vertical_separation != 1
+        })
+        || style.entropy_coder != EntropyCoder::ClassicTier1
+        || style.transform != WaveletTransform::Reversible53
+        || style.decomposition_levels != 2
+        || style.progression_order != ProgressionOrder::Lrcp
+        || style.layers != 1
+        || style.code_block_style != 0
+        || style.code_block_width_exponent != 6
+        || style.code_block_height_exponent != 6
+        || style.sop_markers
+        || style.eph_markers
+        || style.precincts_declared
+        || (components != 3 && style.multiple_component_transform)
+        || !c.component_coding_styles.is_empty()
+        || c.tiles.len() != 1
+        || c.markers.iter().any(|m| {
+            matches!(
+                m.marker,
+                Marker::Coc | Marker::Qcc | Marker::Rgn | Marker::Poc
+            )
+        })
+        || c.markers.iter().filter(|m| m.marker == Marker::Cod).count() != 1
+        || c.markers.iter().filter(|m| m.marker == Marker::Qcd).count() != 1
+        || c.siz.image_origin_x != 0
+        || c.siz.image_origin_y != 0
+        || c.siz.tile_origin_x != 0
+        || c.siz.tile_origin_y != 0
+        || c.siz.tile_width != c.image_width()
+        || c.siz.tile_height != c.image_height()
+    {
+        return Err(scalable_lossless::resource_error(
+            "production diagnostics require the bounded native single-tile classic D2 profile",
+        ));
+    }
+    // The ordinary decoder still performs its full effective-header, packet,
+    // quantisation and resource validation after this narrower diagnostic gate.
+    Ok(())
 }
 
 /// Decode only the requested source component planes from the repo-owned
@@ -30888,61 +31012,68 @@ fn validate_component_selection(codestream: &Codestream, component_indices: &[u1
 fn decode_profiled_high_bit_depth_component(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style = validate_supported_part1_high_bit_depth_component_profile(codestream)?;
     decode_supported_part1_reversible53_default_precinct_validated(
         input,
         codestream,
         coding_style,
-        None,
+        timings,
     )
 }
 
 fn decode_profiled_multitile_grayscale(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style = validate_supported_part1_multitile_grayscale_profile(codestream)?;
-    decode_profiled_multitile_grayscale_validated(input, codestream, coding_style, None)
+    decode_profiled_multitile_grayscale_validated(input, codestream, coding_style, timings)
 }
 
 fn decode_native_grayscale_u8_two_decomp_multitile(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style =
         validate_supported_native_grayscale_u8_two_decomp_multitile_profile(codestream)?;
-    decode_multitile_components_validated(input, codestream, coding_style, 1, None)
+    decode_multitile_components_validated(input, codestream, coding_style, 1, timings)
 }
 
 fn decode_native_rgb_u8_two_decomp_multitile(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style = validate_supported_native_rgb_u8_two_decomp_multitile_profile(codestream)?;
-    decode_multitile_components_validated(input, codestream, coding_style, 3, None)
+    decode_multitile_components_validated(input, codestream, coding_style, 3, timings)
 }
 
 fn decode_native_grayscale_u16_two_decomp_multitile(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style =
         validate_supported_native_grayscale_u16_two_decomp_multitile_profile(codestream)?;
-    decode_multitile_components_validated(input, codestream, coding_style, 1, None)
+    decode_multitile_components_validated(input, codestream, coding_style, 1, timings)
 }
 
 fn decode_native_rgb_u16_two_decomp_multitile(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style = validate_supported_native_rgb_u16_two_decomp_multitile_profile(codestream)?;
-    decode_multitile_components_validated(input, codestream, coding_style, 3, None)
+    decode_multitile_components_validated(input, codestream, coding_style, 3, timings)
 }
 
 fn decode_native_component_multitile(
     input: &[u8],
     codestream: &Codestream,
+    timings: Option<&mut DecodeStageTimings>,
 ) -> Result<DecodedImage> {
     let coding_style = validate_supported_native_component_multitile_profile(codestream)?;
     decode_multitile_components_validated(
@@ -30950,7 +31081,7 @@ fn decode_native_component_multitile(
         codestream,
         coding_style,
         usize::from(codestream.siz.component_count()),
-        None,
+        timings,
     )
 }
 
@@ -31213,6 +31344,8 @@ fn decode_multitile_components_validated(
 
     let tile_rects = tile_rects(codestream)?;
     #[cfg(feature = "parallel")]
+    // Production diagnostics admit one worker, where this ordinary parallel
+    // gate is already false. Detailed checked profiling keeps its old policy.
     let use_parallel_tiles = timings.is_none()
         && parallel_decode_dispatch_available()
         && should_parallel_decode_tiles(&tile_rects, component_count);
@@ -32028,8 +32161,19 @@ fn decode_multitile_tile_component_samples(
 
     let rgb_u8_components =
         component_count == 3 && codestream_components_are_unsigned_u8(codestream, 3);
-    if rgb_u8_components && timings.is_none() && coding_style.multiple_component_transform {
-        return rgb_u8_inverse_rct_planes_to_bytes(planes);
+    if rgb_u8_components
+        && timings.as_ref().is_none_or(|t| t.production_one_worker)
+        && coding_style.multiple_component_transform
+    {
+        let start = timings
+            .as_ref()
+            .map(|_| scalable_lossless::EncodeClock::start::<true>());
+        let bytes = rgb_u8_inverse_rct_planes_to_bytes(planes)?;
+        if let Some(timings) = timings.as_deref_mut() {
+            timings.fused_rgb8_conversion_ns += start.map_or(0, scalable_lossless::EncodeClock::ns);
+            timings.fused_rgb8_component_tiles += 1;
+        }
+        return Ok(bytes);
     }
 
     if component_count == 3 && coding_style.multiple_component_transform {
@@ -37255,7 +37399,7 @@ mod inline_packet_marker_tests {
         let topology = Part1PrecinctTopology::new(&parsed.siz, first_tile, 0, style).unwrap();
         assert!(!topology.has_zero_origin_synthesis_phase());
         assert!(matches!(
-            decode_native_grayscale_u8_two_decomp_multitile(&codestream, &parsed),
+            decode_native_grayscale_u8_two_decomp_multitile(&codestream, &parsed, None),
             Err(CodestreamError::Unsupported {
                 marker: Some(Marker::Siz),
                 construct: UnsupportedConstruct::Transform,
@@ -42835,6 +42979,8 @@ fn reconstruct_default_precinct_component_planes(
     component_count: usize,
     mut timings: Option<&mut DecodeStageTimings>,
 ) -> Result<Vec<Vec<i32>>> {
+    // One-worker production profiling has the same serial scheduling as an
+    // ordinary one-worker invocation; only the optional clocks are additional.
     #[cfg(feature = "parallel")]
     if timings.is_none()
         && rayon::current_thread_index().is_none()
@@ -46160,6 +46306,8 @@ fn inverse_reversible_5_3_component_planes(
     coding_style: CodingStyleMarker,
     mut timings: Option<&mut DecodeStageTimings>,
 ) -> Result<()> {
+    // The production collector rejects multiple workers before decoding, so
+    // this existing gate remains false for both measured and ordinary calls.
     #[cfg(feature = "parallel")]
     if timings.is_none()
         && parallel_decode_dispatch_available()
