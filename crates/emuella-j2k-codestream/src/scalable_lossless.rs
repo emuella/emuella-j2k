@@ -53,10 +53,11 @@ pub fn lossless_d2_requirements(
         || width > 32768
         || height > 32768
         || pixels > 64 * 1024 * 1024
-        || !matches!(components, 1 | 3)
+        || !matches!(components, 1 | 3 | 8)
+        || (components == 8 && pixels > 32 * 1024 * 1024)
     {
         return Err(resource_error(
-            "lossless D2 requires 4..=32768 axes, at most 64 Mi pixels and one or three components",
+            "lossless D2 requires 4..=32768 axes, at most 64 Mi pixels for grey/RGB or 32 Mi pixels for eight components",
         ));
     }
     if limits.max_output_bytes < 128 {
@@ -159,7 +160,7 @@ pub fn encode_lossless_d2(
         u16::try_from(planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
         limits,
     )?;
-    if !matches!(bits, 8 | 16) {
+    if !matches!(bits, 8 | 16) || (planes.len() == 8 && bits != 16) {
         return Err(resource_error(
             "lossless D2 requires unsigned 8-bit or 16-bit input",
         ));

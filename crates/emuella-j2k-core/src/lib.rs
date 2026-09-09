@@ -4917,6 +4917,9 @@ pub enum InputFormat {
     /// Raw HTJ2K codestream.
     Htj2kCodestream,
     /// Input family has not been classified yet.
+    /// No inferred colour interpretation. For native eight-component lossless
+    /// encoding, positions are independent unsigned U16 bands; decode with
+    /// `DecodeMode::Components` preserves those positions.
     Unknown,
 }
 
@@ -7961,7 +7964,11 @@ fn decode_part1_components_into_direct(
         return Ok(false);
     }
     let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
-    if native_planes::is_atomic_profile(codestream_bytes, &parsed) {
+    // Eight-component full output publishes only after every band succeeds.
+    // This changes publication, not the existing codestream admission rules.
+    if parsed.siz.component_count() == 8
+        || native_planes::is_atomic_profile(codestream_bytes, &parsed)
+    {
         return Ok(false);
     }
     if codestream::is_supported_part1_native_subsampled_component_profile(&parsed) {

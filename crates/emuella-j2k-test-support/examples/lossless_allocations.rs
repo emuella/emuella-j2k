@@ -48,7 +48,7 @@ fn main() {
     let c: u16 = a.get(3).map_or(1, |s| s.parse().unwrap());
     let bits: u8 = a.get(4).map_or(16, |s| s.parse().unwrap());
     let b = usize::from(bits / 8);
-    assert!(matches!(c, 1 | 3) && matches!(bits, 8 | 16));
+    assert!(matches!(c, 1 | 3 | 8) && matches!(bits, 8 | 16) && (c != 8 || bits == 16));
     let planar = a.get(5).is_some_and(|s| s == "planar");
     assert!(
         a.get(5)
@@ -65,8 +65,10 @@ fn main() {
         },
         if c == 1 {
             ColorModel::Grayscale
-        } else {
+        } else if c == 3 {
             ColorModel::Rgb
+        } else {
+            ColorModel::Unknown
         },
         ComponentLayout::Interleaved,
     )

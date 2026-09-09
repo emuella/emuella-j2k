@@ -14,7 +14,8 @@ pub(super) fn is_scalable_lossless(image: ImageView<'_>, options: &EncodeOptions
         && (is_native_grayscale_u8_encode(info)
             || is_native_rgb_u8_encode(info)
             || is_native_grayscale_u16_le_encode(info)
-            || is_native_rgb_u16_le_encode(info))
+            || is_native_rgb_u16_le_encode(info)
+            || is_native_eight_component_u16(info))
         && (4..=32768).contains(&info.width)
         && (4..=32768).contains(&info.height)
 }
@@ -31,7 +32,9 @@ pub fn lossless_encode_requirements(
     limits: &LosslessEncodeLimits,
 ) -> Result<LosslessEncodeRequirements> {
     validate_encode_options(options)?;
-    validate_encode_image_info(info)?;
+    if !is_native_eight_component_u16(info) {
+        validate_encode_image_info(info)?;
+    }
     let dummy = ImageView::Interleaved {
         info,
         samples: &[],
@@ -40,7 +43,7 @@ pub fn lossless_encode_requirements(
     if !is_scalable_lossless(dummy, options) {
         return Err(unsupported(
             UnsupportedFeature::ComponentLayout,
-            "explicit lossless limits require raw single-tile U8/U16 grey/RGB D2 without metadata",
+            "explicit lossless limits require raw single-tile U8/U16 grey/RGB or eight native U16 components, D2 without metadata",
         ));
     }
     codestream::lossless_d2_requirements(info.width, info.height, info.components, *limits)
@@ -80,7 +83,7 @@ pub fn encode_with_limits(
         samples: &[],
         stride_bytes: 0,
         sample_step_bytes: bytes,
-    }; 3];
+    }; 8];
     for (index, target) in planes
         .iter_mut()
         .enumerate()
@@ -111,4 +114,11 @@ pub fn encode_with_limits(
         *limits,
     )
     .map_err(map_codestream_error)
+}
+
+// Unknown retains component positions without asserting spectral or colour meaning.
+fn is_native_eight_component_u16(info: &ImageInfo) -> bool {
+    info.components == 8
+        && info.color_model == ColorModel::Unknown
+        && info.sample_format == SampleFormat::U16_LE
 }
