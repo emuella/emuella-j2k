@@ -995,6 +995,9 @@ fn magnitude_refinement_pass_dense_full<const SPARSE: bool, const VERTICAL_CAUSA
     let mut first_no_neighbor_context = context.contexts[14];
     let mut first_neighbor_context = context.contexts[15];
     let mut repeat_context = context.contexts[16];
+    let chunks_per_stripe = context.chunks_per_stripe;
+    let context_stride = context.context_stride;
+    let dense_neighborhoods = &*context.dense_neighborhoods;
     for (word, (((significant, visited), refined), coefficients)) in context
         .stripe_significant
         .iter()
@@ -1015,7 +1018,8 @@ fn magnitude_refinement_pass_dense_full<const SPARSE: bool, const VERTICAL_CAUSA
             );
             continue;
         }
-        let neighbors = context.stripe_neighbor[word];
+        let stripe = word / chunks_per_stripe;
+        let chunk = word % chunks_per_stripe;
         let mut refined_word = *refined;
         while candidates != 0 {
             let bit_index = candidates.trailing_zeros() as usize;
@@ -1026,7 +1030,10 @@ fn magnitude_refinement_pass_dense_full<const SPARSE: bool, const VERTICAL_CAUSA
                 repeat_context = next_context;
                 value
             } else {
-                if neighbors & mask != 0 {
+                let x = chunk * 16 + bit_index / 4;
+                let y = stripe * 4 + bit_index % 4;
+                let neighbors = dense_neighborhoods[(y + 1) * context_stride + x + 1];
+                if neighbors.any() {
                     let (value, next_context) =
                         decoder.read_packed_bit_value(first_neighbor_context);
                     first_neighbor_context = next_context;
@@ -1172,49 +1179,5 @@ fn magnitude_refinement_pass_raw_impl<
             }
             context.stripe_refined[word] = refined;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{CodeBlockDimensions, CodeBlockStyle, Subband};
-
-    fn compare_neighbor_presence<const VERTICAL_CAUSAL: bool>() {
-        for (width, height) in [(16, 8), (17, 11), (64, 64)] {
-            let spec = CodeBlockDecodeSpec {
-                dimensions: CodeBlockDimensions::new(width, height).unwrap(),
-                subband: Subband::LowLow,
-                available_bitplanes: 16,
-                missing_most_significant_bitplanes: 0,
-                coding_passes: 1,
-                style: CodeBlockStyle::NONE,
-            };
-            // Isolate each source position so another significant coefficient
-            // cannot conceal a missing neighbour at a stripe or block edge.
-            for y in 0..usize::from(height) {
-                for x in 0..usize::from(width) {
-                    let mut scratch = PackedDecodeScratch::default();
-                    let mut context = scratch.prepare::<false, VERTICAL_CAUSAL>(spec);
-                    context.set_significant(x, y, ((x + y) & 1) as u8);
-                    for target_y in 0..usize::from(height) {
-                        for target_x in 0..usize::from(width) {
-                            let (word, mask) = context.stripe_position(target_x, target_y);
-                            assert_eq!(
-                                context.stripe_neighbor[word] & mask != 0,
-                                context.neighbors(target_x, target_y).any(),
-                                "source ({x}, {y}), target ({target_x}, {target_y})"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn stripe_presence_matches_dense_neighborhoods_at_all_edges() {
-        compare_neighbor_presence::<false>();
-        compare_neighbor_presence::<true>();
     }
 }

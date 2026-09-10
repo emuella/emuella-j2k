@@ -102,3 +102,9 @@ matched all 304,926 length-prefixed encoded bytes from baseline
 `54b561bc8b70f556d508b730c6f3914247f50f19`). The authored byte sequence has SHA-256
 `adda2a1cc7eb3c353e016fdcee6b0ca10920224e038de60e86ee4a0159eb3b44`.
 These are mechanism and exactness observations, not a full-image speed claim.
+
+A subsequent [dense first-refinement calibration](tier1-refinement-calibration.md)
+measured the existing neighbour bitboard as a replacement for the first-refinement
+presence query. The bounded probe preserved exactness but did not meet the
+full-image 5% practical improvement gate, so the production implementation was
+retained.
