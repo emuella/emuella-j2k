@@ -53,7 +53,11 @@ RGB up to 64 Mi pixels, including full 6650 × 7054 inputs. The additive
 `encode_with_limits` and `lossless_encode_requirements` APIs expose checked
 working-memory and output-capacity admission. See the
 [scalable lossless contract](docs/scalable-lossless.md) for the exact profile,
-allocation model and opt-in authored probes. Exactly eight positional native
+allocation model and opt-in authored probes. The additive
+`encode_lossless_bypass_with_limits` entry selects D2 selective arithmetic
+bypass while the existing encode entry points retain style zero. Its separate
+`lossless_bypass_encode_requirements` query includes bounded segment metadata.
+Exactly eight positional native
 U16_LE components also support this raw D2 route without MCT, with both layouts
 and at most 32 Mi pixels. Use `ColorModel::Unknown` and decode in component mode;
 the [native eight-component contract](docs/native-eight-components.md) defines

@@ -1,8 +1,7 @@
-//! Authored selective-bypass feasibility bridge; not a public encode profile.
+//! Actual terminated segments for the bounded native D2 selective-bypass writer.
 use super::*;
 
-/// Exercise native D2 packet assembly with actual selectively bypassed segments.
-/// This serial exploration entry point is not a qualified resource/API contract.
+/// Compatibility alias retained for opt-in authored exploration tools.
 #[cfg(feature = "test-fixtures")]
 #[doc(hidden)]
 pub fn encode_lossless_d2_bypass_test_fixture(
@@ -12,15 +11,53 @@ pub fn encode_lossless_d2_bypass_test_fixture(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<Vec<u8>> {
-    encode_lossless_d2_impl::<false, true>(
-        width,
-        height,
-        bits,
-        planes,
-        limits,
-        &mut LosslessEncodeTimings::default(),
-        &mut LosslessEncodeExecution::default(),
-    )
+    encode_lossless_d2_bypass(width, height, bits, planes, limits)
+}
+
+// The D2 i32 encoder admits at most 31 magnitude planes. A complete block has
+// 1 + 3*(31-1) = 91 passes: one initial ten-pass MQ segment, then 27 pairs
+// of a two-pass raw segment and one MQ cleanup segment. Thus at most 55.
+const MAX_SEGMENTS: usize = 55;
+const MAX_PASSES: u16 = 91;
+pub(super) const METADATA_BYTES_PER_BLOCK: u64 = 512;
+
+#[derive(Debug, Clone)]
+pub(super) struct SegmentLengths {
+    lengths: [usize; MAX_SEGMENTS],
+    count: usize,
+}
+const _: () = assert!(core::mem::size_of::<SegmentLengths>() <= METADATA_BYTES_PER_BLOCK as usize);
+
+impl SegmentLengths {
+    pub(super) fn checked(passes: u16, bytes: &[u8], lengths: &[usize]) -> Result<Self> {
+        validate_lengths(passes, bytes.len(), lengths)?;
+        if lengths.len() > MAX_SEGMENTS || bytes.last() == Some(&0xff) {
+            return Err(CodestreamError::SizeOverflow);
+        }
+        let mut result = Self {
+            lengths: [0; MAX_SEGMENTS],
+            count: lengths.len(),
+        };
+        result.lengths[..lengths.len()].copy_from_slice(lengths);
+        Ok(result)
+    }
+}
+impl core::ops::Deref for SegmentLengths {
+    type Target = [usize];
+    fn deref(&self) -> &[usize] {
+        &self.lengths[..self.count]
+    }
+}
+
+pub(super) fn metadata(count: usize) -> Result<Vec<SegmentLengths>> {
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(count)
+        .map_err(|_| CodestreamError::SizeOverflow)?;
+    if result.capacity() != count {
+        return Err(CodestreamError::SizeOverflow);
+    }
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -32,7 +69,7 @@ pub(super) fn encode_subband(
     output: &mut Vec<u8>,
     maximum: usize,
     scratch: &mut tier1::CodeBlockEncodeScratch,
-) -> Result<(NativeDecompSubband, Vec<Vec<usize>>)> {
+) -> Result<(NativeDecompSubband, Vec<SegmentLengths>)> {
     if spec.grid_x0 != 0 || spec.grid_y0 != 0 {
         return Err(CodestreamError::SizeOverflow);
     }
@@ -41,7 +78,8 @@ pub(super) fn encode_subband(
         u16::try_from(spec.height.div_ceil(64)).map_err(|_| CodestreamError::SizeOverflow)?;
     let count = usize::from(cols) * usize::from(rows);
     let mut blocks = Vec::with_capacity(count);
-    let mut all_lengths = Vec::with_capacity(count);
+    let mut all_lengths = metadata(count)?;
+    let mut lengths = Vec::new();
     let mut bytes = Vec::new();
     for y in 0..rows {
         for x in 0..cols {
@@ -54,7 +92,6 @@ pub(super) fn encode_subband(
                 .and_then(|n| n.checked_add(spec.x as usize + local_x as usize))
                 .ok_or(CodestreamError::SizeOverflow)?;
             let source = plane.get(offset..).ok_or(CodestreamError::SizeOverflow)?;
-            let mut lengths = Vec::new();
             bytes.clear();
             let encoded = tier1::encode_baseline_code_block_segments_with_strided_scratch(
                 source,
@@ -71,10 +108,10 @@ pub(super) fn encode_subband(
                 scratch,
             )
             .map_err(map_tier1_error)?;
-            validate_lengths(encoded.pass_count, encoded.byte_len, &lengths)?;
-            if bytes.last() == Some(&0xff) {
+            if encoded.byte_len != bytes.len() {
                 return Err(CodestreamError::SizeOverflow);
             }
+            let segments = SegmentLengths::checked(encoded.pass_count, &bytes, &lengths)?;
             reserve_output(output, bytes.len(), maximum)?;
             blocks.push(EncodedCodeBlock {
                 x,
@@ -91,7 +128,7 @@ pub(super) fn encode_subband(
                 segment_len: encoded.byte_len,
             });
             output.extend_from_slice(&bytes);
-            all_lengths.push(lengths);
+            all_lengths.push(segments);
         }
     }
     Ok((
@@ -124,7 +161,11 @@ fn validate_lengths(passes: u16, byte_len: usize, lengths: &[usize]) -> Result<(
             .checked_add(length)
             .ok_or(CodestreamError::SizeOverflow)?;
     }
-    if pass != passes || total != byte_len || passes > 164 {
+    if pass != passes
+        || total != byte_len
+        || passes > MAX_PASSES
+        || (passes != 0 && passes % 3 != 1)
+    {
         return Err(CodestreamError::SizeOverflow);
     }
     Ok(())
@@ -133,7 +174,7 @@ fn validate_lengths(passes: u16, byte_len: usize, lengths: &[usize]) -> Result<(
 pub(super) fn write_packet_header(
     writer: &mut PacketBitWriter,
     band: &NativeDecompSubband,
-    all_lengths: &[Vec<usize>],
+    all_lengths: &[SegmentLengths],
 ) -> Result<()> {
     if band.code_blocks.len() != all_lengths.len() {
         return Err(CodestreamError::SizeOverflow);
@@ -202,6 +243,34 @@ fn write_lengths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selective_bypass_metadata_covers_the_full_i32_magnitude_envelope() {
+        let mut bytes = Vec::new();
+        let mut lengths = Vec::new();
+        let encoded = tier1::encode_baseline_code_block_segments_with_strided_scratch(
+            &[i32::MAX, -i32::MAX],
+            2,
+            tier1::CodeBlockEncodeSpec {
+                dimensions: tier1::CodeBlockDimensions::new(2, 1).unwrap(),
+                subband: tier1::Subband::LowLow,
+                available_bitplanes: 31,
+                code_block_style: 1,
+            },
+            &mut bytes,
+            &mut lengths,
+            &mut tier1::CodeBlockEncodeScratch::new(),
+        )
+        .unwrap();
+        assert_eq!(encoded.pass_count, MAX_PASSES);
+        assert_eq!(lengths.len(), MAX_SEGMENTS);
+        assert_eq!(MAX_SEGMENTS, 1 + 2 * ((usize::from(MAX_PASSES) - 10) / 3));
+        let bounded = SegmentLengths::checked(encoded.pass_count, &bytes, &lengths).unwrap();
+        assert_eq!(&*bounded, lengths);
+        assert!(SegmentLengths::checked(MAX_PASSES + 3, &bytes, &lengths).is_err());
+        assert!(SegmentLengths::checked(MAX_PASSES, &bytes, &[0; MAX_SEGMENTS + 1]).is_err());
+        assert!(SegmentLengths::checked(0, &[1], &[]).is_err());
+    }
 
     #[test]
     fn selective_bypass_malformed_observations() {
@@ -369,7 +438,7 @@ mod tests {
             );
             assert_eq!(
                 segments.iter().map(|s| s.byte_len).collect::<Vec<_>>(),
-                lengths[0]
+                lengths[0].to_vec()
             );
         }
     }

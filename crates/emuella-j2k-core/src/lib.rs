@@ -10120,8 +10120,8 @@ fn decode_partial_part1_components_into_direct(
 mod scalable_lossless;
 #[cfg(feature = "std")]
 pub use scalable_lossless::{
-    LosslessEncodeLimits, LosslessEncodeRequirements, encode_with_limits,
-    lossless_encode_requirements,
+    LosslessEncodeLimits, LosslessEncodeRequirements, encode_lossless_bypass_with_limits,
+    encode_with_limits, lossless_bypass_encode_requirements, lossless_encode_requirements,
 };
 
 /// Convenience encode that owns the returned codestream or container bytes.

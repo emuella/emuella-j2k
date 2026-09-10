@@ -112,7 +112,7 @@ mod scalable_lossless;
 pub use scalable_lossless::encode_lossless_d2_bypass_test_fixture;
 pub use scalable_lossless::{
     LosslessD2Plane, LosslessEncodeLimits, LosslessEncodeRequirements, encode_lossless_d2,
-    lossless_d2_requirements,
+    encode_lossless_d2_bypass, lossless_d2_bypass_requirements, lossless_d2_requirements,
 };
 #[cfg(feature = "std")]
 pub use scalable_lossless::{

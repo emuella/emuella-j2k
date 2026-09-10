@@ -1639,10 +1639,13 @@ pub fn encode_baseline_code_block_with_strided_scratch(
     encode_prepared_baseline_code_block(&mut ctx, max_magnitude, spec, output, None)
 }
 
-/// Encode a strided fixture block and return independently terminated segment
-/// lengths from the production Tier-1 encoder.
-#[cfg(feature = "test-fixtures")]
-#[doc(hidden)]
+/// Encode a strided block and return its actual terminated segment lengths.
+/// The reusable collector is cleared before validation and populated in coding
+/// order. Lengths describe bytes appended by this call, excluding any existing
+/// output prefix; their sum equals the returned `byte_len`. An all-zero block
+/// appends no bytes and leaves the collector empty. On error, callers must
+/// discard the invocation's output and collector contents. Output and scratch
+/// otherwise follow the ordinary strided encoder contract.
 pub fn encode_baseline_code_block_segments_with_strided_scratch(
     coefficients: &[i32],
     row_stride: usize,

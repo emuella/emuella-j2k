@@ -1,5 +1,6 @@
 //! One fresh-process native operation for provisional style-0/style-1 comparison.
 //! The calling harness owns source/build identity and authorised input locations.
+use emuella_j2k as api;
 use emuella_j2k_codestream as cs;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -167,7 +168,7 @@ fn profile(
                 }
                 let capacity = if pass < 10 {
                     10 - pass
-                } else if (pass - 10) % 3 == 0 {
+                } else if (pass - 10).is_multiple_of(3) {
                     2
                 } else {
                     1
@@ -179,7 +180,7 @@ fn profile(
                     .checked_add(segment.byte_len)
                     .ok_or("segment overflow")?;
                 let segment_bytes = codeword.get(offset..end).ok_or("truncated segment")?;
-                if pass >= 10 && pass % 3 != 0 {
+                if pass >= 10 && !pass.is_multiple_of(3) {
                     if segment.coding_passes != 2 {
                         return Err("incomplete generated raw pair".into());
                     }
@@ -256,6 +257,18 @@ fn run() -> Result<Value> {
     let bits = u8::try_from(number(&request, "bits")?)?;
     let style = u8::try_from(number(&request, "style")?)?;
     let operation = string(&request, "operation")?;
+    let boundary = request["boundary"]
+        .as_str()
+        .unwrap_or("native_codestream_operation");
+    let facade = match boundary {
+        "native_codestream_operation" => false,
+        "facade_operation" => true,
+        _ => return Err("unsupported operation boundary".into()),
+    };
+    let workers = usize::try_from(request["workers"].as_u64().unwrap_or(1))?;
+    if !matches!(workers, 1 | 2 | 4 | 8) {
+        return Err("unsupported pool width".into());
+    }
     if !matches!(operation, "prepare" | "encode" | "decode")
         || style > 1
         || !matches!(components, 1 | 3 | 8)
@@ -268,9 +281,16 @@ fn run() -> Result<Value> {
         "interleaved" => false,
         _ => return Err("invalid layout".into()),
     };
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build()?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()?;
     pool.install(|| {
-        cs::lossless_d2_requirements(
+        let requirements = if style == 0 {
+            cs::lossless_d2_requirements
+        } else {
+            cs::lossless_d2_bypass_requirements
+        };
+        requirements(
             width,
             height,
             components as u16,
@@ -319,34 +339,133 @@ fn run() -> Result<Value> {
             sample_step_bytes: sample_bytes * if planar { 1 } else { components },
         })
         .collect();
-    let encode = || {
-        if style == 0 {
-            cs::encode_lossless_d2(
-                width,
-                height,
-                bits,
-                &planes,
-                cs::LosslessEncodeLimits::default(),
-            )
+    let layout = if planar {
+        api::ComponentLayout::Planar
+    } else {
+        api::ComponentLayout::Interleaved
+    };
+    let info = api::ImageInfo::new(
+        width,
+        height,
+        components as u16,
+        if bits == 8 {
+            api::SampleFormat::U8
         } else {
-            cs::encode_lossless_d2_bypass_test_fixture(
+            api::SampleFormat::U16_LE
+        },
+        match components {
+            1 => api::ColorModel::Grayscale,
+            3 => api::ColorModel::Rgb,
+            _ => api::ColorModel::Unknown,
+        },
+        layout,
+    )?;
+    let options = api::EncodeOptions {
+        format: api::OutputFormat::J2kCodestream,
+        decomposition_levels: 2,
+        ..Default::default()
+    };
+    let api_planes: Vec<_> = if planar {
+        raw.chunks_exact(plane_bytes)
+            .map(|samples| {
+                api::Plane::new(
+                    samples,
+                    width,
+                    height,
+                    width as usize * sample_bytes,
+                    info.sample_format,
+                )
+            })
+            .collect::<std::result::Result<_, _>>()?
+    } else {
+        Vec::new()
+    };
+    let view = if planar {
+        api::ImageView::Planar {
+            info: &info,
+            planes: &api_planes,
+        }
+    } else {
+        api::ImageView::Interleaved {
+            info: &info,
+            samples: &raw,
+            stride_bytes: width as usize * sample_bytes * components,
+        }
+    };
+    let decode_options = api::DecodeOptions {
+        mode: api::DecodeMode::Components,
+        target_layout: layout,
+        ..Default::default()
+    };
+    let verify_api = |decoded: &api::Image| -> Result<()> {
+        if decoded.info.width != width
+            || decoded.info.height != height
+            || decoded.info.components as usize != components
+            || decoded.info.sample_format != info.sample_format
+        {
+            return Err("facade decoded shape differs".into());
+        }
+        let exact = match &decoded.data {
+            api::ImageData::Interleaved(samples) => !planar && samples == &raw,
+            api::ImageData::Planes(planes) => {
+                planar
+                    && planes.len() == components
+                    && planes
+                        .iter()
+                        .zip(raw.chunks_exact(plane_bytes))
+                        .all(|(p, expected)| p == expected)
+            }
+        };
+        if !exact {
+            return Err("facade decoded samples differ".into());
+        }
+        Ok(())
+    };
+    let encode = || -> Result<Vec<u8>> {
+        if facade {
+            let encode = if style == 0 {
+                api::encode_with_limits
+            } else {
+                api::encode_lossless_bypass_with_limits
+            };
+            Ok(encode(
+                view,
+                &options,
+                &api::LosslessEncodeLimits::default(),
+            )?)
+        } else {
+            let encode = if style == 0 {
+                cs::encode_lossless_d2
+            } else {
+                cs::encode_lossless_d2_bypass
+            };
+            Ok(encode(
                 width,
                 height,
                 bits,
                 &planes,
                 cs::LosslessEncodeLimits::default(),
-            )
+            )?)
         }
     };
     let (elapsed, actual_hash, stream_bytes, syntax) = pool.install(|| -> Result<_> {
-        if rayon::current_num_threads() != 1 {
+        if rayon::current_num_threads() != workers {
             return Err("unexpected pool width".into());
         }
         if operation == "decode" {
-            let start = Instant::now();
-            let decoded = cs::decode_baseline_owned_components(&stream)?;
-            let elapsed = u64::try_from(start.elapsed().as_nanos())?;
-            verify(&decoded, &raw, width, height, components, bits, planar)?;
+            let elapsed = if facade {
+                let start = Instant::now();
+                let decoded = api::decode(&stream, &decode_options)?;
+                let elapsed = u64::try_from(start.elapsed().as_nanos())?;
+                verify_api(&decoded)?;
+                elapsed
+            } else {
+                let start = Instant::now();
+                let decoded = cs::decode_baseline_owned_components(&stream)?;
+                let elapsed = u64::try_from(start.elapsed().as_nanos())?;
+                verify(&decoded, &raw, width, height, components, bits, planar)?;
+                elapsed
+            };
             Ok((
                 elapsed,
                 expected_hash.clone(),
@@ -362,8 +481,12 @@ fn run() -> Result<Value> {
             if operation == "encode" && actual_hash != expected_hash {
                 return Err("encoded stream changed".into());
             }
-            let decoded = cs::decode_baseline_owned_components(&encoded)?;
-            verify(&decoded, &raw, width, height, components, bits, planar)?;
+            if facade {
+                verify_api(&api::decode(&encoded, &decode_options)?)?;
+            } else {
+                let decoded = cs::decode_baseline_owned_components(&encoded)?;
+                verify(&decoded, &raw, width, height, components, bits, planar)?;
+            }
             if operation == "prepare" {
                 fs::OpenOptions::new()
                     .write(true)
@@ -381,10 +504,10 @@ fn run() -> Result<Value> {
         "layout": string(&request, "layout")?, "rct": components == 3, "native_exact": true,
         "raw_sha256": raw_sha, "stream_sha256": actual_hash, "complete_stream_bytes": stream_bytes,
         "encoder_syntax": syntax,
-        "binary_sha256": hash(&fs::read(std::env::current_exe()?)?), "parallel": true, "simd": false, "workers": 1,
+        "binary_sha256": hash(&fs::read(std::env::current_exe()?)?), "parallel": true, "simd": false, "workers": workers,
         "samples_ns": if operation == "prepare" { Vec::<u64>::new() } else { vec![elapsed] },
-        "warmup": 0, "samples_per_batch": 1, "boundary": "native_codestream_operation",
-        "decode_output": "owned_native_component_planes", "input_policy": "loaded_and_hash_checked_before_clock",
+        "warmup": 0, "samples_per_batch": 1, "boundary": boundary,
+        "decode_output": if facade { "owned_facade_image_in_requested_layout" } else { "owned_native_component_planes" }, "input_policy": "loaded_and_hash_checked_before_clock",
         "context_policy": "fresh_process_per_batch", "verification": "outside_clock_every_sample",
     }))
 }
