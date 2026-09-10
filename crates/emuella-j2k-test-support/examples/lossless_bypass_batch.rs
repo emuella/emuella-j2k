@@ -394,6 +394,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_constant_streams_have_complete_encoder_syntax() {
+        let width = 133u32;
+        let height = 129u32;
+        for (components, bits) in [(1usize, 8u8), (1, 16), (3, 8), (3, 16), (8, 16)] {
+            // Zero samples exercise constant low-pass blocks; the unsigned
+            // midpoint also makes every transformed coefficient zero.
+            for value in [0u16, 1u16 << (bits - 1)] {
+                let sample = value.to_le_bytes();
+                let raw: Vec<_> = (0..width as usize * height as usize * components)
+                    .flat_map(|_| sample[..usize::from(bits / 8)].iter().copied())
+                    .collect();
+                let plane_bytes = width as usize * height as usize * usize::from(bits / 8);
+                let planes: Vec<_> = (0..components)
+                    .map(|component| cs::LosslessD2Plane {
+                        samples: &raw[component * plane_bytes..],
+                        stride_bytes: width as usize * usize::from(bits / 8),
+                        sample_step_bytes: usize::from(bits / 8),
+                    })
+                    .collect();
+                for style in [0, 1] {
+                    let encode = if style == 0 {
+                        cs::encode_lossless_d2
+                    } else {
+                        cs::encode_lossless_d2_bypass_test_fixture
+                    };
+                    let encoded = encode(
+                        width,
+                        height,
+                        bits,
+                        &planes,
+                        cs::LosslessEncodeLimits::default(),
+                    )
+                    .unwrap();
+                    let observed =
+                        profile(&encoded, width, height, components, bits, style).unwrap();
+                    assert_eq!(observed["encoder_syntax_exact"], true);
+                    let decoded = cs::decode_baseline_owned_components(&encoded).unwrap();
+                    verify(&decoded, &raw, width, height, components, bits, true).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
     fn generated_raw_syntax_distinguishes_stuffing_from_padding() {
         assert_eq!(complete_raw_syntax(&[0xff, 0x7f, 0x80]).unwrap(), 1);
         assert_eq!(complete_raw_syntax(&[0x80]).unwrap(), 0);
