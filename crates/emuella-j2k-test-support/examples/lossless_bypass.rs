@@ -2,6 +2,13 @@
 use emuella_j2k_codestream as cs;
 use sha2::{Digest, Sha256};
 
+fn hash(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 9 {
@@ -94,8 +101,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "style": style, "width": width, "height": height, "components": components,
             "bits": bits, "rct": components == 3, "native_exact": true,
             "stream_bytes": encoded.len(),
-            "input_sha256": format!("{:x}", Sha256::digest(&raw)),
-            "stream_sha256": format!("{:x}", Sha256::digest(&encoded)),
+            "input_sha256": hash(&raw),
+            "stream_sha256": hash(&encoded),
             "evidence_role": "synthetic correctness only; no performance evidence",
         })
     );
