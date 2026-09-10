@@ -44,14 +44,19 @@ lookahead byte in adjacent codestream storage.
 
 Coefficient state uses three named booleans: significant, visited in the
 current significance-propagation pass, and magnitude-refined. Neighbourhoods
-use eight named directions from Figure D.2. Zero-coding, sign-coding, and
-magnitude-refinement labels are calculated from Tables D.1-D.5; there are no
-precomputed 256-entry context-label tables or packed context-state words in
-the checked implementation.
+use eight named directions from Figure D.2. Sign-coding and magnitude-refinement
+labels use the project-authored formulas.
+Encoder and packed-decoder zero-coding labels use a compile-time lookup generated solely from this module's
+existing count formula. Each of four subband rows contains 45 entries indexed by
+horizontal, vertical and diagonal significance counts; it occupies 180 bytes
+without dynamic allocation. The original formula remains the generator and
+oracle, and the checked decoder continues to evaluate it directly. Exhaustive tests check all 256 neighbourhood masks in all four subbands,
+direction-to-count mapping and collision-free coverage of the count index.
+There are no packed context-state words in the checked implementation.
 
 The dense and sparse packed decoders remain Emuella performance backends, but
-they call the same Annex C arithmetic decoder and the same Annex D context
-formulas as the checked backend.
+they call the same Annex C arithmetic decoder and use equivalent context
+labels; the checked backend retains the branch-based zero-coding formula.
 
 ## Qualification
 
@@ -66,3 +71,34 @@ The repository's deterministic `gray-gradient-17x19.j2k` generator was also
 run before and after the rewrite. Both complete codestreams were 402 bytes and
 had SHA-256
 `348a05f5696a49320b584ced0576df7cc5d612e4dcb72514ff79521e139675ca`.
+
+## Authored context replay
+
+The opt-in `context_replay` example exercises dense, sparse, patch and diagonal
+coefficient patterns, both 64×64 and partial-stripe 17×11 blocks, all four
+subbands and 1-, 8-, 16-, 24- and 30-bit magnitudes. It verifies exact
+reconstruction through the checked, packed-dense and packed-sparse backends
+before timing repeated encode and decode with reusable scratch. It contains no
+third-party or corpus material.
+
+```sh
+cargo run --profile perf -p emuella-j2k-tier1 --example context_replay -- 32
+```
+
+An optional second argument names an output file for the length-prefixed,
+project-authored encoded blocks. Run the unchanged replay source against both
+revisions and compare these files byte for byte to check encoder parity across
+builds. The replay is a local mechanism probe; its timings do not establish
+full-image or satellite performance. End-to-end qualification belongs with the
+paired codec-consumer measurements.
+
+The initial count-lookup probe also routed checked decode through the lookup.
+Four alternating authored replay pairs showed a roughly 5–7% regression for
+checked decode on dense coefficient patterns, so that variant was rejected.
+The narrower candidate retains direct formula evaluation for checked decode;
+it passed all 160 authored reconstructions through all three backends and
+matched all 304,926 length-prefixed encoded bytes from baseline
+`e703c4d2e59623c91f1ef824c7aff7a13029628c` (the same source tree later merged as
+`54b561bc8b70f556d508b730c6f3914247f50f19`). The authored byte sequence has SHA-256
+`adda2a1cc7eb3c353e016fdcee6b0ca10920224e038de60e86ee4a0159eb3b44`.
+These are mechanism and exactness observations, not a full-image speed claim.
