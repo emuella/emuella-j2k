@@ -243,7 +243,9 @@ work counters. Inner entropy-operation counts are unavailable and reported as
 multiple workers are admitted. Its Tier-1 stage is elapsed batch wall time, not
 the sum of concurrent worker times; preparation within each job is included.
 `effective_workers`, `participating_workers` and `max_batch_blocks` describe the
-admitted slots, observed distinct Tier-1 threads and largest batch. Participant
+admitted slots, observed distinct Tier-1 threads and largest batch. Distinct participants
+can exceed W when memory limits the slots below the pool size: a slot can run
+on different pool threads in successive batches. W bounds simultaneous work. Participant
 tracking exists only in the profiled instantiation, has at most B entries and
 fits the existing descriptor allowance. Serial execution reports one worker.
 
@@ -339,3 +341,10 @@ interval and include their small collection overhead. Diagnostic allocation
 and clock overhead perturb these runs: use ordinary benchmark processes for
 headline comparisons. No decoder scheduling policy changes in this candidate.
 The ordinary decoder measurement does not substitute prepared reconstruction.
+
+
+The initial bounded candidate passed authored parity, budget fallback and
+joined-error checks, and its Mansfield development gate retained serial
+performance while improving eight-worker encoding. The source identities,
+per-case intervals, allocation and CPU observations, and remaining qualification
+boundary are recorded in [the parallel qualification](tier1-parallel-qualification.md).
