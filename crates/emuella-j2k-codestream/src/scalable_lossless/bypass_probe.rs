@@ -266,11 +266,26 @@ mod tests {
         let raw_start = lengths[0][0];
         let raw_end = raw_start + lengths[0][1];
         assert!(raw_end - raw_start >= 2);
+        let evidence =
+            std::env::var_os("EMUELLA_BYPASS_PROBE_OUTPUT").map(std::path::PathBuf::from);
+        if let Some(root) = &evidence {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join("valid-block.bin"), &bytes).unwrap();
+            std::fs::write(root.join("partition.txt"), format!(
+                "Authored 64x64 LL coefficients alternating 31,-17; available planes5; missing0; style1; passes13\nMQ passes0..10 bytes0..{raw_start}\nraw passes10..12 bytes{raw_start}..{raw_end}\nMQ cleanup pass12 bytes{raw_end}..{}\nlengths={:?}\n", bytes.len(), lengths[0]
+            )).unwrap();
+        }
         let mut changed = bytes.clone();
         changed[raw_start..raw_start + 2].copy_from_slice(&[0xff, 0x80]);
+        if let Some(root) = &evidence {
+            std::fs::write(root.join("raw-ff80.bin"), &changed).unwrap();
+        }
         observe("raw_nonzero_stuffed_msb", &changed, &segments);
         changed.clone_from(&bytes);
         changed[raw_end - 1] = 0xff;
+        if let Some(root) = &evidence {
+            std::fs::write(root.join("raw-terminal-ff.bin"), &changed).unwrap();
+        }
         observe("completed_raw_ends_ff", &changed, &segments);
         let mut shifted = segments.clone();
         shifted[0].byte_len += 1;
