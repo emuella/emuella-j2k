@@ -64,10 +64,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .num_threads(workers)
         .build()?;
     pool.broadcast(|_| ());
-    let limits = LosslessEncodeLimits {
-        max_working_bytes: 512 << 20,
-        max_output_bytes: 64 << 20,
-    };
+    // Diagnose the admitted production envelope, including large complete
+    // streams; report the exact queried bound alongside the observed peak.
+    let limits = LosslessEncodeLimits::default();
     let requirements = pool.install(|| {
         if style == 0 {
             lossless_encode_requirements(&info, &options, &limits)
