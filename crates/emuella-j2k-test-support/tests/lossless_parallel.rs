@@ -70,15 +70,16 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                         requirements.working_bytes,
                         serial.working_bytes + (expected_workers - 1) as u64 * (4 << 20)
                     );
-                    let (stream, timings) =
-                        cs::encode_lossless_d2_profiled(width, height, bits, &planes, limits)
-                            .unwrap();
-                    assert_eq!(timings.effective_workers, expected_workers);
+                    let (stream, timings, execution) = cs::encode_lossless_d2_execution_profiled(
+                        width, height, bits, &planes, limits,
+                    )
+                    .unwrap();
+                    assert_eq!(execution.effective_workers, expected_workers);
                     assert!(
-                        timings.participating_workers >= 1
-                            && timings.participating_workers <= expected_workers
+                        execution.participating_workers >= 1
+                            && execution.participating_workers <= expected_workers
                     );
-                    assert!(timings.max_batch_blocks <= expected_workers);
+                    assert!(execution.max_batch_blocks <= expected_workers);
                     assert_eq!(timings.checked_tier1_blocks, requirements.code_blocks);
                     assert_eq!(
                         timings.tier1_coefficients,
@@ -110,9 +111,10 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                             max_working_bytes: serial.working_bytes + (admitted - 1) * (4 << 20),
                             ..limits
                         };
-                        let (limited, t) =
-                            cs::encode_lossless_d2_profiled(width, height, bits, &planes, tight)
-                                .unwrap();
+                        let (limited, _, t) = cs::encode_lossless_d2_execution_profiled(
+                            width, height, bits, &planes, tight,
+                        )
+                        .unwrap();
                         assert_eq!(limited, stream);
                         assert_eq!(t.effective_workers, expected_workers.min(admitted as usize));
                     }

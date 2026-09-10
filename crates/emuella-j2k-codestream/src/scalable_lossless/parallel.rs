@@ -42,6 +42,7 @@ impl BlockWorkers {
         output: &mut Vec<u8>,
         maximum: usize,
         timings: &mut LosslessEncodeTimings,
+        execution: &mut LosslessEncodeExecution,
     ) -> Result<NativeDecompSubband> {
         // Only the validated scalable writer calls this path: origin-aligned
         // D2 subbands, with geometry admitted before coefficient allocation.
@@ -93,7 +94,7 @@ impl BlockWorkers {
                 });
             if PROFILE {
                 timings.tier1_ns += start.ns();
-                timings.max_batch_blocks = timings.max_batch_blocks.max(batch_len);
+                execution.max_batch_blocks = execution.max_batch_blocks.max(batch_len);
             }
             let start = EncodeClock::start::<PROFILE>();
             for slot in active {
@@ -104,7 +105,7 @@ impl BlockWorkers {
                     {
                         self.participants.push(worker);
                     }
-                    timings.participating_workers = self.participants.len().max(1);
+                    execution.participating_workers = self.participants.len().max(1);
                     timings.checked_tier1_blocks += 1;
                     timings.included_tier1_blocks += u64::from(block.included);
                     timings.tier1_coefficients += u64::from(block.width) * u64::from(block.height);
@@ -227,7 +228,8 @@ mod tests {
                             1,
                             &mut output,
                             1 << 20,
-                            &mut LosslessEncodeTimings::default()
+                            &mut LosslessEncodeTimings::default(),
+                            &mut LosslessEncodeExecution::default(),
                         )
                         .is_err()
                 );
@@ -247,6 +249,7 @@ mod tests {
                         &mut output,
                         1 << 20,
                         &mut LosslessEncodeTimings::default(),
+                        &mut LosslessEncodeExecution::default(),
                     )
                     .unwrap();
                 assert!(recovered.code_blocks.iter().all(|b| !b.included));

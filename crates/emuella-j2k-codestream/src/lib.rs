@@ -113,7 +113,10 @@ pub use scalable_lossless::{
     lossless_d2_requirements,
 };
 #[cfg(feature = "std")]
-pub use scalable_lossless::{LosslessEncodeTimings, encode_lossless_d2_profiled};
+pub use scalable_lossless::{
+    LosslessEncodeExecution, LosslessEncodeTimings, encode_lossless_d2_execution_profiled,
+    encode_lossless_d2_profiled,
+};
 
 const MAX_NATIVE_PART1_PROFILE_COMPONENT_SAMPLES: u64 = 16 * 1024 * 1024;
 const MAX_NATIVE_PART1_COMPONENT_DECODE_SAMPLES: u64 = 64 * 1024 * 1024;

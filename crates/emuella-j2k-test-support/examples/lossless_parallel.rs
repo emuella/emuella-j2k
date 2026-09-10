@@ -252,8 +252,9 @@ fn run() -> std::result::Result<serde_json::Value, Box<dyn std::error::Error>> {
     {
         return Err("native samples differ".into());
     }
-    let (profiled, timing) =
-        pool.install(|| cs::encode_lossless_d2_profiled(width, height, bits, &planes, limits))?;
+    let (profiled, timing, execution) = pool.install(|| {
+        cs::encode_lossless_d2_execution_profiled(width, height, bits, &planes, limits)
+    })?;
     if profiled != encoded {
         return Err("profiled stream differs".into());
     }
@@ -264,7 +265,7 @@ fn run() -> std::result::Result<serde_json::Value, Box<dyn std::error::Error>> {
         "raw_sha256": hash(&samples), "decode_stream_sha256": hash(&input_stream), "decode_mct": coding.multiple_component_transform, "encoded_sha256": hash(&encoded), "encoded_bytes": encoded.len(), "exact": true,
         "encode": {"wall_ns": encode_ns, "cpu": encode_cpu, "peak_requested_bytes": encode_peak, "working_bound": requirements.working_bytes, "output_capacity": encoded.capacity()},
         "decode": {"wall_ns": decode_ns, "cpu": decode_cpu, "peak_requested_bytes": decode_peak},
-        "separate_profiled_encode": {"effective_workers": timing.effective_workers, "participating_tier1_workers": timing.participating_workers, "max_batch_blocks": timing.max_batch_blocks, "blocks": timing.checked_tier1_blocks},
+        "separate_profiled_encode": {"effective_workers": execution.effective_workers, "participating_tier1_workers": execution.participating_workers, "max_batch_blocks": execution.max_batch_blocks, "blocks": timing.checked_tier1_blocks},
         "measurement": "allocator-instrumented; /proc per-task CPU tick resolution; profiler participation collected in a separate invocation; not headline throughput"}),
     )
 }

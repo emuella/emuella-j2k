@@ -463,3 +463,47 @@ fn production_diagnostic_retains_native_options_and_decode_errors() {
         assert!(decode_native_d2_profiled(truncated, &decode_options).is_err());
     });
 }
+
+// This compile-time contract protects callers that construct or destructure
+// the original public type exhaustively. New observations need additive types.
+#[test]
+fn original_timing_literal_and_exhaustive_pattern_remain_valid() {
+    let timing = cs::LosslessEncodeTimings {
+        total_ns: 0,
+        conversion_level_shift_rct_ns: 0,
+        forward_dwt_ns: 0,
+        block_preparation_ns: 0,
+        tier1_ns: 0,
+        packet_headers_ns: 0,
+        assembly_ns: 0,
+        component_samples: 0,
+        rct_pixels: 0,
+        checked_tier1_blocks: 0,
+        included_tier1_blocks: 0,
+        tier1_coefficients: 0,
+        tier1_coding_passes: 0,
+        tier1_codeword_bytes: 0,
+        packets: 0,
+        packet_header_bytes: 0,
+        packet_body_bytes_moved: 0,
+    };
+    let cs::LosslessEncodeTimings {
+        total_ns: _,
+        conversion_level_shift_rct_ns: _,
+        forward_dwt_ns: _,
+        block_preparation_ns: _,
+        tier1_ns: _,
+        packet_headers_ns: _,
+        assembly_ns: _,
+        component_samples: _,
+        rct_pixels: _,
+        checked_tier1_blocks: _,
+        included_tier1_blocks: _,
+        tier1_coefficients: _,
+        tier1_coding_passes: _,
+        tier1_codeword_bytes: _,
+        packets: _,
+        packet_header_bytes: _,
+        packet_body_bytes_moved: _,
+    } = timing;
+}

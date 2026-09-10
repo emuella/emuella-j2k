@@ -51,7 +51,9 @@ A budget below the serial minimum fails; a tighter admitted budget reduces W.
 Requirements are resolved in the calling pool, so query and encode should run
 in the same pool to observe the same allowance. The existing options, limits
 and requirements struct shapes are unchanged. This is an adaptive pool policy;
-it does not create a pool or promise an exact count of participating threads.
+it uses the calling or global Rayon pool and does not construct a dedicated
+pool or promise an exact count of participating threads. The global pool may
+initialise on first use.
 A batch contains at most W results, and at most W Tier-1 calls execute at once.
 Thread stacks and Rayon pool infrastructure belong to the caller's pool.
 
@@ -242,7 +244,12 @@ work counters. Inner entropy-operation counts are unavailable and reported as
 `null`, not invented zeros. The writer uses the same checked baseline Tier-1 in bounded batches when
 multiple workers are admitted. Its Tier-1 stage is elapsed batch wall time, not
 the sum of concurrent worker times; preparation within each job is included.
-`effective_workers`, `participating_workers` and `max_batch_blocks` describe the
+The additive `encode_lossless_d2_execution_profiled` returns the encoded bytes,
+the original `LosslessEncodeTimings`, and a separate non-exhaustive
+`LosslessEncodeExecution`. The existing timing struct and
+`encode_lossless_d2_profiled` signature retain their original shapes.
+`LosslessEncodeExecution` fields `effective_workers`, `participating_workers`
+and `max_batch_blocks` describe the
 admitted slots, observed distinct Tier-1 threads and largest batch. Distinct participants
 can exceed W when memory limits the slots below the pool size: a slot can run
 on different pool threads in successive batches. W bounds simultaneous work. Participant

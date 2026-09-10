@@ -180,12 +180,6 @@ pub(super) fn reserve_output(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LosslessEncodeTimings {
     pub total_ns: u128,
-    /// Maximum concurrent slots admitted from the current pool and byte budget.
-    pub effective_workers: usize,
-    /// Distinct Rayon workers observed executing Tier-1 (one for serial calls).
-    pub participating_workers: usize,
-    /// Largest joined batch, including excluded zero blocks.
-    pub max_batch_blocks: usize,
     pub conversion_level_shift_rct_ns: u128,
     pub forward_dwt_ns: u128,
     /// Subband exponent scans and block geometry/descriptor preparation.
@@ -205,6 +199,20 @@ pub struct LosslessEncodeTimings {
     pub packets: u64,
     pub packet_header_bytes: u64,
     pub packet_body_bytes_moved: u64,
+}
+
+/// Observed scheduling for a successful profiled D2 encode.
+/// Slot count bounds simultaneous work; distinct participants can exceed slots
+/// when the memory allowance is tighter than the calling pool size.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LosslessEncodeExecution {
+    /// Maximum concurrent slots admitted from the current pool and byte budget.
+    pub effective_workers: usize,
+    /// Distinct Rayon workers observed executing Tier-1 (one for serial calls).
+    pub participating_workers: usize,
+    /// Largest joined batch, including excluded zero blocks.
+    pub max_batch_blocks: usize,
 }
 
 // A false const parameter removes clock reads and accounting from ordinary
@@ -249,11 +257,36 @@ pub fn encode_lossless_d2_profiled(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<(Vec<u8>, LosslessEncodeTimings)> {
+    let (bytes, timings, _) =
+        encode_lossless_d2_execution_profiled(width, height, bits, planes, limits)?;
+    Ok((bytes, timings))
+}
+
+/// Profile D2 encoding with stage timings and separate scheduling observations.
+/// The existing timing type and profiled entry point retain their original
+/// shape; new execution observations do not extend that public timing struct.
+#[cfg(feature = "std")]
+pub fn encode_lossless_d2_execution_profiled(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[LosslessD2Plane<'_>],
+    limits: LosslessEncodeLimits,
+) -> Result<(Vec<u8>, LosslessEncodeTimings, LosslessEncodeExecution)> {
     let start = EncodeClock::start::<true>();
     let mut timings = LosslessEncodeTimings::default();
-    let bytes = encode_lossless_d2_impl::<true>(width, height, bits, planes, limits, &mut timings)?;
+    let mut execution = LosslessEncodeExecution::default();
+    let bytes = encode_lossless_d2_impl::<true>(
+        width,
+        height,
+        bits,
+        planes,
+        limits,
+        &mut timings,
+        &mut execution,
+    )?;
     timings.total_ns = start.ns();
-    Ok((bytes, timings))
+    Ok((bytes, timings, execution))
 }
 
 /// Encode the bounded profile without packed input or complete packet copies.
@@ -272,6 +305,7 @@ pub fn encode_lossless_d2(
         planes,
         limits,
         &mut LosslessEncodeTimings::default(),
+        &mut LosslessEncodeExecution::default(),
     )
 }
 
@@ -282,6 +316,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
     timings: &mut LosslessEncodeTimings,
+    execution: &mut LosslessEncodeExecution,
 ) -> Result<Vec<u8>> {
     let (_, workers) = execution_requirements(
         width,
@@ -402,9 +437,9 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
     #[cfg(feature = "parallel")]
     let mut parallel = parallel::BlockWorkers::new(if workers > 1 { workers } else { 0 })?;
     if PROFILE {
-        timings.effective_workers = workers;
-        timings.participating_workers = 1;
-        timings.max_batch_blocks = 1;
+        execution.effective_workers = workers;
+        execution.participating_workers = 1;
+        execution.max_batch_blocks = 1;
     }
     if PROFILE {
         timings.assembly_ns += start.ns();
@@ -428,6 +463,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
                         &mut output,
                         maximum,
                         timings,
+                        execution,
                     )?);
                     continue;
                 }
