@@ -1,8 +1,9 @@
 # Native D2 selective-bypass exploration
 
-Retain this provisional codec experiment: authored native and independent
-synthetic decoding establish initial feasibility. No full-image performance
-point or selective-bypass public encode profile has been accepted. The starting codec revision is
+Retain selective bypass for narrow opt-in production integration: authored and
+independent full-image correctness plus the completed development comparison
+establish a useful operating point. No stable public profile is qualified yet.
+The starting codec revision is
 `e1df5a8353c11bcc5e812ff3d3a2a0e46e77341e`.
 
 The question is whether the existing authored Tier-1 selective-bypass engine
@@ -106,34 +107,83 @@ checksum-like detection guarantee or shared decoder acceptance repair follows
 from these observations. Canonical follow-up used D.6, physical PDF pages
 125–126, and B.10.7/B.10.7.1, physical PDF page 93, at the retrieval above.
 
-## Remaining decision
+## Development operating point and decision
 
-Retain the probe for a separate quiet-host development comparison
-of style 0 and style 1. This checkpoint makes no full-image, CPU, allocation,
-latency or throughput claim; no full-image probe or performance measurement has
-run. A useful measured encode/decode/size point must precede selection of a
-stable public API or a parallel style-1 profile. Bounded metadata propagation,
-resource qualification, failure atomicity, full-image correctness and the
-existing performance acceptance gate remain outstanding.
+Retain D2 style 1 for narrow opt-in production integration. On the fixed
+Mansfield acquisition `94_104001000B823500`, all four products improve both
+encode and decode latency under the unchanged 5% practical threshold and
+99% interval gate. RGB8 costs 0.373% more complete codestream bytes; each U16
+product is slightly smaller. This is development selection evidence, not
+reserved-acquisition or stable API qualification.
 
-The prepared `lossless_bypass_batch` example provides one fresh-process batch
-for that comparison. It requires the tuned `perf` build with `parallel`
-enabled, SIMD disabled and a local one-worker pool for both styles. The
-protocol retains zero warmups, one sample per process, twenty AB/BA rounds and
-a 120-second timeout. Input loading, identity checks, generated-stream profile
-and encoder-syntax validation, and exact native sample verification occur
-outside the operation clock. Both arms measure ordinary codestream encoding
-or ordinary native decoding to owned component planes; neither includes core
-facade output packing or substitutes a prepared decoder. Complete codestream
-sizes and both actual stream hashes remain separate.
+The exact codec source is `d214ecd64c3d60d5f0294acc7383db60c764d1bf`, tree
+`0fa2240c02976608401673771ca2915e097ddda0`. The Rust 1.97.1 tuned `perf`
+build enables `parallel`, omits SIMD and creates one local Rayon worker.
+Its `lossless_bypass_batch` executable SHA-256 is
+`78b39171dc2a7e2cb7c27bdb592a4b8a1966679a78a1cd5cc403442b01b8cf45`.
+Three example tests and four focused codec tests pass. Authored zero and
+unsigned-midpoint constants cover grey U8/U16, RGB U8/U16 and eight-component
+U16 with both styles; no pass-count admission change was needed.
 
-The prepared external numeric wrapper reuses the benchmark's exact interval
-function and classification expressions at
-`f78c9c4edc2c606a0037b1445753830781726646`; the owning `src/compare.rs` SHA-256
-is `12fafbd13bd6a17a1aba1ae86c2cf474ad0b86b87b3b5078e4bd40109be653d2`.
+All twelve full-image interoperability comparisons are sample-exact: native
+styles 0 and 1 decoded by OpenJPEG 2.5.4, and OpenJPEG style 1 decoded natively,
+for each of the four products. The existing prepared inputs retain their
+original interleaved layout and hashes. Explicit planar derivatives support
+OpenJPEG raw I/O; exact layout-aware byte comparisons bind those derivatives
+to the original samples. Each actual stream's SIZ/COD/QCD fields are observed
+independently and agree with full dimensions, unsigned unit sampling, D2,
+LRCP, 64×64 blocks, one layer, reversible 5/3 and RGB-only reversible MCT.
+Pixel-bearing inputs, derivatives and external codec outputs remain in the
+approved store; no external implementation source informed this work.
+
+The complete acquisition contains 320 successful fresh-process batches:
+twenty AB/BA rounds, zero warmups, one sample per process, a 120-second timeout
+and warm loaded input. No batch failed, was retried or was discarded. Hashing,
+profile and positive encoder-syntax checks, and exact native reconstruction
+occur outside the clock. Both arms time ordinary codestream encode or native
+decode to owned component planes. Core facade output packing is excluded from
+both arms and must be included at the eventual exposed API boundary.
+
+Relative changes below are style 1 versus style 0 elapsed time; negative is
+faster. Brackets give conservative 99% ratio intervals for each comparison.
+Sizes count the complete actual codestream, with separate hashes per style.
+
+| Product | Encode change, 99% interval | Decode change, 99% interval | Style 0 bytes | Style 1 bytes | Size change |
+| --- | --- | --- | ---: | ---: | ---: |
+| RGB16 | −39.63% [−41.12%, −38.11%] | −51.46% [−52.38%, −50.52%] | 2,480,209 | 2,467,937 | −0.495% |
+| MS16 | −41.41% [−42.36%, −40.46%] | −53.89% [−54.60%, −53.18%] | 7,414,382 | 7,399,817 | −0.196% |
+| PAN16 | −38.25% [−38.86%, −37.63%] | −48.02% [−48.58%, −47.45%] | 13,860,814 | 13,801,207 | −0.430% |
+| RGB8 | −8.04% [−8.64%, −7.42%] | −10.59% [−11.41%, −9.77%] | 12,399,691 | 12,445,920 | +0.373% |
+
+The numeric wrapper uses the benchmark owner's exact interval function and
+classification expressions at `f78c9c4edc2c606a0037b1445753830781726646`, whose
+`src/compare.rs` SHA-256 is
+`12fafbd13bd6a17a1aba1ae86c2cf474ad0b86b87b3b5078e4bd40109be653d2`.
 It retains conservative 99.5% marginal Student t intervals on independent
-batch means, Bonferroni 99% ratio bounds per case and the 5% practical threshold.
-AB/BA describes acquisition order, not paired-t estimation. No outliers are
-removed and no identical stream identities are invented to compare different
-profiles. This adapter and its positive encoder-syntax checks are prepared but
-have not yet been compiled, tested or used for image measurements.
+batch means and Bonferroni 99% ratio bounds per comparison. AB/BA describes
+acquisition order, not paired-t estimation. These intervals do not assert
+simultaneous coverage across every product and operation. No multiplied
+speedup or aggregate performance claim follows.
+
+The external comparison record SHA-256 is
+`c1e6803e0243ab639e922f45aa56cdbc2e660649e8fefa92c602f375a27d46f9`;
+the complete batch record SHA-256 is
+`936bdeb0f0bc9e41c924c0932309d57b35cd5c3bd83cc2ed9d8c30d422d0d627`.
+The config SHA-256 is
+`655b7ba6d31a7d4e2b068b83be6355d2e6e2fff54c997e162d1f7234079f2291`.
+It binds the exact build, authoritative input identities, both native streams
+and per-product interoperability evidence. That evidence binds all three
+actual streams, observed profiles, installed executable hashes and command
+results, reconstructed output hashes and native decode response identities.
+
+## Remaining qualification
+
+The selected next increment is an additive opt-in D2 style-1 encode route,
+with bounded segment metadata, deterministic serial/parallel propagation,
+resource admission and failure atomicity. Style zero must remain the default;
+existing public options, timing and resource struct shapes and default bytes
+remain acceptance gates. The eventual exposed API encode/decode boundary,
+including output packing where applicable, needs its own performance and
+reserved-acquisition qualification. No broader style or geometry admission,
+shared decoder rejection change or stable release claim follows from this
+provisional operating point.
