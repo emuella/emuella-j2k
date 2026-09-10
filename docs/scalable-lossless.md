@@ -22,9 +22,9 @@ limit. Ordinary `encode` retains the previous routes for those cases,
 including 9–15-bit greyscale and previously accepted thin D2 images with
 axes below four or above 32768. Explicit limits continue to reject these shapes.
 HT APIs and all decoder admission rules remain unchanged. Eight-component full
-caller decode now stages complete output to preserve destination bytes on failure. The new D2 writer
-runs sequentially even with the `parallel` feature; byte identity does not
-imply unchanged throughput.
+caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded code-block batches with the `parallel` feature,
+using the current Rayon pool and the explicit working-memory allowance.
+The one-worker path keeps the serial writer.
 
 ## Admission and allocation contract
 
@@ -42,8 +42,20 @@ O = the output capacity allowance, and B = the sum of the 64 × 64 block-grid
 sizes across all seven D2 subbands and components. Checked arithmetic computes:
 
 ```text
-working_bytes = 4*S + 4096*B + 12*A + 2*O + 4 MiB
+working_bytes = 4*S + 4096*B + 12*A + 2*O + (4 MiB)*W
 ```
+
+W is the lesser of the current pool size, B and the number of 4 MiB worker
+allowances that fit after the shared terms. Without `parallel`, W is one.
+A budget below the serial minimum fails; a tighter admitted budget reduces W.
+Requirements are resolved in the calling pool, so query and encode should run
+in the same pool to observe the same allowance. The existing options, limits
+and requirements struct shapes are unchanged. This is an adaptive pool policy;
+it uses the calling or global Rayon pool and does not construct a dedicated
+pool or promise an exact count of participating threads. The global pool may
+initialise on first use.
+A batch contains at most W results, and at most W Tier-1 calls execute at once.
+Thread stacks and Rayon pool infrastructure belong to the caller's pool.
 
 `total_component_samples` is S, not P. The bound is a conservative admission
 ceiling; the encoder does not reserve that amount in advance. Its terms follow
@@ -62,14 +74,15 @@ actual allocation lifetimes:
   1024 bytes per leaf. The 4096-byte combined allowance covers descriptors,
   both trees, header growth and their vector bookkeeping. Small fixed vector
   metadata also fits the separate local allowance.
-- Tier-1 works on one at-most-4096-coefficient block, using existing reusable
+- Each exclusive worker slot handles one at-most-4096-coefficient block, using existing reusable
   coefficient-state, sign and magnitude buffers. The block's compressed bytes
   are accumulated locally before the checked output append. At most three
   binary decisions per coefficient per bitplane, 31 bitplanes, at most 15 MQ
   renormalisation shifts per decision, seven usable bits per emitted byte and
   termination give less than 1 MiB per block. A growing vector, including
   its old allocation during reallocation, plus padded Tier-1 state and small
-  local vectors fit the 4 MiB term. U8/U16 RCT followed by four one-dimensional
+  local vectors fit the 4 MiB per-slot term, including the slot-array allocation. Scratch and
+  codeword vector capacities are retained and reused across batches and subbands. U8/U16 RCT followed by four one-dimensional
   lifting stages stays below this bitplane bound; coding remains the existing
   baseline Tier-1 implementation.
 - 2*O deliberately covers both old and new output allocations during growth,
@@ -228,8 +241,20 @@ allocation/destruction and loop overhead; the remainder is reported explicitly.
 The Tier-1 interval includes its internal block preparation. Completed calls,
 included blocks, coefficient slots, coding passes and codeword bytes are actual
 work counters. Inner entropy-operation counts are unavailable and reported as
-`null`, not invented zeros. The writer remains sequential checked baseline
-Tier-1 with both optional features enabled.
+`null`, not invented zeros. The writer uses the same checked baseline Tier-1 in bounded batches when
+multiple workers are admitted. Its Tier-1 stage is elapsed batch wall time, not
+the sum of concurrent worker times; preparation within each job is included.
+The additive `encode_lossless_d2_execution_profiled` returns the encoded bytes,
+the original `LosslessEncodeTimings`, and a separate non-exhaustive
+`LosslessEncodeExecution`. The existing timing struct and
+`encode_lossless_d2_profiled` signature retain their original shapes.
+`LosslessEncodeExecution` fields `effective_workers`, `participating_workers`
+and `max_batch_blocks` describe the
+admitted slots, observed distinct Tier-1 threads and largest batch. Distinct participants
+can exceed W when memory limits the slots below the pool size: a slot can run
+on different pool threads in successive batches. W bounds simultaneous work. Participant
+tracking exists only in the profiled instantiation, has at most B entries and
+fits the existing descriptor allowance. Serial execution reports one worker.
 
 Decode's `production-one-worker` identity retains the ordinary adaptive Tier-1
 call and records the backend that actually ran, including packed dense blocks.
@@ -283,3 +308,50 @@ cargo test -p emuella-j2k-test-support --test lossless_diagnostics --features pa
 cargo test -p emuella-j2k-test-support --example lossless_diagnostics
 cargo test -p emuella-j2k-core shared_pan_output_moves_the_original_plane
 ```
+
+## Bounded parallel encoding calibration
+
+The design question is whether fixed batches of independent 64×64 code-blocks
+provide useful full-image scaling while retaining serial byte order, reusable
+Tier-1 storage and explicit admission. The smallest probe is an authored odd
+513×515 U16 image with contrasting sparse and dense blocks, run in local pools
+of 1, 2, 4 and 8 workers. The codec owns scheduling, resource and failure
+observations. Full-image development measurements use an authorised existing
+input and keep diagnostic allocation/CPU collection separate from headline
+wall timings. Exit requires exact streams and decoded samples at every worker
+count, bounded live results and scratch, joined failures, useful scaling and
+no meaningful one-worker regression; otherwise reject or revise this candidate.
+
+The candidate uses a fixed array of worker slots, each owning reusable Tier-1
+scratch and one compressed result. A batch contains at most one block per slot.
+All jobs finish before serial raster-order append and the next batch. Shared
+coefficient planes are immutable during coding. Output-budget errors after a
+join drop the private owned output; no job outlives its borrowed input or error.
+There is no channel, unbounded completed-result collection or per-image job
+queue. Slot ownership is exclusive during each job; slots can migrate between
+Rayon threads across batches.
+
+
+The separate Linux `lossless_parallel` example accepts the same seven input
+arguments as `lossless_diagnostics`, followed by the requested worker count.
+Build with `--profile perf --features parallel --example lossless_parallel`.
+It measures ordinary core encode and decode inside the requested local pool,
+using the existing example-only forwarding allocator. Each operation reports
+peak requested bytes, wall time and per-task CPU deltas from `/proc/self/task`;
+`getconf CLK_TCK` supplies their resolution. Threads with a nonzero CPU delta
+are observed participants at that resolution, not an exact inner-kernel worker
+count. Very short operations can have zero observed CPU ticks. Encoder Tier-1
+participation is additionally collected in a separate profiled invocation and
+its bytes must equal ordinary encode. Input loading, hashes, pool startup and
+sample verification are outside measurement. CPU snapshots bracket the wall
+interval and include their small collection overhead. Diagnostic allocation
+and clock overhead perturb these runs: use ordinary benchmark processes for
+headline comparisons. No decoder scheduling policy changes in this candidate.
+The ordinary decoder measurement does not substitute prepared reconstruction.
+
+
+The initial bounded candidate passed authored parity, budget fallback and
+joined-error checks, and its Mansfield development gate retained serial
+performance while improving eight-worker encoding. The source identities,
+per-case intervals, allocation and CPU observations, and remaining qualification
+boundary are recorded in [the parallel qualification](tier1-parallel-qualification.md).

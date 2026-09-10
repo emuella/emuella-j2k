@@ -377,12 +377,32 @@ fn checked_eight_component_resources_match_aggregate_decode_ceiling() {
         )
         .is_ok()
     );
+    // A tighter budget can reduce parallelism. Only the serial minimum is
+    // a rejection boundary shared by every pool size.
+    let minimum = req.total_component_samples * 4
+        + req.code_blocks * 4096
+        + u64::from(small.width.max(small.height)) * 12
+        + limits.max_output_bytes * 2
+        + (4 << 20);
+    assert_eq!(
+        lossless_encode_requirements(
+            &small,
+            &options(),
+            &LosslessEncodeLimits {
+                max_working_bytes: minimum,
+                ..limits
+            }
+        )
+        .unwrap()
+        .working_bytes,
+        minimum
+    );
     assert!(
         lossless_encode_requirements(
             &small,
             &options(),
             &LosslessEncodeLimits {
-                max_working_bytes: req.working_bytes - 1,
+                max_working_bytes: minimum - 1,
                 ..limits
             }
         )

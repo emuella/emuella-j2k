@@ -130,12 +130,18 @@ fn checked_requirements_reject_arithmetic_geometry_and_working_budgets() {
         lossless_encode_requirements(&base, &options(), &tight).unwrap(),
         req
     );
+    // Admission may reduce parallel workers; rejection uses the serial minimum.
+    let minimum = req.total_component_samples * 4
+        + req.code_blocks * 4096
+        + u64::from(base.width.max(base.height)) * 12
+        + limits.max_output_bytes * 2
+        + (4 << 20);
     assert!(
         lossless_encode_requirements(
             &base,
             &options(),
             &LosslessEncodeLimits {
-                max_working_bytes: req.working_bytes - 1,
+                max_working_bytes: minimum - 1,
                 ..tight
             }
         )

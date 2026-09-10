@@ -1,6 +1,11 @@
 //! Resource admission for the project-authored single-tile classic D2 writer.
 use super::*;
 
+#[cfg(feature = "parallel")]
+mod parallel;
+
+const WORKER_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Byte limits for owned raw classic lossless D2 encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LosslessEncodeLimits {
@@ -46,6 +51,15 @@ pub fn lossless_d2_requirements(
     components: u16,
     limits: LosslessEncodeLimits,
 ) -> Result<LosslessEncodeRequirements> {
+    execution_requirements(width, height, components, limits).map(|(requirements, _)| requirements)
+}
+
+fn execution_requirements(
+    width: u32,
+    height: u32,
+    components: u16,
+    limits: LosslessEncodeLimits,
+) -> Result<(LosslessEncodeRequirements, usize)> {
     let pixels = u64::from(width)
         .checked_mul(u64::from(height))
         .ok_or(CodestreamError::SizeOverflow)?;
@@ -93,19 +107,32 @@ pub fn lossless_d2_requirements(
         .and_then(|n| n.checked_add(blocks.checked_mul(4096)?))
         .and_then(|n| n.checked_add(u64::from(width.max(height)).checked_mul(12)?))
         .and_then(|n| n.checked_add(limits.max_output_bytes.checked_mul(2)?))
-        .and_then(|n| n.checked_add(4 * 1024 * 1024))
         .ok_or(CodestreamError::SizeOverflow)?;
-    if working > limits.max_working_bytes {
+    let affordable = limits.max_working_bytes.saturating_sub(working) / WORKER_BYTES;
+    if affordable == 0 {
         return Err(resource_error(
             "lossless D2 working-memory budget is insufficient",
         ));
     }
-    Ok(LosslessEncodeRequirements {
-        total_component_samples: samples,
-        code_blocks: blocks,
-        working_bytes: working,
-        output_capacity_limit: limits.max_output_bytes,
-    })
+    let workers = parallel_worker_count()
+        .unwrap_or(1)
+        .min(usize::try_from(affordable.min(blocks)).map_err(|_| CodestreamError::SizeOverflow)?);
+    let working = working
+        .checked_add(
+            (workers as u64)
+                .checked_mul(WORKER_BYTES)
+                .ok_or(CodestreamError::SizeOverflow)?,
+        )
+        .ok_or(CodestreamError::SizeOverflow)?;
+    Ok((
+        LosslessEncodeRequirements {
+            total_component_samples: samples,
+            code_blocks: blocks,
+            working_bytes: working,
+            output_capacity_limit: limits.max_output_bytes,
+        },
+        workers,
+    ))
 }
 
 pub(super) fn resource_error(message: &'static str) -> CodestreamError {
@@ -174,6 +201,20 @@ pub struct LosslessEncodeTimings {
     pub packet_body_bytes_moved: u64,
 }
 
+/// Observed scheduling for a successful profiled D2 encode.
+/// Slot count bounds simultaneous work; distinct participants can exceed slots
+/// when the memory allowance is tighter than the calling pool size.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LosslessEncodeExecution {
+    /// Maximum concurrent slots admitted from the current pool and byte budget.
+    pub effective_workers: usize,
+    /// Distinct Rayon workers observed executing Tier-1 (one for serial calls).
+    pub participating_workers: usize,
+    /// Largest joined batch, including excluded zero blocks.
+    pub max_batch_blocks: usize,
+}
+
 // A false const parameter removes clock reads and accounting from ordinary
 // instantiations, including no-std builds. It does not select a different codec.
 pub(super) struct EncodeClock {
@@ -216,11 +257,36 @@ pub fn encode_lossless_d2_profiled(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<(Vec<u8>, LosslessEncodeTimings)> {
+    let (bytes, timings, _) =
+        encode_lossless_d2_execution_profiled(width, height, bits, planes, limits)?;
+    Ok((bytes, timings))
+}
+
+/// Profile D2 encoding with stage timings and separate scheduling observations.
+/// The existing timing type and profiled entry point retain their original
+/// shape; new execution observations do not extend that public timing struct.
+#[cfg(feature = "std")]
+pub fn encode_lossless_d2_execution_profiled(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[LosslessD2Plane<'_>],
+    limits: LosslessEncodeLimits,
+) -> Result<(Vec<u8>, LosslessEncodeTimings, LosslessEncodeExecution)> {
     let start = EncodeClock::start::<true>();
     let mut timings = LosslessEncodeTimings::default();
-    let bytes = encode_lossless_d2_impl::<true>(width, height, bits, planes, limits, &mut timings)?;
+    let mut execution = LosslessEncodeExecution::default();
+    let bytes = encode_lossless_d2_impl::<true>(
+        width,
+        height,
+        bits,
+        planes,
+        limits,
+        &mut timings,
+        &mut execution,
+    )?;
     timings.total_ns = start.ns();
-    Ok((bytes, timings))
+    Ok((bytes, timings, execution))
 }
 
 /// Encode the bounded profile without packed input or complete packet copies.
@@ -239,6 +305,7 @@ pub fn encode_lossless_d2(
         planes,
         limits,
         &mut LosslessEncodeTimings::default(),
+        &mut LosslessEncodeExecution::default(),
     )
 }
 
@@ -249,8 +316,9 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
     timings: &mut LosslessEncodeTimings,
+    execution: &mut LosslessEncodeExecution,
 ) -> Result<Vec<u8>> {
-    lossless_d2_requirements(
+    let (_, workers) = execution_requirements(
         width,
         height,
         u16::try_from(planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -366,6 +434,13 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
     let sot = output.len();
     output.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0x93]);
     let mut scratch = tier1::CodeBlockEncodeScratch::new();
+    #[cfg(feature = "parallel")]
+    let mut parallel = parallel::BlockWorkers::new(if workers > 1 { workers } else { 0 })?;
+    if PROFILE {
+        execution.effective_workers = workers;
+        execution.participating_workers = 1;
+        execution.max_batch_blocks = 1;
+    }
     if PROFILE {
         timings.assembly_ns += start.ns();
     }
@@ -378,6 +453,20 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
                 .zip(&exponents)
                 .filter(|(spec, _)| spec.resolution == resolution)
             {
+                #[cfg(feature = "parallel")]
+                if workers > 1 {
+                    bands.push(parallel.encode_subband::<PROFILE>(
+                        width,
+                        plane,
+                        *spec,
+                        *exponent,
+                        &mut output,
+                        maximum,
+                        timings,
+                        execution,
+                    )?);
+                    continue;
+                }
                 bands.push(encode_decomp_subband_with_output_limit::<PROFILE>(
                     width,
                     plane,
