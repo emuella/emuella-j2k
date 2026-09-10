@@ -108,10 +108,32 @@ from these observations. Canonical follow-up used D.6, physical PDF pages
 
 ## Remaining decision
 
-Retain the probe for a separately authorised quiet-host development comparison
+Retain the probe for a separate quiet-host development comparison
 of style 0 and style 1. This checkpoint makes no full-image, CPU, allocation,
 latency or throughput claim; no full-image probe or performance measurement has
 run. A useful measured encode/decode/size point must precede selection of a
 stable public API or a parallel style-1 profile. Bounded metadata propagation,
 resource qualification, failure atomicity, full-image correctness and the
 existing performance acceptance gate remain outstanding.
+
+The prepared `lossless_bypass_batch` example provides one fresh-process batch
+for that comparison. It requires the tuned `perf` build with `parallel`
+enabled, SIMD disabled and a local one-worker pool for both styles. The
+protocol retains zero warmups, one sample per process, twenty AB/BA rounds and
+a 120-second timeout. Input loading, identity checks, generated-stream profile
+and encoder-syntax validation, and exact native sample verification occur
+outside the operation clock. Both arms measure ordinary codestream encoding
+or ordinary native decoding to owned component planes; neither includes core
+facade output packing or substitutes a prepared decoder. Complete codestream
+sizes and both actual stream hashes remain separate.
+
+The prepared external numeric wrapper reuses the benchmark's exact interval
+function and classification expressions at
+`f78c9c4edc2c606a0037b1445753830781726646`; the owning `src/compare.rs` SHA-256
+is `12fafbd13bd6a17a1aba1ae86c2cf474ad0b86b87b3b5078e4bd40109be653d2`.
+It retains conservative 99.5% marginal Student t intervals on independent
+batch means, Bonferroni 99% ratio bounds per case and the 5% practical threshold.
+AB/BA describes acquisition order, not paired-t estimation. No outliers are
+removed and no identical stream identities are invented to compare different
+profiles. This adapter and its positive encoder-syntax checks are prepared but
+have not yet been compiled, tested or used for image measurements.
