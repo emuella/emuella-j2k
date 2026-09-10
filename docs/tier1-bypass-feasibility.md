@@ -1,14 +1,20 @@
 # Native D2 selective-bypass exploration
 
-Retain selective bypass for narrow opt-in production integration: authored and
-independent full-image correctness plus the completed development comparison
-establish a useful operating point. No stable public profile is qualified yet.
+Native D2 selective bypass is implemented through the additive
+`encode_lossless_bypass_with_limits` and `lossless_bypass_encode_requirements`
+APIs. Authored tests, independent full-image interoperability, bounded resource
+observations and actual-facade reserved measurements pass for the candidate.
+Existing encode entry points retain style zero. Final qualification of the
+fixed 48-product cohort from merged owner revisions remains outstanding.
+
+## Initial exploration
+
 The starting codec revision is
 `e1df5a8353c11bcc5e812ff3d3a2a0e46e77341e`.
 
-The question is whether the existing authored Tier-1 selective-bypass engine
+The initial question was whether the existing authored Tier-1 selective-bypass engine
 can provide a useful native D2 encode/decode/size operating point when its
-actual terminated segment lengths reach packet assembly. The first probe is
+actual terminated segment lengths reach packet assembly. The first probe was
 the fixture-only serial bridge in `scalable_lossless/bypass_probe.rs`, using
 the ordinary coefficient conversion, reversible colour transform, two-level
 5/3 transform and native decoder. RGB retains reversible MCT; grey and eight
@@ -176,14 +182,81 @@ and per-product interoperability evidence. That evidence binds all three
 actual streams, observed profiles, installed executable hashes and command
 results, reconstructed output hashes and native decode response identities.
 
+## Production candidate and reserved facade qualification
+
+The production implementation at `4f925a084b9660f7c0fc061028c424358701fb47`,
+tree `23f7756f8eafdaf94c38f328bcd3c6fec674df2d`, adds the explicit bypass
+entry points, bounded segment metadata and ordered worker-slot propagation.
+The fixed 55-length record has a mechanically checked 512-byte maximum;
+bypass admission adds `512*B` before choosing worker count. Existing public
+struct shapes and style-zero defaults remain unchanged. The
+[scalable lossless contract](scalable-lossless.md) owns the API and allocation
+rules. Twelve focused tests cover facade layouts/admission/worker budgets,
+constant inputs, segment topology, the full 31-plane bound and joined failure
+recovery. Canonical verification and independent review passed at
+`f41534254a185f1d17818e07fda3fd83e7cf2508`, whose intervening changes only
+wire the new parallel test into CI and refresh generated notice identities.
+
+The retained `perf`, parallel, no-SIMD facade batch executable has SHA-256
+`5e438f42d50a62fabbf76307fd15a17af404b3c434e0bdc977e5eff0e81056d8`
+and remains attributed to its actual `4f925a0` source above. It times public
+facade encode and ordinary facade decode, including conversion and packed
+output in the requested interleaved layout. It does not substitute a prepared
+decoder. Input loading/hashing, profile checks and sample comparisons remain
+outside the clock.
+
+Roskilde `6_1040010009874E00`, Billings `100_1040010046CD1500` and Boca Raton
+`106_10400100413CDF00` were reserved by acquisition before selection; all twelve
+products were retained. Eight products are admitted. Roskilde and Billings
+PAN16/RGB8 remain unsupported under both styles' unchanged geometry admission.
+For every admitted product, both native styles decode exactly through
+OpenJPEG; OpenJPEG style 1 decodes exactly through the facade at one and eight
+workers. Native one/eight-worker streams are byte-identical per style. Style
+zero also matches the exact merged `e1df5a8` exports. All sixteen successful
+allocation observations remain below their recorded queried bounds.
+
+The allocation diagnostic initially rejected Billings MS16 because its local
+64 MiB output allowance was below the valid 67,454,525-byte bypass stream.
+Diagnostic-only revision `a148a7d0c0472287b0734dc0d42af8df33568d3e` uses
+production default limits. The failed invocation and completed prefix were
+retained; only unfinished checks resumed. Timing kept the unchanged immutable
+facade binary. The separate numeric wrapper also corrected its development
+cardinality assertion from twenty to five without changing the benchmark
+owner's interval function, critical values or classification expressions.
+The initial analysis rejection is retained; no measurement was repeated.
+
+Reserved timing was fixed at five AB/BA rounds, zero warmups, one sample per
+fresh process, one local worker and the same 120-second timeout and 5%/99%
+gate. All 160 batches succeeded without timing retries or discarded samples.
+All sixteen comparisons classify as improved; none is inconclusive. Negative
+changes below mean less elapsed time; brackets are per-comparison 99% bounds.
+The larger Boca streams are an explicit cost of selecting this opt-in profile.
+
+| Reserved product | Encode change, 99% interval | Decode change, 99% interval | Complete size change |
+| --- | --- | --- | ---: |
+| Roskilde MS16 | −39.24% [−40.30%, −38.17%] | −51.01% [−52.17%, −49.84%] | +0.864% |
+| Roskilde RGB16 | −36.16% [−38.76%, −33.49%] | −47.06% [−49.34%, −44.71%] | +0.187% |
+| Billings MS16 | −41.37% [−42.19%, −40.55%] | −53.67% [−54.32%, −53.00%] | +0.166% |
+| Billings RGB16 | −39.11% [−40.14%, −38.06%] | −50.98% [−52.18%, −49.76%] | −0.517% |
+| Boca Raton MS16 | −38.75% [−41.38%, −36.02%] | −50.59% [−52.24%, −48.86%] | +6.784% |
+| Boca Raton PAN16 | −39.34% [−40.84%, −37.81%] | −50.76% [−52.31%, −49.18%] | +7.681% |
+| Boca Raton RGB16 | −38.67% [−42.98%, −34.00%] | −51.79% [−54.18%, −49.26%] | +2.206% |
+| Boca Raton RGB8 | −13.39% [−15.39%, −11.36%] | −18.67% [−20.29%, −17.02%] | +4.171% |
+
+The reserved result SHA-256 is
+`112fa07120a362ce6ed275d5da61ed8c99f2fb76204d7fac44370060d5f01b6f`.
+It binds the exact source/build, independent stream/profile identities,
+complete byte counts, retained batch record, corrected numeric wrapper,
+separate diagnostic provenance and preserved unsupported outcomes. The
+ordinary and diagnostic binary revisions are not relabelled as later heads.
+
 ## Remaining qualification
 
-The selected next increment is an additive opt-in D2 style-1 encode route,
-with bounded segment metadata, deterministic serial/parallel propagation,
-resource admission and failure atomicity. Style zero must remain the default;
-existing public options, timing and resource struct shapes and default bytes
-remain acceptance gates. The eventual exposed API encode/decode boundary,
-including output packing where applicable, needs its own performance and
-reserved-acquisition qualification. No broader style or geometry admission,
-shared decoder rejection change or stable release claim follows from this
-provisional operating point.
+The opt-in production candidate and bounded reserved operating point are now
+implemented and verified. Final delivery still requires gates against the
+completed candidate documentation revision, followed by qualification of all
+48 products across the fixed twelve acquisitions from final merged owner
+revisions. Forty supported and eight geometry-excluded outcomes must remain
+visible. This final merged cohort is pending, not inferred from the smaller
+reserved set. No broader coding style, geometry, decoder rejection policy,
+release or general conformance claim follows from these results.
