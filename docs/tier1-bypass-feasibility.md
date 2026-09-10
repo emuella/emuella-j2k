@@ -232,16 +232,16 @@ All sixteen comparisons classify as improved; none is inconclusive. Negative
 changes below mean less elapsed time; brackets are per-comparison 99% bounds.
 The larger Boca streams are an explicit cost of selecting this opt-in profile.
 
-| Reserved product | Encode change, 99% interval | Decode change, 99% interval | Complete size change |
-| --- | --- | --- | ---: |
-| Roskilde MS16 | −39.24% [−40.30%, −38.17%] | −51.01% [−52.17%, −49.84%] | +0.864% |
-| Roskilde RGB16 | −36.16% [−38.76%, −33.49%] | −47.06% [−49.34%, −44.71%] | +0.187% |
-| Billings MS16 | −41.37% [−42.19%, −40.55%] | −53.67% [−54.32%, −53.00%] | +0.166% |
-| Billings RGB16 | −39.11% [−40.14%, −38.06%] | −50.98% [−52.18%, −49.76%] | −0.517% |
-| Boca Raton MS16 | −38.75% [−41.38%, −36.02%] | −50.59% [−52.24%, −48.86%] | +6.784% |
-| Boca Raton PAN16 | −39.34% [−40.84%, −37.81%] | −50.76% [−52.31%, −49.18%] | +7.681% |
-| Boca Raton RGB16 | −38.67% [−42.98%, −34.00%] | −51.79% [−54.18%, −49.26%] | +2.206% |
-| Boca Raton RGB8 | −13.39% [−15.39%, −11.36%] | −18.67% [−20.29%, −17.02%] | +4.171% |
+| Reserved product | Encode change, 99% interval | Decode change, 99% interval | Style 0 bytes | Style 1 bytes | Size change |
+| --- | --- | --- | ---: | ---: | ---: |
+| Roskilde MS16 | −39.24% [−40.30%, −38.17%] | −51.01% [−52.17%, −49.84%] | 40,318,204 | 40,666,524 | +0.864% |
+| Roskilde RGB16 | −36.16% [−38.76%, −33.49%] | −47.06% [−49.34%, −44.71%] | 13,177,125 | 13,201,775 | +0.187% |
+| Billings MS16 | −41.37% [−42.19%, −40.55%] | −53.67% [−54.32%, −53.00%] | 67,342,491 | 67,454,525 | +0.166% |
+| Billings RGB16 | −39.11% [−40.14%, −38.06%] | −50.98% [−52.18%, −49.76%] | 22,733,626 | 22,616,124 | −0.517% |
+| Boca Raton MS16 | −38.75% [−41.38%, −36.02%] | −50.59% [−52.24%, −48.86%] | 9,103,938 | 9,721,574 | +6.784% |
+| Boca Raton PAN16 | −39.34% [−40.84%, −37.81%] | −50.76% [−52.31%, −49.18%] | 16,469,500 | 17,734,505 | +7.681% |
+| Boca Raton RGB16 | −38.67% [−42.98%, −34.00%] | −51.79% [−54.18%, −49.26%] | 3,054,801 | 3,122,192 | +2.206% |
+| Boca Raton RGB8 | −13.39% [−15.39%, −11.36%] | −18.67% [−20.29%, −17.02%] | 14,339,292 | 14,937,382 | +4.171% |
 
 The reserved result SHA-256 is
 `112fa07120a362ce6ed275d5da61ed8c99f2fb76204d7fac44370060d5f01b6f`.
