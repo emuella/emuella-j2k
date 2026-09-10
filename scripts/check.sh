@@ -31,6 +31,8 @@ cargo test --workspace
 sh scripts/check-c-api.sh
 sh scripts/check-lossy-ht-public-matrix.sh
 cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
+cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel
+cargo test -p emuella-j2k-codestream --features parallel joined_batch_retains_all_results_after_an_in_flight_error
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy \
   --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \
