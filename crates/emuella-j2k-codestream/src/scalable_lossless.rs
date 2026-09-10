@@ -4,6 +4,11 @@ use super::*;
 #[cfg(feature = "parallel")]
 mod parallel;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+mod bypass_probe;
+#[cfg(feature = "test-fixtures")]
+pub use bypass_probe::encode_lossless_d2_bypass_test_fixture;
+
 const WORKER_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Byte limits for owned raw classic lossless D2 encoding.
@@ -276,7 +281,7 @@ pub fn encode_lossless_d2_execution_profiled(
     let start = EncodeClock::start::<true>();
     let mut timings = LosslessEncodeTimings::default();
     let mut execution = LosslessEncodeExecution::default();
-    let bytes = encode_lossless_d2_impl::<true>(
+    let bytes = encode_lossless_d2_impl::<true, false>(
         width,
         height,
         bits,
@@ -298,7 +303,7 @@ pub fn encode_lossless_d2(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<Vec<u8>> {
-    encode_lossless_d2_impl::<false>(
+    encode_lossless_d2_impl::<false, false>(
         width,
         height,
         bits,
@@ -309,7 +314,7 @@ pub fn encode_lossless_d2(
     )
 }
 
-fn encode_lossless_d2_impl<const PROFILE: bool>(
+fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     width: u32,
     height: u32,
     bits: u8,
@@ -419,7 +424,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         usize::try_from(limits.max_output_bytes).map_err(|_| CodestreamError::SizeOverflow)?;
     let mut output = Vec::new();
     reserve_output(&mut output, 128, maximum)?;
-    write_native_part1_main_header(
+    write_native_main_header(
         &mut output,
         width,
         height,
@@ -430,6 +435,9 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         planes.len() == 3,
         2,
         &exponents,
+        false,
+        u8::from(BYPASS),
+        1,
     )?;
     let sot = output.len();
     output.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0x93]);
@@ -448,11 +456,28 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         for plane in &coefficients {
             let body_start = output.len();
             let mut bands = Vec::with_capacity(3);
+            #[cfg(any(test, feature = "test-fixtures"))]
+            let mut bypass_lengths = Vec::with_capacity(3);
             for (spec, exponent) in specs
                 .iter()
                 .zip(&exponents)
                 .filter(|(spec, _)| spec.resolution == resolution)
             {
+                #[cfg(any(test, feature = "test-fixtures"))]
+                if BYPASS {
+                    let (band, lengths) = bypass_probe::encode_subband(
+                        width,
+                        plane,
+                        *spec,
+                        *exponent,
+                        &mut output,
+                        maximum,
+                        &mut scratch,
+                    )?;
+                    bands.push(band);
+                    bypass_lengths.push(lengths);
+                    continue;
+                }
                 #[cfg(feature = "parallel")]
                 if workers > 1 {
                     bands.push(parallel.encode_subband::<PROFILE>(
@@ -486,6 +511,19 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
             header.write_bit(u32::from(present))?;
             if present {
                 for band in &bands {
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    if BYPASS {
+                        let index = bands
+                            .iter()
+                            .position(|candidate| core::ptr::eq(candidate, band))
+                            .ok_or(CodestreamError::SizeOverflow)?;
+                        bypass_probe::write_packet_header(
+                            &mut header,
+                            band,
+                            &bypass_lengths[index],
+                        )?;
+                        continue;
+                    }
                     write_component_packet_header(
                         &mut header,
                         band.code_block_cols,
