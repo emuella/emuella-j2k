@@ -4,6 +4,10 @@ use super::*;
 #[cfg(feature = "parallel")]
 mod parallel;
 
+mod bypass;
+#[cfg(feature = "test-fixtures")]
+pub use bypass::encode_lossless_d2_bypass_test_fixture;
+
 const WORKER_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Byte limits for owned raw classic lossless D2 encoding.
@@ -51,10 +55,23 @@ pub fn lossless_d2_requirements(
     components: u16,
     limits: LosslessEncodeLimits,
 ) -> Result<LosslessEncodeRequirements> {
-    execution_requirements(width, height, components, limits).map(|(requirements, _)| requirements)
+    execution_requirements::<false>(width, height, components, limits)
+        .map(|(requirements, _)| requirements)
 }
 
-fn execution_requirements(
+/// Geometry-only admission for the opt-in D2 selective-bypass writer.
+/// Includes bounded segment metadata before choosing the worker allowance.
+pub fn lossless_d2_bypass_requirements(
+    width: u32,
+    height: u32,
+    components: u16,
+    limits: LosslessEncodeLimits,
+) -> Result<LosslessEncodeRequirements> {
+    execution_requirements::<true>(width, height, components, limits)
+        .map(|(requirements, _)| requirements)
+}
+
+fn execution_requirements<const BYPASS: bool>(
     width: u32,
     height: u32,
     components: u16,
@@ -108,6 +125,17 @@ fn execution_requirements(
         .and_then(|n| n.checked_add(u64::from(width.max(height)).checked_mul(12)?))
         .and_then(|n| n.checked_add(limits.max_output_bytes.checked_mul(2)?))
         .ok_or(CodestreamError::SizeOverflow)?;
+    let working = if BYPASS {
+        working
+            .checked_add(
+                blocks
+                    .checked_mul(bypass::METADATA_BYTES_PER_BLOCK)
+                    .ok_or(CodestreamError::SizeOverflow)?,
+            )
+            .ok_or(CodestreamError::SizeOverflow)?
+    } else {
+        working
+    };
     let affordable = limits.max_working_bytes.saturating_sub(working) / WORKER_BYTES;
     if affordable == 0 {
         return Err(resource_error(
@@ -276,7 +304,7 @@ pub fn encode_lossless_d2_execution_profiled(
     let start = EncodeClock::start::<true>();
     let mut timings = LosslessEncodeTimings::default();
     let mut execution = LosslessEncodeExecution::default();
-    let bytes = encode_lossless_d2_impl::<true>(
+    let bytes = encode_lossless_d2_impl::<true, false>(
         width,
         height,
         bits,
@@ -298,7 +326,7 @@ pub fn encode_lossless_d2(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<Vec<u8>> {
-    encode_lossless_d2_impl::<false>(
+    encode_lossless_d2_impl::<false, false>(
         width,
         height,
         bits,
@@ -309,7 +337,28 @@ pub fn encode_lossless_d2(
     )
 }
 
-fn encode_lossless_d2_impl<const PROFILE: bool>(
+/// Encode bounded raw D2 with selective arithmetic bypass (COD style 1).
+/// Geometry and sample models match `encode_lossless_d2`; segment metadata is
+/// included in `lossless_d2_bypass_requirements`. No partial output is returned.
+pub fn encode_lossless_d2_bypass(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[LosslessD2Plane<'_>],
+    limits: LosslessEncodeLimits,
+) -> Result<Vec<u8>> {
+    encode_lossless_d2_impl::<false, true>(
+        width,
+        height,
+        bits,
+        planes,
+        limits,
+        &mut LosslessEncodeTimings::default(),
+        &mut LosslessEncodeExecution::default(),
+    )
+}
+
+fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     width: u32,
     height: u32,
     bits: u8,
@@ -318,7 +367,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
     timings: &mut LosslessEncodeTimings,
     execution: &mut LosslessEncodeExecution,
 ) -> Result<Vec<u8>> {
-    let (_, workers) = execution_requirements(
+    let (_, workers) = execution_requirements::<BYPASS>(
         width,
         height,
         u16::try_from(planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -411,6 +460,9 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         .iter()
         .map(|spec| max_component_subband_available_bitplanes(width, &refs, *spec))
         .collect::<Result<Vec<_>>>()?;
+    if BYPASS && exponents.iter().any(|&planes| planes > 31) {
+        return Err(CodestreamError::SizeOverflow);
+    }
     if PROFILE {
         timings.block_preparation_ns += start.ns();
     }
@@ -419,7 +471,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         usize::try_from(limits.max_output_bytes).map_err(|_| CodestreamError::SizeOverflow)?;
     let mut output = Vec::new();
     reserve_output(&mut output, 128, maximum)?;
-    write_native_part1_main_header(
+    write_native_main_header(
         &mut output,
         width,
         height,
@@ -430,6 +482,9 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         planes.len() == 3,
         2,
         &exponents,
+        false,
+        u8::from(BYPASS),
+        1,
     )?;
     let sot = output.len();
     output.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0x93]);
@@ -448,6 +503,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
         for plane in &coefficients {
             let body_start = output.len();
             let mut bands = Vec::with_capacity(3);
+            let mut bypass_lengths = Vec::with_capacity(if BYPASS { 3 } else { 0 });
             for (spec, exponent) in specs
                 .iter()
                 .zip(&exponents)
@@ -455,7 +511,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
             {
                 #[cfg(feature = "parallel")]
                 if workers > 1 {
-                    bands.push(parallel.encode_subband::<PROFILE>(
+                    let (band, lengths) = parallel.encode_subband::<PROFILE, BYPASS>(
                         width,
                         plane,
                         *spec,
@@ -464,7 +520,25 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
                         maximum,
                         timings,
                         execution,
-                    )?);
+                    )?;
+                    bands.push(band);
+                    if BYPASS {
+                        bypass_lengths.push(lengths);
+                    }
+                    continue;
+                }
+                if BYPASS {
+                    let (band, lengths) = bypass::encode_subband(
+                        width,
+                        plane,
+                        *spec,
+                        *exponent,
+                        &mut output,
+                        maximum,
+                        &mut scratch,
+                    )?;
+                    bands.push(band);
+                    bypass_lengths.push(lengths);
                     continue;
                 }
                 bands.push(encode_decomp_subband_with_output_limit::<PROFILE>(
@@ -485,7 +559,11 @@ fn encode_lossless_d2_impl<const PROFILE: bool>(
                 .any(|band| band.code_blocks.iter().any(|block| block.included));
             header.write_bit(u32::from(present))?;
             if present {
-                for band in &bands {
+                for (index, band) in bands.iter().enumerate() {
+                    if BYPASS {
+                        bypass::write_packet_header(&mut header, band, &bypass_lengths[index])?;
+                        continue;
+                    }
                     write_component_packet_header(
                         &mut header,
                         band.code_block_cols,

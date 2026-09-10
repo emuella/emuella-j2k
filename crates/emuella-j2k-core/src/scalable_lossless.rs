@@ -34,6 +34,25 @@ pub fn lossless_encode_requirements(
     options: &EncodeOptions,
     limits: &LosslessEncodeLimits,
 ) -> Result<LosslessEncodeRequirements> {
+    requirements::<false>(info, options, limits)
+}
+
+/// Check the D2 selective-bypass working envelope without reading samples.
+/// Admission matches `lossless_encode_requirements` with an additional bounded
+/// segment-metadata allowance. Query and encode in the same calling pool.
+pub fn lossless_bypass_encode_requirements(
+    info: &ImageInfo,
+    options: &EncodeOptions,
+    limits: &LosslessEncodeLimits,
+) -> Result<LosslessEncodeRequirements> {
+    requirements::<true>(info, options, limits)
+}
+
+fn requirements<const BYPASS: bool>(
+    info: &ImageInfo,
+    options: &EncodeOptions,
+    limits: &LosslessEncodeLimits,
+) -> Result<LosslessEncodeRequirements> {
     validate_encode_options(options)?;
     if !is_native_eight_component_u16(info) {
         validate_encode_image_info(info)?;
@@ -49,8 +68,17 @@ pub fn lossless_encode_requirements(
             "explicit lossless limits require raw single-tile U8/U16 grey/RGB or eight native U16 components, D2 without metadata",
         ));
     }
-    codestream::lossless_d2_requirements(info.width, info.height, info.components, *limits)
-        .map_err(map_codestream_error)
+    if BYPASS {
+        codestream::lossless_d2_bypass_requirements(
+            info.width,
+            info.height,
+            info.components,
+            *limits,
+        )
+    } else {
+        codestream::lossless_d2_requirements(info.width, info.height, info.components, *limits)
+    }
+    .map_err(map_codestream_error)
 }
 
 /// Encode owned raw classic lossless D2 with explicit allocation limits.
@@ -65,7 +93,27 @@ pub fn encode_with_limits(
     options: &EncodeOptions,
     limits: &LosslessEncodeLimits,
 ) -> Result<Vec<u8>> {
-    lossless_encode_requirements(image_info(image), options, limits)?;
+    encode_impl::<false>(image, options, limits)
+}
+
+/// Encode owned raw lossless D2 with selective arithmetic bypass (COD style 1).
+/// Accepts exactly the explicit-limit D2 sample models and geometry. RGB retains
+/// reversible MCT. Existing default encoders continue to write style zero.
+/// Admission includes bounded segment metadata; no partial output is returned.
+pub fn encode_lossless_bypass_with_limits(
+    image: ImageView<'_>,
+    options: &EncodeOptions,
+    limits: &LosslessEncodeLimits,
+) -> Result<Vec<u8>> {
+    encode_impl::<true>(image, options, limits)
+}
+
+fn encode_impl<const BYPASS: bool>(
+    image: ImageView<'_>,
+    options: &EncodeOptions,
+    limits: &LosslessEncodeLimits,
+) -> Result<Vec<u8>> {
+    requirements::<BYPASS>(image_info(image), options, limits)?;
     validate_image_view(&image)?;
     let info = image_info(image);
     if let ImageView::Planar { planes, .. } = image {
@@ -109,7 +157,12 @@ pub fn encode_with_limits(
             },
         };
     }
-    codestream::encode_lossless_d2(
+    let encode = if BYPASS {
+        codestream::encode_lossless_d2_bypass
+    } else {
+        codestream::encode_lossless_d2
+    };
+    encode(
         info.width,
         info.height,
         info.sample_format.bits_per_sample,

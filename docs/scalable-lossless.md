@@ -26,6 +26,42 @@ caller decode now stages complete output to preserve destination bytes on failur
 using the current Rayon pool and the explicit working-memory allowance.
 The one-worker path keeps the serial writer.
 
+## Opt-in selective arithmetic bypass
+
+`encode_lossless_bypass_with_limits(image, &options, &limits)` selects COD
+style 1 on the same explicit-limit raw D2 sample models and geometry.
+`lossless_bypass_encode_requirements` checks its working envelope before
+samples are read. Neither API changes `EncodeOptions`, the existing limits or
+requirements types, or the style-zero defaults. RGB retains reversible MCT;
+eight native U16 components retain their positional no-MCT interpretation.
+The lower-level codestream equivalents are `encode_lossless_d2_bypass` and
+`lossless_d2_bypass_requirements`.
+
+The bypass admission adds `512*B` to the shared working terms below before
+choosing W. Actual segment lengths come from the production Tier-1 collector.
+A checked fixed record holds at most 55 lengths per block: the 31-magnitude-plane
+D2 bound permits 91 complete passes, comprising one ten-pass MQ segment and
+27 subsequent raw-pair/cleanup pairs. An authored full-magnitude test reaches
+that bound. The record's size is mechanically limited to 512 bytes; per-packet
+metadata vectors reserve their exact block capacity and do not grow. All
+metadata for the current packet, including earlier subbands, is covered by B.
+The additional raw length fields remain within the existing packet-header
+allowance. Each serial or parallel worker's temporary collector and codeword
+coexist with its fixed result record inside the existing 4 MiB local allowance.
+
+Parallel bypass follows the same bounded joined batches and stream-order
+append policy. Each slot owns its collector; actual lengths follow the encoded
+block into packet assembly. Errors publish no owned output and every started
+batch is joined before an error returns. Reduced working budgets lower worker
+admission after the extra shared metadata term; the ordinary style-zero serial
+minimum and requirements values remain unchanged.
+
+The [development operating point](tier1-bypass-feasibility.md) records the
+selection evidence and distinguishes the codestream-only exploratory clock
+from subsequent facade encode/decode qualification, which includes output
+packing in the requested layout. This opt-in adds no broader style, geometry
+or decoder rejection policy.
+
 ## Admission and allocation contract
 
 `LosslessEncodeLimits` defaults to 4 GiB `max_working_bytes` and 1 GiB

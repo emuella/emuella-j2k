@@ -6,6 +6,7 @@ use rayon::prelude::*;
 struct Slot {
     scratch: tier1::CodeBlockEncodeScratch,
     bytes: Vec<u8>,
+    lengths: Vec<usize>,
     result: Option<Result<EncodedCodeBlock>>,
     worker: Option<usize>,
 }
@@ -33,7 +34,7 @@ impl BlockWorkers {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn encode_subband<const PROFILE: bool>(
+    pub(super) fn encode_subband<const PROFILE: bool, const BYPASS: bool>(
         &mut self,
         image_width: u32,
         plane: &[i32],
@@ -43,7 +44,7 @@ impl BlockWorkers {
         maximum: usize,
         timings: &mut LosslessEncodeTimings,
         execution: &mut LosslessEncodeExecution,
-    ) -> Result<NativeDecompSubband> {
+    ) -> Result<(NativeDecompSubband, Vec<bypass::SegmentLengths>)> {
         // Only the validated scalable writer calls this path: origin-aligned
         // D2 subbands, with geometry admitted before coefficient allocation.
         if spec.grid_x0 != 0 || spec.grid_y0 != 0 || self.slots.is_empty() {
@@ -64,6 +65,7 @@ impl BlockWorkers {
         if blocks.capacity() != count {
             return Err(CodestreamError::SizeOverflow);
         }
+        let mut lengths = bypass::metadata(if BYPASS { count } else { 0 })?;
         if PROFILE {
             timings.block_preparation_ns += start.ns();
         }
@@ -81,7 +83,7 @@ impl BlockWorkers {
                     if PROFILE {
                         slot.worker = rayon::current_thread_index();
                     }
-                    slot.result = Some(encode_block(
+                    slot.result = Some(encode_block::<BYPASS>(
                         image_width,
                         plane,
                         spec,
@@ -89,6 +91,7 @@ impl BlockWorkers {
                         cols,
                         first + offset,
                         &mut slot.bytes,
+                        &mut slot.lengths,
                         &mut slot.scratch,
                     ));
                 });
@@ -112,33 +115,51 @@ impl BlockWorkers {
                     timings.tier1_coding_passes += u64::from(block.coding_passes);
                     timings.tier1_codeword_bytes += block.segment_len as u64;
                 }
+                let segments = if BYPASS {
+                    if block.segment_len != slot.bytes.len() {
+                        return Err(CodestreamError::SizeOverflow);
+                    }
+                    Some(bypass::SegmentLengths::checked(
+                        block.coding_passes,
+                        &slot.bytes,
+                        &slot.lengths,
+                    )?)
+                } else {
+                    None
+                };
                 reserve_output(output, slot.bytes.len(), maximum)?;
                 block.segment_offset = output.len();
                 output.extend_from_slice(&slot.bytes);
                 blocks.push(block);
+                if let Some(segments) = segments {
+                    lengths.push(segments);
+                }
             }
             if PROFILE {
                 timings.assembly_ns += start.ns();
             }
         }
-        Ok(NativeDecompSubband {
-            index: spec.index,
-            resolution: spec.resolution,
-            kind: spec.kind,
-            x: spec.x,
-            y: spec.y,
-            width: spec.width,
-            height: spec.height,
-            code_block_cols: cols,
-            code_block_rows: rows,
-            available_bitplanes,
-            code_blocks: blocks,
-        })
+        Ok((
+            NativeDecompSubband {
+                index: spec.index,
+                resolution: spec.resolution,
+                kind: spec.kind,
+                x: spec.x,
+                y: spec.y,
+                width: spec.width,
+                height: spec.height,
+                code_block_cols: cols,
+                code_block_rows: rows,
+                available_bitplanes,
+                code_blocks: blocks,
+            },
+            lengths,
+        ))
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn encode_block(
+fn encode_block<const BYPASS: bool>(
     image_width: u32,
     plane: &[i32],
     spec: DecompSubbandSpec,
@@ -146,6 +167,7 @@ fn encode_block(
     cols: u16,
     index: usize,
     bytes: &mut Vec<u8>,
+    lengths: &mut Vec<usize>,
     scratch: &mut tier1::CodeBlockEncodeScratch,
 ) -> Result<EncodedCodeBlock> {
     let x = u16::try_from(index % usize::from(cols)).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -162,18 +184,30 @@ fn encode_block(
         .and_then(|n| n.checked_add(spec.x as usize + local_x as usize))
         .ok_or(CodestreamError::SizeOverflow)?;
     let source = plane.get(offset..).ok_or(CodestreamError::SizeOverflow)?;
-    let encoded = tier1::encode_baseline_code_block_with_strided_scratch(
-        source,
-        image_width as usize,
-        tier1::CodeBlockEncodeSpec {
-            dimensions,
-            subband: spec.kind.tier1_subband(),
-            available_bitplanes,
-            code_block_style: 0,
-        },
-        bytes,
-        scratch,
-    )
+    let block_spec = tier1::CodeBlockEncodeSpec {
+        dimensions,
+        subband: spec.kind.tier1_subband(),
+        available_bitplanes,
+        code_block_style: u8::from(BYPASS),
+    };
+    let encoded = if BYPASS {
+        tier1::encode_baseline_code_block_segments_with_strided_scratch(
+            source,
+            image_width as usize,
+            block_spec,
+            bytes,
+            lengths,
+            scratch,
+        )
+    } else {
+        tier1::encode_baseline_code_block_with_strided_scratch(
+            source,
+            image_width as usize,
+            block_spec,
+            bytes,
+            scratch,
+        )
+    }
     .map_err(map_tier1_error)?;
     Ok(EncodedCodeBlock {
         x,
@@ -197,6 +231,11 @@ mod tests {
 
     #[test]
     fn joined_batch_retains_all_results_after_an_in_flight_error() {
+        joined_batch_recovers::<false>();
+        joined_batch_recovers::<true>();
+    }
+
+    fn joined_batch_recovers<const BYPASS: bool>() {
         rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
@@ -221,7 +260,7 @@ mod tests {
                 let mut output = vec![0x71; 13];
                 assert!(
                     workers
-                        .encode_subband::<false>(
+                        .encode_subband::<false, BYPASS>(
                             256,
                             &plane,
                             spec,
@@ -241,7 +280,7 @@ mod tests {
                 // Reuse after failure clears stale results and codewords.
                 plane[0] = 0;
                 let recovered = workers
-                    .encode_subband::<false>(
+                    .encode_subband::<false, BYPASS>(
                         256,
                         &plane,
                         spec,
@@ -252,7 +291,7 @@ mod tests {
                         &mut LosslessEncodeExecution::default(),
                     )
                     .unwrap();
-                assert!(recovered.code_blocks.iter().all(|b| !b.included));
+                assert!(recovered.0.code_blocks.iter().all(|b| !b.included));
             });
     }
 }
