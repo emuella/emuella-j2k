@@ -43,6 +43,28 @@ fn hash(bytes: &[u8]) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+// Match the existing production-stage diagnostic's marker-history boundary.
+// Checking the main COD alone cannot rule out effective tile/component overrides.
+fn frozen_marker_profile(parsed: &cs::Codestream) -> bool {
+    !parsed.markers.iter().any(|m| {
+        matches!(
+            m.marker,
+            cs::Marker::Coc | cs::Marker::Qcc | cs::Marker::Rgn | cs::Marker::Poc
+        )
+    }) && parsed
+        .markers
+        .iter()
+        .filter(|m| m.marker == cs::Marker::Cod)
+        .count()
+        == 1
+        && parsed
+            .markers
+            .iter()
+            .filter(|m| m.marker == cs::Marker::Qcd)
+            .count()
+            == 1
+}
+
 fn run() -> std::result::Result<serde_json::Value, Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 9 {
@@ -134,6 +156,7 @@ fn run() -> std::result::Result<serde_json::Value, Box<dyn std::error::Error>> {
         || coding.precincts_declared
         || (components != 3 && coding.multiple_component_transform)
         || !parsed.component_coding_styles.is_empty()
+        || !frozen_marker_profile(&parsed)
         || parsed.tiles.len() != 1
         || parsed.siz.image_origin_x != 0
         || parsed.siz.image_origin_y != 0
@@ -252,5 +275,62 @@ fn main() {
             eprintln!("{}", json!({"error":error.to_string()}));
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frozen_profile_rejects_overrides_even_when_main_cod_is_unchanged() {
+        let input = vec![0u8; 16 * 16 * 2];
+        let stream = cs::encode_lossless_d2(
+            16,
+            16,
+            16,
+            &[cs::LosslessD2Plane {
+                samples: &input,
+                stride_bytes: 32,
+                sample_step_bytes: 2,
+            }],
+            LosslessEncodeLimits::default(),
+        )
+        .unwrap();
+        let parsed = cs::parse(&stream).unwrap();
+        assert!(frozen_marker_profile(&parsed));
+        let main_cod = parsed.coding_style;
+        let tile_header = parsed
+            .markers
+            .iter()
+            .find(|m| m.marker == cs::Marker::Sot)
+            .unwrap()
+            .offset
+            + 12;
+        // Parsed marker history may carry overrides while the main-header COD
+        // snapshot is unchanged. The diagnostic must reject that entire route.
+        for marker in [
+            cs::Marker::Cod,
+            cs::Marker::Qcd,
+            cs::Marker::Coc,
+            cs::Marker::Qcc,
+            cs::Marker::Rgn,
+            cs::Marker::Poc,
+        ] {
+            let mut overridden = parsed.clone();
+            overridden.markers.push(cs::MarkerSegment {
+                marker,
+                offset: tile_header,
+                data_offset: tile_header + 4,
+                data_len: 1,
+            });
+            assert_eq!(overridden.coding_style, main_cod);
+            assert!(!frozen_marker_profile(&overridden), "accepted {marker:?}");
+        }
+        let mut missing_quantisation = parsed;
+        missing_quantisation
+            .markers
+            .retain(|m| m.marker != cs::Marker::Qcd);
+        assert!(!frozen_marker_profile(&missing_quantisation));
     }
 }
