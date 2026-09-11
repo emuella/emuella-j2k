@@ -320,8 +320,9 @@ output reallocation overlap. This is requested allocation traffic, not RSS.
 The example-only allocator follows the existing allocation probe's forwarding
 contract and is never linked into codec libraries.
 
-Clock reads and the allocation meter perturb execution. Production collection
-is qualified only at one worker, where the ordinary tile, block and component
+Clock reads and the allocation meter perturb execution. The production-path
+`lossless_diagnostics` decoder collector is qualified only at one worker,
+where the ordinary tile, block and component
 parallel gates are also closed. Its full-D2 dispatch keeps the ordinary adaptive
 backend, fused conversion and packing branches. It is not proof of parallel
 fidelity or an uninstrumented throughput result. Use a separate ordinary process

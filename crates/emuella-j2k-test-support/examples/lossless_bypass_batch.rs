@@ -25,6 +25,15 @@ fn number(v: &Value, name: &str) -> Result<u64> {
         .ok_or_else(|| format!("missing {name}").into())
 }
 
+fn optional_limit(v: &Value, name: &str, default: u64) -> Result<u64> {
+    match v.get(name) {
+        None => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| format!("{name} must be an unsigned integer").into()),
+    }
+}
+
 fn complete_raw_syntax(bytes: &[u8]) -> Result<usize> {
     if bytes.last() == Some(&0xff) || bytes.windows(2).any(|p| p[0] == 0xff && p[1] & 0x80 != 0) {
         return Err("generated completed raw segment violates encoder byte syntax".into());
@@ -272,12 +281,8 @@ fn run() -> Result<Value> {
     }
     let request: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let limits = api::LosslessEncodeLimits {
-        max_working_bytes: request["max_working_bytes"]
-            .as_u64()
-            .unwrap_or(4 * 1024 * 1024 * 1024),
-        max_output_bytes: request["max_output_bytes"]
-            .as_u64()
-            .unwrap_or(1024 * 1024 * 1024),
+        max_working_bytes: optional_limit(&request, "max_working_bytes", 4 * 1024 * 1024 * 1024)?,
+        max_output_bytes: optional_limit(&request, "max_output_bytes", 1024 * 1024 * 1024)?,
     };
     let native_limits = cs::LosslessEncodeLimits {
         max_working_bytes: limits.max_working_bytes,
@@ -619,6 +624,31 @@ fn run() -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_limits_never_fall_back_to_defaults() {
+        for name in ["max_working_bytes", "max_output_bytes"] {
+            assert_eq!(optional_limit(&json!({}), name, 4096).unwrap(), 4096);
+            for valid in [0, 768 * 1024 * 1024, u64::MAX] {
+                let mut request = json!({});
+                request[name] = json!(valid);
+                assert_eq!(optional_limit(&request, name, 4096).unwrap(), valid);
+            }
+            for invalid in [
+                json!(null),
+                json!("805306368"),
+                json!(-1),
+                json!(1.5),
+                json!(true),
+                json!([]),
+                json!({}),
+            ] {
+                let mut request = json!({});
+                request[name] = invalid;
+                assert!(optional_limit(&request, name, 4096).is_err());
+            }
+        }
+    }
 
     #[test]
     fn generated_constant_streams_have_complete_encoder_syntax() {

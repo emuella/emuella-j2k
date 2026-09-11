@@ -258,13 +258,12 @@ complete byte counts, retained batch record, corrected numeric wrapper,
 separate diagnostic provenance and preserved unsupported outcomes. The
 ordinary and diagnostic binary revisions are not relabelled as later heads.
 
-## Remaining qualification
+## Completed qualification and scope
 
-The opt-in production candidate and bounded reserved operating point are now
-implemented and verified. Final delivery still requires gates against the
-completed candidate documentation revision, followed by qualification of all
-48 products across the fixed twelve acquisitions from final merged owner
-revisions. Forty supported and eight geometry-excluded outcomes must remain
-visible. This final merged cohort is pending, not inferred from the smaller
-reserved set. No broader coding style, geometry, decoder rejection policy,
-release or general conformance claim follows from these results.
+The opt-in production candidate and bounded reserved operating point are
+implemented and verified. The final merged-owner qualification covered all
+48 products across the fixed twelve acquisitions, with forty supported and
+eight geometry-excluded outcomes, as bound by the terminal evidence above.
+That completed one-worker cohort does not establish the combined bypass and
+parallel operating point. No broader coding style, geometry, decoder rejection
+policy, release or general conformance claim follows from these results.

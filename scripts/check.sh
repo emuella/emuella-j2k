@@ -34,6 +34,7 @@ cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --te
 cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
 cargo test -p emuella-j2k-codestream --features parallel joined_batch_retains_all_results_after_an_in_flight_error
 cargo test -p emuella-j2k-test-support --example lossless_parallel
+cargo test -p emuella-j2k-test-support --example lossless_bypass_batch
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy \
   --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \
