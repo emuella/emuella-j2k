@@ -242,6 +242,26 @@ fn verify(
     Ok(())
 }
 
+// Linux CPU ticks are an observed lower bound on active workers, not a count
+// of Tier-1 jobs or proof that inactive workers never participated.
+fn thread_cpu_ticks() -> Result<std::collections::BTreeMap<u32, (String, u64)>> {
+    let mut observations = std::collections::BTreeMap::new();
+    for entry in fs::read_dir("/proc/self/task")? {
+        let entry = entry?;
+        let tid: u32 = entry.file_name().to_string_lossy().parse()?;
+        let stat = fs::read_to_string(entry.path().join("stat"))?;
+        let end = stat.rfind(')').ok_or("invalid task stat")?;
+        let fields: Vec<_> = stat[end + 1..].split_whitespace().collect();
+        let user: u64 = fields.get(11).ok_or("missing user ticks")?.parse()?;
+        let system: u64 = fields.get(12).ok_or("missing system ticks")?.parse()?;
+        let name = fs::read_to_string(entry.path().join("comm"))?
+            .trim()
+            .to_owned();
+        observations.insert(tid, (name, user + system));
+    }
+    Ok(observations)
+}
+
 fn run() -> Result<Value> {
     if !cfg!(feature = "parallel") || cfg!(feature = "simd") {
         return Err("this contrast requires parallel enabled and SIMD disabled".into());
@@ -283,7 +303,7 @@ fn run() -> Result<Value> {
     }
     if !matches!(
         operation,
-        "prepare" | "encode" | "decode" | "profile" | "requirements"
+        "prepare" | "encode" | "decode" | "decode_diagnostic" | "profile" | "requirements"
     ) || style > 1
         || !matches!(components, 1 | 3 | 8)
         || !matches!(bits, 8 | 16)
@@ -302,11 +322,13 @@ fn run() -> Result<Value> {
         "nested_pool" => Some(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)
+                .thread_name(|index| format!("cl-rayon-{index}"))
                 .build()?,
         ),
         "direct_global" => {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)
+                .thread_name(|index| format!("cl-rayon-{index}"))
                 .build_global()?;
             None
         }
@@ -480,11 +502,36 @@ fn run() -> Result<Value> {
         if rayon::current_num_threads() != workers {
             return Err("unexpected pool width".into());
         }
-        if operation == "decode" {
+        if matches!(operation, "decode" | "decode_diagnostic") {
+            let before = if operation == "decode_diagnostic" {
+                Some(thread_cpu_ticks()?)
+            } else {
+                None
+            };
             let elapsed = if facade {
                 let start = Instant::now();
                 let decoded = api::decode(&stream, &decode_options)?;
                 let elapsed = u64::try_from(start.elapsed().as_nanos())?;
+                if let Some(before) = &before {
+                    let after = thread_cpu_ticks()?;
+                    let rows: Vec<_> = after.iter().map(|(tid, (name, ticks))| {
+                        let previous = before.get(tid).map_or(0, |(_, ticks)| *ticks);
+                        json!({"tid":tid,"name":name,"cpu_ticks":ticks.saturating_sub(previous)})
+                    }).collect();
+                    let active = rows
+                        .iter()
+                        .filter(|r| {
+                            r["name"]
+                                .as_str()
+                                .is_some_and(|n| n.starts_with("cl-rayon-"))
+                                && r["cpu_ticks"].as_u64().unwrap_or(0) > 0
+                        })
+                        .count();
+                    diagnostics = json!({"boundary":"ordinary_facade_decode_before_verification",
+                        "threads":rows,"active_rayon_workers_lower_bound":active,
+                        "interpretation":"Linux task CPU tick deltas; any facade worker activity, not exact Tier-1 participation or stage fractions",
+                        "decoder_stage_timings":null});
+                }
                 verify_api(&decoded)?;
                 elapsed
             } else {
@@ -562,7 +609,7 @@ fn run() -> Result<Value> {
         "requirements_working_bytes": requirements.working_bytes,
         "max_working_bytes":limits.max_working_bytes,"max_output_bytes":limits.max_output_bytes,
         "binary_sha256": hash(&fs::read(std::env::current_exe()?)?), "parallel": true, "simd": false, "workers": workers,
-        "samples_ns": if matches!(operation, "prepare" | "profile") { Vec::<u64>::new() } else { vec![elapsed] },
+        "samples_ns": if matches!(operation, "prepare" | "profile" | "decode_diagnostic") { Vec::<u64>::new() } else { vec![elapsed] },
         "warmup": 0, "samples_per_batch": 1, "boundary": boundary,
         "decode_output": if facade { "owned_facade_image_in_requested_layout" } else { "owned_native_component_planes" }, "input_policy": "loaded_and_hash_checked_before_clock",
         "context_policy": "fresh_process_per_batch", "verification": "outside_clock_every_sample",

@@ -410,8 +410,11 @@ checks ordinary facade byte parity and reconstructs every sample. The
 existing bypass writer without changing ordinary scheduling or coding. Serial
 bypass's Tier-1 interval includes subband preparation and output appends; this
 combined boundary is labelled in the example output. Parallel bypass retains
-separate preparation and assembly intervals. Parallel decoder stage and worker
-telemetry is unavailable in this collector and remains explicitly null.
+separate preparation and assembly intervals. Parallel decoder stage telemetry is unavailable in this collector and remains
+explicitly null. The separate `decode_diagnostic` operation records Linux task
+CPU ticks before/after the ordinary facade call and before verification, including
+named Rayon workers. Positive deltas bound actual active workers from below;
+they do not identify Tier-1 stages or exhaustively count participating workers.
 
 The allocation-only example accepts optional `WORKING_BYTES OUTPUT_BYTES` after
 its original arguments so resource probes can use the same application limits.
