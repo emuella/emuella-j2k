@@ -80,7 +80,6 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
         view,
         &Htj2kEncodeOptions {
             decomposition_levels: 2,
-            ..Default::default()
         },
     );
     let d1 = lossless_bypass_encode_requirements(
