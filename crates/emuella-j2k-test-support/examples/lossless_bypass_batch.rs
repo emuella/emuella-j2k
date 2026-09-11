@@ -25,6 +25,15 @@ fn number(v: &Value, name: &str) -> Result<u64> {
         .ok_or_else(|| format!("missing {name}").into())
 }
 
+fn optional_limit(v: &Value, name: &str, default: u64) -> Result<u64> {
+    match v.get(name) {
+        None => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| format!("{name} must be an unsigned integer").into()),
+    }
+}
+
 fn complete_raw_syntax(bytes: &[u8]) -> Result<usize> {
     if bytes.last() == Some(&0xff) || bytes.windows(2).any(|p| p[0] == 0xff && p[1] & 0x80 != 0) {
         return Err("generated completed raw segment violates encoder byte syntax".into());
@@ -242,6 +251,26 @@ fn verify(
     Ok(())
 }
 
+// Linux CPU ticks are an observed lower bound on active workers, not a count
+// of Tier-1 jobs or proof that inactive workers never participated.
+fn thread_cpu_ticks() -> Result<std::collections::BTreeMap<u32, (String, u64)>> {
+    let mut observations = std::collections::BTreeMap::new();
+    for entry in fs::read_dir("/proc/self/task")? {
+        let entry = entry?;
+        let tid: u32 = entry.file_name().to_string_lossy().parse()?;
+        let stat = fs::read_to_string(entry.path().join("stat"))?;
+        let end = stat.rfind(')').ok_or("invalid task stat")?;
+        let fields: Vec<_> = stat[end + 1..].split_whitespace().collect();
+        let user: u64 = fields.get(11).ok_or("missing user ticks")?.parse()?;
+        let system: u64 = fields.get(12).ok_or("missing system ticks")?.parse()?;
+        let name = fs::read_to_string(entry.path().join("comm"))?
+            .trim()
+            .to_owned();
+        observations.insert(tid, (name, user + system));
+    }
+    Ok(observations)
+}
+
 fn run() -> Result<Value> {
     if !cfg!(feature = "parallel") || cfg!(feature = "simd") {
         return Err("this contrast requires parallel enabled and SIMD disabled".into());
@@ -251,6 +280,14 @@ fn run() -> Result<Value> {
         return Err("usage: lossless_bypass_batch REQUEST.json".into());
     }
     let request: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
+    let limits = api::LosslessEncodeLimits {
+        max_working_bytes: optional_limit(&request, "max_working_bytes", 4 * 1024 * 1024 * 1024)?,
+        max_output_bytes: optional_limit(&request, "max_output_bytes", 1024 * 1024 * 1024)?,
+    };
+    let native_limits = cs::LosslessEncodeLimits {
+        max_working_bytes: limits.max_working_bytes,
+        max_output_bytes: limits.max_output_bytes,
+    };
     let width = u32::try_from(number(&request, "width")?)?;
     let height = u32::try_from(number(&request, "height")?)?;
     let components = usize::try_from(number(&request, "components")?)?;
@@ -269,8 +306,10 @@ fn run() -> Result<Value> {
     if !matches!(workers, 1 | 2 | 4 | 8) {
         return Err("unsupported pool width".into());
     }
-    if !matches!(operation, "prepare" | "encode" | "decode")
-        || style > 1
+    if !matches!(
+        operation,
+        "prepare" | "encode" | "decode" | "decode_diagnostic" | "profile" | "requirements"
+    ) || style > 1
         || !matches!(components, 1 | 3 | 8)
         || !matches!(bits, 8 | 16)
     {
@@ -281,22 +320,25 @@ fn run() -> Result<Value> {
         "interleaved" => false,
         _ => return Err("invalid layout".into()),
     };
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()?;
-    pool.install(|| {
-        let requirements = if style == 0 {
-            cs::lossless_d2_requirements
-        } else {
-            cs::lossless_d2_bypass_requirements
-        };
-        requirements(
-            width,
-            height,
-            components as u16,
-            cs::LosslessEncodeLimits::default(),
-        )
-    })?;
+    let context = request["execution_context"]
+        .as_str()
+        .unwrap_or("nested_pool");
+    let pool = match context {
+        "nested_pool" => Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .thread_name(|index| format!("cl-rayon-{index}"))
+                .build()?,
+        ),
+        "direct_global" => {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .thread_name(|index| format!("cl-rayon-{index}"))
+                .build_global()?;
+            None
+        }
+        _ => return Err("unsupported execution context".into()),
+    };
     let sample_bytes = usize::from(bits / 8);
     let pixels = (width as usize)
         .checked_mul(height as usize)
@@ -421,6 +463,28 @@ fn run() -> Result<Value> {
         }
         Ok(())
     };
+    let query = || {
+        let query = if style == 0 {
+            api::lossless_encode_requirements
+        } else {
+            api::lossless_bypass_encode_requirements
+        };
+        query(&info, &options, &limits)
+    };
+    let requirements = if let Some(pool) = &pool {
+        pool.install(query)
+    } else {
+        query()
+    }?;
+    if operation == "requirements" {
+        return Ok(
+            json!({"operation":operation,"execution_context":context,"workers":workers,
+            "requirements_working_bytes":requirements.working_bytes,
+            "output_capacity_limit":requirements.output_capacity_limit,
+            "total_component_samples":requirements.total_component_samples,
+            "max_working_bytes":limits.max_working_bytes,"max_output_bytes":limits.max_output_bytes}),
+        );
+    }
     let encode = || -> Result<Vec<u8>> {
         if facade {
             let encode = if style == 0 {
@@ -428,35 +492,51 @@ fn run() -> Result<Value> {
             } else {
                 api::encode_lossless_bypass_with_limits
             };
-            Ok(encode(
-                view,
-                &options,
-                &api::LosslessEncodeLimits::default(),
-            )?)
+            Ok(encode(view, &options, &limits)?)
         } else {
             let encode = if style == 0 {
                 cs::encode_lossless_d2
             } else {
                 cs::encode_lossless_d2_bypass
             };
-            Ok(encode(
-                width,
-                height,
-                bits,
-                &planes,
-                cs::LosslessEncodeLimits::default(),
-            )?)
+            Ok(encode(width, height, bits, &planes, native_limits)?)
         }
     };
-    let (elapsed, actual_hash, stream_bytes, syntax) = pool.install(|| -> Result<_> {
+    let mut diagnostics = Value::Null;
+    let mut operation_call = || -> Result<_> {
         if rayon::current_num_threads() != workers {
             return Err("unexpected pool width".into());
         }
-        if operation == "decode" {
+        if matches!(operation, "decode" | "decode_diagnostic") {
+            let before = if operation == "decode_diagnostic" {
+                Some(thread_cpu_ticks()?)
+            } else {
+                None
+            };
             let elapsed = if facade {
                 let start = Instant::now();
                 let decoded = api::decode(&stream, &decode_options)?;
                 let elapsed = u64::try_from(start.elapsed().as_nanos())?;
+                if let Some(before) = &before {
+                    let after = thread_cpu_ticks()?;
+                    let rows: Vec<_> = after.iter().map(|(tid, (name, ticks))| {
+                        let previous = before.get(tid).map_or(0, |(_, ticks)| *ticks);
+                        json!({"tid":tid,"name":name,"cpu_ticks":ticks.saturating_sub(previous)})
+                    }).collect();
+                    let active = rows
+                        .iter()
+                        .filter(|r| {
+                            r["name"]
+                                .as_str()
+                                .is_some_and(|n| n.starts_with("cl-rayon-"))
+                                && r["cpu_ticks"].as_u64().unwrap_or(0) > 0
+                        })
+                        .count();
+                    diagnostics = json!({"boundary":"ordinary_facade_decode_before_verification",
+                        "threads":rows,"active_rayon_workers_lower_bound":active,
+                        "interpretation":"Linux task CPU tick deltas; any facade worker activity, not exact Tier-1 participation or stage fractions",
+                        "decoder_stage_timings":null});
+                }
                 verify_api(&decoded)?;
                 elapsed
             } else {
@@ -474,11 +554,33 @@ fn run() -> Result<Value> {
             ))
         } else {
             let start = Instant::now();
-            let encoded = encode()?;
+            let encoded = if operation == "profile" {
+                let profile = if style == 0 {
+                    cs::encode_lossless_d2_execution_profiled
+                } else {
+                    cs::encode_lossless_d2_bypass_execution_profiled
+                };
+                let (encoded, t, e) = profile(width, height, bits, &planes, native_limits)?;
+                diagnostics = json!({"boundary":"instrumented_native_encoder", "total_ns":t.total_ns,
+                    "conversion_level_shift_rct_ns":t.conversion_level_shift_rct_ns,
+                    "forward_dwt_ns":t.forward_dwt_ns,"block_preparation_ns":t.block_preparation_ns,
+                    "tier1_ns":t.tier1_ns, "serial_bypass_tier1_includes_subband_preparation_and_appends":style == 1 && e.effective_workers == 1,"packet_headers_ns":t.packet_headers_ns,"assembly_ns":t.assembly_ns,
+                    "effective_workers":e.effective_workers,"participating_workers":e.participating_workers,
+                    "max_batch_blocks":e.max_batch_blocks,"tier1_coefficients":t.tier1_coefficients,
+                    "checked_tier1_blocks":t.checked_tier1_blocks,"tier1_coding_passes":t.tier1_coding_passes,
+                    "tier1_codeword_bytes":t.tier1_codeword_bytes,
+                    "decode_parallel_stage_telemetry":null});
+                if encoded != encode()? {
+                    return Err("profiled and facade bytes differ".into());
+                }
+                encoded
+            } else {
+                encode()?
+            };
             let elapsed = u64::try_from(start.elapsed().as_nanos())?;
             let syntax = profile(&encoded, width, height, components, bits, style)?;
             let actual_hash = hash(&encoded);
-            if operation == "encode" && actual_hash != expected_hash {
+            if operation != "prepare" && actual_hash != expected_hash {
                 return Err("encoded stream changed".into());
             }
             if facade {
@@ -496,16 +598,23 @@ fn run() -> Result<Value> {
             }
             Ok((elapsed, actual_hash, encoded.len(), syntax))
         }
-    })?;
+    };
+    let (elapsed, actual_hash, stream_bytes, syntax) = if let Some(pool) = &pool {
+        pool.install(operation_call)
+    } else {
+        operation_call()
+    }?;
     Ok(json!({
         "schema_version": 1, "contrast": "native_d2_style0_vs_style1", "operation": operation,
         "case_id": string(&request, "case_id")?, "round": number(&request, "round")?,
         "style": style, "width": width, "height": height, "components": components, "bits": bits,
         "layout": string(&request, "layout")?, "rct": components == 3, "native_exact": true,
         "raw_sha256": raw_sha, "stream_sha256": actual_hash, "complete_stream_bytes": stream_bytes,
-        "encoder_syntax": syntax,
+        "encoder_syntax": syntax, "diagnostics": diagnostics, "execution_context": context,
+        "requirements_working_bytes": requirements.working_bytes,
+        "max_working_bytes":limits.max_working_bytes,"max_output_bytes":limits.max_output_bytes,
         "binary_sha256": hash(&fs::read(std::env::current_exe()?)?), "parallel": true, "simd": false, "workers": workers,
-        "samples_ns": if operation == "prepare" { Vec::<u64>::new() } else { vec![elapsed] },
+        "samples_ns": if matches!(operation, "prepare" | "profile" | "decode_diagnostic") { Vec::<u64>::new() } else { vec![elapsed] },
         "warmup": 0, "samples_per_batch": 1, "boundary": boundary,
         "decode_output": if facade { "owned_facade_image_in_requested_layout" } else { "owned_native_component_planes" }, "input_policy": "loaded_and_hash_checked_before_clock",
         "context_policy": "fresh_process_per_batch", "verification": "outside_clock_every_sample",
@@ -515,6 +624,31 @@ fn run() -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_limits_never_fall_back_to_defaults() {
+        for name in ["max_working_bytes", "max_output_bytes"] {
+            assert_eq!(optional_limit(&json!({}), name, 4096).unwrap(), 4096);
+            for valid in [0, 768 * 1024 * 1024, u64::MAX] {
+                let mut request = json!({});
+                request[name] = json!(valid);
+                assert_eq!(optional_limit(&request, name, 4096).unwrap(), valid);
+            }
+            for invalid in [
+                json!(null),
+                json!("805306368"),
+                json!(-1),
+                json!(1.5),
+                json!(true),
+                json!([]),
+                json!({}),
+            ] {
+                let mut request = json!({});
+                request[name] = invalid;
+                assert!(optional_limit(&request, name, 4096).is_err());
+            }
+        }
+    }
 
     #[test]
     fn generated_constant_streams_have_complete_encoder_syntax() {

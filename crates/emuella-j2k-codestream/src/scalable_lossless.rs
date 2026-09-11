@@ -317,6 +317,31 @@ pub fn encode_lossless_d2_execution_profiled(
     Ok((bytes, timings, execution))
 }
 
+/// Test-support observation of the existing bypass writer; not headline timing.
+#[cfg(all(feature = "std", feature = "test-fixtures"))]
+pub fn encode_lossless_d2_bypass_execution_profiled(
+    width: u32,
+    height: u32,
+    bits: u8,
+    planes: &[LosslessD2Plane<'_>],
+    limits: LosslessEncodeLimits,
+) -> Result<(Vec<u8>, LosslessEncodeTimings, LosslessEncodeExecution)> {
+    let start = EncodeClock::start::<true>();
+    let mut timings = LosslessEncodeTimings::default();
+    let mut execution = LosslessEncodeExecution::default();
+    let bytes = encode_lossless_d2_impl::<true, true>(
+        width,
+        height,
+        bits,
+        planes,
+        limits,
+        &mut timings,
+        &mut execution,
+    )?;
+    timings.total_ns = start.ns();
+    Ok((bytes, timings, execution))
+}
+
 /// Encode the bounded profile without packed input or complete packet copies.
 /// Eight unsigned U16 components are coded independently without MCT.
 pub fn encode_lossless_d2(
@@ -528,6 +553,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
                     continue;
                 }
                 if BYPASS {
+                    let start = EncodeClock::start::<PROFILE>();
                     let (band, lengths) = bypass::encode_subband(
                         width,
                         plane,
@@ -537,6 +563,20 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
                         maximum,
                         &mut scratch,
                     )?;
+                    if PROFILE {
+                        // Serial bypass includes its subband preparation and
+                        // output appends in this interval, unlike the parallel
+                        // collector's separate assembly interval.
+                        timings.tier1_ns += start.ns();
+                        for block in &band.code_blocks {
+                            timings.checked_tier1_blocks += 1;
+                            timings.included_tier1_blocks += u64::from(block.included);
+                            timings.tier1_coefficients +=
+                                u64::from(block.width) * u64::from(block.height);
+                            timings.tier1_coding_passes += u64::from(block.coding_passes);
+                            timings.tier1_codeword_bytes += block.segment_len as u64;
+                        }
+                    }
                     bands.push(band);
                     bypass_lengths.push(lengths);
                     continue;

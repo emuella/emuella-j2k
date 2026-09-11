@@ -320,8 +320,9 @@ output reallocation overlap. This is requested allocation traffic, not RSS.
 The example-only allocator follows the existing allocation probe's forwarding
 contract and is never linked into codec libraries.
 
-Clock reads and the allocation meter perturb execution. Production collection
-is qualified only at one worker, where the ordinary tile, block and component
+Clock reads and the allocation meter perturb execution. The production-path
+`lossless_diagnostics` decoder collector is qualified only at one worker,
+where the ordinary tile, block and component
 parallel gates are also closed. Its full-D2 dispatch keeps the ordinary adaptive
 backend, fused conversion and packing branches. It is not proof of parallel
 fidelity or an uninstrumented throughput result. Use a separate ordinary process
@@ -391,3 +392,34 @@ joined-error checks, and its Mansfield development gate retained serial
 performance while improving eight-worker encoding. The source identities,
 per-case intervals, allocation and CPU observations, and remaining qualification
 boundary are recorded in [the parallel qualification](tier1-parallel-qualification.md).
+
+## Explicit consumer contexts and bypass execution observations
+
+The test-support `lossless_bypass_batch` request accepts `execution_context` as
+`direct_global` or `nested_pool` (the historical default). The former configures
+the process-global pool and invokes the facade from an ordinary application
+thread. The latter uses a local `ThreadPool::install`, preserving the decoder's
+existing nested-call guard. Requirements are queried in the same context as
+encoding. Optional `max_working_bytes` and `max_output_bytes` set explicit
+application limits; omitted values preserve the previous production defaults.
+Neither pool width nor an admission query is proof of actual decode participants.
+
+Its separate `profile` operation emits no headline samples. It records native
+encoder stages, effective slots and observed distinct Tier-1 participants,
+checks ordinary facade byte parity and reconstructs every sample. The
+`test-fixtures`-gated `encode_lossless_d2_bypass_execution_profiled` observes the
+existing bypass writer without changing ordinary scheduling or coding. Serial
+bypass's Tier-1 interval includes subband preparation and output appends; this
+combined boundary is labelled in the example output. Parallel bypass retains
+separate preparation and assembly intervals. Parallel decoder stage telemetry is unavailable in this collector and remains
+explicitly null. The separate `decode_diagnostic` operation records Linux task
+CPU ticks before/after the ordinary facade call and before verification, including
+named Rayon workers. Positive deltas bound actual active workers from below;
+they do not identify Tier-1 stages or exhaustively count participating workers.
+
+The allocation-only example accepts optional `WORKING_BYTES OUTPUT_BYTES` after
+its original arguments so resource probes can use the same application limits.
+Requested allocation peaks, whole-process RSS and ordinary operation timings
+remain different observations. The authored `lossless_bypass` integration test
+checks direct/nested sample parity, same-context requirements and unchanged
+encoder bytes across one/eight-worker pools. No public struct or default changes.
