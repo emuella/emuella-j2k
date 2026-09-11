@@ -266,3 +266,105 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
         }
     }
 }
+
+/// Consumer calls outside Rayon retain the decoder's direct dispatch path;
+/// nested calls retain its existing guard and must reconstruct identical data.
+#[cfg(feature = "parallel")]
+#[test]
+fn direct_and_nested_consumer_decode_retain_samples_and_requirements() {
+    assert!(rayon::current_thread_index().is_none());
+    let width = 769;
+    let height = 513;
+    for (components, bits) in [(1, 16), (3, 8), (3, 16), (8, 16)] {
+        let raw = samples(width, height, components, bits);
+        let info = info(
+            width,
+            height,
+            components,
+            bits,
+            ComponentLayout::Interleaved,
+        );
+        let view = ImageView::Interleaved {
+            info: &info,
+            samples: &raw,
+            stride_bytes: width as usize * components as usize * usize::from(bits / 8),
+        };
+        for style in [0, 1] {
+            let encode = if style == 0 {
+                encode_with_limits
+            } else {
+                encode_lossless_bypass_with_limits
+            };
+            let query = if style == 0 {
+                lossless_encode_requirements
+            } else {
+                lossless_bypass_encode_requirements
+            };
+            let direct = encode(view, &options(), &LosslessEncodeLimits::default()).unwrap();
+            verify(&direct, &raw);
+            for workers in [1, 8] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    assert!(rayon::current_thread_index().is_some());
+                    assert_eq!(rayon::current_num_threads(), workers);
+                    let requirements =
+                        query(&info, &options(), &LosslessEncodeLimits::default()).unwrap();
+                    assert!(requirements.working_bytes > raw.len() as u64);
+                    assert_eq!(
+                        direct,
+                        encode(view, &options(), &LosslessEncodeLimits::default()).unwrap()
+                    );
+                    verify(&direct, &raw);
+                });
+            }
+        }
+    }
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn bypass_profile_observes_real_workers_and_retains_ordinary_bytes() {
+    use emuella_j2k_codestream as cs;
+    let width = 769;
+    let height = 513;
+    let raw = samples(width, height, 1, 16);
+    let planes = [cs::LosslessD2Plane {
+        samples: &raw,
+        stride_bytes: width as usize * 2,
+        sample_step_bytes: 2,
+    }];
+    for workers in [1, 8] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let (encoded, timings, execution) = cs::encode_lossless_d2_bypass_execution_profiled(
+                width,
+                height,
+                16,
+                &planes,
+                cs::LosslessEncodeLimits::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                encoded,
+                cs::encode_lossless_d2_bypass(
+                    width,
+                    height,
+                    16,
+                    &planes,
+                    cs::LosslessEncodeLimits::default()
+                )
+                .unwrap()
+            );
+            assert_eq!(execution.effective_workers, workers);
+            assert!((1..=workers).contains(&execution.participating_workers));
+            assert!(timings.tier1_ns > 0);
+            assert!(timings.tier1_coefficients > 0);
+        });
+    }
+}

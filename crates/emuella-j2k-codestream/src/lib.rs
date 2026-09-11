@@ -108,6 +108,8 @@ const fn parallel_decode_dispatch_available() -> bool {
 }
 
 mod scalable_lossless;
+#[cfg(all(feature = "std", feature = "test-fixtures"))]
+pub use scalable_lossless::encode_lossless_d2_bypass_execution_profiled;
 #[cfg(feature = "test-fixtures")]
 pub use scalable_lossless::encode_lossless_d2_bypass_test_fixture;
 pub use scalable_lossless::{

@@ -251,6 +251,18 @@ fn run() -> Result<Value> {
         return Err("usage: lossless_bypass_batch REQUEST.json".into());
     }
     let request: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
+    let limits = api::LosslessEncodeLimits {
+        max_working_bytes: request["max_working_bytes"]
+            .as_u64()
+            .unwrap_or(4 * 1024 * 1024 * 1024),
+        max_output_bytes: request["max_output_bytes"]
+            .as_u64()
+            .unwrap_or(1024 * 1024 * 1024),
+    };
+    let native_limits = cs::LosslessEncodeLimits {
+        max_working_bytes: limits.max_working_bytes,
+        max_output_bytes: limits.max_output_bytes,
+    };
     let width = u32::try_from(number(&request, "width")?)?;
     let height = u32::try_from(number(&request, "height")?)?;
     let components = usize::try_from(number(&request, "components")?)?;
@@ -269,8 +281,10 @@ fn run() -> Result<Value> {
     if !matches!(workers, 1 | 2 | 4 | 8) {
         return Err("unsupported pool width".into());
     }
-    if !matches!(operation, "prepare" | "encode" | "decode")
-        || style > 1
+    if !matches!(
+        operation,
+        "prepare" | "encode" | "decode" | "profile" | "requirements"
+    ) || style > 1
         || !matches!(components, 1 | 3 | 8)
         || !matches!(bits, 8 | 16)
     {
@@ -281,22 +295,23 @@ fn run() -> Result<Value> {
         "interleaved" => false,
         _ => return Err("invalid layout".into()),
     };
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()?;
-    pool.install(|| {
-        let requirements = if style == 0 {
-            cs::lossless_d2_requirements
-        } else {
-            cs::lossless_d2_bypass_requirements
-        };
-        requirements(
-            width,
-            height,
-            components as u16,
-            cs::LosslessEncodeLimits::default(),
-        )
-    })?;
+    let context = request["execution_context"]
+        .as_str()
+        .unwrap_or("nested_pool");
+    let pool = match context {
+        "nested_pool" => Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()?,
+        ),
+        "direct_global" => {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build_global()?;
+            None
+        }
+        _ => return Err("unsupported execution context".into()),
+    };
     let sample_bytes = usize::from(bits / 8);
     let pixels = (width as usize)
         .checked_mul(height as usize)
@@ -421,6 +436,28 @@ fn run() -> Result<Value> {
         }
         Ok(())
     };
+    let query = || {
+        let query = if style == 0 {
+            api::lossless_encode_requirements
+        } else {
+            api::lossless_bypass_encode_requirements
+        };
+        query(&info, &options, &limits)
+    };
+    let requirements = if let Some(pool) = &pool {
+        pool.install(query)
+    } else {
+        query()
+    }?;
+    if operation == "requirements" {
+        return Ok(
+            json!({"operation":operation,"execution_context":context,"workers":workers,
+            "requirements_working_bytes":requirements.working_bytes,
+            "output_capacity_limit":requirements.output_capacity_limit,
+            "total_component_samples":requirements.total_component_samples,
+            "max_working_bytes":limits.max_working_bytes,"max_output_bytes":limits.max_output_bytes}),
+        );
+    }
     let encode = || -> Result<Vec<u8>> {
         if facade {
             let encode = if style == 0 {
@@ -428,27 +465,18 @@ fn run() -> Result<Value> {
             } else {
                 api::encode_lossless_bypass_with_limits
             };
-            Ok(encode(
-                view,
-                &options,
-                &api::LosslessEncodeLimits::default(),
-            )?)
+            Ok(encode(view, &options, &limits)?)
         } else {
             let encode = if style == 0 {
                 cs::encode_lossless_d2
             } else {
                 cs::encode_lossless_d2_bypass
             };
-            Ok(encode(
-                width,
-                height,
-                bits,
-                &planes,
-                cs::LosslessEncodeLimits::default(),
-            )?)
+            Ok(encode(width, height, bits, &planes, native_limits)?)
         }
     };
-    let (elapsed, actual_hash, stream_bytes, syntax) = pool.install(|| -> Result<_> {
+    let mut diagnostics = Value::Null;
+    let mut operation_call = || -> Result<_> {
         if rayon::current_num_threads() != workers {
             return Err("unexpected pool width".into());
         }
@@ -474,11 +502,33 @@ fn run() -> Result<Value> {
             ))
         } else {
             let start = Instant::now();
-            let encoded = encode()?;
+            let encoded = if operation == "profile" {
+                let profile = if style == 0 {
+                    cs::encode_lossless_d2_execution_profiled
+                } else {
+                    cs::encode_lossless_d2_bypass_execution_profiled
+                };
+                let (encoded, t, e) = profile(width, height, bits, &planes, native_limits)?;
+                diagnostics = json!({"boundary":"instrumented_native_encoder", "total_ns":t.total_ns,
+                    "conversion_level_shift_rct_ns":t.conversion_level_shift_rct_ns,
+                    "forward_dwt_ns":t.forward_dwt_ns,"block_preparation_ns":t.block_preparation_ns,
+                    "tier1_ns":t.tier1_ns, "serial_bypass_tier1_includes_subband_preparation_and_appends":style == 1 && e.effective_workers == 1,"packet_headers_ns":t.packet_headers_ns,"assembly_ns":t.assembly_ns,
+                    "effective_workers":e.effective_workers,"participating_workers":e.participating_workers,
+                    "max_batch_blocks":e.max_batch_blocks,"tier1_coefficients":t.tier1_coefficients,
+                    "checked_tier1_blocks":t.checked_tier1_blocks,"tier1_coding_passes":t.tier1_coding_passes,
+                    "tier1_codeword_bytes":t.tier1_codeword_bytes,
+                    "decode_parallel_stage_telemetry":null});
+                if encoded != encode()? {
+                    return Err("profiled and facade bytes differ".into());
+                }
+                encoded
+            } else {
+                encode()?
+            };
             let elapsed = u64::try_from(start.elapsed().as_nanos())?;
             let syntax = profile(&encoded, width, height, components, bits, style)?;
             let actual_hash = hash(&encoded);
-            if operation == "encode" && actual_hash != expected_hash {
+            if operation != "prepare" && actual_hash != expected_hash {
                 return Err("encoded stream changed".into());
             }
             if facade {
@@ -496,16 +546,23 @@ fn run() -> Result<Value> {
             }
             Ok((elapsed, actual_hash, encoded.len(), syntax))
         }
-    })?;
+    };
+    let (elapsed, actual_hash, stream_bytes, syntax) = if let Some(pool) = &pool {
+        pool.install(operation_call)
+    } else {
+        operation_call()
+    }?;
     Ok(json!({
         "schema_version": 1, "contrast": "native_d2_style0_vs_style1", "operation": operation,
         "case_id": string(&request, "case_id")?, "round": number(&request, "round")?,
         "style": style, "width": width, "height": height, "components": components, "bits": bits,
         "layout": string(&request, "layout")?, "rct": components == 3, "native_exact": true,
         "raw_sha256": raw_sha, "stream_sha256": actual_hash, "complete_stream_bytes": stream_bytes,
-        "encoder_syntax": syntax,
+        "encoder_syntax": syntax, "diagnostics": diagnostics, "execution_context": context,
+        "requirements_working_bytes": requirements.working_bytes,
+        "max_working_bytes":limits.max_working_bytes,"max_output_bytes":limits.max_output_bytes,
         "binary_sha256": hash(&fs::read(std::env::current_exe()?)?), "parallel": true, "simd": false, "workers": workers,
-        "samples_ns": if operation == "prepare" { Vec::<u64>::new() } else { vec![elapsed] },
+        "samples_ns": if matches!(operation, "prepare" | "profile") { Vec::<u64>::new() } else { vec![elapsed] },
         "warmup": 0, "samples_per_batch": 1, "boundary": boundary,
         "decode_output": if facade { "owned_facade_image_in_requested_layout" } else { "owned_native_component_planes" }, "input_policy": "loaded_and_hash_checked_before_clock",
         "context_policy": "fresh_process_per_batch", "verification": "outside_clock_every_sample",

@@ -391,3 +391,31 @@ joined-error checks, and its Mansfield development gate retained serial
 performance while improving eight-worker encoding. The source identities,
 per-case intervals, allocation and CPU observations, and remaining qualification
 boundary are recorded in [the parallel qualification](tier1-parallel-qualification.md).
+
+## Explicit consumer contexts and bypass execution observations
+
+The test-support `lossless_bypass_batch` request accepts `execution_context` as
+`direct_global` or `nested_pool` (the historical default). The former configures
+the process-global pool and invokes the facade from an ordinary application
+thread. The latter uses a local `ThreadPool::install`, preserving the decoder's
+existing nested-call guard. Requirements are queried in the same context as
+encoding. Optional `max_working_bytes` and `max_output_bytes` set explicit
+application limits; omitted values preserve the previous production defaults.
+Neither pool width nor an admission query is proof of actual decode participants.
+
+Its separate `profile` operation emits no headline samples. It records native
+encoder stages, effective slots and observed distinct Tier-1 participants,
+checks ordinary facade byte parity and reconstructs every sample. The
+`test-fixtures`-gated `encode_lossless_d2_bypass_execution_profiled` observes the
+existing bypass writer without changing ordinary scheduling or coding. Serial
+bypass's Tier-1 interval includes subband preparation and output appends; this
+combined boundary is labelled in the example output. Parallel bypass retains
+separate preparation and assembly intervals. Parallel decoder stage and worker
+telemetry is unavailable in this collector and remains explicitly null.
+
+The allocation-only example accepts optional `WORKING_BYTES OUTPUT_BYTES` after
+its original arguments so resource probes can use the same application limits.
+Requested allocation peaks, whole-process RSS and ordinary operation timings
+remain different observations. The authored `lossless_bypass` integration test
+checks direct/nested sample parity, same-context requirements and unchanged
+encoder bytes across one/eight-worker pools. No public struct or default changes.

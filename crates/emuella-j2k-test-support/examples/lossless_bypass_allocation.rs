@@ -13,9 +13,9 @@ fn hash(bytes: &[u8]) -> String {
 }
 fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 8 {
+    if !matches!(args.len(), 8 | 10) {
         return Err(
-            "usage: lossless_bypass_allocation RAW WIDTH HEIGHT COMPONENTS BITS WORKERS STYLE"
+            "usage: lossless_bypass_allocation RAW WIDTH HEIGHT COMPONENTS BITS WORKERS STYLE [WORKING_BYTES OUTPUT_BYTES]"
                 .into(),
         );
     }
@@ -66,7 +66,14 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     pool.broadcast(|_| ());
     // Diagnose the admitted production envelope, including large complete
     // streams; report the exact queried bound alongside the observed peak.
-    let limits = LosslessEncodeLimits::default();
+    let limits = if args.len() == 10 {
+        LosslessEncodeLimits {
+            max_working_bytes: args[8].parse()?,
+            max_output_bytes: args[9].parse()?,
+        }
+    } else {
+        LosslessEncodeLimits::default()
+    };
     let requirements = pool.install(|| {
         if style == 0 {
             lossless_encode_requirements(&info, &options, &limits)
