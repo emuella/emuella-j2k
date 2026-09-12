@@ -257,10 +257,6 @@ fn encode_tiled_internal(
         // A fixed allowance admits narrow boundary tiles without assigning a
         // negative packet budget. Total overhead remains bounded by tile count.
         let budget = raw_budget.checked_add(128).ok_or_else(resource_error)?;
-        eprintln!(
-            "A_DIAG tile ordinal={ordinal} width={} height={} budget={budget}",
-            rect.width, rect.height
-        );
         let (tile, _, _) = ht_lossy::search_tile_levels(
             rect.width,
             rect.height,
