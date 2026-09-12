@@ -348,7 +348,12 @@ fn candidate(
                     if scaled_magnitude > i32::MAX as f32 {
                         return Err(CodestreamError::SizeOverflow);
                     }
-                    let magnitude = scaled_magnitude as i32;
+                    // Temporary frozen first-bin policy; later quantisation bins are unchanged.
+                    let magnitude = if scaled_magnitude < 1.0 && scaled_magnitude >= 0.875 {
+                        1
+                    } else {
+                        scaled_magnitude as i32
+                    };
                     if magnitude >= (1 << 17) {
                         return Ok(None);
                     }

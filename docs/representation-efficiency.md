@@ -41,3 +41,10 @@ independent decoder reconstruction, regional/native/WASM and merged-owner proof.
 Missing mandatory evidence blocks promotion. At most one policy can be frozen;
 reserved results cannot drive retuning. Rejection retains all outcomes and removes
 unsuccessful production experiments. Final findings and evidence follow below.
+
+Selection was bound before any probe encode or result: at least one RGB product
+must newly pass every existing frozen screen quality and actual-byte gate, and
+PAN16 must retain its pass and resource contract. A PAN16-only gain is insufficient.
+Rank eligible policies by number of newly passing RGB products, then lowest
+worst RGB16 frozen-cell RMSE, then lower actual image payload, then the threshold
+closest to baseline. Fixed-step transformed error cannot select a policy.
