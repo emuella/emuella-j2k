@@ -349,7 +349,7 @@ fn candidate(
                         return Err(CodestreamError::SizeOverflow);
                     }
                     // Temporary frozen first-bin policy; later quantisation bins are unchanged.
-                    let magnitude = if scaled_magnitude < 1.0 && scaled_magnitude >= 0.75 {
+                    let magnitude = if scaled_magnitude < 1.0 && scaled_magnitude >= 0.5 {
                         1
                     } else {
                         scaled_magnitude as i32
