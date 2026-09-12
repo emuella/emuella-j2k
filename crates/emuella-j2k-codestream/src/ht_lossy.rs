@@ -250,6 +250,7 @@ pub(super) fn search_tile_levels(
             &mut quantized_planes,
         )?
         else {
+            eprintln!("A_DIAG visit coarseness={midpoint} rejected=magnitude-admission");
             lower = midpoint + 1;
             continue;
         };
@@ -263,6 +264,10 @@ pub(super) fn search_tile_levels(
             lower = midpoint + 1;
         }
     }
+    eprintln!(
+        "A_DIAG selected coarseness={selected} visits={visits} bytes={} budget={budget}",
+        best.len()
+    );
     Ok((best, selected, visits))
 }
 
@@ -376,6 +381,56 @@ fn candidate(
         }
         component_subbands.push(subbands);
     }
+    // Temporary bounded calibration instrumentation; no samples leave the codec.
+    for (component, ((source, quantized), subbands)) in transformed_planes
+        .iter()
+        .zip(quantized_planes.iter())
+        .zip(component_subbands.iter())
+        .enumerate()
+    {
+        for ((spec, step), subband) in specs.iter().zip(&qcd_steps).zip(subbands) {
+            let gain = match spec.kind {
+                PacketSubbandKind::LowLow => 0,
+                PacketSubbandKind::HighLow | PacketSubbandKind::LowHigh => 1,
+                PacketSubbandKind::HighHigh => 2,
+            };
+            let delta = f64::from(
+                step.delta(bits_per_sample, gain)
+                    .map_err(|_| CodestreamError::SizeOverflow)?,
+            );
+            let mut error = 0_f64;
+            let mut alternatives = [0_f64; 3];
+            let mut changed = [0_u64; 3];
+            let mut zeros = 0_u64;
+            for y in 0..spec.height as usize {
+                for x in 0..spec.width as usize {
+                    let i = (spec.y as usize + y) * stride + spec.x as usize + x;
+                    let value = f64::from(source[i]).abs();
+                    let q = quantized[i].unsigned_abs();
+                    let restored = if q == 0 {
+                        0.0
+                    } else {
+                        (f64::from(q) + 0.5) * delta
+                    };
+                    error += (value - restored).powi(2);
+                    zeros += u64::from(q == 0);
+                    for (j, threshold) in [0.875, 0.75, 0.5].iter().enumerate() {
+                        let promote = q == 0 && value >= threshold * delta;
+                        let proposed = if promote { 1.5 * delta } else { restored };
+                        alternatives[j] += (value - proposed).powi(2);
+                        changed[j] += u64::from(promote);
+                    }
+                }
+            }
+            let body: usize = subband.code_blocks.iter().map(|b| b.segment_len).sum();
+            eprintln!(
+                "A_DIAG band coarseness={coarseness} component={component} subband={} resolution={} samples={} delta={delta} body={body} sse={error} zeros={zeros} alternative_sse={alternatives:?} changed={changed:?}",
+                spec.index,
+                spec.resolution,
+                u64::from(spec.width) * u64::from(spec.height)
+            );
+        }
+    }
     let capacity = native_decomp_packet_capacity_hint(&component_subbands, &segments)?;
     if capacity > MAX_CODESTREAM_BYTES {
         return Err(resource_error());
@@ -407,6 +462,10 @@ fn candidate(
     if codestream.len() + packet.len() + 16 > MAX_CODESTREAM_BYTES {
         return Err(resource_error());
     }
+    eprintln!(
+        "A_DIAG visit coarseness={coarseness} bytes={}",
+        codestream.len() + packet.len() + 16
+    );
     Ok(Some(EncodedLossyTile {
         header: codestream,
         packets: packet,
