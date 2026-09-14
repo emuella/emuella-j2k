@@ -136,6 +136,20 @@ Requested allocation bytes are not process RSS. The allowance includes
 conservative output growth overlap; it does not infer a smaller peak by
 subtracting final output capacity from a peak observed at a different time.
 
+The opt-in [incremental encoder experiment](tier1-implementation.md#incremental-encoder-state-experiment)
+retains this allowance and worker admission. The scalable writer only supplies
+blocks with axes at most 64, so each padded scratch buffer has at most 4,356
+cells. Packed `u16` state, `u8` signs and `u32` magnitudes use 30,492 bytes at
+that shape; the independent reference buffers use 34,848 bytes at exact lengths.
+Packed buffers reserve exact growth and retain their capacities for reuse.
+Authored checks account for both implementations' retained capacities, scratch
+bookkeeping, a scratch reallocation overlap, codeword and segment-collector
+capacities. Scratch fits within 192 KiB with this overlap on the checked target;
+the existing conservative codeword growth envelope, bounded segment records and
+slot bookkeeping still fit the 4 MiB worker term. This resource observation is
+separate from throughput qualification. Wider legal low-level Tier-1 blocks use
+reference encoding and are outside this scalable writer's geometry invariant.
+
 `encode_into` keeps its append semantics and uses the default owned encoder as
 staging. The caller's existing output and its growth are outside this owned
 invocation's limit. Callers requiring the explicit allocation contract should

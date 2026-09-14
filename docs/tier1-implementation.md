@@ -108,3 +108,48 @@ measured the existing neighbour bitboard as a replacement for the first-refineme
 presence query. The bounded probe preserved exactness but did not meet the
 full-image 5% practical improvement gate, so the production implementation was
 retained.
+
+## Incremental encoder state experiment
+
+An experimental encoder stores eight directional neighbour-significance bits
+and the significant, visited and refined flags in one `u16` per padded cell.
+First significance updates the surrounding cells. Magnitude remains a full
+`u32` and sign remains separate, preserving the low-level encoder's accepted
+`i32::MIN` magnitude. The implementation retains stripe/column/row traversal,
+the existing context formulas and the unchanged MQ/raw writer. The reference
+encoder keeps its own state preparation, neighbourhood gathering and pass loops.
+
+`EMUELLA_TIER1_ENCODER=packed` selects the experiment **at compile time** for
+style bytes 0 and 1 with each code-block axis at most 64. All other accepted
+styles and geometries use the reference. `EMUELLA_TIER1_ENCODER=reference`
+forces reference encoding; an unset value also selects reference. Any other
+value fails compilation. The selector performs no runtime environment access
+and changes no public API or profile admission. Record its build-time value
+alongside source and binary identities when comparing builds. Selection of the
+experiment does not establish full-image qualification or change the default.
+
+Authored unit tests compare MQ context/decision and raw decision traces, scan
+positions, pass boundaries, segment termination lengths, complete bytes and
+encode metadata. Coverage includes all four subbands, 1–32 magnitude planes,
+missing planes, partial stripes, wide-shape/style fallback, strided input,
+output prefixes, known-maximum zero handling and reuse after errors. The trace
+wrapper delegates to the same entropy writer and is compiled only for unit
+tests. It limits recorded events to a block's decision and boundary envelope;
+its fields, allocation and calls are absent from ordinary libraries, including
+builds with `test-fixtures` enabled.
+
+The separate `encoder_replay` example uses authored dense, sparse, patch and
+diagonal patterns in 64×64 and 17×11 blocks, all subbands, both styles, and
+1-, 8-, 16-, 24- and 30-bit magnitudes. It verifies reconstruction with the
+checked, dense and sparse decoders outside the timed encoder loop:
+
+```sh
+EMUELLA_TIER1_ENCODER=packed cargo run --profile perf \
+  -p emuella-j2k-tier1 --example encoder_replay -- 32
+```
+
+Its optional second argument writes project-authored bytes together with
+length-prefixed segment lengths, coding-pass counts and missing-plane counts.
+Run identical example source against both builds and compare that output
+byte for byte. Replay timing is a mechanism probe; full-image promotion
+requires separate matched facade measurements.
