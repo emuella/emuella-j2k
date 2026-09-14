@@ -42,7 +42,7 @@ the termination fill required by the selected style. Segment boundaries are
 represented explicitly by `CodeBlockSegment` rather than inferred from a
 lookahead byte in adjacent codestream storage.
 
-Coefficient state uses three named booleans: significant, visited in the
+Reference coefficient state uses three named booleans: significant, visited in the
 current significance-propagation pass, and magnitude-refined. Neighbourhoods
 use eight named directions from Figure D.2. Sign-coding and magnitude-refinement
 labels use the project-authored formulas.
@@ -52,7 +52,7 @@ horizontal, vertical and diagonal significance counts; it occupies 180 bytes
 without dynamic allocation. The original formula remains the generator and
 oracle, and the checked decoder continues to evaluate it directly. Exhaustive tests check all 256 neighbourhood masks in all four subbands,
 direction-to-count mapping and collision-free coverage of the count index.
-There are no packed context-state words in the checked implementation.
+The reference encoder and checked decoder do not use packed coefficient-state words.
 
 The dense and sparse packed decoders remain Emuella performance backends, but
 they call the same Annex C arithmetic decoder and use equivalent context
@@ -109,9 +109,9 @@ presence query. The bounded probe preserved exactness but did not meet the
 full-image 5% practical improvement gate, so the production implementation was
 retained.
 
-## Incremental encoder state experiment
+## Packed classic encoder
 
-An experimental encoder stores eight directional neighbour-significance bits
+The default encoder stores eight directional neighbour-significance bits
 and the significant flag in one `u16` per padded cell. First significance
 updates the surrounding cells. Magnitude remains a full
 `u32` and sign remains separate, preserving the low-level encoder's accepted
@@ -119,7 +119,7 @@ updates the surrounding cells. Magnitude remains a full
 the existing context formulas and the unchanged MQ/raw writer. The reference
 encoder keeps its own state preparation, neighbourhood gathering and pass loops.
 
-The ordered traversal variant additionally groups four rows and sixteen columns
+Ordered traversal groups four rows and sixteen columns
 into each 64-bit word. Separate words track significance, neighbour presence,
 visitation, refinement and valid positions; at most 64 such groups cover an
 eligible block. Bit order follows stripe/column/row coding order. Significance
@@ -130,17 +130,19 @@ not visited during significance propagation, and cleanup retains four-row run
 decisions while skipping unavailable positions. Visit clearing touches the
 bounded word array. Authored checks exhaust every eligible geometry's validity
 mask and explicitly exercise live propagation across bit 63, word boundaries,
-partial stripes and already-consumed positions. The preceding incremental-cell
-variant remains a separate checkpoint for development comparisons.
+partial stripes and already-consumed positions.
 
-`EMUELLA_TIER1_ENCODER=packed` selects the experiment **at compile time** for
-style bytes 0 and 1 with each code-block axis at most 64. All other accepted
-styles and geometries use the reference. `EMUELLA_TIER1_ENCODER=reference`
-forces reference encoding; an unset value also selects reference. Any other
-value fails compilation. The selector performs no runtime environment access
-and changes no public API or profile admission. Record its build-time value
-alongside source and binary identities when comparing builds. Selection of the
-experiment does not establish full-image qualification or change the default.
+The packed backend is the default for style bytes 0 and 1 with each code-block
+axis at most 64. Other accepted styles and geometries use the independent
+reference encoder. `EMUELLA_TIER1_ENCODER=reference` forces reference encoding
+**at compile time**; `EMUELLA_TIER1_ENCODER=packed` explicitly selects the default
+policy, including its fallback. An unset value selects that same default.
+Any other value fails compilation. There is no runtime environment access or
+change to public APIs, profile admission, entropy coding or scheduling. Record
+the build-time selector alongside source and binary identities for comparisons.
+An authored test calls every scratch-based entry point and checks which scratch
+buffers actually receive state, under both the default and forced-reference
+builds, while checking exact bytes against independent reference encoding.
 
 Authored unit tests compare MQ context/decision and raw decision traces, scan
 positions, pass boundaries, segment termination lengths, complete bytes and
@@ -165,5 +167,26 @@ EMUELLA_TIER1_ENCODER=packed cargo run --profile perf \
 Its optional second argument writes project-authored bytes together with
 length-prefixed segment lengths, coding-pass counts and missing-plane counts.
 Run identical example source against both builds and compare that output
-byte for byte. Replay timing is a mechanism probe; full-image promotion
-requires separate matched facade measurements.
+byte for byte. Replay timing remains a mechanism probe; it does not substitute
+for matched full-image facade measurements.
+
+The retained backend was selected using development inputs before the frozen
+confirmation cohort was measured. Confirmation used twenty alternating
+fresh-process pairs, conservative 99% per-case intervals and a 5% practical
+threshold, with the existing lossless D2 profile, parallel enabled and SIMD
+disabled. All 1,920 RarePlanes confirmation invocations were exact. All six
+primary one-worker contrasts improved; across the nine-product cohort, 35 of
+36 encode comparisons improved. Eight-worker Boca Raton RGB8 bypass remained
+inconclusive. The six one-worker decode comparisons were equivalent and the
+six eight-worker decode comparisons remained inconclusive; no comparison
+established a practical regression against reference encoding.
+
+Separate SpaceNet RGB16 regression coverage passed all 960 exact invocations
+and improved all 24 encode comparisons. It covered the twelve fixed Vegas,
+Paris and Shanghai chips; Khartoum remained excluded. Independent exact-stream
+OpenJPEG evidence was reused only where the stream identity and execution
+conditions matched. The broader matched OpenJPEG anchor remained mixed and
+was not the promotion criterion. Detailed timing tables, estimator provenance
+and external-anchor results belong to the benchmark component. These results
+qualify the measured profile and cohorts, not unmeasured profiles, input
+families or thread counts.

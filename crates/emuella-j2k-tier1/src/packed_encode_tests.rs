@@ -62,6 +62,77 @@ fn assert_trace_equal(reference: &[encode_trace::Event], packed: &[encode_trace:
 }
 
 #[test]
+fn encoder_build_selection_routes_real_entry_points_and_scratch() {
+    let forced_reference = option_env!("EMUELLA_TIER1_ENCODER") == Some("reference");
+    let source = coefficients(17, 11, 16, 0);
+    for style in [0, 1] {
+        let spec = spec(17, 11, 16, style, Subband::HighLow);
+        let mut expected = vec![0x23, 0xff];
+        let expected_result = encode_baseline_code_block_with_scratch(
+            &source,
+            spec,
+            &mut expected,
+            &mut scratch(false, false),
+        )
+        .unwrap();
+        for route in 0..5 {
+            // Use ordinary construction: the build selection must own routing.
+            let mut work = CodeBlockEncodeScratch::new();
+            let mut actual = vec![0x23, 0xff];
+            let mut lengths = Vec::new();
+            let result = match route {
+                0 => encode_baseline_code_block_with_scratch(&source, spec, &mut actual, &mut work),
+                1 => encode_baseline_code_block_segments_with_scratch(
+                    &source,
+                    spec,
+                    &mut actual,
+                    &mut lengths,
+                    &mut work,
+                ),
+                2 => encode_baseline_code_block_with_known_max_scratch(
+                    &source,
+                    65535,
+                    spec,
+                    &mut actual,
+                    &mut work,
+                ),
+                3 => encode_baseline_code_block_with_strided_scratch(
+                    &source,
+                    17,
+                    spec,
+                    &mut actual,
+                    &mut work,
+                ),
+                _ => encode_baseline_code_block_segments_with_strided_scratch(
+                    &source,
+                    17,
+                    spec,
+                    &mut actual,
+                    &mut lengths,
+                    &mut work,
+                ),
+            }
+            .unwrap();
+            assert_eq!(result, expected_result);
+            assert_eq!(actual, expected);
+            assert!(work.backend_override.is_none());
+            if forced_reference {
+                assert!(!work.coefficient_states.is_empty());
+                assert_eq!(work.packed.capacities(), [0; 4]);
+            } else {
+                assert!(work.coefficient_states.is_empty());
+                assert!(
+                    work.packed
+                        .capacities()
+                        .into_iter()
+                        .all(|capacity| capacity > 0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn packed_encoder_matches_reference_decisions_bytes_segments_and_reconstruction() {
     let shapes = [
         (1, 1),

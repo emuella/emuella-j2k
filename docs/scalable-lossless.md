@@ -119,8 +119,8 @@ actual allocation lifetimes:
   its old allocation during reallocation, plus padded Tier-1 state and small
   local vectors fit the 4 MiB per-slot term, including the slot-array allocation. Scratch and
   codeword vector capacities are retained and reused across batches and subbands. U8/U16 RCT followed by four one-dimensional
-  lifting stages stays below this bitplane bound; coding remains the existing
-  baseline Tier-1 implementation.
+  lifting stages stays below this bitplane bound. The packed Tier-1 backend
+  preserves reference coding decisions and complete codeword bytes.
 - 2*O deliberately covers both old and new output allocations during growth,
   even though one current output allocation is excluded from the definition
   of additional working memory. This extra conservatism also means the
@@ -136,12 +136,12 @@ Requested allocation bytes are not process RSS. The allowance includes
 conservative output growth overlap; it does not infer a smaller peak by
 subtracting final output capacity from a peak observed at a different time.
 
-The opt-in [incremental encoder experiment](tier1-implementation.md#incremental-encoder-state-experiment)
+The default [packed classic encoder](tier1-implementation.md#packed-classic-encoder)
 retains this allowance and worker admission. The scalable writer only supplies
 blocks with axes at most 64, so each padded scratch buffer has at most 4,356
 cells. Packed `u16` state, `u8` signs and `u32` magnitudes use 30,492 bytes at
 that shape; the independent reference buffers use 34,848 bytes at exact lengths.
-The ordered traversal variant adds at most 64 groups of five `u64` words,
+Ordered traversal adds at most 64 groups of five `u64` words,
 or 2,560 bytes, with a checked group size and capacity bound.
 Packed buffers reserve exact growth and retain their capacities for reuse.
 Authored checks account for both implementations' retained capacities, scratch
@@ -151,6 +151,11 @@ the existing conservative codeword growth envelope, bounded segment records and
 slot bookkeeping still fit the 4 MiB worker term. This resource observation is
 separate from throughput qualification. Wider legal low-level Tier-1 blocks use
 reference encoding and are outside this scalable writer's geometry invariant.
+Resource qualification passed 144 observations over nine products, both styles
+and 1/2/4/8 workers, preserving bytes, working requirements and output capacities.
+The maximum requested encoder peak was 366,357,664 bytes for packed encoding
+and 366,371,264 bytes for reference encoding under unchanged limits. These
+requested-allocation observations are separate from process RSS and timings.
 
 `encode_into` keeps its append semantics and uses the default owned encoder as
 staging. The caller's existing output and its growth are outside this owned
@@ -286,14 +291,14 @@ binary hash externally. Feature booleans reflect this example's feature
 selection; they do not assert that a particular SIMD kernel executed.
 
 Encode reports disjoint conversion/level-shift/RCT, forward DWT, subband and
-block preparation, checked Tier-1, packet header and assembly intervals.
+block preparation, selected Tier-1 encoding, packet header and assembly intervals.
 Assembly includes output appends, moving each current packet body to insert its
 header, and closure. Total also contains validation, accounting, local
 allocation/destruction and loop overhead; the remainder is reported explicitly.
 The Tier-1 interval includes its internal block preparation. Completed calls,
 included blocks, coefficient slots, coding passes and codeword bytes are actual
 work counters. Inner entropy-operation counts are unavailable and reported as
-`null`, not invented zeros. The writer uses the same checked baseline Tier-1 in bounded batches when
+`null`, not invented zeros. The writer uses the same selected Tier-1 backend in bounded batches when
 multiple workers are admitted. Its Tier-1 stage is elapsed batch wall time, not
 the sum of concurrent worker times; preparation within each job is included.
 The additive `encode_lossless_d2_execution_profiled` returns the encoded bytes,

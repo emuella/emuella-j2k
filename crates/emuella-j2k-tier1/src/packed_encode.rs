@@ -6,7 +6,7 @@
 use super::*;
 
 pub(super) const SELECTED: bool = match option_env!("EMUELLA_TIER1_ENCODER") {
-    None => false,
+    None => true,
     Some(value) => match value.as_bytes() {
         b"reference" => false,
         b"packed" => true,
