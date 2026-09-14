@@ -227,8 +227,10 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
         for (pool, workers) in pools.iter().zip([1u64, 2, 4, 8]) {
             pool.install(|| {
                 let req = lossless_bypass_encode_requirements(&image, &options(), &limits).unwrap();
-                assert!(req.working_bytes >= serial.working_bytes + (workers - 1) * (4 << 20));
-                assert!(req.working_bytes <= limits.max_working_bytes);
+                assert_eq!(
+                    req.working_bytes,
+                    serial.working_bytes + (workers - 1) * (4 << 20)
+                );
                 assert_eq!(
                     expected,
                     encode_lossless_bypass_with_limits(view, &options(), &limits).unwrap()

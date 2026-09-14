@@ -22,7 +22,7 @@ limit. Ordinary `encode` retains the previous routes for those cases,
 including 9–15-bit greyscale and previously accepted thin D2 images with
 axes below four or above 32768. Explicit limits continue to reject these shapes.
 HT APIs and all decoder admission rules remain unchanged. Eight-component full
-caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded joined code-block windows with the `parallel` feature,
+caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded code-block batches with the `parallel` feature,
 using the current Rayon pool and the explicit working-memory allowance.
 The one-worker path keeps the serial writer.
 
@@ -49,7 +49,7 @@ The additional raw length fields remain within the existing packet-header
 allowance. Each serial or parallel worker's temporary collector and codeword
 coexist with its fixed result record inside the existing 4 MiB local allowance.
 
-Parallel bypass follows the same bounded joined windows and stream-order
+Parallel bypass follows the same bounded joined batches and stream-order
 append policy. Each slot owns its collector; actual lengths follow the encoded
 block into packet assembly. Errors publish no owned output and every started
 batch is joined before an error returns. Reduced working budgets lower worker
@@ -90,9 +90,7 @@ and requirements struct shapes are unchanged. This is an adaptive pool policy;
 it uses the calling or global Rayon pool and does not construct a dedicated
 pool or promise an exact count of participating threads. The global pool may
 initialise on first use.
-A window contains at most N results (N ≤ 4W), and at most W Tier-1 calls execute at once.
-The original bound above chooses W first; the selected finite-window policy
-below funds N-W additional result slots and adds their charge to working_bytes.
+A batch contains at most W results, and at most W Tier-1 calls execute at once.
 Thread stacks and Rayon pool infrastructure belong to the caller's pool.
 
 `total_component_samples` is S, not P. The bound is a conservative admission
@@ -153,8 +151,9 @@ the existing conservative codeword growth envelope, bounded segment records and
 slot bookkeeping still fit the 4 MiB worker term. This resource observation is
 separate from throughput qualification. Wider legal low-level Tier-1 blocks use
 reference encoding and are outside this scalable writer's geometry invariant.
-Resource qualification passed 144 observations over nine products, both styles
-and 1/2/4/8 workers, preserving bytes, working requirements and output capacities.
+The historical [packed-kernel qualification](https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-encoder-kernel-results.md)
+passed 144 observations over nine products, both styles and 1/2/4/8 workers,
+preserving bytes, working requirements and output capacities.
 The maximum requested encoder peak was 366,357,664 bytes for packed encoding
 and 366,371,264 bytes for reference encoding under unchanged limits. These
 requested-allocation observations are separate from process RSS and timings.
@@ -382,8 +381,7 @@ wall timings. Exit requires exact streams and decoded samples at every worker
 count, bounded live results and scratch, joined failures, useful scaling and
 no meaningful one-worker regression; otherwise reject or revise this candidate.
 
-The original scheduler, retained as the tight-budget fallback, uses a fixed array
-of worker slots, each owning reusable Tier-1
+The candidate uses a fixed array of worker slots, each owning reusable Tier-1
 scratch and one compressed result. A batch contains at most one block per slot.
 All jobs finish before serial raster-order append and the next batch. Shared
 coefficient planes are immutable during coding. Output-budget errors after a
@@ -482,49 +480,30 @@ instantiations contain none of these observers, interval fields or clock reads.
 Use separate ordinary processes for throughput and disclose diagnostic overhead.
 Observer state is bounded, contains no payloads and is removed on error/unwind.
 
-## Selected finite-window policy
 
-The selected 4W scheduler retains W explicitly allocated
-scratch objects. W Rayon claimant tasks take unique indices from one atomic
-counter into a fixed result-slot array. Each result slot owns its compressed
-bytes, temporary bypass collector and outcome. The mutex in each slot enforces
-safe exclusive mutable ownership; unique claims make those locks uncontended.
-No scratch is constructed per job, result or Rayon iterator initialisation.
-Every started job joins before stream-order result inspection and output append,
-including jobs after a coding fault. Inspection and append remain interleaved:
-an earlier output-capacity failure precedes a later coding error. Completed
-results behind a stalled early job never exceed the finite slot count.
+## Finite scheduling study disposition
 
-Let the existing admission above compute W and its original bound L first.
-The frozen finite screen selected multiplier M=4. Choose
-`N = W + min((M - 1)*W, B - W, floor((limit - L)/(4 MiB)))`, with N=W when
-W=1. The reported bound is `L + (N-W)*(4 MiB)`. Extra capacity never changes
-W, raises limits or rejects an image admitted by the original worker policy.
-At the exact previous admission boundary N=W. The original W-batch store and
-new finite-window store are alternative enum variants and never coexist.
+The [finite 2W/4W scheduling study](https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-parallel-execution-results.md)
+selected 4W in development but rejected it at fixed confirmation: neither
+Boca Raton high-bit-depth primary reached the required improved classification
+in either style. Inconclusive improvement intervals are not equivalence or
+proved regression. The production writer therefore retains the original W
+joined batches, one scratch/result per slot, unchanged worker admission and
+the working formula above. The experimental result buffering and additional
+working charge are removed; there is no geometry selector.
 
-The W original 4 MiB allowances continue to cover W live scratch buffers and
-W results, including their state/codeword growth overlap. Each additional
-result receives another full 4 MiB before either array is allocated. The
-existing fewer-than-1-MiB codeword bound, vector old/new growth, at most 55
-collector lengths (including retained capacity and growth), result metadata,
-mutex and queue bookkeeping fit that allowance. Scratch/result structure sizes
-are each checked below 1024 bytes; result/worker arrays reserve exact capacities
-and refuse unexpected capacity. The unused serial scratch descriptor has no
-heap storage in either parallel branch and fits the existing local bookkeeping
-allowance. Shared coefficient/packet/output terms and their overlap are unchanged.
-Diagnostic interval/endpoint arrays are finite in N, with their capacities
-separately reported inside the same conservative local terms.
+The study's separate 144 allocation-only observations belong to that rejected
+candidate and its unchanged baseline, not to the historical packed/reference
+qualification above. The selected peak was 366,461,984 bytes versus baseline
+366,357,664 bytes, including output and conservative reallocation overlap.
+All individual peaks fit their own queries; the largest selected query was
+702,852,604 bytes. Extra result buffering raised parallel queries without
+reducing admitted workers. These candidate observations do not change the
+retained production contract.
 
-Authored tests deterministically hold the first job until the other N-1 jobs
-finish, using a condition variable and at least two admitted scratch lanes.
-They check out-of-order faults, bounded completed residency, all-job joining,
-reuse and exact destructor counts without sleeps. Empty/partial/one-lane probes
-have no such gate. Separate tests compare complete block bytes and segment
-metadata for zero/sparse/dense strided edge shapes, output exhaustion combined
-with a later coding fault, panic joining and reuse, and unchanged W at tight
-budgets. Ordinary 1/2/4/8 facade parity coverage exercises sample layouts and
-native reconstruction. The two predeclared 2W/4W screens selected 4W before confirmation; the
-experimental compile-time selector is removed. No kernel, admission or
-one-worker policy was retuned. Full qualification is recorded by the benchmark
-owner; the component tests establish codec-local invariants.
+The feature-only observer remains useful for future diagnosis. Deterministic
+window/fault/residency tests and exact frozen source identities remain in the
+rejected experiment's history and benchmark evidence; retained production
+coverage checks joined batch errors, exact 1/2/4/8-worker bytes and native
+samples, tight budgets and bounded diagnostic aggregation. No Tier-1 kernel,
+MQ/raw coding, transform, packet algorithm or decoder was changed by this study.

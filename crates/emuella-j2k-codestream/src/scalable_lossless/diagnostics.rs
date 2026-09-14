@@ -115,14 +115,6 @@ pub(crate) fn append(ns: u128) {
     update(|d| d.ordered_append_ns += ns);
 }
 
-#[cfg(feature = "parallel")]
-pub(super) fn retained_results(bytes: usize, collectors: usize) {
-    update(|d| {
-        d.retained_result_capacity_bytes = d.retained_result_capacity_bytes.max(bytes);
-        d.retained_collector_capacity_bytes = d.retained_collector_capacity_bytes.max(collectors);
-    });
-}
-
 pub(crate) fn serial_block(ns: u128, storage: (usize, bool), result: usize, collector: usize) {
     let start = Instant::now();
     update(|d| {
