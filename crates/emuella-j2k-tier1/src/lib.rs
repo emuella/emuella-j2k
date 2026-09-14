@@ -11,13 +11,23 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt;
 
+#[cfg(test)]
+mod encode_trace;
 mod mq;
 mod packed_decode;
+mod packed_encode;
+#[cfg(test)]
+mod packed_encode_tests;
 
 use mq::{
-    Context as ArithmeticDecoderContext, Decoder as ArithmeticDecoder,
-    Encoder as ArithmeticEncoder, RawDecoder, reset_contexts as reset_arithmetic_contexts,
+    Context as ArithmeticDecoderContext, Decoder as ArithmeticDecoder, RawDecoder,
+    reset_contexts as reset_arithmetic_contexts,
 };
+
+#[cfg(test)]
+use encode_trace::Encoder as ArithmeticEncoder;
+#[cfg(not(test))]
+use mq::Encoder as ArithmeticEncoder;
 
 /// Result type returned by tier-1 block decode APIs.
 pub type Result<T> = core::result::Result<T, Tier1Error>;
@@ -1466,6 +1476,8 @@ pub fn encode_baseline_code_block_with_scratch(
     output: &mut Vec<u8>,
     scratch: &mut CodeBlockEncodeScratch,
 ) -> Result<CodeBlockEncode> {
+    #[cfg(test)]
+    scratch.begin_trace();
     spec.validate()?;
 
     let coefficient_count = spec.dimensions.coefficient_count();
@@ -1493,6 +1505,17 @@ pub fn encode_baseline_code_block_with_scratch(
 
     let width = usize::from(spec.dimensions.width());
     let height = usize::from(spec.dimensions.height());
+    if scratch.use_packed(spec) {
+        return packed_encode::encode(
+            coefficients,
+            width,
+            Some(max_magnitude),
+            spec,
+            output,
+            None,
+            &mut scratch.packed,
+        );
+    }
     let mut ctx = scratch.prepare(width, height, spec.subband, coefficients);
     encode_prepared_baseline_code_block(&mut ctx, max_magnitude, spec, output, None)
 }
@@ -1508,6 +1531,8 @@ pub fn encode_baseline_code_block_segments_with_scratch(
     segment_byte_lengths: &mut Vec<usize>,
     scratch: &mut CodeBlockEncodeScratch,
 ) -> Result<CodeBlockEncode> {
+    #[cfg(test)]
+    scratch.begin_trace();
     segment_byte_lengths.clear();
     spec.validate()?;
 
@@ -1536,6 +1561,17 @@ pub fn encode_baseline_code_block_segments_with_scratch(
 
     let width = usize::from(spec.dimensions.width());
     let height = usize::from(spec.dimensions.height());
+    if scratch.use_packed(spec) {
+        return packed_encode::encode(
+            coefficients,
+            width,
+            Some(max_magnitude),
+            spec,
+            output,
+            Some(segment_byte_lengths),
+            &mut scratch.packed,
+        );
+    }
     let mut ctx = scratch.prepare(width, height, spec.subband, coefficients);
     encode_prepared_baseline_code_block(
         &mut ctx,
@@ -1560,6 +1596,8 @@ pub fn encode_baseline_code_block_with_known_max_scratch(
     output: &mut Vec<u8>,
     scratch: &mut CodeBlockEncodeScratch,
 ) -> Result<CodeBlockEncode> {
+    #[cfg(test)]
+    scratch.begin_trace();
     spec.validate()?;
 
     let coefficient_count = spec.dimensions.coefficient_count();
@@ -1590,6 +1628,17 @@ pub fn encode_baseline_code_block_with_known_max_scratch(
             .max()
             .unwrap_or(0)
     );
+    if scratch.use_packed(spec) {
+        return packed_encode::encode(
+            coefficients,
+            width,
+            Some(max_magnitude),
+            spec,
+            output,
+            None,
+            &mut scratch.packed,
+        );
+    }
     let mut ctx = scratch.prepare(width, height, spec.subband, coefficients);
     encode_prepared_baseline_code_block(&mut ctx, max_magnitude, spec, output, None)
 }
@@ -1602,6 +1651,8 @@ pub fn encode_baseline_code_block_with_strided_scratch(
     output: &mut Vec<u8>,
     scratch: &mut CodeBlockEncodeScratch,
 ) -> Result<CodeBlockEncode> {
+    #[cfg(test)]
+    scratch.begin_trace();
     spec.validate()?;
 
     let width = usize::from(spec.dimensions.width());
@@ -1625,6 +1676,17 @@ pub fn encode_baseline_code_block_with_strided_scratch(
         });
     }
 
+    if scratch.use_packed(spec) {
+        return packed_encode::encode(
+            coefficients,
+            row_stride,
+            None,
+            spec,
+            output,
+            None,
+            &mut scratch.packed,
+        );
+    }
     let (mut ctx, max_magnitude) =
         scratch.prepare_strided_with_max(width, height, spec.subband, coefficients, row_stride);
     if max_magnitude == 0 {
@@ -1654,6 +1716,8 @@ pub fn encode_baseline_code_block_segments_with_strided_scratch(
     segment_byte_lengths: &mut Vec<usize>,
     scratch: &mut CodeBlockEncodeScratch,
 ) -> Result<CodeBlockEncode> {
+    #[cfg(test)]
+    scratch.begin_trace();
     segment_byte_lengths.clear();
     spec.validate()?;
 
@@ -1678,6 +1742,17 @@ pub fn encode_baseline_code_block_segments_with_strided_scratch(
         });
     }
 
+    if scratch.use_packed(spec) {
+        return packed_encode::encode(
+            coefficients,
+            row_stride,
+            None,
+            spec,
+            output,
+            Some(segment_byte_lengths),
+            &mut scratch.packed,
+        );
+    }
     let (mut ctx, max_magnitude) =
         scratch.prepare_strided_with_max(width, height, spec.subband, coefficients, row_stride);
     if max_magnitude == 0 {
@@ -1723,6 +1798,8 @@ fn encode_prepared_baseline_code_block(
     let start_len = output.len();
     let byte_len = {
         let mut encoder = ArithmeticEncoder::new(output);
+        #[cfg(test)]
+        encoder.enable_trace(ctx.trace.enabled);
         match (style.resets_contexts(), style.is_vertically_causal()) {
             (false, false) => encode_coding_passes::<false, false>(
                 ctx,
@@ -1757,6 +1834,8 @@ fn encode_prepared_baseline_code_block(
                 segment_byte_lengths,
             )?,
         }
+        #[cfg(test)]
+        encoder.take_trace(ctx.trace);
         encoder.len() - start_len
     };
 
@@ -1785,6 +1864,8 @@ fn encode_coding_passes<const RESET_CONTEXTS: bool, const VERTICAL_CAUSAL: bool>
                 reason: "coding pass exceeds available bit-planes",
             })?;
 
+        #[cfg(test)]
+        encoder.pass(coding_pass, ctx.current_bit_position);
         let raw_pass = is_raw_coding_pass(style, coding_pass);
         match (raw_pass, coding_pass_for_index(coding_pass)) {
             (true, CodingPass::SignificancePropagation) => {
@@ -2636,12 +2717,31 @@ struct BitPlaneDecodeContext<'a> {
 /// depending on coefficient-state internals.
 #[derive(Default)]
 pub struct CodeBlockEncodeScratch {
+    packed: packed_encode::Scratch,
+    #[cfg(test)]
+    backend_override: Option<bool>,
+    #[cfg(test)]
+    trace: encode_trace::Trace,
     coefficient_states: Vec<CoefficientState>,
     signs: Vec<u8>,
     magnitudes: Vec<u32>,
 }
 
 impl CodeBlockEncodeScratch {
+    #[cfg(test)]
+    fn begin_trace(&mut self) {
+        self.trace.events.clear();
+        self.packed.trace.events.clear();
+    }
+
+    fn use_packed(&self, spec: CodeBlockEncodeSpec) -> bool {
+        #[cfg(test)]
+        let selected = self.backend_override.unwrap_or(packed_encode::SELECTED);
+        #[cfg(not(test))]
+        let selected = packed_encode::SELECTED;
+        selected && packed_encode::eligible(spec)
+    }
+
     /// Create an empty scratch object. Capacity grows to the largest encoded
     /// code-block and is reused by later calls.
     pub fn new() -> Self {
@@ -2650,6 +2750,7 @@ impl CodeBlockEncodeScratch {
 
     /// Drop current scratch lengths while retaining allocated capacity.
     pub fn clear(&mut self) {
+        self.packed.clear();
         self.coefficient_states.clear();
         self.signs.clear();
         self.magnitudes.clear();
@@ -2684,6 +2785,8 @@ impl CodeBlockEncodeScratch {
         }
 
         BitPlaneEncodeContext {
+            #[cfg(test)]
+            trace: &mut self.trace,
             coefficient_states: &mut self.coefficient_states[..len],
             signs: &mut self.signs[..len],
             magnitudes: &mut self.magnitudes[..len],
@@ -2729,6 +2832,8 @@ impl CodeBlockEncodeScratch {
 
         (
             BitPlaneEncodeContext {
+                #[cfg(test)]
+                trace: &mut self.trace,
                 coefficient_states: &mut self.coefficient_states[..len],
                 signs: &mut self.signs[..len],
                 magnitudes: &mut self.magnitudes[..len],
@@ -2744,6 +2849,8 @@ impl CodeBlockEncodeScratch {
 }
 
 struct BitPlaneEncodeContext<'a> {
+    #[cfg(test)]
+    trace: &'a mut encode_trace::Trace,
     coefficient_states: &'a mut [CoefficientState],
     signs: &'a mut [u8],
     magnitudes: &'a mut [u32],
@@ -2865,6 +2972,8 @@ fn cleanup_pass_encode<const VERTICAL_CAUSAL: bool>(
         let stripe_height = (ctx.height - base_row).min(4);
         for x in 0..ctx.width {
             let stripe_start = ctx.coefficient_index(x, base_row);
+            #[cfg(test)]
+            encoder.position(stripe_start);
             if stripe_height == 4
                 && cleanup_run_mode_applies_encode_at::<VERTICAL_CAUSAL>(ctx, stripe_start)
             {
@@ -2896,6 +3005,8 @@ fn cleanup_pass_encode<const VERTICAL_CAUSAL: bool>(
             } else {
                 let mut index = stripe_start;
                 for _ in 0..stripe_height {
+                    #[cfg(test)]
+                    encoder.position(index);
                     cleanup_encode_position_at::<VERTICAL_CAUSAL>(index, ctx, encoder);
                     index += ctx.padded_width;
                 }
@@ -2927,6 +3038,8 @@ fn cleanup_encode_position_at<const VERTICAL_CAUSAL: bool>(
     ctx: &mut BitPlaneEncodeContext<'_>,
     encoder: &mut ArithmeticEncoder,
 ) {
+    #[cfg(test)]
+    encoder.position(index);
     if !ctx.is_significant_at(index) && !ctx.is_zero_coded_at(index) {
         let bit = ctx.magnitude_bit_at(index);
         encoder.write_bit(
@@ -2949,6 +3062,8 @@ fn significance_propagation_pass_encode<const VERTICAL_CAUSAL: bool>(
         for x in 0..ctx.width {
             let mut index = ctx.coefficient_index(x, base_row);
             for _ in 0..stripe_height {
+                #[cfg(test)]
+                encoder.position(index);
                 if ctx.is_significant_at(index)
                     || !neighborhood_at::<VERTICAL_CAUSAL>(
                         ctx.coefficient_states,
@@ -2985,6 +3100,8 @@ fn significance_propagation_pass_encode_raw<const VERTICAL_CAUSAL: bool>(
         for x in 0..ctx.width {
             let mut index = ctx.coefficient_index(x, base_row);
             for _ in 0..stripe_height {
+                #[cfg(test)]
+                encoder.position(index);
                 if ctx.is_significant_at(index)
                     || !neighborhood_at::<VERTICAL_CAUSAL>(
                         ctx.coefficient_states,
@@ -3018,6 +3135,8 @@ fn magnitude_refinement_pass_encode<const VERTICAL_CAUSAL: bool>(
         for x in 0..ctx.width {
             let mut index = ctx.coefficient_index(x, base_row);
             for _ in 0..stripe_height {
+                #[cfg(test)]
+                encoder.position(index);
                 if ctx.is_significant_at(index) && !ctx.is_zero_coded_at(index) {
                     let ctx_label = context_label_magnitude_refinement_coding_encode_at::<
                         VERTICAL_CAUSAL,
@@ -3040,6 +3159,8 @@ fn magnitude_refinement_pass_encode_raw(
         for x in 0..ctx.width {
             let mut index = ctx.coefficient_index(x, base_row);
             for _ in 0..stripe_height {
+                #[cfg(test)]
+                encoder.position(index);
                 if ctx.is_significant_at(index) && !ctx.is_zero_coded_at(index) {
                     encoder.write_raw_bit(ctx.magnitude_bit_at(index));
                     ctx.set_magnitude_refined_at(index);
@@ -3055,6 +3176,8 @@ fn encode_sign_bit_at<const VERTICAL_CAUSAL: bool>(
     ctx: &mut BitPlaneEncodeContext<'_>,
     encoder: &mut ArithmeticEncoder,
 ) {
+    #[cfg(test)]
+    encoder.position(index);
     let (ctx_label, xor_bit) = context_label_sign_coding_encode_at::<VERTICAL_CAUSAL>(index, ctx);
     encoder.write_bit(ctx_label, u32::from(ctx.sign_at(index) ^ xor_bit));
 }
@@ -3894,7 +4017,7 @@ impl<'a> MqByteInput<'a> {
 mod tests {
     use super::*;
 
-    fn segment_descriptors(
+    pub(super) fn segment_descriptors(
         style: CodeBlockStyle,
         byte_lengths: &[usize],
         pass_count: u16,
