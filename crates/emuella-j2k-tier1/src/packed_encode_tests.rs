@@ -297,7 +297,7 @@ fn packed_encoder_missing_planes_and_empty_blocks_preserve_metadata() {
                     assert_eq!(actual, [0xff]);
                     assert_eq!(b.missing_bitplanes, available);
                     assert!(!b.included);
-                    assert_eq!(packed.packed.capacities(), [0; 3]);
+                    assert_eq!(packed.packed.capacities(), [0; 4]);
                 } else {
                     assert_eq!(
                         b.missing_bitplanes,
@@ -335,7 +335,7 @@ fn packed_encoder_falls_back_for_wide_shapes_and_every_other_accepted_style() {
             assert_eq!(a, b);
             assert_eq!(expected, actual);
             assert_trace_equal(&reference.trace.events, &packed.trace.events);
-            assert_eq!(packed.packed.capacities(), [0; 3]);
+            assert_eq!(packed.packed.capacities(), [0; 4]);
         }
     }
 }
@@ -430,7 +430,8 @@ fn packed_encoder_retained_capacity_fits_the_existing_worker_allowance() {
                 )
                 .unwrap();
                 let packed = work.packed.capacities();
-                assert!(packed.into_iter().all(|capacity| capacity <= 66 * 66));
+                assert!(packed[..3].iter().all(|&capacity| capacity <= 66 * 66));
+                assert!(packed[3] <= 64);
                 let reference = work.coefficient_states.capacity()
                     * core::mem::size_of::<CoefficientState>()
                     + work.signs.capacity()
@@ -439,6 +440,7 @@ fn packed_encoder_retained_capacity_fits_the_existing_worker_allowance() {
                     + 2 * packed[0]
                     + packed[1]
                     + 4 * packed[2]
+                    + 5 * core::mem::size_of::<u64>() * packed[3]
                     + core::mem::size_of::<CodeBlockEncodeScratch>();
                 peak_scratch = peak_scratch.max(retained);
                 // Also cover a conservative previous scratch allocation while growing.

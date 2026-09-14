@@ -112,12 +112,26 @@ retained.
 ## Incremental encoder state experiment
 
 An experimental encoder stores eight directional neighbour-significance bits
-and the significant, visited and refined flags in one `u16` per padded cell.
-First significance updates the surrounding cells. Magnitude remains a full
+and the significant flag in one `u16` per padded cell. First significance
+updates the surrounding cells. Magnitude remains a full
 `u32` and sign remains separate, preserving the low-level encoder's accepted
 `i32::MIN` magnitude. The implementation retains stripe/column/row traversal,
 the existing context formulas and the unchanged MQ/raw writer. The reference
 encoder keeps its own state preparation, neighbourhood gathering and pass loops.
+
+The ordered traversal variant additionally groups four rows and sixteen columns
+into each 64-bit word. Separate words track significance, neighbour presence,
+visitation, refinement and valid positions; at most 64 such groups cover an
+eligible block. Bit order follows stripe/column/row coding order. Significance
+propagation recomputes its live candidate mask after each decision and masks
+the consumed prefix, including the last-bit case. Newly enabled earlier
+positions remain for a later pass. Refinement visits only significant positions
+not visited during significance propagation, and cleanup retains four-row run
+decisions while skipping unavailable positions. Visit clearing touches the
+bounded word array. Authored checks exhaust every eligible geometry's validity
+mask and explicitly exercise live propagation across bit 63, word boundaries,
+partial stripes and already-consumed positions. The preceding incremental-cell
+variant remains a separate checkpoint for development comparisons.
 
 `EMUELLA_TIER1_ENCODER=packed` selects the experiment **at compile time** for
 style bytes 0 and 1 with each code-block axis at most 64. All other accepted

@@ -141,6 +141,8 @@ retains this allowance and worker admission. The scalable writer only supplies
 blocks with axes at most 64, so each padded scratch buffer has at most 4,356
 cells. Packed `u16` state, `u8` signs and `u32` magnitudes use 30,492 bytes at
 that shape; the independent reference buffers use 34,848 bytes at exact lengths.
+The ordered traversal variant adds at most 64 groups of five `u64` words,
+or 2,560 bytes, with a checked group size and capacity bound.
 Packed buffers reserve exact growth and retain their capacities for reuse.
 Authored checks account for both implementations' retained capacities, scratch
 bookkeeping, a scratch reallocation overlap, codeword and segment-collector
