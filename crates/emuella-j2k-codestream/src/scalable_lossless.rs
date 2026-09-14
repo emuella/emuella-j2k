@@ -5,6 +5,8 @@ use super::*;
 mod parallel;
 
 mod bypass;
+#[cfg(feature = "classic-execution-diagnostics")]
+pub(super) mod diagnostics;
 #[cfg(feature = "test-fixtures")]
 pub use bypass::encode_lossless_d2_bypass_test_fixture;
 
@@ -351,6 +353,24 @@ pub fn encode_lossless_d2(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<Vec<u8>> {
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if diagnostics::enabled() {
+        let start = EncodeClock::start::<true>();
+        let mut timings = LosslessEncodeTimings::default();
+        let mut execution = LosslessEncodeExecution::default();
+        let result = encode_lossless_d2_impl::<true, false>(
+            width,
+            height,
+            bits,
+            planes,
+            limits,
+            &mut timings,
+            &mut execution,
+        );
+        timings.total_ns = start.ns();
+        diagnostics::finish(timings, execution);
+        return result;
+    }
     encode_lossless_d2_impl::<false, false>(
         width,
         height,
@@ -372,6 +392,24 @@ pub fn encode_lossless_d2_bypass(
     planes: &[LosslessD2Plane<'_>],
     limits: LosslessEncodeLimits,
 ) -> Result<Vec<u8>> {
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if diagnostics::enabled() {
+        let start = EncodeClock::start::<true>();
+        let mut timings = LosslessEncodeTimings::default();
+        let mut execution = LosslessEncodeExecution::default();
+        let result = encode_lossless_d2_impl::<true, true>(
+            width,
+            height,
+            bits,
+            planes,
+            limits,
+            &mut timings,
+            &mut execution,
+        );
+        timings.total_ns = start.ns();
+        diagnostics::finish(timings, execution);
+        return result;
+    }
     encode_lossless_d2_impl::<false, true>(
         width,
         height,

@@ -53,6 +53,14 @@ pub(super) struct Scratch {
 }
 
 impl Scratch {
+    #[cfg(feature = "classic-execution-diagnostics")]
+    pub(super) fn capacity_bytes(&self) -> usize {
+        self.states.capacity() * core::mem::size_of::<u16>()
+            + self.signs.capacity()
+            + self.magnitudes.capacity() * core::mem::size_of::<u32>()
+            + self.words.capacity() * core::mem::size_of::<Word>()
+    }
+
     pub(super) fn clear(&mut self) {
         self.states.clear();
         self.signs.clear();

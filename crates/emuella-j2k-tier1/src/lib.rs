@@ -2728,6 +2728,20 @@ pub struct CodeBlockEncodeScratch {
 }
 
 impl CodeBlockEncodeScratch {
+    /// Retained requested heap capacity and actual prepared packed-state presence.
+    /// Available only to the separate execution diagnostic build.
+    #[cfg(feature = "classic-execution-diagnostics")]
+    pub fn diagnostic_storage(&self) -> (usize, bool) {
+        let packed = self.packed.capacity_bytes();
+        (
+            packed
+                + self.coefficient_states.capacity() * core::mem::size_of::<CoefficientState>()
+                + self.signs.capacity()
+                + self.magnitudes.capacity() * core::mem::size_of::<u32>(),
+            packed != 0,
+        )
+    }
+
     #[cfg(test)]
     fn begin_trace(&mut self) {
         self.trace.events.clear();

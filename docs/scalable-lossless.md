@@ -151,8 +151,9 @@ the existing conservative codeword growth envelope, bounded segment records and
 slot bookkeeping still fit the 4 MiB worker term. This resource observation is
 separate from throughput qualification. Wider legal low-level Tier-1 blocks use
 reference encoding and are outside this scalable writer's geometry invariant.
-Resource qualification passed 144 observations over nine products, both styles
-and 1/2/4/8 workers, preserving bytes, working requirements and output capacities.
+The historical [packed-kernel qualification](https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-encoder-kernel-results.md)
+passed 144 observations over nine products, both styles and 1/2/4/8 workers,
+preserving bytes, working requirements and output capacities.
 The maximum requested encoder peak was 366,357,664 bytes for packed encoding
 and 366,371,264 bytes for reference encoding under unchanged limits. These
 requested-allocation observations are separate from process RSS and timings.
@@ -444,3 +445,65 @@ Requested allocation peaks, whole-process RSS and ordinary operation timings
 remain different observations. The authored `lossless_bypass` integration test
 checks direct/nested sample parity, same-context requirements and unchanged
 encoder bytes across one/eight-worker pools. No public struct or default changes.
+
+## Separate execution diagnostic build
+
+The `classic-execution-diagnostics` codestream feature adds
+`observe_lossless_encode`, a synchronous observer around the ordinary facade
+call. It uses the existing profiled writer, with unchanged public production
+API shapes and the same one-worker route. Parallel slots retain block interval
+endpoints; only the caller aggregates them after joining. Serial intervals
+bracket the existing Tier-1 calls. The worker-side diagnostic build separately
+meters live requested allocation, including conservative reallocation overlap.
+
+The collector retains fixed 64-bin distributions and exact count/sum/min/max,
+actual peak overlapping intervals, integrated active-block time, any-active
+time, batch tails, dispatch/join, ordered append and existing stages. At most
+one interval and two endpoints per admitted slot coexist during aggregation;
+both vector capacities are reported and fit the existing per-slot local
+allowance. Slots' timestamp fields are feature-only. Aggregation has its own
+interval and occurs after each measured block interval. Block calls include
+internal preparation; parallel brackets also include geometry, so these are
+not pure entropy-kernel times. Zero-duration intervals contribute no overlap.
+The serial bypass stage retains its existing combined boundary.
+
+Scratch and result/collector observations describe retained capacities after
+a join (or serial call), including inactive slots from earlier batches. They
+are not transient allocation peaks or RSS. A block counted with retained packed
+storage may reuse capacity from an earlier block, including a zero block; that
+counter does not claim fresh packed execution. Packed selection is established
+by the unchanged selector, eligible profile and authored dispatch tests.
+
+Clock reads, profiled bookkeeping, endpoint aggregation and an optional worker
+allocation meter perturb diagnostic execution. Ordinary feature-disabled
+instantiations contain none of these observers, interval fields or clock reads.
+Use separate ordinary processes for throughput and disclose diagnostic overhead.
+Observer state is bounded, contains no payloads and is removed on error/unwind.
+
+
+## Finite scheduling study disposition
+
+The [finite 2W/4W scheduling study](https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-parallel-execution-results.md)
+selected 4W in development but rejected it at fixed confirmation: neither
+Boca Raton high-bit-depth primary reached the required improved classification
+in either style. Inconclusive improvement intervals are not equivalence or
+proved regression. The production writer therefore retains the original W
+joined batches, one scratch/result per slot, unchanged worker admission and
+the working formula above. The experimental result buffering and additional
+working charge are removed; there is no geometry selector.
+
+The study's separate 144 allocation-only observations belong to that rejected
+candidate and its unchanged baseline, not to the historical packed/reference
+qualification above. The selected peak was 366,461,984 bytes versus baseline
+366,357,664 bytes, including output and conservative reallocation overlap.
+All individual peaks fit their own queries; the largest selected query was
+702,852,604 bytes. Extra result buffering raised parallel queries without
+reducing admitted workers. These candidate observations do not change the
+retained production contract.
+
+The feature-only observer remains useful for future diagnosis. Deterministic
+window/fault/residency tests and exact frozen source identities remain in the
+rejected experiment's history and benchmark evidence; retained production
+coverage checks joined batch errors, exact 1/2/4/8-worker bytes and native
+samples, tight budgets and bounded diagnostic aggregation. No Tier-1 kernel,
+MQ/raw coding, transform, packet algorithm or decoder was changed by this study.

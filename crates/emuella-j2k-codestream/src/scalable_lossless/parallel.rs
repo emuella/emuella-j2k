@@ -9,6 +9,8 @@ struct Slot {
     lengths: Vec<usize>,
     result: Option<Result<EncodedCodeBlock>>,
     worker: Option<usize>,
+    #[cfg(feature = "classic-execution-diagnostics")]
+    interval: diagnostics::BlockInterval,
 }
 
 pub(super) struct BlockWorkers {
@@ -73,6 +75,8 @@ impl BlockWorkers {
             let batch_len = self.slots.len().min(count - first);
             let active = &mut self.slots[..batch_len];
             let start = EncodeClock::start::<PROFILE>();
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let batch_start = std::time::Instant::now();
             // for_each joins *every* job, including when another job failed.
             // Results never escape this batch; error selection follows stream order.
             active
@@ -83,6 +87,8 @@ impl BlockWorkers {
                     if PROFILE {
                         slot.worker = rayon::current_thread_index();
                     }
+                    #[cfg(feature = "classic-execution-diagnostics")]
+                    let block_start = batch_start.elapsed().as_nanos();
                     slot.result = Some(encode_block::<BYPASS>(
                         image_width,
                         plane,
@@ -94,13 +100,40 @@ impl BlockWorkers {
                         &mut slot.lengths,
                         &mut slot.scratch,
                     ));
+                    #[cfg(feature = "classic-execution-diagnostics")]
+                    {
+                        slot.interval = diagnostics::BlockInterval {
+                            start: block_start,
+                            end: batch_start.elapsed().as_nanos(),
+                            packed: slot.scratch.diagnostic_storage().1,
+                        };
+                    }
                 });
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let joined_ns = batch_start.elapsed().as_nanos();
             if PROFILE {
                 timings.tier1_ns += start.ns();
                 execution.max_batch_blocks = execution.max_batch_blocks.max(batch_len);
             }
+            #[cfg(feature = "classic-execution-diagnostics")]
+            diagnostics::batch(
+                self.slots[..batch_len].iter().map(|s| s.interval),
+                joined_ns,
+                self.slots
+                    .iter()
+                    .map(|s| s.scratch.diagnostic_storage().0)
+                    .sum(),
+                self.slots.iter().map(|s| s.bytes.capacity()).sum(),
+                self.slots
+                    .iter()
+                    .map(|s| s.lengths.capacity() * core::mem::size_of::<usize>())
+                    .sum(),
+                self.slots.capacity() * core::mem::size_of::<Slot>(),
+            );
             let start = EncodeClock::start::<PROFILE>();
-            for slot in active {
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let append_start = std::time::Instant::now();
+            for slot in &mut self.slots[..batch_len] {
                 let mut block = slot.result.take().ok_or(CodestreamError::SizeOverflow)??;
                 if PROFILE {
                     if let Some(worker) = slot.worker
@@ -135,6 +168,8 @@ impl BlockWorkers {
                     lengths.push(segments);
                 }
             }
+            #[cfg(feature = "classic-execution-diagnostics")]
+            diagnostics::append(append_start.elapsed().as_nanos());
             if PROFILE {
                 timings.assembly_ns += start.ns();
             }

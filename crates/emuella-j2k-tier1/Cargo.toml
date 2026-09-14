@@ -15,6 +15,7 @@ homepage.workspace = true
 default = ["std"]
 std = []
 test-fixtures = []
+classic-execution-diagnostics = ["std"]
 
 [lints]
 workspace = true
