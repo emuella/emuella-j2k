@@ -108,6 +108,8 @@ const fn parallel_decode_dispatch_available() -> bool {
 }
 
 mod scalable_lossless;
+#[cfg(feature = "classic-execution-diagnostics")]
+pub use scalable_lossless::diagnostics::{LosslessExecutionDiagnostic, observe_lossless_encode};
 #[cfg(all(feature = "std", feature = "test-fixtures"))]
 pub use scalable_lossless::encode_lossless_d2_bypass_execution_profiled;
 #[cfg(feature = "test-fixtures")]
@@ -14985,6 +14987,8 @@ fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
             if PROFILE {
                 timings.block_preparation_ns += start.ns();
             }
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let diagnostic_start = std::time::Instant::now();
             let start = scalable_lossless::EncodeClock::start::<PROFILE>();
             let encoded = tier1::encode_baseline_code_block_with_strided_scratch(
                 source,
@@ -15003,6 +15007,13 @@ fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
                 tier1_encode_scratch,
             )
             .map_err(map_tier1_error)?;
+            #[cfg(feature = "classic-execution-diagnostics")]
+            scalable_lossless::diagnostics::serial_block(
+                diagnostic_start.elapsed().as_nanos(),
+                tier1_encode_scratch.diagnostic_storage(),
+                block_segment.capacity(),
+                0,
+            );
             if PROFILE {
                 timings.tier1_ns += start.ns();
                 timings.checked_tier1_blocks += 1;
@@ -15012,10 +15023,14 @@ fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
                 timings.tier1_codeword_bytes += encoded.byte_len as u64;
             }
             let start = scalable_lossless::EncodeClock::start::<PROFILE>();
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let append_start = std::time::Instant::now();
             if let Some(maximum) = output_limit {
                 scalable_lossless::reserve_output(segments, block_segment.len(), maximum)?;
                 segments.extend_from_slice(&block_segment);
             }
+            #[cfg(feature = "classic-execution-diagnostics")]
+            scalable_lossless::diagnostics::append(append_start.elapsed().as_nanos());
             if PROFILE {
                 timings.assembly_ns += start.ns();
             }

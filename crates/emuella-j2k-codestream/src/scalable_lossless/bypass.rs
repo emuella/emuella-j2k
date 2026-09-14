@@ -93,6 +93,8 @@ pub(super) fn encode_subband(
                 .ok_or(CodestreamError::SizeOverflow)?;
             let source = plane.get(offset..).ok_or(CodestreamError::SizeOverflow)?;
             bytes.clear();
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let diagnostic_start = std::time::Instant::now();
             let encoded = tier1::encode_baseline_code_block_segments_with_strided_scratch(
                 source,
                 image_width as usize,
@@ -108,10 +110,19 @@ pub(super) fn encode_subband(
                 scratch,
             )
             .map_err(map_tier1_error)?;
+            #[cfg(feature = "classic-execution-diagnostics")]
+            diagnostics::serial_block(
+                diagnostic_start.elapsed().as_nanos(),
+                scratch.diagnostic_storage(),
+                bytes.capacity(),
+                lengths.capacity() * core::mem::size_of::<usize>(),
+            );
             if encoded.byte_len != bytes.len() {
                 return Err(CodestreamError::SizeOverflow);
             }
             let segments = SegmentLengths::checked(encoded.pass_count, &bytes, &lengths)?;
+            #[cfg(feature = "classic-execution-diagnostics")]
+            let append_start = std::time::Instant::now();
             reserve_output(output, bytes.len(), maximum)?;
             blocks.push(EncodedCodeBlock {
                 x,
@@ -128,6 +139,8 @@ pub(super) fn encode_subband(
                 segment_len: encoded.byte_len,
             });
             output.extend_from_slice(&bytes);
+            #[cfg(feature = "classic-execution-diagnostics")]
+            diagnostics::append(append_start.elapsed().as_nanos());
             all_lengths.push(segments);
         }
     }

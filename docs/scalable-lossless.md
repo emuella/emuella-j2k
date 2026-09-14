@@ -444,3 +444,37 @@ Requested allocation peaks, whole-process RSS and ordinary operation timings
 remain different observations. The authored `lossless_bypass` integration test
 checks direct/nested sample parity, same-context requirements and unchanged
 encoder bytes across one/eight-worker pools. No public struct or default changes.
+
+## Separate execution diagnostic build
+
+The `classic-execution-diagnostics` codestream feature adds
+`observe_lossless_encode`, a synchronous observer around the ordinary facade
+call. It uses the existing profiled writer, with unchanged public production
+API shapes and the same one-worker route. Parallel slots retain block interval
+endpoints; only the caller aggregates them after joining. Serial intervals
+bracket the existing Tier-1 calls. The worker-side diagnostic build separately
+meters live requested allocation, including conservative reallocation overlap.
+
+The collector retains fixed 64-bin distributions and exact count/sum/min/max,
+actual peak overlapping intervals, integrated active-block time, any-active
+time, batch tails, dispatch/join, ordered append and existing stages. At most
+one interval and two endpoints per admitted slot coexist during aggregation;
+both vector capacities are reported and fit the existing per-slot local
+allowance. Slots' timestamp fields are feature-only. Aggregation has its own
+interval and occurs after each measured block interval. Block calls include
+internal preparation; parallel brackets also include geometry, so these are
+not pure entropy-kernel times. Zero-duration intervals contribute no overlap.
+The serial bypass stage retains its existing combined boundary.
+
+Scratch and result/collector observations describe retained capacities after
+a join (or serial call), including inactive slots from earlier batches. They
+are not transient allocation peaks or RSS. A block counted with retained packed
+storage may reuse capacity from an earlier block, including a zero block; that
+counter does not claim fresh packed execution. Packed selection is established
+by the unchanged selector, eligible profile and authored dispatch tests.
+
+Clock reads, profiled bookkeeping, endpoint aggregation and an optional worker
+allocation meter perturb diagnostic execution. Ordinary feature-disabled
+instantiations contain none of these observers, interval fields or clock reads.
+Use separate ordinary processes for throughput and disclose diagnostic overhead.
+Observer state is bounded, contains no payloads and is removed on error/unwind.
