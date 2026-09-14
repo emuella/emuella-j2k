@@ -478,3 +478,47 @@ allocation meter perturb diagnostic execution. Ordinary feature-disabled
 instantiations contain none of these observers, interval fields or clock reads.
 Use separate ordinary processes for throughput and disclose diagnostic overhead.
 Observer state is bounded, contains no payloads and is removed on error/unwind.
+
+## Finite-window exploration
+
+The separate 2W and 4W scheduling candidates retain W explicitly allocated
+scratch objects. W Rayon claimant tasks take unique indices from one atomic
+counter into a fixed result-slot array. Each result slot owns its compressed
+bytes, temporary bypass collector and outcome. The mutex in each slot enforces
+safe exclusive mutable ownership; unique claims make those locks uncontended.
+No scratch is constructed per job, result or Rayon iterator initialisation.
+Every started job joins before stream-order result inspection and output append,
+including jobs after a coding fault. Inspection and append remain interleaved:
+an earlier output-capacity failure precedes a later coding error. Completed
+results behind a stalled early job never exceed the finite slot count.
+
+Let the existing admission above compute W and its original bound L first.
+For multiplier M (2 or 4), choose
+`N = W + min((M - 1)*W, B - W, floor((limit - L)/(4 MiB)))`, with N=W when
+W=1. The reported bound is `L + (N-W)*(4 MiB)`. Extra capacity never changes
+W, raises limits or rejects an image admitted by the original worker policy.
+At the exact previous admission boundary N=W. The original W-batch store and
+new finite-window store are alternative enum variants and never coexist.
+
+The W original 4 MiB allowances continue to cover W live scratch buffers and
+W results, including their state/codeword growth overlap. Each additional
+result receives another full 4 MiB before either array is allocated. The
+existing fewer-than-1-MiB codeword bound, vector old/new growth, at most 55
+collector lengths (including retained capacity and growth), result metadata,
+mutex and queue bookkeeping fit that allowance. Scratch/result structure sizes
+are each checked below 1024 bytes; result/worker arrays reserve exact capacities
+and refuse unexpected capacity. The unused serial scratch descriptor has no
+heap storage in either parallel branch and fits the existing local bookkeeping
+allowance. Shared coefficient/packet/output terms and their overlap are unchanged.
+Diagnostic interval/endpoint arrays are finite in N, with their capacities
+separately reported inside the same conservative local terms.
+
+Authored tests deterministically hold the first job until the other N-1 jobs
+finish, using a condition variable and at least two admitted scratch lanes.
+They check out-of-order faults, bounded completed residency, all-job joining,
+reuse and exact destructor counts without sleeps. Empty/partial/one-lane probes
+have no such gate. Separate tests compare complete block bytes and segment
+metadata for zero/sparse/dense strided edge shapes, output exhaustion combined
+with a later coding fault, panic joining and reuse, and unchanged W at tight
+budgets. Ordinary 1/2/4/8 facade parity coverage exercises sample layouts and
+native reconstruction. These are candidates pending the frozen finite screen.

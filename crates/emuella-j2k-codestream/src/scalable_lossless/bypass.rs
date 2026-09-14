@@ -22,6 +22,7 @@ const MAX_PASSES: u16 = 91;
 pub(super) const METADATA_BYTES_PER_BLOCK: u64 = 512;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct SegmentLengths {
     lengths: [usize; MAX_SEGMENTS],
     count: usize,

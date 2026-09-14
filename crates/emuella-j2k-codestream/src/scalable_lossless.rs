@@ -58,7 +58,7 @@ pub fn lossless_d2_requirements(
     limits: LosslessEncodeLimits,
 ) -> Result<LosslessEncodeRequirements> {
     execution_requirements::<false>(width, height, components, limits)
-        .map(|(requirements, _)| requirements)
+        .map(|(requirements, _, _)| requirements)
 }
 
 /// Geometry-only admission for the opt-in D2 selective-bypass writer.
@@ -70,7 +70,7 @@ pub fn lossless_d2_bypass_requirements(
     limits: LosslessEncodeLimits,
 ) -> Result<LosslessEncodeRequirements> {
     execution_requirements::<true>(width, height, components, limits)
-        .map(|(requirements, _)| requirements)
+        .map(|(requirements, _, _)| requirements)
 }
 
 fn execution_requirements<const BYPASS: bool>(
@@ -78,7 +78,7 @@ fn execution_requirements<const BYPASS: bool>(
     height: u32,
     components: u16,
     limits: LosslessEncodeLimits,
-) -> Result<(LosslessEncodeRequirements, usize)> {
+) -> Result<(LosslessEncodeRequirements, usize, usize)> {
     let pixels = u64::from(width)
         .checked_mul(u64::from(height))
         .ok_or(CodestreamError::SizeOverflow)?;
@@ -154,6 +154,13 @@ fn execution_requirements<const BYPASS: bool>(
                 .ok_or(CodestreamError::SizeOverflow)?,
         )
         .ok_or(CodestreamError::SizeOverflow)?;
+    #[cfg(feature = "parallel")]
+    let window = parallel::window_capacity(workers, blocks, working, limits.max_working_bytes);
+    #[cfg(not(feature = "parallel"))]
+    let window = workers;
+    let working = working
+        .checked_add((window - workers) as u64 * WORKER_BYTES)
+        .ok_or(CodestreamError::SizeOverflow)?;
     Ok((
         LosslessEncodeRequirements {
             total_component_samples: samples,
@@ -162,6 +169,7 @@ fn execution_requirements<const BYPASS: bool>(
             output_capacity_limit: limits.max_output_bytes,
         },
         workers,
+        window,
     ))
 }
 
@@ -430,7 +438,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     timings: &mut LosslessEncodeTimings,
     execution: &mut LosslessEncodeExecution,
 ) -> Result<Vec<u8>> {
-    let (_, workers) = execution_requirements::<BYPASS>(
+    let (_, workers, _window) = execution_requirements::<BYPASS>(
         width,
         height,
         u16::try_from(planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -553,7 +561,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     output.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0x93]);
     let mut scratch = tier1::CodeBlockEncodeScratch::new();
     #[cfg(feature = "parallel")]
-    let mut parallel = parallel::BlockWorkers::new(if workers > 1 { workers } else { 0 })?;
+    let mut parallel = parallel::BlockWorkers::new(if workers > 1 { workers } else { 0 }, _window)?;
     if PROFILE {
         execution.effective_workers = workers;
         execution.participating_workers = 1;

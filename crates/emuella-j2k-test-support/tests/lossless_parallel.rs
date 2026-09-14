@@ -66,10 +66,12 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                     let expected_workers = [1, 2, 4, 8][index];
                     let requirements =
                         cs::lossless_d2_requirements(width, height, components, limits).unwrap();
-                    assert_eq!(
-                        requirements.working_bytes,
-                        serial.working_bytes + (expected_workers - 1) as u64 * (4 << 20)
-                    );
+                    let original_bound =
+                        serial.working_bytes + (expected_workers - 1) as u64 * (4 << 20);
+                    assert!(requirements.working_bytes >= original_bound);
+                    assert!(requirements.working_bytes <= limits.max_working_bytes);
+                    let admitted_slots = expected_workers
+                        + ((requirements.working_bytes - original_bound) / (4 << 20)) as usize;
                     let (stream, timings, execution) = cs::encode_lossless_d2_execution_profiled(
                         width, height, bits, &planes, limits,
                     )
@@ -79,7 +81,7 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                         execution.participating_workers >= 1
                             && execution.participating_workers <= expected_workers
                     );
-                    assert!(execution.max_batch_blocks <= expected_workers);
+                    assert!(execution.max_batch_blocks <= admitted_slots);
                     assert_eq!(timings.checked_tier1_blocks, requirements.code_blocks);
                     assert_eq!(
                         timings.tier1_coefficients,

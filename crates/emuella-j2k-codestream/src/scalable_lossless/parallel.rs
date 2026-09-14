@@ -2,6 +2,90 @@
 use super::*;
 use rayon::prelude::*;
 
+mod window;
+
+// The finite exploration varies only this compile-time geometry policy.
+const WINDOW_MULTIPLIER: usize = match option_env!("EMUELLA_CLASSIC_WINDOW") {
+    None => 1,
+    Some(value) => match value.as_bytes() {
+        b"2" => 2,
+        b"4" => 4,
+        _ => panic!("EMUELLA_CLASSIC_WINDOW must be 2 or 4"),
+    },
+};
+
+pub(super) fn window_capacity(workers: usize, blocks: u64, working: u64, maximum: u64) -> usize {
+    capacity_for(WINDOW_MULTIPLIER, workers, blocks, working, maximum)
+}
+
+fn capacity_for(
+    multiplier: usize,
+    workers: usize,
+    blocks: u64,
+    working: u64,
+    maximum: u64,
+) -> usize {
+    if workers <= 1 {
+        return workers;
+    }
+    let spare = maximum.saturating_sub(working) / WORKER_BYTES;
+    let extra = (workers.saturating_mul(multiplier - 1) as u64)
+        .min(blocks.saturating_sub(workers as u64))
+        .min(spare);
+    workers + extra as usize
+}
+
+pub(super) enum BlockWorkers {
+    Batches(Batches),
+    Window(window::Window),
+}
+
+impl BlockWorkers {
+    pub(super) fn new(workers: usize, slots: usize) -> Result<Self> {
+        if workers > 1 && slots > workers {
+            Ok(Self::Window(window::Window::new(workers, slots)?))
+        } else {
+            Ok(Self::Batches(Batches::new(workers)?))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn encode_subband<const PROFILE: bool, const BYPASS: bool>(
+        &mut self,
+        image_width: u32,
+        plane: &[i32],
+        spec: DecompSubbandSpec,
+        available_bitplanes: u8,
+        output: &mut Vec<u8>,
+        maximum: usize,
+        timings: &mut LosslessEncodeTimings,
+        execution: &mut LosslessEncodeExecution,
+    ) -> Result<(NativeDecompSubband, Vec<bypass::SegmentLengths>)> {
+        match self {
+            Self::Batches(b) => b.encode_subband::<PROFILE, BYPASS>(
+                image_width,
+                plane,
+                spec,
+                available_bitplanes,
+                output,
+                maximum,
+                timings,
+                execution,
+            ),
+            Self::Window(w) => w.encode_subband::<PROFILE, BYPASS>(
+                image_width,
+                plane,
+                spec,
+                available_bitplanes,
+                output,
+                maximum,
+                timings,
+                execution,
+            ),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Slot {
     scratch: tier1::CodeBlockEncodeScratch,
@@ -13,13 +97,13 @@ struct Slot {
     interval: diagnostics::BlockInterval,
 }
 
-pub(super) struct BlockWorkers {
+pub(super) struct Batches {
     slots: Vec<Slot>,
     // Allocated only by profiling; at most one entry per block, covered by B.
     participants: Vec<usize>,
 }
 
-impl BlockWorkers {
+impl Batches {
     pub(super) fn new(workers: usize) -> Result<Self> {
         let mut slots = Vec::new();
         slots
@@ -291,7 +375,7 @@ mod tests {
                 // Only the first block exceeds the declared bitplane bound. The
                 // other three jobs must still finish before its error is observed.
                 plane[0] = i32::MAX;
-                let mut workers = BlockWorkers::new(4).unwrap();
+                let mut workers = Batches::new(4).unwrap();
                 let mut output = vec![0x71; 13];
                 assert!(
                     workers
