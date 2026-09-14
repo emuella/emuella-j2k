@@ -1,18 +1,11 @@
-//! Fixed-size batches: exclusive reusable slots, shared planes, ordered append.
+//! Bounded joined windows with the original fixed-size batch fallback.
 use super::*;
 use rayon::prelude::*;
 
 mod window;
 
-// The finite exploration varies only this compile-time geometry policy.
-const WINDOW_MULTIPLIER: usize = match option_env!("EMUELLA_CLASSIC_WINDOW") {
-    None => 1,
-    Some(value) => match value.as_bytes() {
-        b"2" => 2,
-        b"4" => 4,
-        _ => panic!("EMUELLA_CLASSIC_WINDOW must be 2 or 4"),
-    },
-};
+// Selected finite geometry; working admission may shrink this to W batches.
+const WINDOW_MULTIPLIER: usize = 4;
 
 pub(super) fn window_capacity(workers: usize, blocks: u64, working: u64, maximum: u64) -> usize {
     capacity_for(WINDOW_MULTIPLIER, workers, blocks, working, maximum)

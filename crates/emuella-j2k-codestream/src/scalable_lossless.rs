@@ -245,11 +245,11 @@ pub struct LosslessEncodeTimings {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LosslessEncodeExecution {
-    /// Maximum concurrent slots admitted from the current pool and byte budget.
+    /// Maximum executing lanes admitted from the current pool and byte budget.
     pub effective_workers: usize,
     /// Distinct Rayon workers observed executing Tier-1 (one for serial calls).
     pub participating_workers: usize,
-    /// Largest joined batch, including excluded zero blocks.
+    /// Largest joined window, including excluded zero blocks; at most 4W results.
     pub max_batch_blocks: usize,
 }
 

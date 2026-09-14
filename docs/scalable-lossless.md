@@ -22,7 +22,7 @@ limit. Ordinary `encode` retains the previous routes for those cases,
 including 9–15-bit greyscale and previously accepted thin D2 images with
 axes below four or above 32768. Explicit limits continue to reject these shapes.
 HT APIs and all decoder admission rules remain unchanged. Eight-component full
-caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded code-block batches with the `parallel` feature,
+caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded joined code-block windows with the `parallel` feature,
 using the current Rayon pool and the explicit working-memory allowance.
 The one-worker path keeps the serial writer.
 
@@ -49,7 +49,7 @@ The additional raw length fields remain within the existing packet-header
 allowance. Each serial or parallel worker's temporary collector and codeword
 coexist with its fixed result record inside the existing 4 MiB local allowance.
 
-Parallel bypass follows the same bounded joined batches and stream-order
+Parallel bypass follows the same bounded joined windows and stream-order
 append policy. Each slot owns its collector; actual lengths follow the encoded
 block into packet assembly. Errors publish no owned output and every started
 batch is joined before an error returns. Reduced working budgets lower worker
@@ -90,7 +90,9 @@ and requirements struct shapes are unchanged. This is an adaptive pool policy;
 it uses the calling or global Rayon pool and does not construct a dedicated
 pool or promise an exact count of participating threads. The global pool may
 initialise on first use.
-A batch contains at most W results, and at most W Tier-1 calls execute at once.
+A window contains at most N results (N ≤ 4W), and at most W Tier-1 calls execute at once.
+The original bound above chooses W first; the selected finite-window policy
+below funds N-W additional result slots and adds their charge to working_bytes.
 Thread stacks and Rayon pool infrastructure belong to the caller's pool.
 
 `total_component_samples` is S, not P. The bound is a conservative admission
@@ -380,7 +382,8 @@ wall timings. Exit requires exact streams and decoded samples at every worker
 count, bounded live results and scratch, joined failures, useful scaling and
 no meaningful one-worker regression; otherwise reject or revise this candidate.
 
-The candidate uses a fixed array of worker slots, each owning reusable Tier-1
+The original scheduler, retained as the tight-budget fallback, uses a fixed array
+of worker slots, each owning reusable Tier-1
 scratch and one compressed result. A batch contains at most one block per slot.
 All jobs finish before serial raster-order append and the next batch. Shared
 coefficient planes are immutable during coding. Output-budget errors after a
@@ -479,9 +482,9 @@ instantiations contain none of these observers, interval fields or clock reads.
 Use separate ordinary processes for throughput and disclose diagnostic overhead.
 Observer state is bounded, contains no payloads and is removed on error/unwind.
 
-## Finite-window exploration
+## Selected finite-window policy
 
-The separate 2W and 4W scheduling candidates retain W explicitly allocated
+The selected 4W scheduler retains W explicitly allocated
 scratch objects. W Rayon claimant tasks take unique indices from one atomic
 counter into a fixed result-slot array. Each result slot owns its compressed
 bytes, temporary bypass collector and outcome. The mutex in each slot enforces
@@ -493,7 +496,7 @@ an earlier output-capacity failure precedes a later coding error. Completed
 results behind a stalled early job never exceed the finite slot count.
 
 Let the existing admission above compute W and its original bound L first.
-For multiplier M (2 or 4), choose
+The frozen finite screen selected multiplier M=4. Choose
 `N = W + min((M - 1)*W, B - W, floor((limit - L)/(4 MiB)))`, with N=W when
 W=1. The reported bound is `L + (N-W)*(4 MiB)`. Extra capacity never changes
 W, raises limits or rejects an image admitted by the original worker policy.
@@ -521,4 +524,7 @@ have no such gate. Separate tests compare complete block bytes and segment
 metadata for zero/sparse/dense strided edge shapes, output exhaustion combined
 with a later coding fault, panic joining and reuse, and unchanged W at tight
 budgets. Ordinary 1/2/4/8 facade parity coverage exercises sample layouts and
-native reconstruction. These are candidates pending the frozen finite screen.
+native reconstruction. The two predeclared 2W/4W screens selected 4W before confirmation; the
+experimental compile-time selector is removed. No kernel, admission or
+one-worker policy was retuned. Full qualification is recorded by the benchmark
+owner; the component tests establish codec-local invariants.
