@@ -118,6 +118,69 @@ metadata and reconstruction across styles, magnitudes, partial/wide shapes and
 malformed/truncated inputs. Both variants passed explicit no-std and WASM checks.
 These historical checks do not discharge any new baseline's correctness gates.
 
+## Contemporary D2 incremental confirmation
+
+A separate fresh confirmation on the contemporary baseline applied
+`incremental-performance-policy/v1`, Route A. D2 is **not selected**: its primary
+PAN16 result missed the 2% estimated reduction, strictly negative 99% upper
+change bound and 20 ms absolute saving requirements. This disposition is not
+insufficient precision alone because the estimated and absolute savings also
+missed their gates. The historical development verdicts above remain unchanged.
+Production MQ arithmetic was restored; the independent arithmetic oracle and a
+new decoder scratch recovery regression remain.
+
+The measured adaptation changed only the decision path in `Decoder::read_bit`,
+removed its now-unused exchange helpers and added that regression. It restored
+no historical harness, build configuration, scheduler or runtime selector.
+The test exercises checked, dense, sparse and adaptive decoder scratch after an
+entropy-stage segmentation-symbol failure, with and without selective bypass,
+and verifies recovery across geometry changes without retained-capacity growth.
+
+| Contemporary recovery identity | Value |
+|---|---|
+| Base commit / tree | `e0971bc82d18d787a47c53ff27ed51a81e70b94c` / `b4745457f2065fd17ab67b66d385d17f1e651110` |
+| Measured commit / recovered tree | `07c85ecac1fbe1c477c05a8f6c8d605d1039d9ad` / `98206d5e870b1601815508796b83aac0ffbe24df` |
+| Complete source patch | [mq-d2-incremental.patch.txt](performance-candidates/mq-d2-incremental.patch.txt) |
+| Patch SHA-256 | `ebce0dd612f5d6f86bbd82d9722cc70b2b1d0da65e7f6651f3cf3ac534dc590a` |
+
+The full-index patch includes the complete two-file measured diff, including the
+scratch regression. Isolated-index application to its stated base reproduced
+the recorded measured tree exactly. Use the recovery procedure above with these
+identities; do not apply it on top of the final retained-test tree. The patch is
+source-only archival material, with no compiled or dormant production route.
+
+Twenty alternating fresh-process pairs per contrast used the common
+OpenJPEG-origin stream, full Boca Raton inputs, style zero and one-worker decode.
+The primary and mandatory MSI16 corroboration produced:
+
+| Contrast | Baseline → D2 mean ms | Saving ms | Relative change | 99% interval |
+|---|---:|---:|---:|---:|
+| PAN16 primary | 1714.338752 → 1708.867047 | 5.471704 | −0.319173% | [−0.949967%, +0.314787%] |
+| MSI16 corroboration | 937.691784 → 936.122374 | 1.569410 | −0.167370% | [−1.046925%, +0.719901%] |
+
+MSI16 passed its upper-bound tolerance of +1%. Both contrasts were equivalent
+under the legacy ±5% classification. All 80 timed calls passed exactness and
+absolute limits. The primary failed, so the conditional 560 timing and 80
+resource calls were not started; no extra sampling was performed.
+
+Before timing, 80 correctness/resource calls checked exact bytes and native
+samples across both stream origins and 1/2/4/8 workers. Maximum observed
+additional requested allocation was 233,441,260 bytes. Allocation evidence is
+separate from process RSS. The initial literal allocation-request-count gate
+failed at four and eight workers. An independently reviewed pre-timing setup
+correction preserved that failure and reported schedule-dependent request
+counts alongside source review showing no new allocation or buffer mechanism;
+all allocation, retained-capacity and admission bounds remained unchanged.
+These observations do not claim that request counts were identical.
+
+The measured candidate passed the contemporary independent oracle, no-std and
+WASM checks, focused native/failure/resource tests and the complete canonical
+check. The benchmark owns the frozen protocol, setup correction, statistical
+method and detailed [confirmation result][incremental-result] and
+[machine-readable evidence][incremental-evidence]. Recovery does not confer
+qualification: any future reconsideration requires a newly justified protocol
+and fresh eligibility review, with no recurring retest obligation.
+
 ## Separate 4W evidence and costs
 
 The frozen twenty-pair confirmation retained the original conservative 99%
@@ -161,3 +224,6 @@ The archive does not reinstate the removed implementation or its test machinery.
 [parallel-protocol]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/classic-parallel-execution.md
 [parallel]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/classic-parallel-execution-results.md
 [parallel-json]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/evidence/classic-parallel-execution.json
+
+[incremental-result]: https://github.com/emuella/emuella-benchmark/blob/main/docs/mq-d2-incremental-confirmation-results.md
+[incremental-evidence]: https://github.com/emuella/emuella-benchmark/blob/main/docs/evidence/mq-d2-incremental-confirmation.json

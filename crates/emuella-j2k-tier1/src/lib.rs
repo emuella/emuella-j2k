@@ -4294,6 +4294,95 @@ mod tests {
     }
 
     #[test]
+    fn decoder_scratch_recovers_after_entropy_errors_without_capacity_growth() {
+        for backend in 0..4 {
+            for bypass in [0, CodeBlockStyle::SELECTIVE_ARITHMETIC_BYPASS] {
+                let style =
+                    CodeBlockStyle::from_bits(bypass | CodeBlockStyle::SEGMENTATION_SYMBOLS);
+                let mut scratch = CodeBlockDecodeScratch::new();
+                let mut retained = None;
+                for (width, height) in [(64, 64), (17, 11), (64, 64), (1, 1)] {
+                    let dimensions = CodeBlockDimensions::new(width, height).unwrap();
+                    let source = qualification_coefficients(width as usize, height as usize);
+                    let mut bytes = Vec::new();
+                    let mut lengths = Vec::new();
+                    let encoded = encode_baseline_code_block_segments_with_scratch(
+                        &source,
+                        CodeBlockEncodeSpec {
+                            dimensions,
+                            subband: Subband::HighLow,
+                            available_bitplanes: 9,
+                            code_block_style: style.bits(),
+                        },
+                        &mut bytes,
+                        &mut lengths,
+                        &mut CodeBlockEncodeScratch::new(),
+                    )
+                    .unwrap();
+                    let segments = segment_descriptors(style, &lengths, encoded.pass_count);
+                    let spec = CodeBlockDecodeSpec {
+                        dimensions,
+                        available_bitplanes: 9,
+                        missing_most_significant_bitplanes: encoded.missing_bitplanes,
+                        coding_passes: encoded.pass_count,
+                        style,
+                        subband: Subband::HighLow,
+                    };
+                    let mut output = vec![0; source.len()];
+                    let mut decode = |input: &[u8]| match backend {
+                        0 => decode_baseline_code_block_segments_with_scratch(
+                            input,
+                            &segments,
+                            spec,
+                            &mut output,
+                            &mut scratch,
+                        )
+                        .map(|_| ()),
+                        1 => decode_baseline_code_block_segments_with_packed_scratch(
+                            input,
+                            &segments,
+                            spec,
+                            &mut output,
+                            &mut scratch,
+                        )
+                        .map(|_| ()),
+                        2 => decode_baseline_code_block_segments_with_sparse_scratch_outcome(
+                            input,
+                            &segments,
+                            spec,
+                            &mut output,
+                            &mut scratch,
+                        )
+                        .map(|_| ()),
+                        _ => decode_baseline_code_block_segments_with_adaptive_scratch_outcome(
+                            input,
+                            &segments,
+                            spec,
+                            &mut output,
+                            &mut scratch,
+                        )
+                        .map(|_| ()),
+                    };
+                    // Valid descriptors and stuffing admit the replacement bytes;
+                    // failure must occur inside entropy decoding after scratch setup.
+                    let corrupt = vec![0; bytes.len()];
+                    assert!(matches!(
+                        decode(&corrupt),
+                        Err(Tier1Error::MalformedBitstream {
+                            reason: "cleanup segmentation symbol is not 0xa",
+                        })
+                    ));
+                    decode(&bytes).unwrap();
+                    assert_eq!(output, source, "backend {backend}, style {:?}", style);
+                    let capacity = scratch.retained_heap_bytes();
+                    let ceiling = *retained.get_or_insert(capacity);
+                    assert!(capacity > 0 && capacity <= ceiling);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn continuous_mq_pass_prefixes_reproduce_declared_passes() {
         let mut checked_prefixes = 0;
         let mut stuffed_codewords = 0;
