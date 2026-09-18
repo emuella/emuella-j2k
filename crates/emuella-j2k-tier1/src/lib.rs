@@ -14,6 +14,9 @@ use core::fmt;
 #[cfg(test)]
 mod encode_trace;
 mod mq;
+#[cfg(test)]
+#[allow(dead_code)]
+mod mq_reference;
 mod packed_decode;
 mod packed_encode;
 #[cfg(test)]
