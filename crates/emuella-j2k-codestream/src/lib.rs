@@ -13654,7 +13654,14 @@ fn forward_reversible_5_3_levels_with_scratch(
             active_height,
             transform::ComponentSampleRange::signed(32),
         )?;
+        #[cfg(feature = "classic-execution-diagnostics")]
+        let resize = scalable_lossless::EncodeClock::start::<true>();
         scratch.resize(config.scratch_len(), 0);
+        #[cfg(feature = "classic-execution-diagnostics")]
+        {
+            let ns = resize.ns();
+            scalable_lossless::diagnostics::update(|d| d.dwt_scratch_resize_ns += ns);
+        }
         transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
             .map_err(|_| {
                 unsupported(

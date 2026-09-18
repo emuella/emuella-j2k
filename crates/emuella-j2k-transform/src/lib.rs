@@ -9,6 +9,11 @@ extern crate alloc;
 
 use core::fmt;
 
+#[cfg(feature = "classic-execution-diagnostics")]
+mod forward_diagnostics;
+#[cfg(feature = "classic-execution-diagnostics")]
+pub use forward_diagnostics::{ForwardTransformDiagnostic, observe_forward_transform};
+
 mod full;
 mod window;
 
@@ -417,14 +422,23 @@ pub fn forward_reversible_5_3_bounded(
     config: Reversible53Config,
     scratch: &mut [i32],
 ) -> Result<(), TransformError> {
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let validation = forward_diagnostics::Clock::start();
     validate_config(plane, config, scratch)?;
     validate_samples_in_range(plane, config)?;
+
+    #[cfg(feature = "classic-execution-diagnostics")]
+    validation.finish(|d| &mut d.validation_ns);
 
     let max_axis = max_usize(config.width, config.height);
     let (_line, rest) = scratch.split_at_mut(max_axis);
     let (read, coeffs) = rest.split_at_mut(max_axis);
     for x in 0..config.width {
+        #[cfg(feature = "classic-execution-diagnostics")]
+        let gather = forward_diagnostics::Clock::start();
         copy_strided_column_to_line(plane, config.stride, x, &mut read[..config.height]);
+        #[cfg(feature = "classic-execution-diagnostics")]
+        gather.finish(|d| &mut d.vertical_gather_ns);
         transform_line_forward_from_read_to_strided_bounded(
             config.height,
             config.edges.vertical_low_samples,
@@ -1414,6 +1428,8 @@ fn transform_line_forward_bounded(
         return;
     }
 
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let lifting = forward_diagnostics::Clock::start();
     match first {
         TransformBand::Low => {
             transform_line_forward_first_low_bounded(len, low_samples, line, coeffs)
@@ -1422,7 +1438,13 @@ fn transform_line_forward_bounded(
             transform_line_forward_first_high_bounded(len, low_samples, line, coeffs)
         }
     }
+    #[cfg(feature = "classic-execution-diagnostics")]
+    lifting.finish(|d| &mut d.horizontal_lifting_ns);
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let copying = forward_diagnostics::Clock::start();
     line.copy_from_slice(&coeffs[..len]);
+    #[cfg(feature = "classic-execution-diagnostics")]
+    copying.finish(|d| &mut d.horizontal_copy_ns);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1441,6 +1463,8 @@ fn transform_line_forward_from_read_to_strided_bounded(
         return;
     }
 
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let lifting = forward_diagnostics::Clock::start();
     match first {
         TransformBand::Low => {
             transform_line_forward_first_low_bounded(len, low_samples, read, coeffs)
@@ -1449,7 +1473,13 @@ fn transform_line_forward_from_read_to_strided_bounded(
             transform_line_forward_first_high_bounded(len, low_samples, read, coeffs)
         }
     }
+    #[cfg(feature = "classic-execution-diagnostics")]
+    lifting.finish(|d| &mut d.vertical_lifting_ns);
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let copying = forward_diagnostics::Clock::start();
     write_line_to_strided_column(plane, stride, x, &coeffs[..len]);
+    #[cfg(feature = "classic-execution-diagnostics")]
+    copying.finish(|d| &mut d.vertical_store_ns);
 }
 
 fn transform_line_forward_first_low_bounded(

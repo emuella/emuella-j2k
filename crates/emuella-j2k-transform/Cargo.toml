@@ -16,6 +16,7 @@ default = ["std"]
 parallel = ["std", "dep:rayon"]
 simd = ["std", "emuella-j2k-accel/simd"]
 std = []
+classic-execution-diagnostics = ["std"]
 
 [dependencies]
 emuella-j2k-accel.workspace = true

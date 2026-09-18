@@ -480,6 +480,22 @@ instantiations contain none of these observers, interval fields or clock reads.
 Use separate ordinary processes for throughput and disclose diagnostic overhead.
 Observer state is bounded, contains no payloads and is removed on error/unwind.
 
+The feature-only observer also splits the existing encode front end without
+changing its arithmetic or traversal. `conversion_level_shift_ns` includes
+coefficient allocation and input conversion; `forward_rct_ns` is the separate
+whole-plane RCT call (zero without RGB). The DWT detail records validation,
+vertical gather/lifting/store, horizontal lifting/copy, scratch resize and
+scratch destruction. Lifting includes writes of its coefficients into scratch;
+the explicit gather/store/copy intervals describe the subsequent or preceding
+transfers. Resize includes allocation and zero initialisation when needed.
+These intervals are nested within the existing combined conversion/RCT and
+forward-DWT stages, so they must not be added to those totals. Their remainder
+contains configuration, loops and diagnostic clock/accounting overhead. The
+scalable writer's conversion, RCT and DWT component/axis loops are serial even
+in parallel builds; its later Tier-1 batches retain the admitted W policy.
+Per-line clock reads perturb the diagnostic build, particularly short axes.
+The ordinary feature-disabled build contains no added clocks or observer state.
+
 
 ## Finite scheduling study disposition
 

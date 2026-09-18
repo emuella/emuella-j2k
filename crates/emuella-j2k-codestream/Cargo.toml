@@ -26,7 +26,7 @@ std = [
 ]
 test-fixtures = ["emuella-j2k-tier1/test-fixtures"]
 
-classic-execution-diagnostics = ["std", "emuella-j2k-tier1/classic-execution-diagnostics"]
+classic-execution-diagnostics = ["std", "emuella-j2k-tier1/classic-execution-diagnostics", "emuella-j2k-transform/classic-execution-diagnostics"]
 
 [dependencies]
 emuella-j2k-accel.workspace = true
