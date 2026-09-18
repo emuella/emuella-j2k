@@ -145,19 +145,36 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn read_bit(&mut self, context: &mut Context) -> u32 {
-        let estimate = PROBABILITY_ESTIMATES[usize::from(context.state)];
-        self.interval -= estimate.qe;
+        let estimate = &PROBABILITY_ESTIMATES[usize::from(context.state)];
+        let mut interval = self.interval - estimate.qe;
+        let mut code = self.code;
+        let mut next = *context;
 
-        let decision = if (self.code >> 16) < estimate.qe {
-            self.exchange_on_lps_path(context, estimate, self.interval)
+        let lower_interval = (code >> 16) < estimate.qe;
+        let exchanged = interval < estimate.qe;
+        if lower_interval {
+            interval = estimate.qe;
         } else {
-            self.code -= estimate.qe << 16;
-            if self.interval & 0x8000 != 0 {
-                return u32::from(context.mps);
+            code -= estimate.qe << 16;
+            if interval & 0x8000 != 0 {
+                self.interval = interval;
+                self.code = code;
+                return u32::from(next.mps);
             }
-            self.exchange_on_mps_path(context, estimate)
-        };
+        }
 
+        let lps = lower_interval != exchanged;
+        let decision = u32::from(next.mps ^ u8::from(lps));
+        if lps {
+            next.state = estimate.next_lps;
+            next.mps ^= u8::from(estimate.switch_mps);
+        } else {
+            next.state = estimate.next_mps;
+        }
+
+        self.interval = interval;
+        self.code = code;
+        *context = next;
         self.renormalize();
         decision
     }
@@ -187,44 +204,6 @@ impl<'a> Decoder<'a> {
             });
         }
         Ok(())
-    }
-
-    fn exchange_on_mps_path(
-        &mut self,
-        context: &mut Context,
-        estimate: ProbabilityEstimate,
-    ) -> u32 {
-        if self.interval < estimate.qe {
-            let decision = u32::from(context.mps ^ 1);
-            context.state = estimate.next_lps;
-            if estimate.switch_mps {
-                context.mps ^= 1;
-            }
-            decision
-        } else {
-            context.state = estimate.next_mps;
-            u32::from(context.mps)
-        }
-    }
-
-    fn exchange_on_lps_path(
-        &mut self,
-        context: &mut Context,
-        estimate: ProbabilityEstimate,
-        mps_interval: u32,
-    ) -> u32 {
-        self.interval = estimate.qe;
-        if mps_interval < estimate.qe {
-            context.state = estimate.next_mps;
-            u32::from(context.mps)
-        } else {
-            let decision = u32::from(context.mps ^ 1);
-            context.state = estimate.next_lps;
-            if estimate.switch_mps {
-                context.mps ^= 1;
-            }
-            decision
-        }
     }
 
     fn renormalize(&mut self) {
