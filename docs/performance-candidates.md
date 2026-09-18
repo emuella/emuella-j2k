@@ -1,6 +1,6 @@
 # Retained performance candidates
 
-This codec-owned inventory retains three project-authored source experiments
+This codec-owned inventory retains project-authored source experiments
 for possible future investigation. It changes no production execution or
 historical verdict. Recoverable source, correctness observations, timing evidence
 and engineering disposition are separate. Retention is not qualification, an
@@ -227,3 +227,63 @@ The archive does not reinstate the removed implementation or its test machinery.
 
 [incremental-result]: https://github.com/emuella/emuella-benchmark/blob/main/docs/mq-d2-incremental-confirmation-results.md
 [incremental-evidence]: https://github.com/emuella/emuella-benchmark/blob/main/docs/evidence/mq-d2-incremental-confirmation.json
+
+
+## Classic encode front-end locality experiment
+
+The contemporary `classic-encode-front-end/v1` experiment is **not selected**.
+Its Route A primary passed, but required non-regression remained unproved in
+22 of 24 conditional contrasts. None of those contrasts established a slowdown;
+insufficient precision is not zero effect. No additional timing rounds were
+run. The conditional OpenJPEG anchor and selected-stage re-profile were not
+started. Production uses the original single-column traversal, original MQ,
+packed encoder and W batches; only feature-gated stage diagnostics remain.
+
+The one development variant gathered two adjacent DWT columns into two existing
+scratch lines before applying the unchanged bounded lifting and scattering each
+column. The third scratch line remained lifting output; odd columns used the
+original route. There was no new allocation, concurrency, ISA, runtime selector
+or resource charge. Independent pre-timing review classified this compact
+locality change as Route A. Candidate tests compared intermediate coefficients
+against original traversal and checked arithmetic, and complete streams against
+an original-path encoder across layouts and shapes. Those candidate tests are
+retained with the source archive, not compiled as dormant production machinery.
+
+| Recovery identity | Value |
+|---|---|
+| Reachable production base / tree | `b02b6ab1ddaecefd25e18d4cd610eba09e8a6627` / `ccebe92485183eb016c25bb7eeb01d4fd00533ef` |
+| Measured source / recovered tree | `21033ea890b4393e8c7f6791cf4a89d866d2dfd3` / `19c26fe7f04f88ac8125fdd736916827e41c18a5` |
+| Complete source patch | [classic-front-end-columns.patch.txt](performance-candidates/classic-front-end-columns.patch.txt) |
+| Patch SHA-256 | `08fdf2912df2ed5003c6a9365a3d35db2f4d32e5e179a7954a98f27d38407e08` |
+
+Isolated-index application to the stated merged base reproduced the measured
+tree exactly. The full-index patch includes the diagnostic prerequisite,
+implementation, tests and documentation. Apply it to that base, not to the
+retained-diagnostics tree. It contains only project-authored source.
+
+The sole primary, full Boca Raton RGB8/bypass at eight workers, improved from
+735.469171 to 701.548489 ms: 33.920682 ms saving, estimated −4.612115%, with
+99% interval [−7.931653%, −1.167162%]. This passed the frozen Route A estimated
+2%, strictly negative upper bound and 10 ms absolute gates. Its legacy 5%
+classification remained inconclusive. Style-zero and both one-worker initial
+contrasts passed their +1% upper-bound non-regression gate. The subsequent
+high-bit-depth, Tok, SpaceNet and targeted unchanged-decoder matrix left 22
+upper bounds above +1%; primary success did not waive that requirement.
+
+All 1,288 experimental calls passed their applicable exactness and absolute
+resource gates. The separate 112 allocation-only observations retained the same
+measured peaks, counts, queries and output capacities in paired arms; equality
+of allocation counts is an observation, not a scheduling contract. Maximum
+requested peak was 366,357,664 bytes against its 602,189,308-byte query. Frozen
+candidate canonical native, no-std and WASM verification passed. Independent
+decoder receipts were reused only for identical stream hashes with provenance.
+
+The benchmark owns the [frozen protocol][front-end-protocol],
+[complete results][front-end-result] and [factual evidence][front-end-evidence].
+Any future proposal needs its own contemporary baseline, justified fixed
+precision budget and acceptance route. This archive creates no implementation
+request or recurring retest obligation.
+
+[front-end-protocol]: https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-encode-front-end.md
+[front-end-result]: https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-encode-front-end-results.md
+[front-end-evidence]: https://github.com/emuella/emuella-benchmark/blob/main/docs/evidence/classic-encode-front-end.json

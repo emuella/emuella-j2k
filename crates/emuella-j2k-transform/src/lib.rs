@@ -14,8 +14,6 @@ mod forward_diagnostics;
 #[cfg(feature = "classic-execution-diagnostics")]
 pub use forward_diagnostics::{ForwardTransformDiagnostic, observe_forward_transform};
 
-#[cfg(test)]
-mod forward_tests;
 mod full;
 mod window;
 
@@ -424,27 +422,6 @@ pub fn forward_reversible_5_3_bounded(
     config: Reversible53Config,
     scratch: &mut [i32],
 ) -> Result<(), TransformError> {
-    forward_reversible_5_3_bounded_impl::<false>(plane, config, scratch)
-}
-
-/// Internal classic scalable-encoder entry using the existing three-line scratch.
-/// Arithmetic, coefficient layout and validation match the bounded entry point.
-/// Callers must satisfy the same prevalidated arithmetic bounds as
-/// [`forward_reversible_5_3_bounded`].
-#[doc(hidden)]
-pub fn forward_reversible_5_3_bounded_paired_columns(
-    plane: &mut [i32],
-    config: Reversible53Config,
-    scratch: &mut [i32],
-) -> Result<(), TransformError> {
-    forward_reversible_5_3_bounded_impl::<true>(plane, config, scratch)
-}
-
-fn forward_reversible_5_3_bounded_impl<const PAIR_COLUMNS: bool>(
-    plane: &mut [i32],
-    config: Reversible53Config,
-    scratch: &mut [i32],
-) -> Result<(), TransformError> {
     #[cfg(feature = "classic-execution-diagnostics")]
     let validation = forward_diagnostics::Clock::start();
     validate_config(plane, config, scratch)?;
@@ -454,47 +431,9 @@ fn forward_reversible_5_3_bounded_impl<const PAIR_COLUMNS: bool>(
     validation.finish(|d| &mut d.validation_ns);
 
     let max_axis = max_usize(config.width, config.height);
-    let (line, rest) = scratch.split_at_mut(max_axis);
+    let (_line, rest) = scratch.split_at_mut(max_axis);
     let (read, coeffs) = rest.split_at_mut(max_axis);
-    let mut next_column = 0;
-    if PAIR_COLUMNS {
-        while next_column + 1 < config.width {
-            let x = next_column;
-            #[cfg(feature = "classic-execution-diagnostics")]
-            let gather = forward_diagnostics::Clock::start();
-            // Read neighbouring samples together before either column is changed.
-            // The first scratch line was unused by the single-column route.
-            for y in 0..config.height {
-                let offset = y * config.stride + x;
-                line[y] = plane[offset];
-                read[y] = plane[offset + 1];
-            }
-            #[cfg(feature = "classic-execution-diagnostics")]
-            gather.finish(|d| &mut d.vertical_gather_ns);
-            transform_line_forward_from_read_to_strided_bounded(
-                config.height,
-                config.edges.vertical_low_samples,
-                config.edges.vertical_first,
-                &line[..config.height],
-                &mut coeffs[..config.height],
-                plane,
-                config.stride,
-                x,
-            );
-            transform_line_forward_from_read_to_strided_bounded(
-                config.height,
-                config.edges.vertical_low_samples,
-                config.edges.vertical_first,
-                &read[..config.height],
-                &mut coeffs[..config.height],
-                plane,
-                config.stride,
-                x + 1,
-            );
-            next_column += 2;
-        }
-    }
-    for x in next_column..config.width {
+    for x in 0..config.width {
         #[cfg(feature = "classic-execution-diagnostics")]
         let gather = forward_diagnostics::Clock::start();
         copy_strided_column_to_line(plane, config.stride, x, &mut read[..config.height]);

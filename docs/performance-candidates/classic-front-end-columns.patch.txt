@@ -1,0 +1,954 @@
+diff --git a/crates/emuella-j2k-codestream/Cargo.toml b/crates/emuella-j2k-codestream/Cargo.toml
+index cf3106e4579abbc1f73ef1023fbb401d0aa21011..a51abff3117de148940c61e4d5d70598761ecfcb 100644
+--- a/crates/emuella-j2k-codestream/Cargo.toml
++++ b/crates/emuella-j2k-codestream/Cargo.toml
+@@ -26,7 +26,7 @@ std = [
+ ]
+ test-fixtures = ["emuella-j2k-tier1/test-fixtures"]
+ 
+-classic-execution-diagnostics = ["std", "emuella-j2k-tier1/classic-execution-diagnostics"]
++classic-execution-diagnostics = ["std", "emuella-j2k-tier1/classic-execution-diagnostics", "emuella-j2k-transform/classic-execution-diagnostics"]
+ 
+ [dependencies]
+ emuella-j2k-accel.workspace = true
+diff --git a/crates/emuella-j2k-codestream/src/lib.rs b/crates/emuella-j2k-codestream/src/lib.rs
+index 23c3b7b6dd62d55582291ddd73523a0f51d8c087..28a255f790298a518f00f4ee9afdce09c93e45b6 100644
+--- a/crates/emuella-j2k-codestream/src/lib.rs
++++ b/crates/emuella-j2k-codestream/src/lib.rs
+@@ -13633,6 +13633,24 @@ fn forward_reversible_5_3_levels_with_scratch(
+     decomposition_levels: u8,
+     message: &'static str,
+     scratch: &mut Vec<i32>,
++) -> Result<()> {
++    forward_reversible_5_3_levels_with_scratch_impl::<false>(
++        width,
++        height,
++        coefficients,
++        decomposition_levels,
++        message,
++        scratch,
++    )
++}
++
++fn forward_reversible_5_3_levels_with_scratch_impl<const PAIR_COLUMNS: bool>(
++    width: u32,
++    height: u32,
++    coefficients: &mut [i32],
++    decomposition_levels: u8,
++    message: &'static str,
++    scratch: &mut Vec<i32>,
+ ) -> Result<()> {
+     if !(1..=5).contains(&decomposition_levels) {
+         return Err(unsupported(
+@@ -13654,16 +13672,31 @@ fn forward_reversible_5_3_levels_with_scratch(
+             active_height,
+             transform::ComponentSampleRange::signed(32),
+         )?;
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let resize = scalable_lossless::EncodeClock::start::<true>();
+         scratch.resize(config.scratch_len(), 0);
+-        transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
+-            .map_err(|_| {
+-                unsupported(
+-                    None,
+-                    Some(Marker::Cod),
+-                    UnsupportedConstruct::Transform,
+-                    message,
+-                )
+-            })?;
++        #[cfg(feature = "classic-execution-diagnostics")]
++        {
++            let ns = resize.ns();
++            scalable_lossless::diagnostics::update(|d| d.dwt_scratch_resize_ns += ns);
++        }
++        let result = if PAIR_COLUMNS {
++            transform::forward_reversible_5_3_bounded_paired_columns(
++                coefficients,
++                config,
++                scratch.as_mut_slice(),
++            )
++        } else {
++            transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
++        };
++        result.map_err(|_| {
++            unsupported(
++                None,
++                Some(Marker::Cod),
++                UnsupportedConstruct::Transform,
++                message,
++            )
++        })?;
+     }
+     Ok(())
+ }
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless.rs b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+index 1407a40149ab0062b8823eed33347b90719341fc..b5f0d36751fcb9d7782b27b0de54d2b7cc1dd2f4 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+@@ -7,6 +7,8 @@ mod parallel;
+ mod bypass;
+ #[cfg(feature = "classic-execution-diagnostics")]
+ pub(super) mod diagnostics;
++#[cfg(test)]
++mod front_end_tests;
+ #[cfg(feature = "test-fixtures")]
+ pub use bypass::encode_lossless_d2_bypass_test_fixture;
+ 
+@@ -306,7 +308,7 @@ pub fn encode_lossless_d2_execution_profiled(
+     let start = EncodeClock::start::<true>();
+     let mut timings = LosslessEncodeTimings::default();
+     let mut execution = LosslessEncodeExecution::default();
+-    let bytes = encode_lossless_d2_impl::<true, false>(
++    let bytes = encode_lossless_d2_impl::<true, false, true>(
+         width,
+         height,
+         bits,
+@@ -331,7 +333,7 @@ pub fn encode_lossless_d2_bypass_execution_profiled(
+     let start = EncodeClock::start::<true>();
+     let mut timings = LosslessEncodeTimings::default();
+     let mut execution = LosslessEncodeExecution::default();
+-    let bytes = encode_lossless_d2_impl::<true, true>(
++    let bytes = encode_lossless_d2_impl::<true, true, true>(
+         width,
+         height,
+         bits,
+@@ -358,7 +360,7 @@ pub fn encode_lossless_d2(
+         let start = EncodeClock::start::<true>();
+         let mut timings = LosslessEncodeTimings::default();
+         let mut execution = LosslessEncodeExecution::default();
+-        let result = encode_lossless_d2_impl::<true, false>(
++        let result = encode_lossless_d2_impl::<true, false, true>(
+             width,
+             height,
+             bits,
+@@ -371,7 +373,7 @@ pub fn encode_lossless_d2(
+         diagnostics::finish(timings, execution);
+         return result;
+     }
+-    encode_lossless_d2_impl::<false, false>(
++    encode_lossless_d2_impl::<false, false, true>(
+         width,
+         height,
+         bits,
+@@ -397,7 +399,7 @@ pub fn encode_lossless_d2_bypass(
+         let start = EncodeClock::start::<true>();
+         let mut timings = LosslessEncodeTimings::default();
+         let mut execution = LosslessEncodeExecution::default();
+-        let result = encode_lossless_d2_impl::<true, true>(
++        let result = encode_lossless_d2_impl::<true, true, true>(
+             width,
+             height,
+             bits,
+@@ -410,7 +412,7 @@ pub fn encode_lossless_d2_bypass(
+         diagnostics::finish(timings, execution);
+         return result;
+     }
+-    encode_lossless_d2_impl::<false, true>(
++    encode_lossless_d2_impl::<false, true, true>(
+         width,
+         height,
+         bits,
+@@ -421,7 +423,7 @@ pub fn encode_lossless_d2_bypass(
+     )
+ }
+ 
+-fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
++fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool, const PAIR_COLUMNS: bool>(
+     width: u32,
+     height: u32,
+     bits: u8,
+@@ -491,9 +493,21 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+         }
+         coefficients.push(values);
+     }
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if PROFILE {
++        let ns = start.started.map_or(0, |s| s.elapsed().as_nanos());
++        diagnostics::update(|d| d.conversion_level_shift_ns = ns);
++    }
+     if let [red, green, blue] = coefficients.as_mut_slice() {
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let rct = EncodeClock::start::<PROFILE>();
+         transform::forward_reversible_color_transform_bounded(red, green, blue)
+             .map_err(|_| CodestreamError::SizeOverflow)?;
++        #[cfg(feature = "classic-execution-diagnostics")]
++        if PROFILE {
++            let ns = rct.ns();
++            diagnostics::update(|d| d.forward_rct_ns = ns);
++        }
+     }
+     if PROFILE {
+         timings.conversion_level_shift_rct_ns = start.ns();
+@@ -502,17 +516,44 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+     }
+     let start = EncodeClock::start::<PROFILE>();
+     let mut transform_scratch = Vec::new();
+-    for plane in &mut coefficients {
+-        forward_reversible_5_3_levels_with_scratch(
+-            width,
+-            height,
+-            plane,
+-            2,
+-            "lossless D2 transform failed",
+-            &mut transform_scratch,
+-        )?;
++    let mut transform_components = || -> Result<()> {
++        for plane in &mut coefficients {
++            forward_reversible_5_3_levels_with_scratch_impl::<PAIR_COLUMNS>(
++                width,
++                height,
++                plane,
++                2,
++                "lossless D2 transform failed",
++                &mut transform_scratch,
++            )?;
++        }
++        Ok(())
++    };
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if PROFILE && diagnostics::enabled() {
++        let (result, detail) = transform::observe_forward_transform(transform_components);
++        result?;
++        diagnostics::update(|d| {
++            d.dwt_validation_ns = detail.validation_ns;
++            d.dwt_vertical_gather_ns = detail.vertical_gather_ns;
++            d.dwt_vertical_lifting_ns = detail.vertical_lifting_ns;
++            d.dwt_vertical_store_ns = detail.vertical_store_ns;
++            d.dwt_horizontal_lifting_ns = detail.horizontal_lifting_ns;
++            d.dwt_horizontal_copy_ns = detail.horizontal_copy_ns;
++        });
++    } else {
++        transform_components()?;
+     }
++    #[cfg(not(feature = "classic-execution-diagnostics"))]
++    transform_components()?;
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let dropping = EncodeClock::start::<PROFILE>();
+     drop(transform_scratch);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if PROFILE {
++        let ns = dropping.ns();
++        diagnostics::update(|d| d.dwt_scratch_drop_ns += ns);
++    }
+     if PROFILE {
+         timings.forward_dwt_ns = start.ns();
+     }
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs
+index bb371be218bb15e20a0ca446b67f07aa6bb2b9ed..35442bd9e18267a2af8d3acf79d6b1040f0f6df9 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs
+@@ -492,7 +492,7 @@ mod tests {
+                         sample_step_bytes: 2,
+                     })
+                     .collect();
+-                let bytes = encode_lossless_d2_impl::<false, true>(
++                let bytes = encode_lossless_d2_impl::<false, true, true>(
+                     width,
+                     height,
+                     16,
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
+index e0dfc85fd0e109f24393b3ab09495e36e9e81094..456ef5cfdd8e550b5422b105a0a62b111476d83d 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
+@@ -45,6 +45,17 @@ impl Durations {
+ pub struct LosslessExecutionDiagnostic {
+     pub timings: LosslessEncodeTimings,
+     pub execution: LosslessEncodeExecution,
++    /// Front-end subintervals nested within the existing stage totals.
++    pub conversion_level_shift_ns: u128,
++    pub forward_rct_ns: u128,
++    pub dwt_scratch_resize_ns: u128,
++    pub dwt_scratch_drop_ns: u128,
++    pub dwt_validation_ns: u128,
++    pub dwt_vertical_gather_ns: u128,
++    pub dwt_vertical_lifting_ns: u128,
++    pub dwt_vertical_store_ns: u128,
++    pub dwt_horizontal_lifting_ns: u128,
++    pub dwt_horizontal_copy_ns: u128,
+     pub blocks: Durations,
+     pub batch_tails: Durations,
+     pub batches: u64,
+@@ -98,7 +109,7 @@ pub fn observe_lossless_encode<T>(call: impl FnOnce() -> T) -> (T, LosslessExecu
+ pub(super) fn enabled() -> bool {
+     CURRENT.with(|c| c.borrow().is_some())
+ }
+-fn update(f: impl FnOnce(&mut LosslessExecutionDiagnostic)) {
++pub(crate) fn update(f: impl FnOnce(&mut LosslessExecutionDiagnostic)) {
+     CURRENT.with(|c| {
+         if let Some(d) = c.borrow_mut().as_mut() {
+             f(d);
+@@ -207,6 +218,77 @@ pub(super) fn batch(
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn front_end_observation_preserves_models_layouts_and_styles() {
++        use super::super::*;
++        let (width, height) = (17, 19);
++        for (components, bits) in [(1, 8), (1, 16), (3, 8), (3, 16), (8, 16)] {
++            let bytes = usize::from(bits / 8);
++            for interleaved in [false, true] {
++                let step = bytes * if interleaved { components } else { 1 };
++                let stride = width * step + 7;
++                let span = height * stride;
++                let mut raw = vec![0; if interleaved { span } else { span * components }];
++                for c in 0..components {
++                    for y in 0..height {
++                        for x in 0..width {
++                            let offset = if interleaved { c * bytes } else { c * span }
++                                + y * stride
++                                + x * step;
++                            let value = ((x * 7919 + y * 3301 + c * 65521) as u16).to_le_bytes();
++                            raw[offset..offset + bytes].copy_from_slice(&value[..bytes]);
++                        }
++                    }
++                }
++                let planes: Vec<_> = (0..components)
++                    .map(|c| LosslessD2Plane {
++                        samples: &raw[if interleaved { c * bytes } else { c * span }..],
++                        stride_bytes: stride,
++                        sample_step_bytes: step,
++                    })
++                    .collect();
++                for bypass in [false, true] {
++                    let call = || {
++                        let encode = if bypass {
++                            encode_lossless_d2_bypass
++                        } else {
++                            encode_lossless_d2
++                        };
++                        encode(
++                            width as u32,
++                            height as u32,
++                            bits,
++                            &planes,
++                            LosslessEncodeLimits::default(),
++                        )
++                    };
++                    let plain = call().unwrap();
++                    let (observed, d) = observe_lossless_encode(call);
++                    assert_eq!(observed.unwrap(), plain);
++                    assert!(
++                        d.conversion_level_shift_ns + d.forward_rct_ns
++                            <= d.timings.conversion_level_shift_rct_ns
++                    );
++                    if components != 3 {
++                        assert_eq!(d.forward_rct_ns, 0);
++                    }
++                    let detailed_dwt = d.dwt_scratch_resize_ns
++                        + d.dwt_scratch_drop_ns
++                        + d.dwt_validation_ns
++                        + d.dwt_vertical_gather_ns
++                        + d.dwt_vertical_lifting_ns
++                        + d.dwt_vertical_store_ns
++                        + d.dwt_horizontal_lifting_ns
++                        + d.dwt_horizontal_copy_ns;
++                    assert!(detailed_dwt <= d.timings.forward_dwt_ns);
++                    assert!(d.dwt_vertical_gather_ns > 0);
++                    assert!(d.dwt_vertical_lifting_ns > 0);
++                    assert!(d.dwt_horizontal_lifting_ns > 0);
++                }
++            }
++        }
++    }
++
+     #[test]
+     fn fixed_distribution_preserves_counts_and_bounds() {
+         let mut d = Durations::default();
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/front_end_tests.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/front_end_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..9edd41e2f65e86ee64264ac435a7ddb42deda345
+--- /dev/null
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/front_end_tests.rs
+@@ -0,0 +1,102 @@
++use super::*;
++
++fn streams_match_original_columns() {
++    for (width, height) in [(4, 5), (17, 19), (65, 67)] {
++        for (components, bits) in [(1, 8), (1, 16), (3, 8), (3, 16), (8, 16)] {
++            let bytes = usize::from(bits / 8);
++            // Disjoint planes, interleaved planes, identical slices, and partially
++            // overlapping U16 samples are all legal immutable borrowed inputs.
++            for layout in 0..4 {
++                let step = if layout == 1 {
++                    bytes * components
++                } else {
++                    bytes + 1
++                };
++                let stride = width * step + 7;
++                let span = height * stride;
++                let raw: Vec<u8> = (0..span * components + components * bytes)
++                    .map(|n| (n * 193 + n / 7) as u8)
++                    .collect();
++                let before = raw.clone();
++                let planes: Vec<_> = (0..components)
++                    .map(|c| LosslessD2Plane {
++                        samples: &raw[match layout {
++                            0 => c * span,
++                            1 => c * bytes,
++                            2 => 0,
++                            _ => c,
++                        }..],
++                        stride_bytes: stride,
++                        sample_step_bytes: step,
++                    })
++                    .collect();
++                for bypass in [false, true] {
++                    let limits = LosslessEncodeLimits::default();
++                    let run = |paired: bool| {
++                        let mut timings = LosslessEncodeTimings::default();
++                        let mut execution = LosslessEncodeExecution::default();
++                        match (paired, bypass) {
++                            (true, false) => encode_lossless_d2_impl::<false, false, true>(
++                                width as u32,
++                                height as u32,
++                                bits,
++                                &planes,
++                                limits,
++                                &mut timings,
++                                &mut execution,
++                            ),
++                            (false, false) => encode_lossless_d2_impl::<false, false, false>(
++                                width as u32,
++                                height as u32,
++                                bits,
++                                &planes,
++                                limits,
++                                &mut timings,
++                                &mut execution,
++                            ),
++                            (true, true) => encode_lossless_d2_impl::<false, true, true>(
++                                width as u32,
++                                height as u32,
++                                bits,
++                                &planes,
++                                limits,
++                                &mut timings,
++                                &mut execution,
++                            ),
++                            (false, true) => encode_lossless_d2_impl::<false, true, false>(
++                                width as u32,
++                                height as u32,
++                                bits,
++                                &planes,
++                                limits,
++                                &mut timings,
++                                &mut execution,
++                            ),
++                        }
++                        .unwrap()
++                    };
++                    assert_eq!(
++                        run(true),
++                        run(false),
++                        "{width}x{height} c={components} bits={bits} layout={layout} bypass={bypass}"
++                    );
++                    assert_eq!(raw, before);
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn paired_columns_preserve_complete_streams_and_borrowed_input() {
++    #[cfg(feature = "parallel")]
++    for workers in [1, 8] {
++        rayon::ThreadPoolBuilder::new()
++            .num_threads(workers)
++            .build()
++            .unwrap()
++            .install(streams_match_original_columns);
++    }
++    #[cfg(not(feature = "parallel"))]
++    streams_match_original_columns();
++}
+diff --git a/crates/emuella-j2k-transform/Cargo.toml b/crates/emuella-j2k-transform/Cargo.toml
+index 4930ebb506c8a51fbafdc792b3c03ab6062b1ab0..4854f66bebf0c96a2f49bfe537354877c366566d 100644
+--- a/crates/emuella-j2k-transform/Cargo.toml
++++ b/crates/emuella-j2k-transform/Cargo.toml
+@@ -16,6 +16,7 @@ default = ["std"]
+ parallel = ["std", "dep:rayon"]
+ simd = ["std", "emuella-j2k-accel/simd"]
+ std = []
++classic-execution-diagnostics = ["std"]
+ 
+ [dependencies]
+ emuella-j2k-accel.workspace = true
+diff --git a/crates/emuella-j2k-transform/src/forward_diagnostics.rs b/crates/emuella-j2k-transform/src/forward_diagnostics.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca67c79521852ef40ea7b1e24995b076e7b272a8
+--- /dev/null
++++ b/crates/emuella-j2k-transform/src/forward_diagnostics.rs
+@@ -0,0 +1,111 @@
++//! Feature-only observations of the ordinary bounded forward transform body.
++use std::{cell::RefCell, time::Instant};
++
++/// Nested intervals, excluding clock/accounting and loop overhead. These are
++/// diagnostic observations, not ordinary throughput measurements.
++#[derive(Debug, Clone, Default)]
++pub struct ForwardTransformDiagnostic {
++    pub validation_ns: u128,
++    pub vertical_gather_ns: u128,
++    pub vertical_lifting_ns: u128,
++    pub vertical_store_ns: u128,
++    pub horizontal_lifting_ns: u128,
++    pub horizontal_copy_ns: u128,
++}
++
++thread_local! {
++    static CURRENT: RefCell<Option<ForwardTransformDiagnostic>> = const { RefCell::new(None) };
++}
++
++/// Observe synchronous calls to the existing bounded forward transform.
++/// Nested observation is rejected; state is removed on error or unwind.
++pub fn observe_forward_transform<T>(call: impl FnOnce() -> T) -> (T, ForwardTransformDiagnostic) {
++    struct Reset;
++    impl Drop for Reset {
++        fn drop(&mut self) {
++            CURRENT.with(|c| {
++                c.borrow_mut().take();
++            });
++        }
++    }
++    CURRENT.with(|c| {
++        assert!(c.borrow().is_none(), "nested forward transform observation");
++        *c.borrow_mut() = Some(ForwardTransformDiagnostic::default());
++    });
++    let reset = Reset;
++    let result = call();
++    let observation = CURRENT.with(|c| c.borrow_mut().take().expect("active observation"));
++    drop(reset);
++    (result, observation)
++}
++
++pub(super) struct Clock(Option<Instant>);
++impl Clock {
++    pub(super) fn start() -> Self {
++        Self(CURRENT.with(|c| c.borrow().is_some()).then(Instant::now))
++    }
++    pub(super) fn finish(self, field: impl FnOnce(&mut ForwardTransformDiagnostic) -> &mut u128) {
++        if let Some(start) = self.0 {
++            let ns = start.elapsed().as_nanos();
++            CURRENT.with(|c| {
++                if let Some(d) = c.borrow_mut().as_mut() {
++                    *field(d) += ns;
++                }
++            });
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::*;
++
++    #[test]
++    fn observed_forward_matches_ordinary_and_checked_coefficients() {
++        for (width, height) in [(1, 1), (1, 9), (8, 1), (7, 9), (8, 10), (65, 64)] {
++            for (x_origin, y_origin) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
++                let config = Reversible53Config {
++                    width,
++                    height,
++                    stride: width + 3,
++                    edges: Reversible53Edges::from_tile_origin(x_origin, y_origin, width, height),
++                    sample_range: ComponentSampleRange::signed(32),
++                };
++                let source: Vec<i32> = (0..config.stride * height)
++                    .map(|n| ((n * 7919 + n / 7) % 131071) as i32 - 65535)
++                    .collect();
++                let mut plain = source.clone();
++                let mut checked = source.clone();
++                let mut observed = source;
++                let mut scratch = vec![0; config.scratch_len()];
++                forward_reversible_5_3(&mut checked, config, &mut scratch).unwrap();
++                forward_reversible_5_3_bounded(&mut plain, config, &mut scratch).unwrap();
++                let start = Instant::now();
++                let (result, detail) = observe_forward_transform(|| {
++                    forward_reversible_5_3_bounded(&mut observed, config, &mut scratch)
++                });
++                result.unwrap();
++                assert_eq!(observed, plain);
++                assert_eq!(observed, checked);
++                let sum = detail.validation_ns
++                    + detail.vertical_gather_ns
++                    + detail.vertical_lifting_ns
++                    + detail.vertical_store_ns
++                    + detail.horizontal_lifting_ns
++                    + detail.horizontal_copy_ns;
++                assert!(sum <= start.elapsed().as_nanos());
++            }
++        }
++    }
++
++    #[test]
++    fn observer_releases_after_unwind() {
++        assert!(
++            std::panic::catch_unwind(|| observe_forward_transform(|| panic!("authored fault")))
++                .is_err()
++        );
++        let (_, detail) = observe_forward_transform(|| ());
++        assert_eq!(detail.validation_ns, 0);
++    }
++}
+diff --git a/crates/emuella-j2k-transform/src/forward_tests.rs b/crates/emuella-j2k-transform/src/forward_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f340a872ffa6e88bf900ab702991bc470de123d9
+--- /dev/null
++++ b/crates/emuella-j2k-transform/src/forward_tests.rs
+@@ -0,0 +1,164 @@
++use super::*;
++use alloc::{vec, vec::Vec};
++
++// Retain the original single-column traversal independently of the candidate's
++// const-generic body. Checked lifting below supplies a separate arithmetic oracle.
++fn original_columns(plane: &mut [i32], config: Reversible53Config, scratch: &mut [i32]) {
++    let axis = config.width.max(config.height);
++    let (_, rest) = scratch.split_at_mut(axis);
++    let (read, coeffs) = rest.split_at_mut(axis);
++    for x in 0..config.width {
++        copy_strided_column_to_line(plane, config.stride, x, &mut read[..config.height]);
++        transform_line_forward_from_read_to_strided_bounded(
++            config.height,
++            config.edges.vertical_low_samples,
++            config.edges.vertical_first,
++            &read[..config.height],
++            &mut coeffs[..config.height],
++            plane,
++            config.stride,
++            x,
++        );
++    }
++    for y in 0..config.height {
++        let start = y * config.stride;
++        transform_line_forward_bounded(
++            &mut plane[start..start + config.width],
++            config.edges.horizontal_low_samples,
++            config.edges.horizontal_first,
++            &mut coeffs[..config.width],
++        );
++    }
++}
++
++#[test]
++fn paired_columns_match_original_and_checked_with_exact_scratch() {
++    for (width, height) in [
++        (1, 1),
++        (1, 17),
++        (18, 1),
++        (2, 2),
++        (3, 5),
++        (4, 4),
++        (7, 8),
++        (8, 7),
++        (63, 65),
++        (64, 64),
++        (65, 63),
++        (129, 127),
++    ] {
++        for (origin_x, origin_y) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
++            for padding in [0, 5] {
++                let config = Reversible53Config {
++                    width,
++                    height,
++                    stride: width + padding,
++                    edges: Reversible53Edges::from_tile_origin(origin_x, origin_y, width, height),
++                    sample_range: ComponentSampleRange::signed(32),
++                };
++                let source: Vec<i32> = (0..(height - 1) * config.stride + width)
++                    .map(|n| match n % 5 {
++                        0 => -65535,
++                        1 => 65535,
++                        2 => -1,
++                        3 => 0,
++                        _ => ((n * 7919 + n / 7) % 131071) as i32 - 65535,
++                    })
++                    .collect();
++                let mut candidate = source.clone();
++                let mut original = source.clone();
++                let mut checked = source;
++                let required = config.scratch_len();
++                let mut candidate_storage = vec![0x123456; required + 18];
++                let mut reference_scratch = vec![0; required];
++                forward_reversible_5_3_bounded_paired_columns(
++                    &mut candidate,
++                    config,
++                    &mut candidate_storage[9..9 + required],
++                )
++                .unwrap();
++                original_columns(&mut original, config, &mut reference_scratch);
++                forward_reversible_5_3(&mut checked, config, &mut reference_scratch).unwrap();
++                assert_eq!(
++                    candidate, original,
++                    "original {width}x{height}, phase {origin_x},{origin_y}"
++                );
++                assert_eq!(
++                    candidate, checked,
++                    "checked {width}x{height}, phase {origin_x},{origin_y}"
++                );
++                assert_eq!(&candidate_storage[..9], &[0x123456; 9]);
++                assert_eq!(&candidate_storage[9 + required..], &[0x123456; 9]);
++            }
++        }
++    }
++}
++
++#[test]
++fn paired_columns_preserve_two_level_ll_stride_and_other_subbands() {
++    for (width, height) in [(4, 4), (5, 7), (64, 65), (65, 64), (129, 131)] {
++        let source: Vec<i32> = (0..width * height)
++            .map(|n| ((n * 65521 + n / 3) % 131071) as i32 - 65535)
++            .collect();
++        let mut candidate = source.clone();
++        let mut original = source.clone();
++        let mut checked = source;
++        let mut scratch = vec![0; 3 * width.max(height)];
++        for level in 0..2 {
++            let active_width = width.div_ceil(1 << level);
++            let active_height = height.div_ceil(1 << level);
++            let config = Reversible53Config {
++                width: active_width,
++                height: active_height,
++                stride: width,
++                edges: Reversible53Edges::from_tile_origin(0, 0, active_width, active_height),
++                sample_range: ComponentSampleRange::signed(32),
++            };
++            forward_reversible_5_3_bounded_paired_columns(&mut candidate, config, &mut scratch)
++                .unwrap();
++            original_columns(&mut original, config, &mut scratch);
++            forward_reversible_5_3(&mut checked, config, &mut scratch).unwrap();
++            assert_eq!(candidate, original);
++            assert_eq!(candidate, checked);
++        }
++    }
++}
++
++#[test]
++fn paired_columns_preserve_validation_and_failure_atomicity() {
++    let valid = Reversible53Config {
++        width: 4,
++        height: 5,
++        stride: 4,
++        edges: Reversible53Edges::from_tile_origin(0, 0, 4, 5),
++        sample_range: ComponentSampleRange::signed(8),
++    };
++    for (config, length, scratch_length, value) in [
++        (valid, 20, valid.scratch_len() - 1, 0),
++        (valid, 19, valid.scratch_len(), 0),
++        (
++            Reversible53Config { stride: 3, ..valid },
++            20,
++            valid.scratch_len(),
++            0,
++        ),
++        (
++            Reversible53Config { width: 0, ..valid },
++            20,
++            valid.scratch_len(),
++            0,
++        ),
++        (valid, 20, valid.scratch_len(), 128),
++    ] {
++        let source = vec![value; length];
++        let mut candidate = source.clone();
++        let mut original = source.clone();
++        let mut scratch = vec![0; scratch_length];
++        let a = forward_reversible_5_3_bounded_paired_columns(&mut candidate, config, &mut scratch);
++        let b = forward_reversible_5_3_bounded(&mut original, config, &mut scratch);
++        assert!(a.is_err());
++        assert_eq!(a, b);
++        assert_eq!(candidate, source);
++        assert_eq!(original, source);
++    }
++}
+diff --git a/crates/emuella-j2k-transform/src/lib.rs b/crates/emuella-j2k-transform/src/lib.rs
+index 793b15d49efb3a79032fdf101b949ee23008ba9b..f1de02714cc640738bf58e63edbc89836a63b221 100644
+--- a/crates/emuella-j2k-transform/src/lib.rs
++++ b/crates/emuella-j2k-transform/src/lib.rs
+@@ -9,6 +9,13 @@ extern crate alloc;
+ 
+ use core::fmt;
+ 
++#[cfg(feature = "classic-execution-diagnostics")]
++mod forward_diagnostics;
++#[cfg(feature = "classic-execution-diagnostics")]
++pub use forward_diagnostics::{ForwardTransformDiagnostic, observe_forward_transform};
++
++#[cfg(test)]
++mod forward_tests;
+ mod full;
+ mod window;
+ 
+@@ -417,14 +424,82 @@ pub fn forward_reversible_5_3_bounded(
+     config: Reversible53Config,
+     scratch: &mut [i32],
+ ) -> Result<(), TransformError> {
++    forward_reversible_5_3_bounded_impl::<false>(plane, config, scratch)
++}
++
++/// Internal classic scalable-encoder entry using the existing three-line scratch.
++/// Arithmetic, coefficient layout and validation match the bounded entry point.
++/// Callers must satisfy the same prevalidated arithmetic bounds as
++/// [`forward_reversible_5_3_bounded`].
++#[doc(hidden)]
++pub fn forward_reversible_5_3_bounded_paired_columns(
++    plane: &mut [i32],
++    config: Reversible53Config,
++    scratch: &mut [i32],
++) -> Result<(), TransformError> {
++    forward_reversible_5_3_bounded_impl::<true>(plane, config, scratch)
++}
++
++fn forward_reversible_5_3_bounded_impl<const PAIR_COLUMNS: bool>(
++    plane: &mut [i32],
++    config: Reversible53Config,
++    scratch: &mut [i32],
++) -> Result<(), TransformError> {
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let validation = forward_diagnostics::Clock::start();
+     validate_config(plane, config, scratch)?;
+     validate_samples_in_range(plane, config)?;
+ 
++    #[cfg(feature = "classic-execution-diagnostics")]
++    validation.finish(|d| &mut d.validation_ns);
++
+     let max_axis = max_usize(config.width, config.height);
+-    let (_line, rest) = scratch.split_at_mut(max_axis);
++    let (line, rest) = scratch.split_at_mut(max_axis);
+     let (read, coeffs) = rest.split_at_mut(max_axis);
+-    for x in 0..config.width {
++    let mut next_column = 0;
++    if PAIR_COLUMNS {
++        while next_column + 1 < config.width {
++            let x = next_column;
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let gather = forward_diagnostics::Clock::start();
++            // Read neighbouring samples together before either column is changed.
++            // The first scratch line was unused by the single-column route.
++            for y in 0..config.height {
++                let offset = y * config.stride + x;
++                line[y] = plane[offset];
++                read[y] = plane[offset + 1];
++            }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            gather.finish(|d| &mut d.vertical_gather_ns);
++            transform_line_forward_from_read_to_strided_bounded(
++                config.height,
++                config.edges.vertical_low_samples,
++                config.edges.vertical_first,
++                &line[..config.height],
++                &mut coeffs[..config.height],
++                plane,
++                config.stride,
++                x,
++            );
++            transform_line_forward_from_read_to_strided_bounded(
++                config.height,
++                config.edges.vertical_low_samples,
++                config.edges.vertical_first,
++                &read[..config.height],
++                &mut coeffs[..config.height],
++                plane,
++                config.stride,
++                x + 1,
++            );
++            next_column += 2;
++        }
++    }
++    for x in next_column..config.width {
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let gather = forward_diagnostics::Clock::start();
+         copy_strided_column_to_line(plane, config.stride, x, &mut read[..config.height]);
++        #[cfg(feature = "classic-execution-diagnostics")]
++        gather.finish(|d| &mut d.vertical_gather_ns);
+         transform_line_forward_from_read_to_strided_bounded(
+             config.height,
+             config.edges.vertical_low_samples,
+@@ -1414,6 +1489,8 @@ fn transform_line_forward_bounded(
+         return;
+     }
+ 
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let lifting = forward_diagnostics::Clock::start();
+     match first {
+         TransformBand::Low => {
+             transform_line_forward_first_low_bounded(len, low_samples, line, coeffs)
+@@ -1422,7 +1499,13 @@ fn transform_line_forward_bounded(
+             transform_line_forward_first_high_bounded(len, low_samples, line, coeffs)
+         }
+     }
++    #[cfg(feature = "classic-execution-diagnostics")]
++    lifting.finish(|d| &mut d.horizontal_lifting_ns);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let copying = forward_diagnostics::Clock::start();
+     line.copy_from_slice(&coeffs[..len]);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    copying.finish(|d| &mut d.horizontal_copy_ns);
+ }
+ 
+ #[allow(clippy::too_many_arguments)]
+@@ -1441,6 +1524,8 @@ fn transform_line_forward_from_read_to_strided_bounded(
+         return;
+     }
+ 
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let lifting = forward_diagnostics::Clock::start();
+     match first {
+         TransformBand::Low => {
+             transform_line_forward_first_low_bounded(len, low_samples, read, coeffs)
+@@ -1449,7 +1534,13 @@ fn transform_line_forward_from_read_to_strided_bounded(
+             transform_line_forward_first_high_bounded(len, low_samples, read, coeffs)
+         }
+     }
++    #[cfg(feature = "classic-execution-diagnostics")]
++    lifting.finish(|d| &mut d.vertical_lifting_ns);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let copying = forward_diagnostics::Clock::start();
+     write_line_to_strided_column(plane, stride, x, &coeffs[..len]);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    copying.finish(|d| &mut d.vertical_store_ns);
+ }
+ 
+ fn transform_line_forward_first_low_bounded(
+diff --git a/docs/scalable-lossless.md b/docs/scalable-lossless.md
+index 85dabab1069cf6262e78fbb8177944f2c56accb5..3d54d74d03e2f99a1ad2d9a1f7fa19f5de22e8c7 100644
+--- a/docs/scalable-lossless.md
++++ b/docs/scalable-lossless.md
+@@ -100,7 +100,12 @@ actual allocation lifetimes:
+ - Exact-capacity i32 coefficient vectors use 4*S bytes. Input components are
+   read directly at their byte stride/step; planar RGB has no packed input copy.
+ - One reusable DWT vector contains three i32 lines, at most 12*A bytes. It is
+-  released before entropy coding.
++  released before entropy coding. The scalable writer gathers neighbouring
++  column pairs into two of those lines before applying the existing vertical
++  lifting and stores, reusing the third line for coefficients. An odd final
++  column keeps the single-column traversal. The horizontal transform and
++  arithmetic are unchanged; other encoder profiles retain the existing
++  single-column entry point. This requires no additional scratch or workers.
+ - Descriptors for one packet, two encoding tag trees for one subband and the
+   packet header are bounded by 4096*B. A descriptor is below 64 bytes. Each
+   tree has fewer than three times its leaf count in nodes (including thin
+@@ -480,6 +485,22 @@ instantiations contain none of these observers, interval fields or clock reads.
+ Use separate ordinary processes for throughput and disclose diagnostic overhead.
+ Observer state is bounded, contains no payloads and is removed on error/unwind.
+ 
++The feature-only observer also splits the existing encode front end without
++changing its arithmetic or traversal. `conversion_level_shift_ns` includes
++coefficient allocation and input conversion; `forward_rct_ns` is the separate
++whole-plane RCT call (zero without RGB). The DWT detail records validation,
++vertical gather/lifting/store, horizontal lifting/copy, scratch resize and
++scratch destruction. Lifting includes writes of its coefficients into scratch;
++the explicit gather/store/copy intervals describe the subsequent or preceding
++transfers. Resize includes allocation and zero initialisation when needed.
++These intervals are nested within the existing combined conversion/RCT and
++forward-DWT stages, so they must not be added to those totals. Their remainder
++contains configuration, loops and diagnostic clock/accounting overhead. The
++scalable writer's conversion, RCT and DWT component/axis loops are serial even
++in parallel builds; its later Tier-1 batches retain the admitted W policy.
++Per-line clock reads perturb the diagnostic build, particularly short axes.
++The ordinary feature-disabled build contains no added clocks or observer state.
++
+ 
+ ## Finite scheduling study disposition
+ 

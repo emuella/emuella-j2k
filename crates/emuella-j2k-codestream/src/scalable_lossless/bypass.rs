@@ -492,7 +492,7 @@ mod tests {
                         sample_step_bytes: 2,
                     })
                     .collect();
-                let bytes = encode_lossless_d2_impl::<false, true, true>(
+                let bytes = encode_lossless_d2_impl::<false, true>(
                     width,
                     height,
                     16,
