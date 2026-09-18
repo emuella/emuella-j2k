@@ -190,3 +190,29 @@ was not the promotion criterion. Detailed timing tables, estimator provenance
 and external-anchor results belong to the benchmark component. These results
 qualify the measured profile and cohorts, not unmeasured profiles, input
 families or thread counts.
+
+## Independent entropy regression oracle
+
+A bounded decoder decision-path experiment retained the original production
+MQ/raw implementation as a test-only independent reference before arithmetic
+changes. The reference keeps its own probability data, byte IO and termination;
+only test observation accessors were added. It cannot call the production coder's
+helpers. Differential checks compare every decision, all contexts, arithmetic
+registers, byte-boundary state, consumed-prefix accounting and predictable
+termination results. Coverage includes all two-byte inputs, authored sequences
+that reach every probability state, empty/truncated prefixes and raw stuffing.
+
+Existing authored block traces also replay through the independent writer and
+both arithmetic decoders, checking complete bytes and segment lengths alongside
+the block tests' pass/missing-plane metadata. They include styles zero/bypass,
+RESET, TERMALL, PTERM, SEGSYM and VSC combinations, all subbands, partial/wide
+shapes, output prefixes and 1–32 magnitude planes. The module and observation
+accessors are absent from ordinary and `test-fixtures`-only library builds.
+
+Neither of the two decision-local variants met the frozen high-bit-depth
+style-zero development gate. Both production experiments were removed; the
+production MQ implementation remains unchanged. The benchmark-owned
+[finite entropy result](https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-entropy-hot-loop-results.md)
+records descriptive timings, exact source identities, sampled attribution and
+the conditional confirmation stages that were not started. This retained oracle
+strengthens regression evidence without claiming a default performance gain.

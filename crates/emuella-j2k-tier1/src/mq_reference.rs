@@ -1,3 +1,7 @@
+//! Test-only snapshot of the unchanged production arithmetic implementation.
+//! Retained from bc747f86907aff09e09278e4444ad5932ef4669d before optimisation.
+//! Keep byte IO and termination independent of production helpers.
+//!
 //! JPEG 2000 MQ arithmetic coding primitives.
 //!
 //! This module follows the register procedures in ISO/IEC 15444-1:2024,
@@ -521,6 +525,39 @@ impl<'a> Encoder<'a> {
     }
 }
 
+// Observation accessors only: the retained arithmetic above stays independent.
+#[cfg(test)]
+impl Context {
+    pub(super) fn checkpoint(self) -> (u8, u8) {
+        (self.state, self.mps)
+    }
+}
+#[cfg(test)]
+impl Decoder<'_> {
+    pub(super) fn checkpoint(&self) -> (u32, u32, usize, u32, u8) {
+        (
+            self.interval,
+            self.code,
+            self.cursor,
+            self.bits_available,
+            self.synthetic_marker_reads,
+        )
+    }
+}
+#[cfg(test)]
+impl RawDecoder<'_> {
+    pub(super) fn checkpoint(&self) -> (usize, u8, u8) {
+        (self.cursor, self.current, self.bits_available)
+    }
+}
+
+#[cfg(test)]
+impl Encoder<'_> {
+    pub(super) fn context_checkpoint(&self, label: usize) -> (u8, u8) {
+        self.contexts[label].checkpoint()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,7 +616,3 @@ mod tests {
         assert_ne!(encoded.last().copied(), Some(0xff));
     }
 }
-
-#[cfg(test)]
-#[path = "mq_oracle_tests.rs"]
-pub(super) mod oracle_tests;
