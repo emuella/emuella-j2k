@@ -220,3 +220,11 @@ strengthens regression evidence without claiming a default performance gain.
 The [retained performance candidate inventory](performance-candidates.md) keeps
 recoverable source for the two alternative MQ experiments and the separate
 rejected 4W scheduler, with their historical evidence and fresh-reuse boundaries.
+
+A later contemporary D2 incremental confirmation also left production arithmetic
+unchanged: the PAN16 primary missed the estimated, interval and absolute-saving
+gates. The inventory records that separate not-selected result and its exact
+recoverable source. A retained regression verifies decoder scratch recovery after
+entropy errors through the checked, dense, sparse and adaptive routes, with and
+without selective bypass and across geometry changes, while bounding retained
+capacity by the initial large-block allocation.
