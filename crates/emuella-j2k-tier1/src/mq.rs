@@ -150,20 +150,10 @@ impl<'a> Decoder<'a> {
         let mut code = self.code;
         let mut next = *context;
 
-        let decision = if (code >> 16) < estimate.qe {
-            let mps_interval = interval;
+        let lower_interval = (code >> 16) < estimate.qe;
+        let exchanged = interval < estimate.qe;
+        if lower_interval {
             interval = estimate.qe;
-            if mps_interval < estimate.qe {
-                next.state = estimate.next_mps;
-                u32::from(next.mps)
-            } else {
-                let decision = u32::from(next.mps ^ 1);
-                next.state = estimate.next_lps;
-                if estimate.switch_mps {
-                    next.mps ^= 1;
-                }
-                decision
-            }
         } else {
             code -= estimate.qe << 16;
             if interval & 0x8000 != 0 {
@@ -171,18 +161,16 @@ impl<'a> Decoder<'a> {
                 self.code = code;
                 return u32::from(next.mps);
             }
-            if interval < estimate.qe {
-                let decision = u32::from(next.mps ^ 1);
-                next.state = estimate.next_lps;
-                if estimate.switch_mps {
-                    next.mps ^= 1;
-                }
-                decision
-            } else {
-                next.state = estimate.next_mps;
-                u32::from(next.mps)
-            }
-        };
+        }
+
+        let lps = lower_interval != exchanged;
+        let decision = u32::from(next.mps ^ u8::from(lps));
+        if lps {
+            next.state = estimate.next_lps;
+            next.mps ^= u8::from(estimate.switch_mps);
+        } else {
+            next.state = estimate.next_mps;
+        }
 
         self.interval = interval;
         self.code = code;

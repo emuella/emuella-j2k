@@ -561,3 +561,50 @@ fn packed_encoder_retained_capacity_fits_the_existing_worker_allowance() {
     }
     assert!(peak_scratch > 0);
 }
+
+#[test]
+fn entropy_reference_replays_fallback_styles_and_termination_combinations() {
+    let mut saw_reset = false;
+    let mut saw_predictable = false;
+    let mut saw_raw = false;
+    for style in [2, 4, 8, 16, 32, 3, 5, 17, 33, 63] {
+        for (width, height) in [(3, 5), (17, 11), (64, 64), (65, 3)] {
+            for planes in [1, 8, 16, 30, 32] {
+                for subband in [
+                    Subband::LowLow,
+                    Subband::LowHigh,
+                    Subband::HighLow,
+                    Subband::HighHigh,
+                ] {
+                    let source =
+                        coefficients(width as usize, height as usize, planes, usize::from(style));
+                    let mut output = vec![0x71, 0xff, 0x33];
+                    let mut lengths = Vec::new();
+                    let mut work = scratch(true, true);
+                    let result = encode_baseline_code_block_segments_with_scratch(
+                        &source,
+                        spec(width, height, planes, style, subband),
+                        &mut output,
+                        &mut lengths,
+                        &mut work,
+                    )
+                    .unwrap();
+                    assert_eq!(lengths.iter().sum::<usize>(), result.byte_len);
+                    mq::oracle_tests::assert_trace(&work.trace.events, &output[3..]);
+                    for event in &work.trace.events {
+                        saw_reset |= matches!(event, encode_trace::Event::Reset);
+                        saw_predictable |= matches!(
+                            event,
+                            encode_trace::Event::Finish {
+                                predictable: true,
+                                ..
+                            }
+                        );
+                        saw_raw |= matches!(event, encode_trace::Event::Raw { .. });
+                    }
+                }
+            }
+        }
+    }
+    assert!(saw_reset && saw_predictable && saw_raw);
+}
