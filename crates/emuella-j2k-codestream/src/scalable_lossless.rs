@@ -7,6 +7,8 @@ mod parallel;
 mod bypass;
 #[cfg(feature = "classic-execution-diagnostics")]
 pub(super) mod diagnostics;
+#[cfg(test)]
+mod front_end_tests;
 #[cfg(feature = "test-fixtures")]
 pub use bypass::encode_lossless_d2_bypass_test_fixture;
 
@@ -306,7 +308,7 @@ pub fn encode_lossless_d2_execution_profiled(
     let start = EncodeClock::start::<true>();
     let mut timings = LosslessEncodeTimings::default();
     let mut execution = LosslessEncodeExecution::default();
-    let bytes = encode_lossless_d2_impl::<true, false>(
+    let bytes = encode_lossless_d2_impl::<true, false, true>(
         width,
         height,
         bits,
@@ -331,7 +333,7 @@ pub fn encode_lossless_d2_bypass_execution_profiled(
     let start = EncodeClock::start::<true>();
     let mut timings = LosslessEncodeTimings::default();
     let mut execution = LosslessEncodeExecution::default();
-    let bytes = encode_lossless_d2_impl::<true, true>(
+    let bytes = encode_lossless_d2_impl::<true, true, true>(
         width,
         height,
         bits,
@@ -358,7 +360,7 @@ pub fn encode_lossless_d2(
         let start = EncodeClock::start::<true>();
         let mut timings = LosslessEncodeTimings::default();
         let mut execution = LosslessEncodeExecution::default();
-        let result = encode_lossless_d2_impl::<true, false>(
+        let result = encode_lossless_d2_impl::<true, false, true>(
             width,
             height,
             bits,
@@ -371,7 +373,7 @@ pub fn encode_lossless_d2(
         diagnostics::finish(timings, execution);
         return result;
     }
-    encode_lossless_d2_impl::<false, false>(
+    encode_lossless_d2_impl::<false, false, true>(
         width,
         height,
         bits,
@@ -397,7 +399,7 @@ pub fn encode_lossless_d2_bypass(
         let start = EncodeClock::start::<true>();
         let mut timings = LosslessEncodeTimings::default();
         let mut execution = LosslessEncodeExecution::default();
-        let result = encode_lossless_d2_impl::<true, true>(
+        let result = encode_lossless_d2_impl::<true, true, true>(
             width,
             height,
             bits,
@@ -410,7 +412,7 @@ pub fn encode_lossless_d2_bypass(
         diagnostics::finish(timings, execution);
         return result;
     }
-    encode_lossless_d2_impl::<false, true>(
+    encode_lossless_d2_impl::<false, true, true>(
         width,
         height,
         bits,
@@ -421,7 +423,7 @@ pub fn encode_lossless_d2_bypass(
     )
 }
 
-fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool, const PAIR_COLUMNS: bool>(
     width: u32,
     height: u32,
     bits: u8,
@@ -516,7 +518,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     let mut transform_scratch = Vec::new();
     let mut transform_components = || -> Result<()> {
         for plane in &mut coefficients {
-            forward_reversible_5_3_levels_with_scratch(
+            forward_reversible_5_3_levels_with_scratch_impl::<PAIR_COLUMNS>(
                 width,
                 height,
                 plane,

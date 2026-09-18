@@ -100,7 +100,12 @@ actual allocation lifetimes:
 - Exact-capacity i32 coefficient vectors use 4*S bytes. Input components are
   read directly at their byte stride/step; planar RGB has no packed input copy.
 - One reusable DWT vector contains three i32 lines, at most 12*A bytes. It is
-  released before entropy coding.
+  released before entropy coding. The scalable writer gathers neighbouring
+  column pairs into two of those lines before applying the existing vertical
+  lifting and stores, reusing the third line for coefficients. An odd final
+  column keeps the single-column traversal. The horizontal transform and
+  arithmetic are unchanged; other encoder profiles retain the existing
+  single-column entry point. This requires no additional scratch or workers.
 - Descriptors for one packet, two encoding tag trees for one subband and the
   packet header are bounded by 4096*B. A descriptor is below 64 bytes. Each
   tree has fewer than three times its leaf count in nodes (including thin

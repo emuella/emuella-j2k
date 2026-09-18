@@ -13634,6 +13634,24 @@ fn forward_reversible_5_3_levels_with_scratch(
     message: &'static str,
     scratch: &mut Vec<i32>,
 ) -> Result<()> {
+    forward_reversible_5_3_levels_with_scratch_impl::<false>(
+        width,
+        height,
+        coefficients,
+        decomposition_levels,
+        message,
+        scratch,
+    )
+}
+
+fn forward_reversible_5_3_levels_with_scratch_impl<const PAIR_COLUMNS: bool>(
+    width: u32,
+    height: u32,
+    coefficients: &mut [i32],
+    decomposition_levels: u8,
+    message: &'static str,
+    scratch: &mut Vec<i32>,
+) -> Result<()> {
     if !(1..=5).contains(&decomposition_levels) {
         return Err(unsupported(
             None,
@@ -13662,15 +13680,23 @@ fn forward_reversible_5_3_levels_with_scratch(
             let ns = resize.ns();
             scalable_lossless::diagnostics::update(|d| d.dwt_scratch_resize_ns += ns);
         }
-        transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
-            .map_err(|_| {
-                unsupported(
-                    None,
-                    Some(Marker::Cod),
-                    UnsupportedConstruct::Transform,
-                    message,
-                )
-            })?;
+        let result = if PAIR_COLUMNS {
+            transform::forward_reversible_5_3_bounded_paired_columns(
+                coefficients,
+                config,
+                scratch.as_mut_slice(),
+            )
+        } else {
+            transform::forward_reversible_5_3_bounded(coefficients, config, scratch.as_mut_slice())
+        };
+        result.map_err(|_| {
+            unsupported(
+                None,
+                Some(Marker::Cod),
+                UnsupportedConstruct::Transform,
+                message,
+            )
+        })?;
     }
     Ok(())
 }
