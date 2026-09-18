@@ -579,3 +579,7 @@ mod tests {
         assert_ne!(encoded.last().copied(), Some(0xff));
     }
 }
+
+#[cfg(test)]
+#[path = "mq_oracle_tests.rs"]
+pub(super) mod oracle_tests;

@@ -196,6 +196,7 @@ fn packed_encoder_matches_reference_decisions_bytes_segments_and_reconstruction(
                     assert_eq!(expected_lengths, actual_lengths, "{spec:?}");
                     assert_eq!(actual_lengths.iter().sum::<usize>(), actual_result.byte_len);
                     assert_trace_equal(&reference.trace.events, &packed.packed.trace.events);
+                    mq::oracle_tests::assert_trace(&packed.packed.trace.events, &actual[2..]);
                     stuffed += usize::from(actual[2..].contains(&0xff));
                     raw += packed
                         .packed
@@ -364,6 +365,7 @@ fn packed_encoder_missing_planes_and_empty_blocks_preserve_metadata() {
                 assert_eq!(expected, actual);
                 assert_eq!(a_lengths, b_lengths);
                 assert_trace_equal(&reference.trace.events, &packed.packed.trace.events);
+                mq::oracle_tests::assert_trace(&packed.packed.trace.events, &actual[1..]);
                 if value == 0 {
                     assert_eq!(actual, [0xff]);
                     assert_eq!(b.missing_bitplanes, available);
