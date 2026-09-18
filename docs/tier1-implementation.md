@@ -216,3 +216,7 @@ production MQ implementation remains unchanged. The benchmark-owned
 records descriptive timings, exact source identities, sampled attribution and
 the conditional confirmation stages that were not started. This retained oracle
 strengthens regression evidence without claiming a default performance gain.
+
+The [retained performance candidate inventory](performance-candidates.md) keeps
+recoverable source for the two alternative MQ experiments and the separate
+rejected 4W scheduler, with their historical evidence and fresh-reuse boundaries.

@@ -1,0 +1,1731 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index a0049fe0c400ab97a54ecbc8fac79d93b6eef802..02301aedd52f50bb78c268dfbeeb5ea5faaf84bb 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -48,7 +48,8 @@ jobs:
+       - run: sh scripts/check-lossy-ht-public-matrix.sh
+       - run: cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
+       - run: cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
+-      - run: cargo test -p emuella-j2k-codestream --features parallel joined_batch_retains_all_results_after_an_in_flight_error
++      - run: cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::parallel
++      - run: cargo test -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics
+       - run: cargo test -p emuella-j2k-test-support --example lossless_parallel
+       - run: cargo clippy --workspace --all-targets -- -D warnings
+       - run: cargo clippy --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml --all-targets --locked -- -D warnings
+diff --git a/crates/emuella-j2k-codestream/Cargo.toml b/crates/emuella-j2k-codestream/Cargo.toml
+index f3bef025edaa3c0853213a4e15184ee5b63c3956..cf3106e4579abbc1f73ef1023fbb401d0aa21011 100644
+--- a/crates/emuella-j2k-codestream/Cargo.toml
++++ b/crates/emuella-j2k-codestream/Cargo.toml
+@@ -26,6 +26,8 @@ std = [
+ ]
+ test-fixtures = ["emuella-j2k-tier1/test-fixtures"]
+ 
++classic-execution-diagnostics = ["std", "emuella-j2k-tier1/classic-execution-diagnostics"]
++
+ [dependencies]
+ emuella-j2k-accel.workspace = true
+ emuella-j2k-ht.workspace = true
+diff --git a/crates/emuella-j2k-codestream/src/lib.rs b/crates/emuella-j2k-codestream/src/lib.rs
+index 6f95496ebbd16bdd92286f306512b4901ce735f0..23c3b7b6dd62d55582291ddd73523a0f51d8c087 100644
+--- a/crates/emuella-j2k-codestream/src/lib.rs
++++ b/crates/emuella-j2k-codestream/src/lib.rs
+@@ -108,6 +108,8 @@ const fn parallel_decode_dispatch_available() -> bool {
+ }
+ 
+ mod scalable_lossless;
++#[cfg(feature = "classic-execution-diagnostics")]
++pub use scalable_lossless::diagnostics::{LosslessExecutionDiagnostic, observe_lossless_encode};
+ #[cfg(all(feature = "std", feature = "test-fixtures"))]
+ pub use scalable_lossless::encode_lossless_d2_bypass_execution_profiled;
+ #[cfg(feature = "test-fixtures")]
+@@ -14985,6 +14987,8 @@ fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
+             if PROFILE {
+                 timings.block_preparation_ns += start.ns();
+             }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let diagnostic_start = std::time::Instant::now();
+             let start = scalable_lossless::EncodeClock::start::<PROFILE>();
+             let encoded = tier1::encode_baseline_code_block_with_strided_scratch(
+                 source,
+@@ -15003,6 +15007,13 @@ fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
+                 tier1_encode_scratch,
+             )
+             .map_err(map_tier1_error)?;
++            #[cfg(feature = "classic-execution-diagnostics")]
++            scalable_lossless::diagnostics::serial_block(
++                diagnostic_start.elapsed().as_nanos(),
++                tier1_encode_scratch.diagnostic_storage(),
++                block_segment.capacity(),
++                0,
++            );
+             if PROFILE {
+                 timings.tier1_ns += start.ns();
+                 timings.checked_tier1_blocks += 1;
+@@ -15012,10 +15023,14 @@ fn encode_decomp_subband_with_output_limit<const PROFILE: bool>(
+                 timings.tier1_codeword_bytes += encoded.byte_len as u64;
+             }
+             let start = scalable_lossless::EncodeClock::start::<PROFILE>();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let append_start = std::time::Instant::now();
+             if let Some(maximum) = output_limit {
+                 scalable_lossless::reserve_output(segments, block_segment.len(), maximum)?;
+                 segments.extend_from_slice(&block_segment);
+             }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            scalable_lossless::diagnostics::append(append_start.elapsed().as_nanos());
+             if PROFILE {
+                 timings.assembly_ns += start.ns();
+             }
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless.rs b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+index 156952d96e253148d64ec6e4d7823a13284ca7d9..7396a30fa78e0895dcfd92608a1e07ee6cf899e5 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+@@ -5,6 +5,8 @@ use super::*;
+ mod parallel;
+ 
+ mod bypass;
++#[cfg(feature = "classic-execution-diagnostics")]
++pub(super) mod diagnostics;
+ #[cfg(feature = "test-fixtures")]
+ pub use bypass::encode_lossless_d2_bypass_test_fixture;
+ 
+@@ -56,7 +58,7 @@ pub fn lossless_d2_requirements(
+     limits: LosslessEncodeLimits,
+ ) -> Result<LosslessEncodeRequirements> {
+     execution_requirements::<false>(width, height, components, limits)
+-        .map(|(requirements, _)| requirements)
++        .map(|(requirements, _, _)| requirements)
+ }
+ 
+ /// Geometry-only admission for the opt-in D2 selective-bypass writer.
+@@ -68,7 +70,7 @@ pub fn lossless_d2_bypass_requirements(
+     limits: LosslessEncodeLimits,
+ ) -> Result<LosslessEncodeRequirements> {
+     execution_requirements::<true>(width, height, components, limits)
+-        .map(|(requirements, _)| requirements)
++        .map(|(requirements, _, _)| requirements)
+ }
+ 
+ fn execution_requirements<const BYPASS: bool>(
+@@ -76,7 +78,7 @@ fn execution_requirements<const BYPASS: bool>(
+     height: u32,
+     components: u16,
+     limits: LosslessEncodeLimits,
+-) -> Result<(LosslessEncodeRequirements, usize)> {
++) -> Result<(LosslessEncodeRequirements, usize, usize)> {
+     let pixels = u64::from(width)
+         .checked_mul(u64::from(height))
+         .ok_or(CodestreamError::SizeOverflow)?;
+@@ -152,6 +154,13 @@ fn execution_requirements<const BYPASS: bool>(
+                 .ok_or(CodestreamError::SizeOverflow)?,
+         )
+         .ok_or(CodestreamError::SizeOverflow)?;
++    #[cfg(feature = "parallel")]
++    let window = parallel::window_capacity(workers, blocks, working, limits.max_working_bytes);
++    #[cfg(not(feature = "parallel"))]
++    let window = workers;
++    let working = working
++        .checked_add((window - workers) as u64 * WORKER_BYTES)
++        .ok_or(CodestreamError::SizeOverflow)?;
+     Ok((
+         LosslessEncodeRequirements {
+             total_component_samples: samples,
+@@ -160,6 +169,7 @@ fn execution_requirements<const BYPASS: bool>(
+             output_capacity_limit: limits.max_output_bytes,
+         },
+         workers,
++        window,
+     ))
+ }
+ 
+@@ -235,11 +245,11 @@ pub struct LosslessEncodeTimings {
+ #[derive(Debug, Clone, Default, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub struct LosslessEncodeExecution {
+-    /// Maximum concurrent slots admitted from the current pool and byte budget.
++    /// Maximum executing lanes admitted from the current pool and byte budget.
+     pub effective_workers: usize,
+     /// Distinct Rayon workers observed executing Tier-1 (one for serial calls).
+     pub participating_workers: usize,
+-    /// Largest joined batch, including excluded zero blocks.
++    /// Largest joined window, including excluded zero blocks; at most 4W results.
+     pub max_batch_blocks: usize,
+ }
+ 
+@@ -351,6 +361,24 @@ pub fn encode_lossless_d2(
+     planes: &[LosslessD2Plane<'_>],
+     limits: LosslessEncodeLimits,
+ ) -> Result<Vec<u8>> {
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if diagnostics::enabled() {
++        let start = EncodeClock::start::<true>();
++        let mut timings = LosslessEncodeTimings::default();
++        let mut execution = LosslessEncodeExecution::default();
++        let result = encode_lossless_d2_impl::<true, false>(
++            width,
++            height,
++            bits,
++            planes,
++            limits,
++            &mut timings,
++            &mut execution,
++        );
++        timings.total_ns = start.ns();
++        diagnostics::finish(timings, execution);
++        return result;
++    }
+     encode_lossless_d2_impl::<false, false>(
+         width,
+         height,
+@@ -372,6 +400,24 @@ pub fn encode_lossless_d2_bypass(
+     planes: &[LosslessD2Plane<'_>],
+     limits: LosslessEncodeLimits,
+ ) -> Result<Vec<u8>> {
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if diagnostics::enabled() {
++        let start = EncodeClock::start::<true>();
++        let mut timings = LosslessEncodeTimings::default();
++        let mut execution = LosslessEncodeExecution::default();
++        let result = encode_lossless_d2_impl::<true, true>(
++            width,
++            height,
++            bits,
++            planes,
++            limits,
++            &mut timings,
++            &mut execution,
++        );
++        timings.total_ns = start.ns();
++        diagnostics::finish(timings, execution);
++        return result;
++    }
+     encode_lossless_d2_impl::<false, true>(
+         width,
+         height,
+@@ -392,7 +438,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+     timings: &mut LosslessEncodeTimings,
+     execution: &mut LosslessEncodeExecution,
+ ) -> Result<Vec<u8>> {
+-    let (_, workers) = execution_requirements::<BYPASS>(
++    let (_, workers, _window) = execution_requirements::<BYPASS>(
+         width,
+         height,
+         u16::try_from(planes.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+@@ -515,7 +561,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+     output.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0x93]);
+     let mut scratch = tier1::CodeBlockEncodeScratch::new();
+     #[cfg(feature = "parallel")]
+-    let mut parallel = parallel::BlockWorkers::new(if workers > 1 { workers } else { 0 })?;
++    let mut parallel = parallel::BlockWorkers::new(if workers > 1 { workers } else { 0 }, _window)?;
+     if PROFILE {
+         execution.effective_workers = workers;
+         execution.participating_workers = 1;
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs
+index bf6da26936330689d414b6490c316354389bde9b..e1a301d1de761a10d9e5f7c146256f6ffe975119 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/bypass.rs
+@@ -22,6 +22,7 @@ const MAX_PASSES: u16 = 91;
+ pub(super) const METADATA_BYTES_PER_BLOCK: u64 = 512;
+ 
+ #[derive(Debug, Clone)]
++#[cfg_attr(test, derive(PartialEq, Eq))]
+ pub(super) struct SegmentLengths {
+     lengths: [usize; MAX_SEGMENTS],
+     count: usize,
+@@ -93,6 +94,8 @@ pub(super) fn encode_subband(
+                 .ok_or(CodestreamError::SizeOverflow)?;
+             let source = plane.get(offset..).ok_or(CodestreamError::SizeOverflow)?;
+             bytes.clear();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let diagnostic_start = std::time::Instant::now();
+             let encoded = tier1::encode_baseline_code_block_segments_with_strided_scratch(
+                 source,
+                 image_width as usize,
+@@ -108,10 +111,19 @@ pub(super) fn encode_subband(
+                 scratch,
+             )
+             .map_err(map_tier1_error)?;
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::serial_block(
++                diagnostic_start.elapsed().as_nanos(),
++                scratch.diagnostic_storage(),
++                bytes.capacity(),
++                lengths.capacity() * core::mem::size_of::<usize>(),
++            );
+             if encoded.byte_len != bytes.len() {
+                 return Err(CodestreamError::SizeOverflow);
+             }
+             let segments = SegmentLengths::checked(encoded.pass_count, &bytes, &lengths)?;
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let append_start = std::time::Instant::now();
+             reserve_output(output, bytes.len(), maximum)?;
+             blocks.push(EncodedCodeBlock {
+                 x,
+@@ -128,6 +140,8 @@ pub(super) fn encode_subband(
+                 segment_len: encoded.byte_len,
+             });
+             output.extend_from_slice(&bytes);
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::append(append_start.elapsed().as_nanos());
+             all_lengths.push(segments);
+         }
+     }
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..3402e856a13456acb138fc3d06a53ca356c8a451
+--- /dev/null
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
+@@ -0,0 +1,334 @@
++//! Separate-build observations of the existing facade writer, never headline timing.
++use super::{LosslessEncodeExecution, LosslessEncodeTimings};
++use std::{cell::RefCell, time::Instant};
++
++/// Fixed logarithmic duration distribution: bin i contains [2^(i-1), 2^i) ns,
++/// with zero in bin zero and the last bin saturating. Sum/min/max remain exact.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Durations {
++    pub bins: [u64; 64],
++    pub count: u64,
++    pub sum_ns: u128,
++    pub min_ns: u128,
++    pub max_ns: u128,
++}
++impl Default for Durations {
++    fn default() -> Self {
++        Self {
++            bins: [0; 64],
++            count: 0,
++            sum_ns: 0,
++            min_ns: 0,
++            max_ns: 0,
++        }
++    }
++}
++impl Durations {
++    fn add(&mut self, ns: u128) {
++        let bin = (128 - ns.leading_zeros()).min(63) as usize;
++        self.bins[bin] += 1;
++        self.min_ns = if self.count == 0 {
++            ns
++        } else {
++            self.min_ns.min(ns)
++        };
++        self.max_ns = self.max_ns.max(ns);
++        self.count += 1;
++        self.sum_ns += ns;
++    }
++}
++
++/// Aggregated observations. Storage fields are retained requested capacities,
++/// not growth peaks, allocator overhead or RSS. The separate allocation meter
++/// observes transient live allocations. No coefficient or codeword is retained.
++#[derive(Debug, Clone, Default)]
++pub struct LosslessExecutionDiagnostic {
++    pub timings: LosslessEncodeTimings,
++    pub execution: LosslessEncodeExecution,
++    pub blocks: Durations,
++    pub batch_tails: Durations,
++    pub batches: u64,
++    pub peak_active_blocks: usize,
++    pub active_block_ns: u128,
++    pub any_block_active_ns: u128,
++    pub dispatch_to_first_start_ns: u128,
++    pub last_finish_to_join_ns: u128,
++    pub batch_dispatch_join_ns: u128,
++    pub ordered_append_ns: u128,
++    pub aggregation_ns: u128,
++    pub retained_scratch_bytes: usize,
++    pub retained_result_capacity_bytes: usize,
++    pub retained_collector_capacity_bytes: usize,
++    pub slot_metadata_bytes: usize,
++    pub endpoint_capacity_bytes: usize,
++    pub blocks_with_retained_packed_storage: u64,
++    pub blocks_without_packed_storage: u64,
++}
++
++thread_local! {
++    static CURRENT: RefCell<Option<LosslessExecutionDiagnostic>> = const { RefCell::new(None) };
++}
++
++/// Observe one synchronous facade call in a separate feature-enabled build.
++/// Nested observation is rejected. The observer is removed even during unwinding.
++/// All asynchronous codec jobs must join before the closure returns.
++pub fn observe_lossless_encode<T>(call: impl FnOnce() -> T) -> (T, LosslessExecutionDiagnostic) {
++    struct Reset;
++    impl Drop for Reset {
++        fn drop(&mut self) {
++            CURRENT.with(|c| {
++                c.borrow_mut().take();
++            });
++        }
++    }
++    CURRENT.with(|c| {
++        assert!(
++            c.borrow().is_none(),
++            "nested lossless execution observation"
++        );
++        *c.borrow_mut() = Some(LosslessExecutionDiagnostic::default());
++    });
++    let reset = Reset;
++    let result = call();
++    let observation = CURRENT.with(|c| c.borrow_mut().take().expect("active observation"));
++    drop(reset);
++    (result, observation)
++}
++
++pub(super) fn enabled() -> bool {
++    CURRENT.with(|c| c.borrow().is_some())
++}
++fn update(f: impl FnOnce(&mut LosslessExecutionDiagnostic)) {
++    CURRENT.with(|c| {
++        if let Some(d) = c.borrow_mut().as_mut() {
++            f(d);
++        }
++    });
++}
++pub(super) fn finish(timings: LosslessEncodeTimings, execution: LosslessEncodeExecution) {
++    update(|d| {
++        d.timings = timings;
++        d.execution = execution;
++    });
++}
++pub(crate) fn append(ns: u128) {
++    update(|d| d.ordered_append_ns += ns);
++}
++
++#[cfg(feature = "parallel")]
++pub(super) fn retained_results(bytes: usize, collectors: usize) {
++    update(|d| {
++        d.retained_result_capacity_bytes = d.retained_result_capacity_bytes.max(bytes);
++        d.retained_collector_capacity_bytes = d.retained_collector_capacity_bytes.max(collectors);
++    });
++}
++
++pub(crate) fn serial_block(ns: u128, storage: (usize, bool), result: usize, collector: usize) {
++    let start = Instant::now();
++    update(|d| {
++        d.blocks.add(ns);
++        d.peak_active_blocks = 1;
++        d.active_block_ns += ns;
++        d.any_block_active_ns += ns;
++        d.retained_scratch_bytes = d.retained_scratch_bytes.max(storage.0);
++        d.retained_result_capacity_bytes = d.retained_result_capacity_bytes.max(result);
++        d.retained_collector_capacity_bytes = d.retained_collector_capacity_bytes.max(collector);
++        d.blocks_with_retained_packed_storage += u64::from(storage.1);
++        d.blocks_without_packed_storage += u64::from(!storage.1);
++    });
++    update(|d| d.aggregation_ns += start.elapsed().as_nanos());
++}
++
++#[cfg(feature = "parallel")]
++#[derive(Clone, Copy, Default)]
++pub(super) struct BlockInterval {
++    pub start: u128,
++    pub end: u128,
++    pub packed: bool,
++}
++
++#[cfg(feature = "parallel")]
++#[allow(clippy::too_many_arguments)]
++pub(super) fn batch(
++    intervals: impl Iterator<Item = BlockInterval>,
++    joined_ns: u128,
++    scratch: usize,
++    results: usize,
++    collectors: usize,
++    metadata: usize,
++) {
++    if !enabled() {
++        return;
++    }
++    let aggregation = Instant::now();
++    update(|d| {
++        let intervals = intervals.collect::<Vec<_>>();
++        let mut endpoints = Vec::with_capacity(intervals.len() * 2);
++        let mut first_start = joined_ns;
++        let mut first_finish = joined_ns;
++        let mut last_finish = 0;
++        for interval in &intervals {
++            d.blocks.add(interval.end - interval.start);
++            d.active_block_ns += interval.end - interval.start;
++            d.blocks_with_retained_packed_storage += u64::from(interval.packed);
++            d.blocks_without_packed_storage += u64::from(!interval.packed);
++            first_start = first_start.min(interval.start);
++            first_finish = first_finish.min(interval.end);
++            last_finish = last_finish.max(interval.end);
++            if interval.end > interval.start {
++                endpoints.push((interval.start, 1_i32));
++                endpoints.push((interval.end, -1_i32));
++            }
++        }
++        // End before start at ties: touching intervals do not overlap.
++        endpoints.sort_unstable();
++        let mut active = 0;
++        let mut previous = 0;
++        for &(at, delta) in &endpoints {
++            if active > 0 {
++                d.any_block_active_ns += at - previous;
++            }
++            active += delta;
++            d.peak_active_blocks = d.peak_active_blocks.max(active as usize);
++            previous = at;
++        }
++        assert_eq!(active, 0);
++        if !intervals.is_empty() {
++            d.batch_tails.add(last_finish - first_finish);
++            d.dispatch_to_first_start_ns += first_start;
++            d.last_finish_to_join_ns += joined_ns - last_finish;
++            d.batch_dispatch_join_ns += joined_ns;
++            d.batches += 1;
++        }
++        d.retained_scratch_bytes = d.retained_scratch_bytes.max(scratch);
++        d.retained_result_capacity_bytes = d.retained_result_capacity_bytes.max(results);
++        d.retained_collector_capacity_bytes = d.retained_collector_capacity_bytes.max(collectors);
++        d.slot_metadata_bytes = d.slot_metadata_bytes.max(metadata);
++        d.endpoint_capacity_bytes = d.endpoint_capacity_bytes.max(
++            endpoints.capacity() * core::mem::size_of::<(u128, i32)>()
++                + intervals.capacity() * core::mem::size_of::<BlockInterval>(),
++        );
++    });
++    update(|d| d.aggregation_ns += aggregation.elapsed().as_nanos());
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn fixed_distribution_preserves_counts_and_bounds() {
++        let mut d = Durations::default();
++        for ns in [0, 1, 2, 3, 4, 7, 8] {
++            d.add(ns);
++        }
++        assert_eq!(&d.bins[..5], &[1, 1, 2, 2, 1]);
++        assert_eq!((d.count, d.sum_ns, d.min_ns, d.max_ns), (7, 25, 0, 8));
++    }
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn activity_uses_overlap_and_integral_not_participants() {
++        let (_, d) = observe_lossless_encode(|| {
++            batch(
++                [
++                    BlockInterval {
++                        start: 2,
++                        end: 12,
++                        packed: true,
++                    },
++                    BlockInterval {
++                        start: 3,
++                        end: 5,
++                        packed: true,
++                    },
++                    BlockInterval {
++                        start: 5,
++                        end: 8,
++                        packed: true,
++                    },
++                ]
++                .into_iter(),
++                15,
++                30,
++                60,
++                90,
++                10,
++            );
++        });
++        assert_eq!(d.peak_active_blocks, 2);
++        assert_eq!(d.active_block_ns, 15);
++        assert_eq!(d.any_block_active_ns, 10);
++        assert_eq!(d.batch_tails.sum_ns, 7);
++        assert_eq!(d.dispatch_to_first_start_ns, 2);
++        assert_eq!(d.last_finish_to_join_ns, 3);
++        assert!(!enabled());
++    }
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn facade_writer_observation_preserves_stream_and_serial_route() {
++        use super::super::*;
++        let raw: Vec<u8> = (0..129 * 131)
++            .flat_map(|n| ((n * 7919 + n / 7) as u16).to_le_bytes())
++            .collect();
++        for workers in [1, 2, 4, 8] {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap()
++                .install(|| {
++                    let planes = [LosslessD2Plane {
++                        samples: &raw,
++                        stride_bytes: 129 * 2,
++                        sample_step_bytes: 2,
++                    }];
++                    for bypass in [false, true] {
++                        let call = || {
++                            if bypass {
++                                encode_lossless_d2_bypass(
++                                    129,
++                                    131,
++                                    16,
++                                    &planes,
++                                    LosslessEncodeLimits::default(),
++                                )
++                            } else {
++                                encode_lossless_d2(
++                                    129,
++                                    131,
++                                    16,
++                                    &planes,
++                                    LosslessEncodeLimits::default(),
++                                )
++                            }
++                        };
++                        let plain = call().unwrap();
++                        let (observed, d) = observe_lossless_encode(call);
++                        assert_eq!(observed.unwrap(), plain);
++                        assert_eq!(d.blocks.count, d.timings.checked_tier1_blocks);
++                        assert_eq!(d.execution.effective_workers, workers);
++                        assert!(d.peak_active_blocks > 0 && d.peak_active_blocks <= workers);
++                        assert!(d.active_block_ns >= d.any_block_active_ns);
++                        assert!(d.retained_scratch_bytes > 0);
++                        assert!(d.blocks_with_retained_packed_storage > 0);
++                        if workers == 1 {
++                            assert_eq!(d.batches, 0);
++                            assert_eq!(d.execution.max_batch_blocks, 1);
++                            assert_eq!(d.peak_active_blocks, 1);
++                        } else {
++                            assert!(d.batches > 0);
++                            assert_eq!(d.batch_tails.count, d.batches);
++                        }
++                    }
++                });
++        }
++    }
++    #[test]
++    fn observer_releases_after_unwind() {
++        assert!(
++            std::panic::catch_unwind(|| observe_lossless_encode(|| panic!("authored fault")))
++                .is_err()
++        );
++        assert!(!enabled());
++        let (_, d) = observe_lossless_encode(|| ());
++        assert_eq!(d.blocks.count, 0);
++    }
++}
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/parallel.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/parallel.rs
+index f56af860b47e9791e0af40128e35db6dfa6cd8b9..8bb65fed10ee172135f7a8a1b14f7c2799882de4 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless/parallel.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/parallel.rs
+@@ -1,7 +1,84 @@
+-//! Fixed-size batches: exclusive reusable slots, shared planes, ordered append.
++//! Bounded joined windows with the original fixed-size batch fallback.
+ use super::*;
+ use rayon::prelude::*;
+ 
++mod window;
++
++// Selected finite geometry; working admission may shrink this to W batches.
++const WINDOW_MULTIPLIER: usize = 4;
++
++pub(super) fn window_capacity(workers: usize, blocks: u64, working: u64, maximum: u64) -> usize {
++    capacity_for(WINDOW_MULTIPLIER, workers, blocks, working, maximum)
++}
++
++fn capacity_for(
++    multiplier: usize,
++    workers: usize,
++    blocks: u64,
++    working: u64,
++    maximum: u64,
++) -> usize {
++    if workers <= 1 {
++        return workers;
++    }
++    let spare = maximum.saturating_sub(working) / WORKER_BYTES;
++    let extra = (workers.saturating_mul(multiplier - 1) as u64)
++        .min(blocks.saturating_sub(workers as u64))
++        .min(spare);
++    workers + extra as usize
++}
++
++pub(super) enum BlockWorkers {
++    Batches(Batches),
++    Window(window::Window),
++}
++
++impl BlockWorkers {
++    pub(super) fn new(workers: usize, slots: usize) -> Result<Self> {
++        if workers > 1 && slots > workers {
++            Ok(Self::Window(window::Window::new(workers, slots)?))
++        } else {
++            Ok(Self::Batches(Batches::new(workers)?))
++        }
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    pub(super) fn encode_subband<const PROFILE: bool, const BYPASS: bool>(
++        &mut self,
++        image_width: u32,
++        plane: &[i32],
++        spec: DecompSubbandSpec,
++        available_bitplanes: u8,
++        output: &mut Vec<u8>,
++        maximum: usize,
++        timings: &mut LosslessEncodeTimings,
++        execution: &mut LosslessEncodeExecution,
++    ) -> Result<(NativeDecompSubband, Vec<bypass::SegmentLengths>)> {
++        match self {
++            Self::Batches(b) => b.encode_subband::<PROFILE, BYPASS>(
++                image_width,
++                plane,
++                spec,
++                available_bitplanes,
++                output,
++                maximum,
++                timings,
++                execution,
++            ),
++            Self::Window(w) => w.encode_subband::<PROFILE, BYPASS>(
++                image_width,
++                plane,
++                spec,
++                available_bitplanes,
++                output,
++                maximum,
++                timings,
++                execution,
++            ),
++        }
++    }
++}
++
+ #[derive(Default)]
+ struct Slot {
+     scratch: tier1::CodeBlockEncodeScratch,
+@@ -9,15 +86,17 @@ struct Slot {
+     lengths: Vec<usize>,
+     result: Option<Result<EncodedCodeBlock>>,
+     worker: Option<usize>,
++    #[cfg(feature = "classic-execution-diagnostics")]
++    interval: diagnostics::BlockInterval,
+ }
+ 
+-pub(super) struct BlockWorkers {
++pub(super) struct Batches {
+     slots: Vec<Slot>,
+     // Allocated only by profiling; at most one entry per block, covered by B.
+     participants: Vec<usize>,
+ }
+ 
+-impl BlockWorkers {
++impl Batches {
+     pub(super) fn new(workers: usize) -> Result<Self> {
+         let mut slots = Vec::new();
+         slots
+@@ -73,6 +152,8 @@ impl BlockWorkers {
+             let batch_len = self.slots.len().min(count - first);
+             let active = &mut self.slots[..batch_len];
+             let start = EncodeClock::start::<PROFILE>();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let batch_start = std::time::Instant::now();
+             // for_each joins *every* job, including when another job failed.
+             // Results never escape this batch; error selection follows stream order.
+             active
+@@ -83,6 +164,8 @@ impl BlockWorkers {
+                     if PROFILE {
+                         slot.worker = rayon::current_thread_index();
+                     }
++                    #[cfg(feature = "classic-execution-diagnostics")]
++                    let block_start = batch_start.elapsed().as_nanos();
+                     slot.result = Some(encode_block::<BYPASS>(
+                         image_width,
+                         plane,
+@@ -94,13 +177,40 @@ impl BlockWorkers {
+                         &mut slot.lengths,
+                         &mut slot.scratch,
+                     ));
++                    #[cfg(feature = "classic-execution-diagnostics")]
++                    {
++                        slot.interval = diagnostics::BlockInterval {
++                            start: block_start,
++                            end: batch_start.elapsed().as_nanos(),
++                            packed: slot.scratch.diagnostic_storage().1,
++                        };
++                    }
+                 });
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let joined_ns = batch_start.elapsed().as_nanos();
+             if PROFILE {
+                 timings.tier1_ns += start.ns();
+                 execution.max_batch_blocks = execution.max_batch_blocks.max(batch_len);
+             }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::batch(
++                self.slots[..batch_len].iter().map(|s| s.interval),
++                joined_ns,
++                self.slots
++                    .iter()
++                    .map(|s| s.scratch.diagnostic_storage().0)
++                    .sum(),
++                self.slots.iter().map(|s| s.bytes.capacity()).sum(),
++                self.slots
++                    .iter()
++                    .map(|s| s.lengths.capacity() * core::mem::size_of::<usize>())
++                    .sum(),
++                self.slots.capacity() * core::mem::size_of::<Slot>(),
++            );
+             let start = EncodeClock::start::<PROFILE>();
+-            for slot in active {
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let append_start = std::time::Instant::now();
++            for slot in &mut self.slots[..batch_len] {
+                 let mut block = slot.result.take().ok_or(CodestreamError::SizeOverflow)??;
+                 if PROFILE {
+                     if let Some(worker) = slot.worker
+@@ -135,6 +245,8 @@ impl BlockWorkers {
+                     lengths.push(segments);
+                 }
+             }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::append(append_start.elapsed().as_nanos());
+             if PROFILE {
+                 timings.assembly_ns += start.ns();
+             }
+@@ -256,7 +368,7 @@ mod tests {
+                 // Only the first block exceeds the declared bitplane bound. The
+                 // other three jobs must still finish before its error is observed.
+                 plane[0] = i32::MAX;
+-                let mut workers = BlockWorkers::new(4).unwrap();
++                let mut workers = Batches::new(4).unwrap();
+                 let mut output = vec![0x71; 13];
+                 assert!(
+                     workers
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/parallel/window.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/parallel/window.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9bf636f6019d76de31b7be80f0267cabecfcbf6
+--- /dev/null
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/parallel/window.rs
+@@ -0,0 +1,680 @@
++//! Finite dynamically claimed windows, with W scratch objects and bounded results.
++use super::*;
++use std::sync::{
++    Mutex,
++    atomic::{AtomicUsize, Ordering},
++};
++
++#[derive(Default)]
++struct ResultSlot {
++    bytes: Vec<u8>,
++    lengths: Vec<usize>,
++    result: Option<Result<EncodedCodeBlock>>,
++    worker: Option<usize>,
++    #[cfg(feature = "classic-execution-diagnostics")]
++    interval: diagnostics::BlockInterval,
++}
++
++pub(in crate::scalable_lossless) struct Window {
++    scratch: Vec<tier1::CodeBlockEncodeScratch>,
++    results: Vec<Mutex<ResultSlot>>,
++    participants: Vec<usize>,
++}
++
++fn exact_vec<T: Default>(count: usize) -> Result<Vec<T>> {
++    let mut values = Vec::new();
++    values
++        .try_reserve_exact(count)
++        .map_err(|_| CodestreamError::SizeOverflow)?;
++    if values.capacity() != count {
++        return Err(CodestreamError::SizeOverflow);
++    }
++    values.resize_with(count, T::default);
++    Ok(values)
++}
++
++// Each claimant owns exactly one reusable scratch. Result slots are never reused
++// until this finite window joins. Mutexes provide safe exclusive access, but the
++// atomic index gives each slot exactly one claimant and hence no slot contention.
++fn run_window<S: Send, R: Send>(
++    scratch: &mut [S],
++    results: &[Mutex<R>],
++    job: impl Fn(usize, &mut S, &mut R) + Sync,
++) {
++    let next = AtomicUsize::new(0);
++    scratch.par_iter_mut().for_each(|scratch| {
++        loop {
++            let index = next.fetch_add(1, Ordering::Relaxed);
++            let Some(slot) = results.get(index) else {
++                break;
++            };
++            let mut slot = slot
++                .lock()
++                .unwrap_or_else(std::sync::PoisonError::into_inner);
++            job(index, scratch, &mut slot);
++        }
++    });
++}
++
++impl Window {
++    pub(super) fn new(workers: usize, slots: usize) -> Result<Self> {
++        if workers < 2 || slots <= workers || slots > workers.saturating_mul(4) {
++            return Err(CodestreamError::SizeOverflow);
++        }
++        // Admission already charged 4 MiB for each worker and each extra result.
++        // Metadata, fixed queue atomics and diagnostic endpoints fit far below
++        // that bound; no additional scratch is constructed per result or job.
++        const _: () = assert!(core::mem::size_of::<Mutex<ResultSlot>>() < 1024);
++        const _: () = assert!(core::mem::size_of::<tier1::CodeBlockEncodeScratch>() < 1024);
++        Ok(Self {
++            scratch: exact_vec(workers)?,
++            results: exact_vec(slots)?,
++            participants: Vec::new(),
++        })
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    pub(super) fn encode_subband<const PROFILE: bool, const BYPASS: bool>(
++        &mut self,
++        image_width: u32,
++        plane: &[i32],
++        spec: DecompSubbandSpec,
++        available_bitplanes: u8,
++        output: &mut Vec<u8>,
++        maximum: usize,
++        timings: &mut LosslessEncodeTimings,
++        execution: &mut LosslessEncodeExecution,
++    ) -> Result<(NativeDecompSubband, Vec<bypass::SegmentLengths>)> {
++        if spec.grid_x0 != 0 || spec.grid_y0 != 0 {
++            return Err(CodestreamError::SizeOverflow);
++        }
++        let start = EncodeClock::start::<PROFILE>();
++        let cols =
++            u16::try_from(spec.width.div_ceil(64)).map_err(|_| CodestreamError::SizeOverflow)?;
++        let rows =
++            u16::try_from(spec.height.div_ceil(64)).map_err(|_| CodestreamError::SizeOverflow)?;
++        let count = usize::from(cols)
++            .checked_mul(usize::from(rows))
++            .ok_or(CodestreamError::SizeOverflow)?;
++        let mut blocks = Vec::new();
++        blocks
++            .try_reserve_exact(count)
++            .map_err(|_| CodestreamError::SizeOverflow)?;
++        if blocks.capacity() != count {
++            return Err(CodestreamError::SizeOverflow);
++        }
++        let mut lengths = bypass::metadata(if BYPASS { count } else { 0 })?;
++        if PROFILE {
++            timings.block_preparation_ns += start.ns();
++        }
++        for first in (0..count).step_by(self.results.len()) {
++            let active = (count - first).min(self.results.len());
++            let start = EncodeClock::start::<PROFILE>();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let batch_start = std::time::Instant::now();
++            run_window(
++                &mut self.scratch,
++                &self.results[..active],
++                |offset, scratch, slot| {
++                    slot.bytes.clear();
++                    if PROFILE {
++                        slot.worker = rayon::current_thread_index();
++                    }
++                    #[cfg(feature = "classic-execution-diagnostics")]
++                    let block_start = batch_start.elapsed().as_nanos();
++                    slot.result = Some(encode_block::<BYPASS>(
++                        image_width,
++                        plane,
++                        spec,
++                        available_bitplanes,
++                        cols,
++                        first + offset,
++                        &mut slot.bytes,
++                        &mut slot.lengths,
++                        scratch,
++                    ));
++                    #[cfg(feature = "classic-execution-diagnostics")]
++                    {
++                        slot.interval = diagnostics::BlockInterval {
++                            start: block_start,
++                            end: batch_start.elapsed().as_nanos(),
++                            packed: scratch.diagnostic_storage().1,
++                        };
++                    }
++                },
++            );
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let joined_ns = batch_start.elapsed().as_nanos();
++            if PROFILE {
++                timings.tier1_ns += start.ns();
++                execution.max_batch_blocks = execution.max_batch_blocks.max(active);
++            }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let metadata = self.results.capacity() * core::mem::size_of::<Mutex<ResultSlot>>()
++                + self.scratch.capacity() * core::mem::size_of::<tier1::CodeBlockEncodeScratch>();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::batch(
++                self.results[..active].iter_mut().map(|s| {
++                    s.get_mut()
++                        .unwrap_or_else(std::sync::PoisonError::into_inner)
++                        .interval
++                }),
++                joined_ns,
++                self.scratch.iter().map(|s| s.diagnostic_storage().0).sum(),
++                // All slots remain live, including a previous longer window.
++                0,
++                0,
++                metadata,
++            );
++            #[cfg(feature = "classic-execution-diagnostics")]
++            {
++                let mut bytes = 0;
++                let mut collectors = 0;
++                for slot in &mut self.results {
++                    let slot = slot
++                        .get_mut()
++                        .unwrap_or_else(std::sync::PoisonError::into_inner);
++                    bytes += slot.bytes.capacity();
++                    collectors += slot.lengths.capacity() * core::mem::size_of::<usize>();
++                }
++                diagnostics::retained_results(bytes, collectors);
++            }
++            let start = EncodeClock::start::<PROFILE>();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let append_start = std::time::Instant::now();
++            // Joining completed all started jobs, regardless of their Result.
++            // Taking in stream order preserves first-error selection and bytes.
++            for slot in &mut self.results[..active] {
++                let slot = slot
++                    .get_mut()
++                    .unwrap_or_else(std::sync::PoisonError::into_inner);
++                let mut block = slot.result.take().ok_or(CodestreamError::SizeOverflow)??;
++                if PROFILE {
++                    if let Some(worker) = slot.worker
++                        && !self.participants.contains(&worker)
++                    {
++                        self.participants.push(worker);
++                    }
++                    execution.participating_workers = self.participants.len().max(1);
++                    timings.checked_tier1_blocks += 1;
++                    timings.included_tier1_blocks += u64::from(block.included);
++                    timings.tier1_coefficients += u64::from(block.width) * u64::from(block.height);
++                    timings.tier1_coding_passes += u64::from(block.coding_passes);
++                    timings.tier1_codeword_bytes += block.segment_len as u64;
++                }
++                let segments = if BYPASS {
++                    if block.segment_len != slot.bytes.len() {
++                        return Err(CodestreamError::SizeOverflow);
++                    }
++                    Some(bypass::SegmentLengths::checked(
++                        block.coding_passes,
++                        &slot.bytes,
++                        &slot.lengths,
++                    )?)
++                } else {
++                    None
++                };
++                reserve_output(output, slot.bytes.len(), maximum)?;
++                block.segment_offset = output.len();
++                output.extend_from_slice(&slot.bytes);
++                blocks.push(block);
++                if let Some(segments) = segments {
++                    lengths.push(segments);
++                }
++            }
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::append(append_start.elapsed().as_nanos());
++            if PROFILE {
++                timings.assembly_ns += start.ns();
++            }
++        }
++        Ok((
++            NativeDecompSubband {
++                index: spec.index,
++                resolution: spec.resolution,
++                kind: spec.kind,
++                x: spec.x,
++                y: spec.y,
++                width: spec.width,
++                height: spec.height,
++                code_block_cols: cols,
++                code_block_rows: rows,
++                available_bitplanes,
++                code_blocks: blocks,
++            },
++            lengths,
++        ))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::{Arc, Condvar};
++
++    #[test]
++    fn finite_claims_bound_slow_first_results_join_faults_and_release_storage() {
++        struct Scratch(Arc<AtomicUsize>);
++        impl Drop for Scratch {
++            fn drop(&mut self) {
++                self.0.fetch_add(1, Ordering::SeqCst);
++            }
++        }
++        struct ResultProbe {
++            value: Option<std::result::Result<usize, usize>>,
++            drops: Arc<AtomicUsize>,
++        }
++        impl Drop for ResultProbe {
++            fn drop(&mut self) {
++                self.drops.fetch_add(1, Ordering::SeqCst);
++            }
++        }
++        for workers in [2, 4, 8] {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap()
++                .install(|| {
++                    for multiplier in [2, 4] {
++                        let count = workers * multiplier;
++                        let scratch_drops = Arc::new(AtomicUsize::new(0));
++                        let result_drops = Arc::new(AtomicUsize::new(0));
++                        let mut scratch: Vec<_> = (0..workers)
++                            .map(|_| Scratch(scratch_drops.clone()))
++                            .collect();
++                        let results: Vec<_> = (0..count)
++                            .map(|_| {
++                                Mutex::new(ResultProbe {
++                                    value: None,
++                                    drops: result_drops.clone(),
++                                })
++                            })
++                            .collect();
++                        let finished = (Mutex::new(Vec::new()), Condvar::new());
++                        let active = AtomicUsize::new(0);
++                        let peak = AtomicUsize::new(0);
++                        run_window(&mut scratch, &results, |index, _, result| {
++                            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
++                            peak.fetch_max(now, Ordering::SeqCst);
++                            // Only jobs in this finite window are awaited. At least
++                            // two admitted scratch lanes make the gate independent
++                            // of the delayed first job and no sleep/timing race is used.
++                            if index == 0 {
++                                let guard = finished.0.lock().unwrap();
++                                let guard = finished
++                                    .1
++                                    .wait_while(guard, |v| v.len() != count - 1)
++                                    .unwrap();
++                                assert_eq!(guard.len(), results.len() - 1);
++                                assert_eq!(scratch_drops.load(Ordering::SeqCst), 0);
++                                assert_eq!(result_drops.load(Ordering::SeqCst), 0);
++                            }
++                            result.value = Some(if index == 0 || index == 3 {
++                                Err(index)
++                            } else {
++                                Ok(index)
++                            });
++                            finished.0.lock().unwrap().push(index);
++                            finished.1.notify_all();
++                            active.fetch_sub(1, Ordering::SeqCst);
++                        });
++                        assert_eq!(active.load(Ordering::SeqCst), 0);
++                        assert!(peak.load(Ordering::SeqCst) <= workers);
++                        assert_eq!(finished.0.lock().unwrap().last(), Some(&0));
++                        let values: Vec<_> = results
++                            .iter()
++                            .map(|r| r.lock().unwrap().value.unwrap())
++                            .collect();
++                        assert_eq!(values.len(), count);
++                        assert_eq!(values[0], Err(0));
++                        assert_eq!(values[3], Err(3));
++                        assert!(
++                            values
++                                .iter()
++                                .enumerate()
++                                .all(|(i, v)| *v == if i == 0 || i == 3 { Err(i) } else { Ok(i) })
++                        );
++                        // Reuse has no stale failure and all original scratch/result
++                        // storage survives until the explicit owner drops it.
++                        run_window(&mut scratch, &results, |i, _, r| r.value = Some(Ok(i)));
++                        assert!(
++                            results
++                                .iter()
++                                .enumerate()
++                                .all(|(i, r)| r.lock().unwrap().value == Some(Ok(i)))
++                        );
++                        drop(results);
++                        drop(scratch);
++                        assert_eq!(scratch_drops.load(Ordering::SeqCst), workers);
++                        assert_eq!(result_drops.load(Ordering::SeqCst), count);
++                    }
++                });
++        }
++    }
++
++    #[test]
++    fn empty_partial_and_one_lane_claims_do_not_require_other_work() {
++        for workers in [1, 2, 4, 8] {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap()
++                .install(|| {
++                    for count in [0, 1, 3, workers * 2 - 1] {
++                        let mut scratch = vec![0; workers];
++                        let results: Vec<_> = (0..count).map(|_| Mutex::new(None)).collect();
++                        run_window(&mut scratch, &results, |i, s, r| {
++                            *s += 1;
++                            *r = Some(i);
++                        });
++                        assert_eq!(scratch.iter().sum::<usize>(), count);
++                        assert!(
++                            results
++                                .iter()
++                                .enumerate()
++                                .all(|(i, r)| *r.lock().unwrap() == Some(i))
++                        );
++                    }
++                });
++        }
++    }
++
++    #[test]
++    fn panic_joins_other_lanes_and_reusable_poisoned_slots_are_replaced() {
++        rayon::ThreadPoolBuilder::new()
++            .num_threads(2)
++            .build()
++            .unwrap()
++            .install(|| {
++                let mut scratch = [0; 2];
++                let results: Vec<_> = (0..4).map(|_| Mutex::new(None)).collect();
++                let completed = AtomicUsize::new(0);
++                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                    run_window(&mut scratch, &results, |i, _, r| {
++                        if i == 0 {
++                            panic!("authored fault");
++                        }
++                        *r = Some(i);
++                        completed.fetch_add(1, Ordering::SeqCst);
++                    });
++                }));
++                assert!(result.is_err());
++                assert_eq!(completed.load(Ordering::SeqCst), 3);
++                run_window(&mut scratch, &results, |i, _, r| *r = Some(i));
++                assert!(results.iter().enumerate().all(|(i, r)| {
++                    *r.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == Some(i)
++                }));
++            });
++    }
++
++    #[test]
++    fn windows_preserve_strided_edge_bytes_metadata_fault_order_and_reuse() {
++        compare::<false>();
++        compare::<true>();
++    }
++    fn compare<const BYPASS: bool>() {
++        for workers in [2, 4, 8] {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap()
++                .install(|| {
++                    for multiplier in [2, 4] {
++                        let mut window = Window::new(workers, workers * multiplier).unwrap();
++                        let mut batches = Batches::new(workers).unwrap();
++                        for (width, height) in [(0, 0), (1, 1), (63, 65), (129, 131), (513, 67)] {
++                            for pattern in 0..3 {
++                                let stride = width + 7;
++                                let spec = DecompSubbandSpec {
++                                    index: 0,
++                                    resolution: 0,
++                                    kind: PacketSubbandKind::LowLow,
++                                    x: 0,
++                                    y: 0,
++                                    grid_x0: 0,
++                                    grid_y0: 0,
++                                    width,
++                                    height,
++                                };
++                                let mut plane = vec![0; (stride * height) as usize];
++                                for y in 0..height {
++                                    for x in 0..width {
++                                        plane[(y * stride + x) as usize] = match pattern {
++                                            0 => 0,
++                                            1 => {
++                                                if (x + y).is_multiple_of(71) {
++                                                    511
++                                                } else {
++                                                    0
++                                                }
++                                            }
++                                            _ => ((x * 7919 + y * 3109) % 2048) as i32 - 1024,
++                                        };
++                                    }
++                                }
++                                let mut a = vec![0x71; 13];
++                                let mut b = a.clone();
++                                let mut timings = LosslessEncodeTimings::default();
++                                let mut execution = LosslessEncodeExecution::default();
++                                let actual = window
++                                    .encode_subband::<true, BYPASS>(
++                                        stride,
++                                        &plane,
++                                        spec,
++                                        12,
++                                        &mut a,
++                                        1 << 20,
++                                        &mut timings,
++                                        &mut execution,
++                                    )
++                                    .unwrap();
++                                let expected = batches
++                                    .encode_subband::<true, BYPASS>(
++                                        stride,
++                                        &plane,
++                                        spec,
++                                        12,
++                                        &mut b,
++                                        1 << 20,
++                                        &mut LosslessEncodeTimings::default(),
++                                        &mut LosslessEncodeExecution::default(),
++                                    )
++                                    .unwrap();
++                                assert_eq!(a, b);
++                                assert_eq!(actual, expected);
++                                assert_eq!(window.scratch.len(), workers);
++                                assert_eq!(window.results.len(), workers * multiplier);
++                                assert!(execution.max_batch_blocks <= workers * multiplier);
++                                // Output exhaustion occurs only after the current
++                                // finite window joins; a later reuse remains exact.
++                                if a.len() > 13 {
++                                    let failed = window.encode_subband::<false, BYPASS>(
++                                        stride,
++                                        &plane,
++                                        spec,
++                                        12,
++                                        &mut vec![0x71; 13],
++                                        13,
++                                        &mut LosslessEncodeTimings::default(),
++                                        &mut LosslessEncodeExecution::default(),
++                                    );
++                                    assert!(failed.is_err());
++                                    let mut again = vec![0x71; 13];
++                                    let recovered = window
++                                        .encode_subband::<false, BYPASS>(
++                                            stride,
++                                            &plane,
++                                            spec,
++                                            12,
++                                            &mut again,
++                                            1 << 20,
++                                            &mut LosslessEncodeTimings::default(),
++                                            &mut LosslessEncodeExecution::default(),
++                                        )
++                                        .unwrap();
++                                    assert_eq!(again, a);
++                                    assert_eq!(recovered, actual);
++                                }
++                                if width > 64 {
++                                    plane[0] = i32::MAX;
++                                    let mut a = vec![0x71; 13];
++                                    let mut b = a.clone();
++                                    let actual = window.encode_subband::<false, BYPASS>(
++                                        stride,
++                                        &plane,
++                                        spec,
++                                        1,
++                                        &mut a,
++                                        1 << 20,
++                                        &mut LosslessEncodeTimings::default(),
++                                        &mut LosslessEncodeExecution::default(),
++                                    );
++                                    let expected = batches.encode_subband::<false, BYPASS>(
++                                        stride,
++                                        &plane,
++                                        spec,
++                                        1,
++                                        &mut b,
++                                        1 << 20,
++                                        &mut LosslessEncodeTimings::default(),
++                                        &mut LosslessEncodeExecution::default(),
++                                    );
++                                    assert_eq!(actual, expected);
++                                    assert!(actual.is_err());
++                                    assert_eq!(a, b);
++                                    for slot in window
++                                        .results
++                                        .iter_mut()
++                                        .take(
++                                            ((width.div_ceil(64) * height.div_ceil(64)) as usize)
++                                                .min(workers * multiplier),
++                                        )
++                                        .skip(1)
++                                    {
++                                        assert!(slot.get_mut().unwrap().result.is_some());
++                                    }
++                                }
++                            }
++                        }
++                    }
++                });
++        }
++    }
++
++    #[test]
++    fn earlier_output_exhaustion_wins_over_a_later_block_fault() {
++        rayon::ThreadPoolBuilder::new()
++            .num_threads(2)
++            .build()
++            .unwrap()
++            .install(|| {
++                let spec = DecompSubbandSpec {
++                    index: 0,
++                    resolution: 0,
++                    kind: PacketSubbandKind::LowLow,
++                    x: 0,
++                    y: 0,
++                    grid_x0: 0,
++                    grid_y0: 0,
++                    width: 256,
++                    height: 64,
++                };
++                let mut plane = vec![0; 256 * 64];
++                plane[0] = 3;
++                plane[64] = i32::MAX;
++                let mut window = Window::new(2, 4).unwrap();
++                let mut batches = Batches::new(2).unwrap();
++                let mut a = vec![0x71; 13];
++                let mut b = a.clone();
++                let actual = window
++                    .encode_subband::<false, false>(
++                        256,
++                        &plane,
++                        spec,
++                        3,
++                        &mut a,
++                        13,
++                        &mut LosslessEncodeTimings::default(),
++                        &mut LosslessEncodeExecution::default(),
++                    )
++                    .unwrap_err();
++                let expected = batches
++                    .encode_subband::<false, false>(
++                        256,
++                        &plane,
++                        spec,
++                        3,
++                        &mut b,
++                        13,
++                        &mut LosslessEncodeTimings::default(),
++                        &mut LosslessEncodeExecution::default(),
++                    )
++                    .unwrap_err();
++                assert_eq!(actual, expected);
++                assert_eq!(
++                    actual,
++                    resource_error("lossless D2 output-capacity budget is insufficient")
++                );
++                assert_eq!(a, vec![0x71; 13]);
++                assert!(
++                    window.results[1]
++                        .get_mut()
++                        .unwrap()
++                        .result
++                        .as_ref()
++                        .unwrap()
++                        .is_err()
++                );
++                assert!(
++                    window.results[2..].iter_mut().all(|s| s
++                        .get_mut()
++                        .unwrap()
++                        .result
++                        .as_ref()
++                        .unwrap()
++                        .is_ok())
++                );
++            });
++    }
++
++    #[test]
++    fn extra_results_never_consume_the_existing_worker_admission() {
++        for workers in [1, 2, 4, 8] {
++            for multiplier in [2, 4] {
++                let original = WORKER_BYTES * workers as u64 + 12345;
++                assert_eq!(
++                    capacity_for(multiplier, workers, 100, original, original),
++                    workers
++                );
++                assert_eq!(
++                    capacity_for(
++                        multiplier,
++                        workers,
++                        100,
++                        original,
++                        original + WORKER_BYTES - 1
++                    ),
++                    workers
++                );
++                for extra in 0..workers * multiplier {
++                    let slots = capacity_for(
++                        multiplier,
++                        workers,
++                        100,
++                        original,
++                        original + extra as u64 * WORKER_BYTES,
++                    );
++                    assert!(slots >= workers && slots <= workers * multiplier);
++                    assert!((slots - workers) <= extra);
++                    if workers == 1 {
++                        assert_eq!(slots, 1);
++                    }
++                }
++                assert_eq!(
++                    capacity_for(multiplier, workers, workers as u64, original, u64::MAX),
++                    workers
++                );
++            }
++        }
++    }
++}
+diff --git a/crates/emuella-j2k-test-support/tests/lossless_bypass.rs b/crates/emuella-j2k-test-support/tests/lossless_bypass.rs
+index a313e5fcc00d03dfdd07cbd2fe04ce5ae79857e9..8f223ec4896b440b1fe2790883e3ce8e4cd8d961 100644
+--- a/crates/emuella-j2k-test-support/tests/lossless_bypass.rs
++++ b/crates/emuella-j2k-test-support/tests/lossless_bypass.rs
+@@ -227,10 +227,8 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
+         for (pool, workers) in pools.iter().zip([1u64, 2, 4, 8]) {
+             pool.install(|| {
+                 let req = lossless_bypass_encode_requirements(&image, &options(), &limits).unwrap();
+-                assert_eq!(
+-                    req.working_bytes,
+-                    serial.working_bytes + (workers - 1) * (4 << 20)
+-                );
++                assert!(req.working_bytes >= serial.working_bytes + (workers - 1) * (4 << 20));
++                assert!(req.working_bytes <= limits.max_working_bytes);
+                 assert_eq!(
+                     expected,
+                     encode_lossless_bypass_with_limits(view, &options(), &limits).unwrap()
+diff --git a/crates/emuella-j2k-test-support/tests/lossless_parallel.rs b/crates/emuella-j2k-test-support/tests/lossless_parallel.rs
+index 9994a5c86340566dd5be35aab75f967bbf289748..2783ca2f35220e4e93c56c9e2dc0f593e1d1e49d 100644
+--- a/crates/emuella-j2k-test-support/tests/lossless_parallel.rs
++++ b/crates/emuella-j2k-test-support/tests/lossless_parallel.rs
+@@ -66,10 +66,12 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
+                     let expected_workers = [1, 2, 4, 8][index];
+                     let requirements =
+                         cs::lossless_d2_requirements(width, height, components, limits).unwrap();
+-                    assert_eq!(
+-                        requirements.working_bytes,
+-                        serial.working_bytes + (expected_workers - 1) as u64 * (4 << 20)
+-                    );
++                    let original_bound =
++                        serial.working_bytes + (expected_workers - 1) as u64 * (4 << 20);
++                    assert!(requirements.working_bytes >= original_bound);
++                    assert!(requirements.working_bytes <= limits.max_working_bytes);
++                    let admitted_slots = expected_workers
++                        + ((requirements.working_bytes - original_bound) / (4 << 20)) as usize;
+                     let (stream, timings, execution) = cs::encode_lossless_d2_execution_profiled(
+                         width, height, bits, &planes, limits,
+                     )
+@@ -79,7 +81,7 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
+                         execution.participating_workers >= 1
+                             && execution.participating_workers <= expected_workers
+                     );
+-                    assert!(execution.max_batch_blocks <= expected_workers);
++                    assert!(execution.max_batch_blocks <= admitted_slots);
+                     assert_eq!(timings.checked_tier1_blocks, requirements.code_blocks);
+                     assert_eq!(
+                         timings.tier1_coefficients,
+diff --git a/crates/emuella-j2k-tier1/Cargo.toml b/crates/emuella-j2k-tier1/Cargo.toml
+index 063ec4af304f67d23624136a40e4b4efbb919b35..7594e45c57a4375e4128eec19c61082912ddedf1 100644
+--- a/crates/emuella-j2k-tier1/Cargo.toml
++++ b/crates/emuella-j2k-tier1/Cargo.toml
+@@ -15,6 +15,7 @@ homepage.workspace = true
+ default = ["std"]
+ std = []
+ test-fixtures = []
++classic-execution-diagnostics = ["std"]
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/emuella-j2k-tier1/src/lib.rs b/crates/emuella-j2k-tier1/src/lib.rs
+index 5b849c0704d949df526f21d5f9ea69e3fa6f79c9..9a7ba140253aab1773391606ae9883a16fe3482b 100644
+--- a/crates/emuella-j2k-tier1/src/lib.rs
++++ b/crates/emuella-j2k-tier1/src/lib.rs
+@@ -2728,6 +2728,20 @@ pub struct CodeBlockEncodeScratch {
+ }
+ 
+ impl CodeBlockEncodeScratch {
++    /// Retained requested heap capacity and actual prepared packed-state presence.
++    /// Available only to the separate execution diagnostic build.
++    #[cfg(feature = "classic-execution-diagnostics")]
++    pub fn diagnostic_storage(&self) -> (usize, bool) {
++        let packed = self.packed.capacity_bytes();
++        (
++            packed
++                + self.coefficient_states.capacity() * core::mem::size_of::<CoefficientState>()
++                + self.signs.capacity()
++                + self.magnitudes.capacity() * core::mem::size_of::<u32>(),
++            packed != 0,
++        )
++    }
++
+     #[cfg(test)]
+     fn begin_trace(&mut self) {
+         self.trace.events.clear();
+diff --git a/crates/emuella-j2k-tier1/src/packed_encode.rs b/crates/emuella-j2k-tier1/src/packed_encode.rs
+index e5848894f34a33a85a024a295aa8a0c73c556124..432f48567744faaab659303d7569f3e245c86099 100644
+--- a/crates/emuella-j2k-tier1/src/packed_encode.rs
++++ b/crates/emuella-j2k-tier1/src/packed_encode.rs
+@@ -53,6 +53,14 @@ pub(super) struct Scratch {
+ }
+ 
+ impl Scratch {
++    #[cfg(feature = "classic-execution-diagnostics")]
++    pub(super) fn capacity_bytes(&self) -> usize {
++        self.states.capacity() * core::mem::size_of::<u16>()
++            + self.signs.capacity()
++            + self.magnitudes.capacity() * core::mem::size_of::<u32>()
++            + self.words.capacity() * core::mem::size_of::<Word>()
++    }
++
+     pub(super) fn clear(&mut self) {
+         self.states.clear();
+         self.signs.clear();
+diff --git a/docs/scalable-lossless.md b/docs/scalable-lossless.md
+index 796a14b0c6a0e6f22a1ba83e72465e4bbcbcc57b..22b5b9b1954d73c6716f3e27f023ed99af22a6b4 100644
+--- a/docs/scalable-lossless.md
++++ b/docs/scalable-lossless.md
+@@ -22,7 +22,7 @@ limit. Ordinary `encode` retains the previous routes for those cases,
+ including 9–15-bit greyscale and previously accepted thin D2 images with
+ axes below four or above 32768. Explicit limits continue to reject these shapes.
+ HT APIs and all decoder admission rules remain unchanged. Eight-component full
+-caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded code-block batches with the `parallel` feature,
++caller decode now stages complete output to preserve destination bytes on failure. The D2 writer uses bounded joined code-block windows with the `parallel` feature,
+ using the current Rayon pool and the explicit working-memory allowance.
+ The one-worker path keeps the serial writer.
+ 
+@@ -49,7 +49,7 @@ The additional raw length fields remain within the existing packet-header
+ allowance. Each serial or parallel worker's temporary collector and codeword
+ coexist with its fixed result record inside the existing 4 MiB local allowance.
+ 
+-Parallel bypass follows the same bounded joined batches and stream-order
++Parallel bypass follows the same bounded joined windows and stream-order
+ append policy. Each slot owns its collector; actual lengths follow the encoded
+ block into packet assembly. Errors publish no owned output and every started
+ batch is joined before an error returns. Reduced working budgets lower worker
+@@ -90,7 +90,9 @@ and requirements struct shapes are unchanged. This is an adaptive pool policy;
+ it uses the calling or global Rayon pool and does not construct a dedicated
+ pool or promise an exact count of participating threads. The global pool may
+ initialise on first use.
+-A batch contains at most W results, and at most W Tier-1 calls execute at once.
++A window contains at most N results (N ≤ 4W), and at most W Tier-1 calls execute at once.
++The original bound above chooses W first; the selected finite-window policy
++below funds N-W additional result slots and adds their charge to working_bytes.
+ Thread stacks and Rayon pool infrastructure belong to the caller's pool.
+ 
+ `total_component_samples` is S, not P. The bound is a conservative admission
+@@ -380,7 +382,8 @@ wall timings. Exit requires exact streams and decoded samples at every worker
+ count, bounded live results and scratch, joined failures, useful scaling and
+ no meaningful one-worker regression; otherwise reject or revise this candidate.
+ 
+-The candidate uses a fixed array of worker slots, each owning reusable Tier-1
++The original scheduler, retained as the tight-budget fallback, uses a fixed array
++of worker slots, each owning reusable Tier-1
+ scratch and one compressed result. A batch contains at most one block per slot.
+ All jobs finish before serial raster-order append and the next batch. Shared
+ coefficient planes are immutable during coding. Output-budget errors after a
+@@ -444,3 +447,84 @@ Requested allocation peaks, whole-process RSS and ordinary operation timings
+ remain different observations. The authored `lossless_bypass` integration test
+ checks direct/nested sample parity, same-context requirements and unchanged
+ encoder bytes across one/eight-worker pools. No public struct or default changes.
++
++## Separate execution diagnostic build
++
++The `classic-execution-diagnostics` codestream feature adds
++`observe_lossless_encode`, a synchronous observer around the ordinary facade
++call. It uses the existing profiled writer, with unchanged public production
++API shapes and the same one-worker route. Parallel slots retain block interval
++endpoints; only the caller aggregates them after joining. Serial intervals
++bracket the existing Tier-1 calls. The worker-side diagnostic build separately
++meters live requested allocation, including conservative reallocation overlap.
++
++The collector retains fixed 64-bin distributions and exact count/sum/min/max,
++actual peak overlapping intervals, integrated active-block time, any-active
++time, batch tails, dispatch/join, ordered append and existing stages. At most
++one interval and two endpoints per admitted slot coexist during aggregation;
++both vector capacities are reported and fit the existing per-slot local
++allowance. Slots' timestamp fields are feature-only. Aggregation has its own
++interval and occurs after each measured block interval. Block calls include
++internal preparation; parallel brackets also include geometry, so these are
++not pure entropy-kernel times. Zero-duration intervals contribute no overlap.
++The serial bypass stage retains its existing combined boundary.
++
++Scratch and result/collector observations describe retained capacities after
++a join (or serial call), including inactive slots from earlier batches. They
++are not transient allocation peaks or RSS. A block counted with retained packed
++storage may reuse capacity from an earlier block, including a zero block; that
++counter does not claim fresh packed execution. Packed selection is established
++by the unchanged selector, eligible profile and authored dispatch tests.
++
++Clock reads, profiled bookkeeping, endpoint aggregation and an optional worker
++allocation meter perturb diagnostic execution. Ordinary feature-disabled
++instantiations contain none of these observers, interval fields or clock reads.
++Use separate ordinary processes for throughput and disclose diagnostic overhead.
++Observer state is bounded, contains no payloads and is removed on error/unwind.
++
++## Selected finite-window policy
++
++The selected 4W scheduler retains W explicitly allocated
++scratch objects. W Rayon claimant tasks take unique indices from one atomic
++counter into a fixed result-slot array. Each result slot owns its compressed
++bytes, temporary bypass collector and outcome. The mutex in each slot enforces
++safe exclusive mutable ownership; unique claims make those locks uncontended.
++No scratch is constructed per job, result or Rayon iterator initialisation.
++Every started job joins before stream-order result inspection and output append,
++including jobs after a coding fault. Inspection and append remain interleaved:
++an earlier output-capacity failure precedes a later coding error. Completed
++results behind a stalled early job never exceed the finite slot count.
++
++Let the existing admission above compute W and its original bound L first.
++The frozen finite screen selected multiplier M=4. Choose
++`N = W + min((M - 1)*W, B - W, floor((limit - L)/(4 MiB)))`, with N=W when
++W=1. The reported bound is `L + (N-W)*(4 MiB)`. Extra capacity never changes
++W, raises limits or rejects an image admitted by the original worker policy.
++At the exact previous admission boundary N=W. The original W-batch store and
++new finite-window store are alternative enum variants and never coexist.
++
++The W original 4 MiB allowances continue to cover W live scratch buffers and
++W results, including their state/codeword growth overlap. Each additional
++result receives another full 4 MiB before either array is allocated. The
++existing fewer-than-1-MiB codeword bound, vector old/new growth, at most 55
++collector lengths (including retained capacity and growth), result metadata,
++mutex and queue bookkeeping fit that allowance. Scratch/result structure sizes
++are each checked below 1024 bytes; result/worker arrays reserve exact capacities
++and refuse unexpected capacity. The unused serial scratch descriptor has no
++heap storage in either parallel branch and fits the existing local bookkeeping
++allowance. Shared coefficient/packet/output terms and their overlap are unchanged.
++Diagnostic interval/endpoint arrays are finite in N, with their capacities
++separately reported inside the same conservative local terms.
++
++Authored tests deterministically hold the first job until the other N-1 jobs
++finish, using a condition variable and at least two admitted scratch lanes.
++They check out-of-order faults, bounded completed residency, all-job joining,
++reuse and exact destructor counts without sleeps. Empty/partial/one-lane probes
++have no such gate. Separate tests compare complete block bytes and segment
++metadata for zero/sparse/dense strided edge shapes, output exhaustion combined
++with a later coding fault, panic joining and reuse, and unchanged W at tight
++budgets. Ordinary 1/2/4/8 facade parity coverage exercises sample layouts and
++native reconstruction. The two predeclared 2W/4W screens selected 4W before confirmation; the
++experimental compile-time selector is removed. No kernel, admission or
++one-worker policy was retuned. Full qualification is recorded by the benchmark
++owner; the component tests establish codec-local invariants.
+diff --git a/scripts/check.sh b/scripts/check.sh
+index 725d58cd3c9b4f66ee3ce8fea7f7247f2c984a64..52d6140b1f85c8ec2cdf58a59058aaf698f3774b 100644
+--- a/scripts/check.sh
++++ b/scripts/check.sh
+@@ -32,7 +32,8 @@ sh scripts/check-c-api.sh
+ sh scripts/check-lossy-ht-public-matrix.sh
+ cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
+ cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
+-cargo test -p emuella-j2k-codestream --features parallel joined_batch_retains_all_results_after_an_in_flight_error
++cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::parallel
++cargo test -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics
+ cargo test -p emuella-j2k-test-support --example lossless_parallel
+ cargo test -p emuella-j2k-test-support --example lossless_bypass_batch
+ cargo clippy --workspace --all-targets -- -D warnings

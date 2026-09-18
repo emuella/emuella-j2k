@@ -1,0 +1,163 @@
+# Retained performance candidates
+
+This codec-owned inventory retains three project-authored source experiments
+for possible future investigation. It changes no production execution or
+historical verdict. Recoverable source, correctness observations, timing evidence
+and engineering disposition are separate. Retention is not qualification, an
+implementation request or a commitment to maintain a branch, rebase, build or
+periodically retest a candidate.
+
+The patches are complete text-only changes from reachable merged bases, including
+the original authored tests, configuration and documentation where changed.
+They contain no binaries, protected inputs, generated stream payloads, raw
+measurement transcripts or copied standards expression. Historical documentation
+inside a patch describes that experiment, not the current production contract.
+The [Tier-1 provenance and oracle record](tier1-implementation.md) remains the
+implementation authority; timing and experiment design belong to the benchmark
+component's pinned [entropy protocol][entropy-protocol], [entropy result][entropy],
+[entropy evidence][entropy-json], [parallel protocol][parallel-protocol],
+[parallel result][parallel] and [parallel evidence][parallel-json].
+
+## Owner inventory
+
+| Candidate / owner | Mechanism and callers | Historical evidence and disposition | Complexity, compatibility and reuse boundary |
+|---|---|---|---|
+| MQ D1 / Tier-1 | `mq::Decoder::read_bit` keeps interval, code and context local and delays successor access while retaining exchange branches. Shared by checked, dense-packed and sparse-packed classic block decode. | Correctness checks passed within the recorded scope. Three-pair development means show small, unconfirmed effects; the high-bit-depth style-zero screen failed. No confirmation or allocation-only qualification. | Local arithmetic refactor with no new buffer, API, scheduler or encoder change. An alternative to D2, not an additive stack member. Fresh review must preserve fast MPS return, context/register state, byte IO, raw transitions and termination. |
+| MQ D2 / Tier-1 | Same decision-local family, with Boolean-selected exchange and successor writeback in the same decoder and callers. | Correctness checks passed within the recorded scope. Three-pair development means are unconfirmed; the same high-bit-depth screen failed. A descriptive eight-worker follow-up did not promote it. | More factored control flow than D1; no new buffer or public API. Alternative to D1. Neither is currently eligible for adoption on the historical evidence alone. |
+| 4W scheduler / codestream scalable lossless writer | W reusable scratch objects claim at most 4W finite result slots through an atomic index; per-slot mutexes protect storage, then results join and append in stream order. Affects parallel D2 style-zero/bypass encode. | Completed frozen confirmation failed its original promotion gate. Correctness and resource observations passed their recorded checks, but the required high-bit-depth improvements did not. A decoder non-regression bound also remained unresolved. | Separate, higher-complexity scheduler experiment, excluded from the low-cost incremental lane. Extra result lifetime, joining/fault/panic behaviour, admission and up to `3W × 4 MiB` extra working charge require dedicated justification. Not bundled with MQ candidates by this record. |
+
+All three production experiments were removed. Original arithmetic and W joined
+batches remain in production. Future reuse needs fresh source review against an
+explicit contemporary baseline and a new frozen protocol with appropriate
+correctness, resource and regression gates. Historical baseline applicability
+must be established rather than assumed. D1/D2 effects cannot be summed, and
+results across the entropy and scheduler experiments cannot establish a combined
+effect. Retire a record explicitly when its mechanism is superseded, no longer
+applicable, cannot be recovered, or its maintenance cost has no justified benefit;
+retain the historical result and reason. There is no recurring retest obligation.
+
+## Exact source and recovery
+
+Each patch applies independently to its own base. The source commits identify the
+measured experiments; durable recovery uses the tracked patch and merged base,
+not the continued reachability of an abandoned source commit.
+
+| Candidate | Base commit / tree | Historical source commit / recovered tree | Source patch / SHA-256 |
+|---|---|---|---|
+| D1 | `bc747f86907aff09e09278e4444ad5932ef4669d` / `138634fec5d3b7818b95c85d34881dc0807214a7` | `1e0e920c1096671b04863f81a254720df1d66866` / `da49733b249e75be730b38c30bf27303a15d74f1` | [mq-d1.patch.txt](performance-candidates/mq-d1.patch.txt) / `d47f58453ee11a77e736586da9c6f0abcd60980881a4dacb1a9d4418e3c1c0ae` |
+| D2 | `bc747f86907aff09e09278e4444ad5932ef4669d` / `138634fec5d3b7818b95c85d34881dc0807214a7` | `78534e6ebad9ad5bbec35529ff315d3900f69b8a` / `ada31becf548c53773ae66f893000526dac9426f` | [mq-d2.patch.txt](performance-candidates/mq-d2.patch.txt) / `0db1e4038effac83457d533cfae827ef10252518511995f1e164d0a834cc9ae5` |
+| 4W | `94ba19589b0710192c295478c1f9ad284ea2abd5` / `d9f73ef09ea3bf3cbc50b9a3a250156bee537bec` | `8aca0cde9031c9e81f5cec33b3f09a8d2a330128` / `b9bb3aec96ed86ca5ee2b6db461ad9daee8e1ad5` | [scheduler-4w.patch.txt](performance-candidates/scheduler-4w.patch.txt) / `8dc23bc68ac96ac09afacded8930efc33fa5d6de139f61f3806b713fbc277909` |
+
+Recovery was checked without building or executing a candidate: load the base
+into an isolated Git index, apply the patch with `git apply --cached`, and require
+`git write-tree` to equal the recorded historical source tree. This compares all
+tracked bytes, paths and modes, including unchanged base files. All three matched.
+Both bases are ancestors of inventory starting revision
+`5eed30d5a2da1cc7b291e19cdfbe031c6ea97584`. The patches include five changed files
+each for D1/D2 and fifteen for 4W; full-index blob identities bind every hunk.
+They are archive artefacts under `docs/`, not compiled modules or build inputs.
+
+For example, from a full codec clone the following checks D1 in a temporary index
+and prints the recovered tree without modifying the checkout or executing it.
+Use the matching base, patch and expected tree above for each other candidate:
+
+```sh
+(
+  candidate_index_dir=$(mktemp -d)
+  trap 'rm -f "$candidate_index_dir/index"; rmdir "$candidate_index_dir"' EXIT
+  export GIT_INDEX_FILE="$candidate_index_dir/index"
+  git read-tree bc747f86907aff09e09278e4444ad5932ef4669d
+  git apply --cached --check docs/performance-candidates/mq-d1.patch.txt
+  git apply --cached docs/performance-candidates/mq-d1.patch.txt
+  git write-tree
+)
+```
+
+## MQ evidence and missing gates
+
+The benchmark's `descriptive_results.d1_screen`, `d2_screen` and
+`d2_eight_worker` own the following factual means. Each uses three adjacent
+alternating fresh-process pairs, no warmups, one decode operation per process,
+complete Mansfield inputs and common OpenJPEG-origin streams. Both arms use
+Rust 1.97.1, perf/optimisation 3, ThinLTO, one codegen unit, parallel enabled,
+SIMD disabled, packed-default encode and the original W scheduler on the same
+AMD Ryzen 9 9950X3D host. One worker uses CPU 0; eight use CPUs 0–7. Decode is
+direct/global, lossless D2, interleaved, with RGB RCT and no PAN/MSI MCT. Limits
+are 768 MiB working, 64 MiB output, 120 seconds and an 8 GiB process ceiling.
+D1 and D2 have separate adjacent controls; D1 must not borrow D2's baseline.
+
+Times below are baseline → candidate milliseconds; saving is baseline minus
+candidate, computed before rounding. A positive saving favours the candidate.
+There are **no confidence intervals or confirmed improvement claims** for these
+means; their precision does not measure uncertainty.
+
+| Product / style | D1 one worker: ms (saving) | D2 one worker: ms (saving) | D2 eight workers: ms (saving) |
+|---|---|---|---|
+| PAN16 / 0 | 1338.066 → 1306.615 (31.452) | 1356.276 → 1306.450 (49.826) | 205.567 → 199.691 (5.876) |
+| PAN16 / bypass | 684.026 → 656.489 (27.537) | 681.078 → 675.202 (5.876) | 122.342 → 117.507 (4.835) |
+| MS16 / 0 | 713.528 → 697.446 (16.081) | 718.359 → 698.857 (19.502) | 104.121 → 104.373 (−0.252) |
+| MS16 / bypass | 331.074 → 321.367 (9.708) | 330.229 → 322.198 (8.032) | 55.494 → 53.761 (1.733) |
+| RGB8 / 0 | 1749.502 → 1654.140 (95.362) | 1745.706 → 1672.134 (73.572) | 277.802 → 263.614 (14.188) |
+| RGB8 / bypass | 1563.907 → 1469.184 (94.723) | 1548.116 → 1493.749 (54.368) | 248.578 → 236.016 (12.562) |
+
+Neither variant achieved a PAN16/MS16 style-zero development mean ratio below
+0.95; all six one-worker ratios in each variant were at most 1.05. The RGB8
+means cannot satisfy that high-bit-depth predicate. Primary confirmation,
+internal regression, candidate allocation-only measurements, expanded both-origin
+1/2/4/8-worker corpus parity, SpaceNet performance and the external anchor were
+not started. D1 has no eight-worker timing result. Whole-process RSS/CPU is not
+allocation-bound qualification. Timed authored replay pairs numbered zero.
+
+Across the experiment, 108 ordinary and eighteen sampled facade calls produced
+exact native samples and expected stream hashes. The retained independent
+entropy oracle covered 31 Tier-1 tests, exhaustive two-byte inputs, all 47
+reachable probability states, decisions/contexts/registers/byte state, consumed
+prefixes, predictable termination and raw stuffing. Authored block replay
+checked independent writer bytes and segment lengths alongside pass/missing-plane
+metadata and reconstruction across styles, magnitudes, partial/wide shapes and
+malformed/truncated inputs. Both variants passed explicit no-std and WASM checks.
+These historical checks do not discharge any new baseline's correctness gates.
+
+## Separate 4W evidence and costs
+
+The frozen twenty-pair confirmation retained the original conservative 99%
+per-contrast intervals and 5% practical gate. All 1,920 RarePlanes calls were
+exact, all eighteen one-worker encode contrasts were equivalent, and every encode
+upper change bound was below +5%. Required Boca Raton high-bit-depth eight-worker
+encode contrasts nevertheless remained inconclusive against the improvement gate:
+
+| Product / style | Baseline → 4W ms | Saving ms | Relative change, 99% interval |
+|---|---|---:|---|
+| PAN16 / 0 | 390.447 → 361.921 | 28.526 | [−12.21%, −1.96%] |
+| PAN16 / bypass | 282.333 → 267.406 | 14.927 | [−11.25%, +1.20%] |
+| MS16 / 0 | 199.253 → 181.393 | 17.860 | [−13.71%, −4.02%] |
+| MS16 / bypass | 131.896 → 116.573 | 15.323 | [−18.12%, −4.32%] |
+
+Savings above are differences of the displayed rounded means. Other encode
+improvements did not rescue the failed gate. Of twelve targeted decode contrasts,
+nine were equivalent and three inconclusive; unchanged MS16/style-zero decode at
+eight workers was 105.398 → 107.315 ms with [−2.40%, +6.23%], leaving practical
+non-regression unproved for that contrast. The fixed 480-call SpaceNet and
+1,440-call matched OpenJPEG encode cohorts completed; they did not change the
+historical rejection. This is not the MQ experiment's unstarted confirmation.
+
+The 144 separate allocation-only calls fitted each arm's working queries; maximum
+requested peak/query was 0.644825. Peak requested allocation rose from 366,357,664
+to 366,461,984 bytes. Parallel queries added exactly `3W × 4 MiB` in the measured
+cohort (96 MiB at eight workers); the largest query was 702,852,604 bytes, below
+768 MiB. One-worker queries were unchanged. Tight budgets reduced extra slots
+without changing original worker admission. These are separate from RSS and
+headline timings and do not make extra scheduler state a low-cost change.
+
+Historical authored tests covered stalled-first/out-of-order completion,
+faults, bounded residency, joining, release counts, panic/reuse, stream/segment
+metadata and admission; the frozen candidate's canonical checks passed. Any
+reuse must revisit those invariants and resource costs on its new baseline.
+The archive does not reinstate the removed implementation or its test machinery.
+
+[entropy-protocol]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/classic-entropy-hot-loop.md
+[entropy]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/classic-entropy-hot-loop-results.md
+[entropy-json]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/evidence/classic-entropy-hot-loop.json
+[parallel-protocol]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/classic-parallel-execution.md
+[parallel]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/classic-parallel-execution-results.md
+[parallel-json]: https://github.com/emuella/emuella-benchmark/blob/876aefb9fc53d3e856de4c77ba253c043fdc3805/docs/evidence/classic-parallel-execution.json
