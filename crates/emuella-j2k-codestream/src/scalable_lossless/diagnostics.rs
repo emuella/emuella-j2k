@@ -45,6 +45,17 @@ impl Durations {
 pub struct LosslessExecutionDiagnostic {
     pub timings: LosslessEncodeTimings,
     pub execution: LosslessEncodeExecution,
+    /// Front-end subintervals nested within the existing stage totals.
+    pub conversion_level_shift_ns: u128,
+    pub forward_rct_ns: u128,
+    pub dwt_scratch_resize_ns: u128,
+    pub dwt_scratch_drop_ns: u128,
+    pub dwt_validation_ns: u128,
+    pub dwt_vertical_gather_ns: u128,
+    pub dwt_vertical_lifting_ns: u128,
+    pub dwt_vertical_store_ns: u128,
+    pub dwt_horizontal_lifting_ns: u128,
+    pub dwt_horizontal_copy_ns: u128,
     pub blocks: Durations,
     pub batch_tails: Durations,
     pub batches: u64,
@@ -98,7 +109,7 @@ pub fn observe_lossless_encode<T>(call: impl FnOnce() -> T) -> (T, LosslessExecu
 pub(super) fn enabled() -> bool {
     CURRENT.with(|c| c.borrow().is_some())
 }
-fn update(f: impl FnOnce(&mut LosslessExecutionDiagnostic)) {
+pub(crate) fn update(f: impl FnOnce(&mut LosslessExecutionDiagnostic)) {
     CURRENT.with(|c| {
         if let Some(d) = c.borrow_mut().as_mut() {
             f(d);
@@ -207,6 +218,77 @@ pub(super) fn batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn front_end_observation_preserves_models_layouts_and_styles() {
+        use super::super::*;
+        let (width, height) = (17, 19);
+        for (components, bits) in [(1, 8), (1, 16), (3, 8), (3, 16), (8, 16)] {
+            let bytes = usize::from(bits / 8);
+            for interleaved in [false, true] {
+                let step = bytes * if interleaved { components } else { 1 };
+                let stride = width * step + 7;
+                let span = height * stride;
+                let mut raw = vec![0; if interleaved { span } else { span * components }];
+                for c in 0..components {
+                    for y in 0..height {
+                        for x in 0..width {
+                            let offset = if interleaved { c * bytes } else { c * span }
+                                + y * stride
+                                + x * step;
+                            let value = ((x * 7919 + y * 3301 + c * 65521) as u16).to_le_bytes();
+                            raw[offset..offset + bytes].copy_from_slice(&value[..bytes]);
+                        }
+                    }
+                }
+                let planes: Vec<_> = (0..components)
+                    .map(|c| LosslessD2Plane {
+                        samples: &raw[if interleaved { c * bytes } else { c * span }..],
+                        stride_bytes: stride,
+                        sample_step_bytes: step,
+                    })
+                    .collect();
+                for bypass in [false, true] {
+                    let call = || {
+                        let encode = if bypass {
+                            encode_lossless_d2_bypass
+                        } else {
+                            encode_lossless_d2
+                        };
+                        encode(
+                            width as u32,
+                            height as u32,
+                            bits,
+                            &planes,
+                            LosslessEncodeLimits::default(),
+                        )
+                    };
+                    let plain = call().unwrap();
+                    let (observed, d) = observe_lossless_encode(call);
+                    assert_eq!(observed.unwrap(), plain);
+                    assert!(
+                        d.conversion_level_shift_ns + d.forward_rct_ns
+                            <= d.timings.conversion_level_shift_rct_ns
+                    );
+                    if components != 3 {
+                        assert_eq!(d.forward_rct_ns, 0);
+                    }
+                    let detailed_dwt = d.dwt_scratch_resize_ns
+                        + d.dwt_scratch_drop_ns
+                        + d.dwt_validation_ns
+                        + d.dwt_vertical_gather_ns
+                        + d.dwt_vertical_lifting_ns
+                        + d.dwt_vertical_store_ns
+                        + d.dwt_horizontal_lifting_ns
+                        + d.dwt_horizontal_copy_ns;
+                    assert!(detailed_dwt <= d.timings.forward_dwt_ns);
+                    assert!(d.dwt_vertical_gather_ns > 0);
+                    assert!(d.dwt_vertical_lifting_ns > 0);
+                    assert!(d.dwt_horizontal_lifting_ns > 0);
+                }
+            }
+        }
+    }
+
     #[test]
     fn fixed_distribution_preserves_counts_and_bounds() {
         let mut d = Durations::default();

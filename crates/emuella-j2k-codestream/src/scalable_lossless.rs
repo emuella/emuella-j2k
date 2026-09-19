@@ -491,9 +491,21 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
         }
         coefficients.push(values);
     }
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if PROFILE {
+        let ns = start.started.map_or(0, |s| s.elapsed().as_nanos());
+        diagnostics::update(|d| d.conversion_level_shift_ns = ns);
+    }
     if let [red, green, blue] = coefficients.as_mut_slice() {
+        #[cfg(feature = "classic-execution-diagnostics")]
+        let rct = EncodeClock::start::<PROFILE>();
         transform::forward_reversible_color_transform_bounded(red, green, blue)
             .map_err(|_| CodestreamError::SizeOverflow)?;
+        #[cfg(feature = "classic-execution-diagnostics")]
+        if PROFILE {
+            let ns = rct.ns();
+            diagnostics::update(|d| d.forward_rct_ns = ns);
+        }
     }
     if PROFILE {
         timings.conversion_level_shift_rct_ns = start.ns();
@@ -502,17 +514,44 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     }
     let start = EncodeClock::start::<PROFILE>();
     let mut transform_scratch = Vec::new();
-    for plane in &mut coefficients {
-        forward_reversible_5_3_levels_with_scratch(
-            width,
-            height,
-            plane,
-            2,
-            "lossless D2 transform failed",
-            &mut transform_scratch,
-        )?;
+    let mut transform_components = || -> Result<()> {
+        for plane in &mut coefficients {
+            forward_reversible_5_3_levels_with_scratch(
+                width,
+                height,
+                plane,
+                2,
+                "lossless D2 transform failed",
+                &mut transform_scratch,
+            )?;
+        }
+        Ok(())
+    };
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if PROFILE && diagnostics::enabled() {
+        let (result, detail) = transform::observe_forward_transform(transform_components);
+        result?;
+        diagnostics::update(|d| {
+            d.dwt_validation_ns = detail.validation_ns;
+            d.dwt_vertical_gather_ns = detail.vertical_gather_ns;
+            d.dwt_vertical_lifting_ns = detail.vertical_lifting_ns;
+            d.dwt_vertical_store_ns = detail.vertical_store_ns;
+            d.dwt_horizontal_lifting_ns = detail.horizontal_lifting_ns;
+            d.dwt_horizontal_copy_ns = detail.horizontal_copy_ns;
+        });
+    } else {
+        transform_components()?;
     }
+    #[cfg(not(feature = "classic-execution-diagnostics"))]
+    transform_components()?;
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let dropping = EncodeClock::start::<PROFILE>();
     drop(transform_scratch);
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if PROFILE {
+        let ns = dropping.ns();
+        diagnostics::update(|d| d.dwt_scratch_drop_ns += ns);
+    }
     if PROFILE {
         timings.forward_dwt_ns = start.ns();
     }
