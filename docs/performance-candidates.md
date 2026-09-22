@@ -337,8 +337,8 @@ ordinary, 68 allocation, twelve diagnostics and four unchanged-decoder calls.
 All 164 encode calls matched complete bytes/native samples and applicable independent
 decode receipts; all 68 allocation calls passed unchanged query/output gates.
 These counts overlap by role and are not additional confirmation samples.
-The single RGB16 bypass/one-worker +6.585% descriptive observation remains a failed
-or adverse observation to retain, not a demonstrated regression or a discarded tail.
+The single RGB16 bypass/one-worker +6.585% descriptive observation remains an adverse
+observation to retain, not a demonstrated regression or a discarded tail.
 No development mean establishes a confidence interval or production qualification.
 See the benchmark's [development evidence](https://github.com/emuella/emuella-benchmark/blob/162373e881c517bdfb1f9527dd0d0c589a7c9a3c/docs/classic-forward53-panels-results.md)
 and its finite confirmation record for complete observations and unstarted gates.
