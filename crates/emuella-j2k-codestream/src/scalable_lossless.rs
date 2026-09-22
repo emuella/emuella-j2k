@@ -12,76 +12,6 @@ pub use bypass::encode_lossless_d2_bypass_test_fixture;
 
 const WORKER_BYTES: u64 = 4 * 1024 * 1024;
 
-// Source-bound development policy. Promotion requires independent confirmation.
-const FORWARD53_BACKEND: transform::Forward53Backend =
-    transform::Forward53Backend::RowPanelParallel;
-const FORWARD53_PANEL_WIDTH: usize = 16;
-
-fn prepare_forward53(
-    width: usize,
-    height: usize,
-    workers: usize,
-) -> Result<(transform::Forward53Plan, transform::Forward53Workspace)> {
-    // Only the DWT and Tier-1 local terms are reused. Descriptors, output and
-    // coefficient allowances remain untouched; 4 KiB preserves fixed metadata.
-    let maximum = workers
-        .min(8)
-        .checked_mul(WORKER_BYTES as usize)
-        .and_then(|n| n.checked_add(width.max(height).checked_mul(12)?))
-        .and_then(|n| n.checked_sub(4096))
-        .ok_or(CodestreamError::SizeOverflow)?;
-    prepare_forward53_with_maximum(width, height, workers, maximum)
-}
-
-fn prepare_forward53_with_maximum(
-    width: usize,
-    height: usize,
-    workers: usize,
-    maximum: usize,
-) -> Result<(transform::Forward53Plan, transform::Forward53Workspace)> {
-    let config = |w, h| transform::Reversible53Config {
-        width: w,
-        height: h,
-        stride: width,
-        edges: transform::Reversible53Edges::from_tile_origin(0, 0, w, h),
-        sample_range: transform::ComponentSampleRange::signed(32),
-    };
-    let levels = [
-        config(width, height),
-        config(width.div_ceil(2), height.div_ceil(2)),
-    ];
-    let backend = FORWARD53_BACKEND;
-    let panel_width = FORWARD53_PANEL_WIDTH;
-    #[cfg(feature = "classic-execution-diagnostics")]
-    let (backend, panel_width) = transform::forward53_diagnostic_policy(backend, panel_width);
-    let backend = if width * height < 4096 {
-        transform::Forward53Backend::Reference
-    } else {
-        backend
-    };
-    let mut slots = workers.min(8);
-    let mut workspace = transform::Forward53Workspace::new();
-    loop {
-        let plan = transform::Forward53Plan::new(&levels, backend, panel_width, slots)
-            .map_err(|_| CodestreamError::SizeOverflow)?;
-        if workspace.prepare(&plan, maximum).is_ok() {
-            return Ok((plan, workspace));
-        }
-        if slots == 1 {
-            break;
-        }
-        slots = slots.div_ceil(2);
-    }
-    // Optional allocation failure occurs before any transform mutation. Retrying
-    // reference storage cannot overlap a discarded panel allocation.
-    let plan = transform::Forward53Plan::new(&levels, transform::Forward53Backend::Reference, 1, 1)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    workspace
-        .prepare(&plan, maximum)
-        .map_err(|_| CodestreamError::SizeOverflow)?;
-    Ok((plan, workspace))
-}
-
 /// Byte limits for owned raw classic lossless D2 encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LosslessEncodeLimits {
@@ -583,22 +513,17 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
         timings.rct_pixels = if planes.len() == 3 { count as u64 } else { 0 };
     }
     let start = EncodeClock::start::<PROFILE>();
-    #[cfg(feature = "classic-execution-diagnostics")]
-    let preparation = EncodeClock::start::<PROFILE>();
-    let (transform_plan, mut transform_workspace) =
-        prepare_forward53(width_usize, height as usize, workers)?;
-    #[cfg(feature = "classic-execution-diagnostics")]
-    if PROFILE {
-        diagnostics::update(|d| d.dwt_scratch_resize_ns += preparation.ns());
-    }
+    let mut transform_scratch = Vec::new();
     let mut transform_components = || -> Result<()> {
         for plane in &mut coefficients {
-            transform::forward_reversible_5_3_planned_bounded(
+            forward_reversible_5_3_levels_with_scratch(
+                width,
+                height,
                 plane,
-                &transform_plan,
-                &mut transform_workspace,
-            )
-            .map_err(|_| CodestreamError::SizeOverflow)?;
+                2,
+                "lossless D2 transform failed",
+                &mut transform_scratch,
+            )?;
         }
         Ok(())
     };
@@ -613,7 +538,6 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
             d.dwt_vertical_store_ns = detail.vertical_store_ns;
             d.dwt_horizontal_lifting_ns = detail.horizontal_lifting_ns;
             d.dwt_horizontal_copy_ns = detail.horizontal_copy_ns;
-            d.forward53 = detail;
         });
     } else {
         transform_components()?;
@@ -622,7 +546,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     transform_components()?;
     #[cfg(feature = "classic-execution-diagnostics")]
     let dropping = EncodeClock::start::<PROFILE>();
-    drop(transform_workspace);
+    drop(transform_scratch);
     #[cfg(feature = "classic-execution-diagnostics")]
     if PROFILE {
         let ns = dropping.ns();
@@ -793,56 +717,4 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
         timings.assembly_ns += start.ns();
     }
     Ok(output)
-}
-
-#[cfg(test)]
-mod forward53_tests {
-    use super::*;
-
-    #[test]
-    fn optional_workspace_shrinks_or_falls_back_with_no_query_change() {
-        for (width, height) in [
-            (4, 32768),
-            (32768, 4),
-            (129, 131),
-            (32768, 2048),
-            (2048, 32768),
-        ] {
-            for workers in [1, 2, 4, 8] {
-                let (plan, workspace) = prepare_forward53(width, height, workers).unwrap();
-                assert!(
-                    plan.slots()
-                        <= workers
-                            .min(width.div_ceil(FORWARD53_PANEL_WIDTH))
-                            .min(height)
-                );
-                assert!(
-                    workspace.capacity_bytes()
-                        <= 12 * width.max(height) + (WORKER_BYTES as usize) * workers - 4096
-                );
-                assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
-            }
-        }
-        // Even a wider admitted execution budget cannot overflow optional
-        // planning on 32-bit hosts: transform storage uses at most eight slots.
-        let (wide, wide_workspace) = prepare_forward53(513, 515, usize::MAX).unwrap();
-        let (eight, eight_workspace) = prepare_forward53(513, 515, 8).unwrap();
-        assert_eq!(wide.slots(), eight.slots());
-        assert_eq!(wide.workspace_bytes(), eight.workspace_bytes());
-        assert_eq!(
-            wide_workspace.capacity_bytes(),
-            eight_workspace.capacity_bytes()
-        );
-        let (width, height) = (513, 515);
-        let (scalar, _) = prepare_forward53(width, height, 1).unwrap();
-        let (shrunk, workspace) =
-            prepare_forward53_with_maximum(width, height, 8, scalar.workspace_bytes()).unwrap();
-        assert_eq!(shrunk.slots(), 1);
-        assert_eq!(workspace.capacity_bytes(), scalar.workspace_bytes());
-        let (reference, workspace) =
-            prepare_forward53_with_maximum(width, height, 8, 12 * height).unwrap();
-        assert_eq!(reference.backend(), transform::Forward53Backend::Reference);
-        assert_eq!(workspace.capacity_bytes(), 12 * height);
-        assert!(prepare_forward53_with_maximum(width, height, 8, 12 * height - 1).is_err());
-    }
 }

@@ -287,3 +287,58 @@ request or recurring retest obligation.
 [front-end-protocol]: https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-encode-front-end.md
 [front-end-result]: https://github.com/emuella/emuella-benchmark/blob/main/docs/classic-encode-front-end-results.md
 [front-end-evidence]: https://github.com/emuella/emuella-benchmark/blob/main/docs/evidence/classic-encode-front-end.json
+
+## Classic forward 5/3 bounded panels
+
+The finite `classic-forward53-finite-confirmation/v1` attempt is **DECLINED BEFORE
+LAUNCH**. A fresh authorised balanced exclusive CPU reservation was unavailable:
+non-interactive administrative access required authentication, and the previous
+single-use reservation had already been restored and removed. There were zero
+confirmation worker starts and no measured candidate rejection. Production retains
+the original scalar forward traversal, original MQ, packed-default encoding and W.
+The implementation attempt is closed; future reuse needs a separately authorised
+objective or evidence plan, with no ongoing worktree, rebase or retest obligation.
+
+The engineering owner prospectively authorised one finite attempt despite incomplete
+A/A precision. That amendment changes only this panel attempt's feasibility-based
+launch prohibition and indefinite pending disposition; it does not relax acceptance,
+claim sufficient power, revise history or establish product-wide policy. The full
+Boca RGB8/bypass/eight-worker primary still requires its 99% upper change bound
+strictly below -5% and mean saving at least 10 ms, with every critical upper bound
+at most +1% and all exactness, interoperability, resource and failure gates.
+
+| Recovery identity | Value |
+|---|---|
+| Reachable baseline / tree | `975a5e734773578f61abf76d5fddfbd837f3bd7d` / `cea1ed5dd73b11bfaf3ee1260629fab6d3e4919e` |
+| Frozen candidate / recovered tree | `d60859a8595554be52c8748a8e8c85b69614fea5` / `ea121ffa15497d10b4657897b0f9d54f93c3588b` |
+| Complete source patch | [classic-forward53-panels.patch.txt](performance-candidates/classic-forward53-panels.patch.txt) |
+| Patch SHA-256 | `8f0092d19ba607f76ec6c27dda2b652c3e39b9d85f91a1ca7a9c549bea88b47a` |
+
+Isolated-index application to the exact baseline reproduces the complete candidate
+tree, including all thirteen changed source, test, build and documentation files.
+No candidate code is compiled by this archive. The snapshot preserves the width-16
+bounded parallel-panel policy, one-worker behaviour and independent scalar fallback;
+it is not a newer algorithm. The original proof and tests are in the patch and
+[original source document](https://github.com/emuella/emuella-j2k/blob/d60859a8595554be52c8748a8e8c85b69614fea5/docs/forward53-panels.md).
+
+The mechanism adds an immutable geometry plan, explicitly owned reusable panel/line
+slots, parallel gather/lift, joined disjoint-row scatter and horizontal work.
+Components remain sequential, workspace is prepared before mutation and released
+before entropy/output allocation, and existing queries and admitted workers remain
+unchanged. Scheduling, allocation/fallback and join/failure complexity require the
+larger-change policy; no runtime option, decoder change or other optimisation is
+part of the treatment. Any future integration must inspect conflicts and preserve
+newer independent tests rather than restore this tree over contemporary mainline.
+
+Historical source-readiness review, canonical/native/no-std/WASM checks, independent
+axis/level/stream parity, tight-budget/reuse and joined-failure checks remain scoped
+to the recorded candidate. All 168 development calls are retained: 84 descriptive
+ordinary, 68 allocation, twelve diagnostics and four unchanged-decoder calls.
+All 164 encode calls matched complete bytes/native samples and applicable independent
+decode receipts; all 68 allocation calls passed unchanged query/output gates.
+These counts overlap by role and are not additional confirmation samples.
+The single RGB16 bypass/one-worker +6.585% descriptive observation remains a failed
+or adverse observation to retain, not a demonstrated regression or a discarded tail.
+No development mean establishes a confidence interval or production qualification.
+See the benchmark's [development evidence](https://github.com/emuella/emuella-benchmark/blob/162373e881c517bdfb1f9527dd0d0c589a7c9a3c/docs/classic-forward53-panels-results.md)
+and its finite confirmation record for complete observations and unstarted gates.

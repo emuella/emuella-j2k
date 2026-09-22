@@ -33,9 +33,6 @@ sh scripts/check-lossy-ht-public-matrix.sh
 cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
 cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
 cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::parallel
-cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::forward53_tests
-cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
-cargo test --release -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --test forward53_panels
 cargo test -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics
 cargo test -p emuella-j2k-test-support --example lossless_parallel
 cargo test -p emuella-j2k-test-support --example lossless_bypass_batch

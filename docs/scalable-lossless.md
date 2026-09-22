@@ -1,10 +1,5 @@
 # Scalable classic lossless encoding
 
-This development candidate adds a [planned forward 5/3 panel engine](forward53-panels.md).
-Its correctness, phase memory proof and diagnostic identities are described there;
-production performance qualification remains pending. The source branch enables
-the candidate for bounded evaluation and is not a promoted production revision.
-
 The public owned `encode` route admits raw, single-tile Part 1 lossless D2
 images with unsigned U8 or U16_LE greyscale/RGB samples, LRCP and reversible
 5/3. Both planar and interleaved input are supported, including row padding.
@@ -104,10 +99,8 @@ actual allocation lifetimes:
 
 - Exact-capacity i32 coefficient vectors use 4*S bytes. Input components are
   read directly at their byte stride/step; planar RGB has no packed input copy.
-- The scalar DWT vector contains three i32 lines, at most 12*A bytes. The
-  planned panel candidate uses an explicitly bounded alternative workspace
-  within the non-overlapping DWT/Tier-1 local terms; see the linked whole-operation
-  proof. Every transform allocation is released before entropy coding.
+- One reusable DWT vector contains three i32 lines, at most 12*A bytes. It is
+  released before entropy coding.
 - Descriptors for one packet, two encoding tag trees for one subband and the
   packet header are bounded by 4096*B. A descriptor is below 64 bytes. Each
   tree has fewer than three times its leaf count in nodes (including thin
@@ -498,9 +491,8 @@ transfers. Resize includes allocation and zero initialisation when needed.
 These intervals are nested within the existing combined conversion/RCT and
 forward-DWT stages, so they must not be added to those totals. Their remainder
 contains configuration, loops and diagnostic clock/accounting overhead. The
-scalable writer's conversion, RCT and DWT component loops remain serial. The
-panel candidate parallelises bounded axis work and records separate joined wall
-intervals; its later Tier-1 batches retain the admitted W policy.
+scalable writer's conversion, RCT and DWT component/axis loops are serial even
+in parallel builds; its later Tier-1 batches retain the admitted W policy.
 Per-line clock reads perturb the diagnostic build, particularly short axes.
 The ordinary feature-disabled build contains no added clocks or observer state.
 
