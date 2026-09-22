@@ -89,7 +89,10 @@ capacity fields and no allocated level/job arrays. Iterators borrow slices;
 the existing caller-owned Rayon pool supplies scheduling infrastructure and
 stacks. This does not create a second pool or charge an assumed OS-thread count.
 
-Preparation checks `D <= 12*A + (4 MiB)*W - 4096`. The 4096-byte reserve keeps
+Preparation checks `D <= 12*A + (4 MiB)*min(W, 8) - 4096`. Capping the
+optional allowance before usize arithmetic keeps unusually wide admitted pools
+safe on 32-bit hosts; it uses a conservative subset of the existing W term and
+does not cap Tier-1 workers. The 4096-byte reserve keeps
 fixed allocation bookkeeping within the original local allowance; the outer
 coefficient vector holds at most eight Vec descriptors (192 bytes on 64-bit
 hosts), with no transform job metadata allocation. The new plan and workspace

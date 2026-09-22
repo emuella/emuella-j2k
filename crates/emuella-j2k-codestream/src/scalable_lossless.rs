@@ -25,6 +25,7 @@ fn prepare_forward53(
     // Only the DWT and Tier-1 local terms are reused. Descriptors, output and
     // coefficient allowances remain untouched; 4 KiB preserves fixed metadata.
     let maximum = workers
+        .min(8)
         .checked_mul(WORKER_BYTES as usize)
         .and_then(|n| n.checked_add(width.max(height).checked_mul(12)?))
         .and_then(|n| n.checked_sub(4096))
@@ -822,6 +823,16 @@ mod forward53_tests {
                 assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
             }
         }
+        // Even a wider admitted execution budget cannot overflow optional
+        // planning on 32-bit hosts: transform storage uses at most eight slots.
+        let (wide, wide_workspace) = prepare_forward53(513, 515, usize::MAX).unwrap();
+        let (eight, eight_workspace) = prepare_forward53(513, 515, 8).unwrap();
+        assert_eq!(wide.slots(), eight.slots());
+        assert_eq!(wide.workspace_bytes(), eight.workspace_bytes());
+        assert_eq!(
+            wide_workspace.capacity_bytes(),
+            eight_workspace.capacity_bytes()
+        );
         let (width, height) = (513, 515);
         let (scalar, _) = prepare_forward53(width, height, 1).unwrap();
         let (shrunk, workspace) =
