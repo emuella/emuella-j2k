@@ -50,6 +50,7 @@ pub struct LosslessExecutionDiagnostic {
     pub forward_rct_ns: u128,
     pub dwt_scratch_resize_ns: u128,
     pub dwt_scratch_drop_ns: u128,
+    pub forward53: emuella_j2k_transform::ForwardTransformDiagnostic,
     pub dwt_validation_ns: u128,
     pub dwt_vertical_gather_ns: u128,
     pub dwt_vertical_lifting_ns: u128,
