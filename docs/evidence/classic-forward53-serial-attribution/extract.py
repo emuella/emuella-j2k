@@ -80,7 +80,7 @@ def extract(binary, arm, output):
                   f'--start-address={address}', f'--stop-address={address + size}', str(binary))
         # Remove only the input filename, retaining every address and instruction byte.
         raw = '\n'.join(line for line in raw.splitlines() if 'file format' not in line).strip() + '\n'
-        (output / f'{arm}-{key}.asm').write_text(raw)
+        (output / f'{arm}-{key}.asm.txt').write_text(raw)
         instructions = []
         decoded_bytes = bytearray()
         for line in raw.splitlines():

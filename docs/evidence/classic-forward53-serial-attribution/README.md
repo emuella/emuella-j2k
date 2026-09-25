@@ -23,7 +23,7 @@ every selected symbol. Baseline `prepare` is the sole permitted absent symbol.
 The output does not embed input paths. The exact replay needs these binary
 identities and tool versions; rebuilding the same source does not promise them.
 
-Each `.asm` retains linked addresses, instruction bytes, register names, original
+Each `.asm.txt` retains linked addresses, instruction bytes, register names, original
 branch displacements and resolved symbol annotations. Only the input filename
 banner is removed. External call labels appear as references; external function
 bodies are outside the extraction. `worker_encode` is Emuella's own adapter
