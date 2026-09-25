@@ -28,6 +28,10 @@ fn prepare_forward53(
     let panel_width = FORWARD53_PANEL_WIDTH;
     #[cfg(feature = "classic-execution-diagnostics")]
     let (backend, panel_width) = transform::forward53_diagnostic_policy(backend, panel_width);
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if !(1..=32).contains(&panel_width) {
+        return Err(CodestreamError::SizeOverflow);
+    }
     // Admission already reflects the existing pool and Tier-1 memory budget.
     // Do not construct a plan or initialise panel storage for serial calls.
     if backend == transform::Forward53Backend::Reference

@@ -320,3 +320,31 @@ fn eight_component_u8_remains_outside_the_profile() {
             .is_err()
     );
 }
+
+#[test]
+fn invalid_diagnostic_width_fails_before_panel_preparation_and_policy_is_reusable() {
+    let samples = vec![127u8; 129 * 131];
+    let planes = [cs::LosslessD2Plane {
+        samples: &samples,
+        stride_bytes: 129,
+        sample_step_bytes: 1,
+    }];
+    let encode =
+        || cs::encode_lossless_d2(129, 131, 8, &planes, cs::LosslessEncodeLimits::default());
+    for backend in [
+        cs::Forward53Backend::Reference,
+        cs::Forward53Backend::RowPanelScalar,
+        cs::Forward53Backend::RowPanelParallel,
+    ] {
+        for width in [0, 33, usize::MAX] {
+            let (result, detail) = cs::observe_lossless_encode(|| {
+                cs::with_forward53_diagnostic_policy(backend, width, encode)
+            });
+            assert!(result.is_err());
+            assert_eq!(detail.forward53_panel_prepare_attempts, 0);
+            assert_eq!(detail.forward53_panel_initialised_bytes, 0);
+            assert_eq!(detail.forward53_original_helper_calls, 0);
+        }
+    }
+    assert!(encode().is_ok());
+}
