@@ -342,3 +342,43 @@ observation to retain, not a demonstrated regression or a discarded tail.
 No development mean establishes a confidence interval or production qualification.
 See the benchmark's [development evidence](https://github.com/emuella/emuella-benchmark/blob/162373e881c517bdfb1f9527dd0d0c589a7c9a3c/docs/classic-forward53-panels-results.md)
 and its finite confirmation record for complete observations and unstarted gates.
+
+
+## Classic forward 5/3 parallel dispatch v1
+
+The separate `classic-forward53-parallel-dispatch/v1` treatment is **NOT QUALIFIED
+WITHIN BUDGET** and remains source-only. Its bounded confirmation is closed;
+there is no authorised retest or production promotion. Earlier finite-confirmation
+v1/v2 outcomes and their evidence are unchanged. Production source, tests,
+dependencies and checks retain the exact pre-treatment base.
+
+| Recovery identity | Value |
+|---|---|
+| Reachable baseline / tree | `a7576ad03486e097ac923b8e49cac39a1cbef5d2` / `5e7dfa48280c6d1d0abfe376d69af243e879359f` |
+| Frozen candidate / recovered tree | `4f5bfb39f02e043c9a1f594a8159d3cf86d52c3f` / `259066112bda675e67a8d3eab3dbf9088d18fe91` |
+| Complete source patch | [classic-forward53-parallel-dispatch.patch.txt](performance-candidates/classic-forward53-parallel-dispatch.patch.txt) |
+| Patch SHA-256 | `ad5333e4e5ea285e3ed1123a65e449cfab6066e74f98a10abe68790b336b4c3c` |
+
+The thirteen-file full-index patch reconstructs the exact frozen tree from its
+base in an isolated Git index. It includes the panel engine, independent authored
+arithmetic/stream tests, backend/scratch routing tests, diagnostics, build checks
+and proof. None is a production build input. The [terminal source record](forward53-parallel-dispatch.md)
+retains the dispatch truth table and phase-aware allocation proof.
+
+Ordinary single-worker execution kept the original multi-level helper and original
+scratch lifecycle, with no panel allocation or initialisation. Panels required at
+least two useful slots under existing effective admission, pool, geometry and
+resource eligibility. Optional failure released reservations before original-helper
+fallback; mixed levels retained admitted workspace. Historical serial-panel RGB8
+gains were explicitly foregone. This does not assert universal serial superiority
+or attribute historical RGB16 cost to allocation.
+
+The primary and eight-worker style-zero endpoint passed. The serial Boca RGB8
+style-zero endpoint's 40-pair 99% interval was [+0.769086%, +1.131692%], leaving the
+mandatory +1% upper bound unresolved without demonstrating a greater-than-1%
+regression. The stopping rule left 25 endpoints unstarted. The retained report
+accounts for 278 starts (240 ordinary, six preflight and 32 allocation), verifies
+all applicable report checks and independent restoration, and records no issues.
+Its SHA-256 is `e3ffa775cf723379a449e2a8a07086a7f32333dea193137096e2be277f3f9211`.
+The benchmark owns the [complete factual result](https://github.com/emuella/emuella-benchmark/pull/31); any future reuse requires a new
+explicit objective and contemporary qualification, not a continuation of this run.
