@@ -382,3 +382,24 @@ all applicable report checks and independent restoration, and records no issues.
 Its SHA-256 is `e3ffa775cf723379a449e2a8a07086a7f32333dea193137096e2be277f3f9211`.
 The benchmark owns the [complete factual result](https://github.com/emuella/emuella-benchmark/pull/31); any future reuse requires a new
 explicit objective and contemporary qualification, not a continuation of this run.
+
+## Classic forward 5/3 caller boundary v1
+
+The prospective [caller-boundary experiment](forward53-caller-boundary.md)
+compares production reference A, the archived parallel-dispatch B, and B plus
+one owning-helper refactoring C. Its additional full-index patch applies after
+recovering B and retains the exact C source and authored tests. The helper owns
+panel preparation, component execution and destruction; the effective
+single-worker writer skips it and uses its original reusable scalar scratch.
+The scoped `inline(never)` decision precedes the measured build. This archive
+introduces no enabled codec change, option or automatic qualification campaign.
+The source record retains the recovery identities, compiled-code interpretation
+and the scope of the prospective evidence separately from historical outcomes.
+
+The complete 126-start prospective acquisition found **no worthwhile supported
+repair at this budget**. C/B changed mean time by +2.421219 ms, with a 99%
+relative interval [−0.120744%, +0.318239%], leaving benefit and harm unresolved.
+C/A satisfied the serial bound for this endpoint, but that does not prove a
+boundary benefit. B/A's present result did not reproduce the historical
+slowdown. C remains recoverable source only; no repair selection, production
+promotion, full-matrix qualification or automatic next experiment follows.

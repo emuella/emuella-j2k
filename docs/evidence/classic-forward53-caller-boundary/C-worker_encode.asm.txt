@@ -1,0 +1,462 @@
+Disassembly of section .text:
+
+000000000006e7a0 <classic_compare_worker::encode>:
+   6e7a0:	55                                              	push   %rbp
+   6e7a1:	41 57                                           	push   %r15
+   6e7a3:	41 56                                           	push   %r14
+   6e7a5:	41 55                                           	push   %r13
+   6e7a7:	41 54                                           	push   %r12
+   6e7a9:	53                                              	push   %rbx
+   6e7aa:	48 81 ec c8 00 00 00                            	sub    $0xc8,%rsp
+   6e7b1:	49 89 cd                                        	mov    %rcx,%r13
+   6e7b4:	49 89 d4                                        	mov    %rdx,%r12
+   6e7b7:	49 89 f7                                        	mov    %rsi,%r15
+   6e7ba:	48 83 7e 10 07                                  	cmpq   $0x7,0x10(%rsi)
+   6e7bf:	75 1b                                           	jne    6e7dc <classic_compare_worker::encode+0x3c>
+   6e7c1:	49 8b 47 08                                     	mov    0x8(%r15),%rax
+   6e7c5:	b9 65 6d 75 65                                  	mov    $0x65756d65,%ecx
+   6e7ca:	33 08                                           	xor    (%rax),%ecx
+   6e7cc:	ba 65 6c 6c 61                                  	mov    $0x616c6c65,%edx
+   6e7d1:	33 50 03                                        	xor    0x3(%rax),%edx
+   6e7d4:	09 ca                                           	or     %ecx,%edx
+   6e7d6:	0f 84 d0 00 00 00                               	je     6e8ac <classic_compare_worker::encode+0x10c>
+   6e7dc:	41 0f b6 af ca 00 00 00                         	movzbl 0xca(%r15),%ebp
+   6e7e4:	83 fd 08                                        	cmp    $0x8,%ebp
+   6e7e7:	75 36                                           	jne    6e81f <classic_compare_worker::encode+0x7f>
+   6e7e9:	48 89 7c 24 38                                  	mov    %rdi,0x38(%rsp)
+   6e7ee:	4a 8d 1c ad 00 00 00 00                         	lea    0x0(,%r13,4),%rbx
+   6e7f6:	4c 89 e8                                        	mov    %r13,%rax
+   6e7f9:	48 c1 e8 3e                                     	shr    $0x3e,%rax
+   6e7fd:	0f 95 c0                                        	setne  %al
+   6e800:	48 b9 fc ff ff ff ff ff ff 7f                   	movabs $0x7ffffffffffffffc,%rcx
+   6e80a:	48 39 cb                                        	cmp    %rcx,%rbx
+   6e80d:	0f 97 c1                                        	seta   %cl
+   6e810:	08 c1                                           	or     %al,%cl
+   6e812:	74 2a                                           	je     6e83e <classic_compare_worker::encode+0x9e>
+   6e814:	31 ff                                           	xor    %edi,%edi
+   6e816:	48 89 de                                        	mov    %rbx,%rsi
+   6e819:	ff 15 e1 65 20 00                               	call   *0x2065e1(%rip)        # 274e00 <_DYNAMIC+0x250>
+   6e81f:	4c 89 e9                                        	mov    %r13,%rcx
+   6e822:	48 d1 e9                                        	shr    $1,%rcx
+   6e825:	48 8d 34 8d 00 00 00 00                         	lea    0x0(,%rcx,4),%rsi
+   6e82d:	4c 89 e8                                        	mov    %r13,%rax
+   6e830:	48 c1 e8 3e                                     	shr    $0x3e,%rax
+   6e834:	74 3c                                           	je     6e872 <classic_compare_worker::encode+0xd2>
+   6e836:	31 ff                                           	xor    %edi,%edi
+   6e838:	ff 15 c2 65 20 00                               	call   *0x2065c2(%rip)        # 274e00 <_DYNAMIC+0x250>
+   6e83e:	48 85 db                                        	test   %rbx,%rbx
+   6e841:	0f 84 a7 00 00 00                               	je     6e8ee <classic_compare_worker::encode+0x14e>
+   6e847:	48 89 df                                        	mov    %rbx,%rdi
+   6e84a:	ff 15 68 65 20 00                               	call   *0x206568(%rip)        # 274db8 <malloc@GLIBC_2.2.5>
+   6e850:	49 89 c6                                        	mov    %rax,%r14
+   6e853:	4c 89 ea                                        	mov    %r13,%rdx
+   6e856:	48 85 c0                                        	test   %rax,%rax
+   6e859:	0f 84 cb 06 00 00                               	je     6ef2a <classic_compare_worker::encode+0x78a>
+   6e85f:	4d 85 ed                                        	test   %r13,%r13
+   6e862:	48 89 54 24 30                                  	mov    %rdx,0x30(%rsp)
+   6e867:	0f 85 97 00 00 00                               	jne    6e904 <classic_compare_worker::encode+0x164>
+   6e86d:	e9 b2 04 00 00                                  	jmp    6ed24 <classic_compare_worker::encode+0x584>
+   6e872:	48 89 7c 24 38                                  	mov    %rdi,0x38(%rsp)
+   6e877:	48 89 4c 24 30                                  	mov    %rcx,0x30(%rsp)
+   6e87c:	48 85 c9                                        	test   %rcx,%rcx
+   6e87f:	0f 84 13 01 00 00                               	je     6e998 <classic_compare_worker::encode+0x1f8>
+   6e885:	48 89 f3                                        	mov    %rsi,%rbx
+   6e888:	48 89 f7                                        	mov    %rsi,%rdi
+   6e88b:	ff 15 27 65 20 00                               	call   *0x206527(%rip)        # 274db8 <malloc@GLIBC_2.2.5>
+   6e891:	49 89 c6                                        	mov    %rax,%r14
+   6e894:	48 85 c0                                        	test   %rax,%rax
+   6e897:	0f 84 8d 06 00 00                               	je     6ef2a <classic_compare_worker::encode+0x78a>
+   6e89d:	49 83 fd 02                                     	cmp    $0x2,%r13
+   6e8a1:	0f 83 01 01 00 00                               	jae    6e9a8 <classic_compare_worker::encode+0x208>
+   6e8a7:	e9 78 04 00 00                                  	jmp    6ed24 <classic_compare_worker::encode+0x584>
+   6e8ac:	48 89 fb                                        	mov    %rdi,%rbx
+   6e8af:	49 89 e6                                        	mov    %rsp,%r14
+   6e8b2:	4c 89 f7                                        	mov    %r14,%rdi
+   6e8b5:	4c 89 fe                                        	mov    %r15,%rsi
+   6e8b8:	e8 d3 16 00 00                                  	call   6ff90 <<classic_compare_worker::Request>::info>
+   6e8bd:	48 8b 04 24                                     	mov    (%rsp),%rax
+   6e8c1:	0f 10 44 24 08                                  	movups 0x8(%rsp),%xmm0
+   6e8c6:	0f 29 44 24 40                                  	movaps %xmm0,0x40(%rsp)
+   6e8cb:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+   6e8cf:	0f 84 ab 01 00 00                               	je     6ea80 <classic_compare_worker::encode+0x2e0>
+   6e8d5:	0f 28 44 24 40                                  	movaps 0x40(%rsp),%xmm0
+   6e8da:	0f 11 43 10                                     	movups %xmm0,0x10(%rbx)
+   6e8de:	48 89 43 08                                     	mov    %rax,0x8(%rbx)
+   6e8e2:	48 c7 03 01 00 00 00                            	movq   $0x1,(%rbx)
+   6e8e9:	e9 61 05 00 00                                  	jmp    6ee4f <classic_compare_worker::encode+0x6af>
+   6e8ee:	41 be 04 00 00 00                               	mov    $0x4,%r14d
+   6e8f4:	31 d2                                           	xor    %edx,%edx
+   6e8f6:	4d 85 ed                                        	test   %r13,%r13
+   6e8f9:	48 89 54 24 30                                  	mov    %rdx,0x30(%rsp)
+   6e8fe:	0f 84 20 04 00 00                               	je     6ed24 <classic_compare_worker::encode+0x584>
+   6e904:	49 83 fd 08                                     	cmp    $0x8,%r13
+   6e908:	72 1b                                           	jb     6e925 <classic_compare_worker::encode+0x185>
+   6e90a:	4c 01 f3                                        	add    %r14,%rbx
+   6e90d:	4b 8d 04 2c                                     	lea    (%r12,%r13,1),%rax
+   6e911:	49 39 c6                                        	cmp    %rax,%r14
+   6e914:	0f 92 c0                                        	setb   %al
+   6e917:	49 39 dc                                        	cmp    %rbx,%r12
+   6e91a:	0f 92 c1                                        	setb   %cl
+   6e91d:	84 c8                                           	test   %cl,%al
+   6e91f:	0f 84 ae 01 00 00                               	je     6ead3 <classic_compare_worker::encode+0x333>
+   6e925:	31 c0                                           	xor    %eax,%eax
+   6e927:	4c 89 ea                                        	mov    %r13,%rdx
+   6e92a:	48 89 c1                                        	mov    %rax,%rcx
+   6e92d:	48 83 e2 03                                     	and    $0x3,%rdx
+   6e931:	74 1e                                           	je     6e951 <classic_compare_worker::encode+0x1b1>
+   6e933:	48 89 c1                                        	mov    %rax,%rcx
+   6e936:	66 2e 0f 1f 84 00 00 00 00 00                   	cs nopw 0x0(%rax,%rax,1)
+   6e940:	41 0f b6 34 0c                                  	movzbl (%r12,%rcx,1),%esi
+   6e945:	41 89 34 8e                                     	mov    %esi,(%r14,%rcx,4)
+   6e949:	48 ff c1                                        	inc    %rcx
+   6e94c:	48 ff ca                                        	dec    %rdx
+   6e94f:	75 ef                                           	jne    6e940 <classic_compare_worker::encode+0x1a0>
+   6e951:	4c 29 e8                                        	sub    %r13,%rax
+   6e954:	48 83 f8 fc                                     	cmp    $0xfffffffffffffffc,%rax
+   6e958:	0f 87 c6 03 00 00                               	ja     6ed24 <classic_compare_worker::encode+0x584>
+   6e95e:	66 90                                           	xchg   %ax,%ax
+   6e960:	41 0f b6 04 0c                                  	movzbl (%r12,%rcx,1),%eax
+   6e965:	41 89 04 8e                                     	mov    %eax,(%r14,%rcx,4)
+   6e969:	41 0f b6 44 0c 01                               	movzbl 0x1(%r12,%rcx,1),%eax
+   6e96f:	41 89 44 8e 04                                  	mov    %eax,0x4(%r14,%rcx,4)
+   6e974:	41 0f b6 44 0c 02                               	movzbl 0x2(%r12,%rcx,1),%eax
+   6e97a:	41 89 44 8e 08                                  	mov    %eax,0x8(%r14,%rcx,4)
+   6e97f:	41 0f b6 44 0c 03                               	movzbl 0x3(%r12,%rcx,1),%eax
+   6e985:	41 89 44 8e 0c                                  	mov    %eax,0xc(%r14,%rcx,4)
+   6e98a:	48 83 c1 04                                     	add    $0x4,%rcx
+   6e98e:	49 39 cd                                        	cmp    %rcx,%r13
+   6e991:	75 cd                                           	jne    6e960 <classic_compare_worker::encode+0x1c0>
+   6e993:	e9 8c 03 00 00                                  	jmp    6ed24 <classic_compare_worker::encode+0x584>
+   6e998:	41 be 04 00 00 00                               	mov    $0x4,%r14d
+   6e99e:	49 83 fd 02                                     	cmp    $0x2,%r13
+   6e9a2:	0f 82 7c 03 00 00                               	jb     6ed24 <classic_compare_worker::encode+0x584>
+   6e9a8:	48 b9 fc ff ff ff ff ff ff 7f                   	movabs $0x7ffffffffffffffc,%rcx
+   6e9b2:	48 8d 41 02                                     	lea    0x2(%rcx),%rax
+   6e9b6:	4c 21 e8                                        	and    %r13,%rax
+   6e9b9:	49 8d 75 fe                                     	lea    -0x2(%r13),%rsi
+   6e9bd:	48 83 fe 1e                                     	cmp    $0x1e,%rsi
+   6e9c1:	72 1f                                           	jb     6e9e2 <classic_compare_worker::encode+0x242>
+   6e9c3:	49 8d 14 04                                     	lea    (%r12,%rax,1),%rdx
+   6e9c7:	49 39 d6                                        	cmp    %rdx,%r14
+   6e9ca:	0f 83 ff 02 00 00                               	jae    6eccf <classic_compare_worker::encode+0x52f>
+   6e9d0:	4d 01 ed                                        	add    %r13,%r13
+   6e9d3:	49 21 cd                                        	and    %rcx,%r13
+   6e9d6:	4d 01 f5                                        	add    %r14,%r13
+   6e9d9:	4d 39 ec                                        	cmp    %r13,%r12
+   6e9dc:	0f 83 ed 02 00 00                               	jae    6eccf <classic_compare_worker::encode+0x52f>
+   6e9e2:	31 d2                                           	xor    %edx,%edx
+   6e9e4:	4c 89 e1                                        	mov    %r12,%rcx
+   6e9e7:	48 8d 70 fe                                     	lea    -0x2(%rax),%rsi
+   6e9eb:	89 f7                                           	mov    %esi,%edi
+   6e9ed:	f7 d7                                           	not    %edi
+   6e9ef:	40 f6 c7 06                                     	test   $0x6,%dil
+   6e9f3:	74 39                                           	je     6ea2e <classic_compare_worker::encode+0x28e>
+   6e9f5:	89 f7                                           	mov    %esi,%edi
+   6e9f7:	d1 ef                                           	shr    $1,%edi
+   6e9f9:	ff c7                                           	inc    %edi
+   6e9fb:	83 e7 03                                        	and    $0x3,%edi
+   6e9fe:	4d 8d 0c 96                                     	lea    (%r14,%rdx,4),%r9
+   6ea02:	48 f7 df                                        	neg    %rdi
+   6ea05:	45 31 c0                                        	xor    %r8d,%r8d
+   6ea08:	45 31 d2                                        	xor    %r10d,%r10d
+   6ea0b:	0f 1f 44 00 00                                  	nopl   0x0(%rax,%rax,1)
+   6ea10:	46 0f b7 1c 01                                  	movzwl (%rcx,%r8,1),%r11d
+   6ea15:	47 89 1c 41                                     	mov    %r11d,(%r9,%r8,2)
+   6ea19:	49 ff ca                                        	dec    %r10
+   6ea1c:	49 83 c0 02                                     	add    $0x2,%r8
+   6ea20:	4c 39 d7                                        	cmp    %r10,%rdi
+   6ea23:	75 eb                                           	jne    6ea10 <classic_compare_worker::encode+0x270>
+   6ea25:	4c 29 d2                                        	sub    %r10,%rdx
+   6ea28:	4c 29 c0                                        	sub    %r8,%rax
+   6ea2b:	4c 01 c1                                        	add    %r8,%rcx
+   6ea2e:	48 83 fe 06                                     	cmp    $0x6,%rsi
+   6ea32:	0f 82 ec 02 00 00                               	jb     6ed24 <classic_compare_worker::encode+0x584>
+   6ea38:	49 8d 14 96                                     	lea    (%r14,%rdx,4),%rdx
+   6ea3c:	48 83 c2 0c                                     	add    $0xc,%rdx
+   6ea40:	31 f6                                           	xor    %esi,%esi
+   6ea42:	66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   6ea50:	0f b7 3c 31                                     	movzwl (%rcx,%rsi,1),%edi
+   6ea54:	89 7c 72 f4                                     	mov    %edi,-0xc(%rdx,%rsi,2)
+   6ea58:	0f b7 7c 31 02                                  	movzwl 0x2(%rcx,%rsi,1),%edi
+   6ea5d:	89 7c 72 f8                                     	mov    %edi,-0x8(%rdx,%rsi,2)
+   6ea61:	0f b7 7c 31 04                                  	movzwl 0x4(%rcx,%rsi,1),%edi
+   6ea66:	89 7c 72 fc                                     	mov    %edi,-0x4(%rdx,%rsi,2)
+   6ea6a:	0f b7 7c 31 06                                  	movzwl 0x6(%rcx,%rsi,1),%edi
+   6ea6f:	89 3c 72                                        	mov    %edi,(%rdx,%rsi,2)
+   6ea72:	48 83 c6 08                                     	add    $0x8,%rsi
+   6ea76:	48 39 f0                                        	cmp    %rsi,%rax
+   6ea79:	75 d5                                           	jne    6ea50 <classic_compare_worker::encode+0x2b0>
+   6ea7b:	e9 a4 02 00 00                                  	jmp    6ed24 <classic_compare_worker::encode+0x584>
+   6ea80:	0f 28 44 24 40                                  	movaps 0x40(%rsp),%xmm0
+   6ea85:	0f 29 84 24 a0 00 00 00                         	movaps %xmm0,0xa0(%rsp)
+   6ea8d:	41 8b 8f c4 00 00 00                            	mov    0xc4(%r15),%ecx
+   6ea94:	48 85 c9                                        	test   %rcx,%rcx
+   6ea97:	0f 84 9b 04 00 00                               	je     6ef38 <classic_compare_worker::encode+0x798>
+   6ea9d:	41 8b 97 c0 00 00 00                            	mov    0xc0(%r15),%edx
+   6eaa4:	48 0f af d1                                     	imul   %rcx,%rdx
+   6eaa8:	41 0f b7 b7 c8 00 00 00                         	movzwl 0xc8(%r15),%esi
+   6eab0:	41 0f b6 87 ca 00 00 00                         	movzbl 0xca(%r15),%eax
+   6eab8:	c1 e8 03                                        	shr    $0x3,%eax
+   6eabb:	48 0f af c6                                     	imul   %rsi,%rax
+   6eabf:	48 0f af c2                                     	imul   %rdx,%rax
+   6eac3:	48 89 c2                                        	mov    %rax,%rdx
+   6eac6:	48 c1 ea 20                                     	shr    $0x20,%rdx
+   6eaca:	74 65                                           	je     6eb31 <classic_compare_worker::encode+0x391>
+   6eacc:	31 d2                                           	xor    %edx,%edx
+   6eace:	48 f7 f1                                        	div    %rcx
+   6ead1:	eb 62                                           	jmp    6eb35 <classic_compare_worker::encode+0x395>
+   6ead3:	48 b8 ff ff ff ff ff ff ff 3f                   	movabs $0x3fffffffffffffff,%rax
+   6eadd:	48 83 c0 f9                                     	add    $0xfffffffffffffff9,%rax
+   6eae1:	4c 21 e8                                        	and    %r13,%rax
+   6eae4:	31 c9                                           	xor    %ecx,%ecx
+   6eae6:	66 0f ef c0                                     	pxor   %xmm0,%xmm0
+   6eaea:	66 0f 1f 44 00 00                               	nopw   0x0(%rax,%rax,1)
+   6eaf0:	66 41 0f 6e 0c 0c                               	movd   (%r12,%rcx,1),%xmm1
+   6eaf6:	66 41 0f 6e 54 0c 04                            	movd   0x4(%r12,%rcx,1),%xmm2
+   6eafd:	66 0f 60 c8                                     	punpcklbw %xmm0,%xmm1
+   6eb01:	66 0f 61 c8                                     	punpcklwd %xmm0,%xmm1
+   6eb05:	66 0f 60 d0                                     	punpcklbw %xmm0,%xmm2
+   6eb09:	66 0f 61 d0                                     	punpcklwd %xmm0,%xmm2
+   6eb0d:	f3 41 0f 7f 0c 8e                               	movdqu %xmm1,(%r14,%rcx,4)
+   6eb13:	f3 41 0f 7f 54 8e 10                            	movdqu %xmm2,0x10(%r14,%rcx,4)
+   6eb1a:	48 83 c1 08                                     	add    $0x8,%rcx
+   6eb1e:	48 39 c8                                        	cmp    %rcx,%rax
+   6eb21:	75 cd                                           	jne    6eaf0 <classic_compare_worker::encode+0x350>
+   6eb23:	49 39 c5                                        	cmp    %rax,%r13
+   6eb26:	0f 84 f8 01 00 00                               	je     6ed24 <classic_compare_worker::encode+0x584>
+   6eb2c:	e9 f6 fd ff ff                                  	jmp    6e927 <classic_compare_worker::encode+0x187>
+   6eb31:	31 d2                                           	xor    %edx,%edx
+   6eb33:	f7 f1                                           	div    %ecx
+   6eb35:	48 8d 8c 24 a0 00 00 00                         	lea    0xa0(%rsp),%rcx
+   6eb3d:	48 89 4c 24 70                                  	mov    %rcx,0x70(%rsp)
+   6eb42:	4c 89 64 24 78                                  	mov    %r12,0x78(%rsp)
+   6eb47:	4c 89 ac 24 80 00 00 00                         	mov    %r13,0x80(%rsp)
+   6eb4f:	48 89 84 24 88 00 00 00                         	mov    %rax,0x88(%rsp)
+   6eb57:	49 8d 8f b0 00 00 00                            	lea    0xb0(%r15),%rcx
+   6eb5e:	41 80 bf cb 00 00 00 00                         	cmpb   $0x0,0xcb(%r15)
+   6eb66:	74 47                                           	je     6ebaf <classic_compare_worker::encode+0x40f>
+   6eb68:	c7 44 24 18 00 00 00 00                         	movl   $0x0,0x18(%rsp)
+   6eb70:	c7 44 24 2c 01 00 00 02                         	movl   $0x2000001,0x2c(%rsp)
+   6eb78:	c7 44 24 20 00 00 00 00                         	movl   $0x0,0x20(%rsp)
+   6eb80:	48 c7 04 24 00 00 00 00                         	movq   $0x0,(%rsp)
+   6eb88:	48 c7 44 24 08 08 00 00 00                      	movq   $0x8,0x8(%rsp)
+   6eb91:	48 c7 44 24 10 00 00 00 00                      	movq   $0x0,0x10(%rsp)
+   6eb9a:	48 8d 7c 24 40                                  	lea    0x40(%rsp),%rdi
+   6eb9f:	48 8d 74 24 70                                  	lea    0x70(%rsp),%rsi
+   6eba4:	48 89 e2                                        	mov    %rsp,%rdx
+   6eba7:	ff 15 1b 64 20 00                               	call   *0x20641b(%rip)        # 274fc8 <_DYNAMIC+0x418>
+   6ebad:	eb 45                                           	jmp    6ebf4 <classic_compare_worker::encode+0x454>
+   6ebaf:	c7 44 24 18 00 00 00 00                         	movl   $0x0,0x18(%rsp)
+   6ebb7:	c7 44 24 2c 01 00 00 02                         	movl   $0x2000001,0x2c(%rsp)
+   6ebbf:	c7 44 24 20 00 00 00 00                         	movl   $0x0,0x20(%rsp)
+   6ebc7:	48 c7 04 24 00 00 00 00                         	movq   $0x0,(%rsp)
+   6ebcf:	48 c7 44 24 08 08 00 00 00                      	movq   $0x8,0x8(%rsp)
+   6ebd8:	48 c7 44 24 10 00 00 00 00                      	movq   $0x0,0x10(%rsp)
+   6ebe1:	48 8d 7c 24 40                                  	lea    0x40(%rsp),%rdi
+   6ebe6:	48 8d 74 24 70                                  	lea    0x70(%rsp),%rsi
+   6ebeb:	48 89 e2                                        	mov    %rsp,%rdx
+   6ebee:	ff 15 dc 63 20 00                               	call   *0x2063dc(%rip)        # 274fd0 <_DYNAMIC+0x420>
+   6ebf4:	48 89 d9                                        	mov    %rbx,%rcx
+   6ebf7:	48 83 7c 24 40 ff                               	cmpq   $0xffffffffffffffff,0x40(%rsp)
+   6ebfd:	0f 84 ae 00 00 00                               	je     6ecb1 <classic_compare_worker::encode+0x511>
+   6ec03:	0f 10 44 24 40                                  	movups 0x40(%rsp),%xmm0
+   6ec08:	f3 0f 6f 4c 24 50                               	movdqu 0x50(%rsp),%xmm1
+   6ec0e:	f3 0f 6f 54 24 60                               	movdqu 0x60(%rsp),%xmm2
+   6ec14:	66 0f 7f 54 24 20                               	movdqa %xmm2,0x20(%rsp)
+   6ec1a:	66 0f 7f 4c 24 10                               	movdqa %xmm1,0x10(%rsp)
+   6ec20:	0f 29 04 24                                     	movaps %xmm0,(%rsp)
+   6ec24:	4c 89 b4 24 90 00 00 00                         	mov    %r14,0x90(%rsp)
+   6ec2c:	48 8d 05 6d 39 00 00                            	lea    0x396d(%rip),%rax        # 725a0 <<emuella_j2k_core::J2kError as core::fmt::Debug>::fmt>
+   6ec33:	48 89 84 24 98 00 00 00                         	mov    %rax,0x98(%rsp)
+   6ec3b:	48 8d 35 95 f6 f9 ff                            	lea    -0x6096b(%rip),%rsi        # e2d7 <anon.b5c622d8c0861678d1a06bfbb6410fee.144.llvm.5232537515227879042>
+   6ec42:	48 8d bc 24 b0 00 00 00                         	lea    0xb0(%rsp),%rdi
+   6ec4a:	48 8d 94 24 90 00 00 00                         	lea    0x90(%rsp),%rdx
+   6ec52:	ff 15 20 62 20 00                               	call   *0x206220(%rip)        # 274e78 <_DYNAMIC+0x2c8>
+   6ec58:	48 8d 44 24 10                                  	lea    0x10(%rsp),%rax
+   6ec5d:	48 8b 0c 24                                     	mov    (%rsp),%rcx
+   6ec61:	48 be fc ff ff ff ff ff ff 7f                   	movabs $0x7ffffffffffffffc,%rsi
+   6ec6b:	48 83 c6 04                                     	add    $0x4,%rsi
+   6ec6f:	48 31 ce                                        	xor    %rcx,%rsi
+   6ec72:	48 85 c9                                        	test   %rcx,%rcx
+   6ec75:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   6ec7a:	48 0f 48 d6                                     	cmovs  %rsi,%rdx
+   6ec7e:	48 83 fa 05                                     	cmp    $0x5,%rdx
+   6ec82:	0f 87 51 02 00 00                               	ja     6eed9 <classic_compare_worker::encode+0x739>
+   6ec88:	48 8d 35 01 23 fa ff                            	lea    -0x5dcff(%rip),%rsi        # 10f90 <anon.ee651107ab5319c6bc273e1a29320aaf.108.llvm.14746981713632465754+0x40>
+   6ec8f:	48 63 14 96                                     	movslq (%rsi,%rdx,4),%rdx
+   6ec93:	48 01 f2                                        	add    %rsi,%rdx
+   6ec96:	48 89 de                                        	mov    %rbx,%rsi
+   6ec99:	ff e2                                           	jmp    *%rdx
+   6ec9b:	48 83 7c 24 18 00                               	cmpq   $0x0,0x18(%rsp)
+   6eca1:	0f 84 55 02 00 00                               	je     6eefc <classic_compare_worker::encode+0x75c>
+   6eca7:	48 8d 44 24 20                                  	lea    0x20(%rsp),%rax
+   6ecac:	e9 3f 02 00 00                                  	jmp    6eef0 <classic_compare_worker::encode+0x750>
+   6ecb1:	48 8b 44 24 58                                  	mov    0x58(%rsp),%rax
+   6ecb6:	48 89 41 18                                     	mov    %rax,0x18(%rcx)
+   6ecba:	0f 10 44 24 48                                  	movups 0x48(%rsp),%xmm0
+   6ecbf:	0f 11 41 08                                     	movups %xmm0,0x8(%rcx)
+   6ecc3:	48 c7 01 00 00 00 00                            	movq   $0x0,(%rcx)
+   6ecca:	e9 80 01 00 00                                  	jmp    6ee4f <classic_compare_worker::encode+0x6af>
+   6eccf:	48 d1 ee                                        	shr    $1,%rsi
+   6ecd2:	48 ff c6                                        	inc    %rsi
+   6ecd5:	48 89 f2                                        	mov    %rsi,%rdx
+   6ecd8:	48 83 e2 f8                                     	and    $0xfffffffffffffff8,%rdx
+   6ecdc:	48 29 d0                                        	sub    %rdx,%rax
+   6ecdf:	48 29 d0                                        	sub    %rdx,%rax
+   6ece2:	49 8d 0c 54                                     	lea    (%r12,%rdx,2),%rcx
+   6ece6:	31 ff                                           	xor    %edi,%edi
+   6ece8:	66 0f ef c0                                     	pxor   %xmm0,%xmm0
+   6ecec:	0f 1f 40 00                                     	nopl   0x0(%rax)
+   6ecf0:	f3 41 0f 7e 0c 7c                               	movq   (%r12,%rdi,2),%xmm1
+   6ecf6:	f3 41 0f 7e 54 7c 08                            	movq   0x8(%r12,%rdi,2),%xmm2
+   6ecfd:	66 0f 61 c8                                     	punpcklwd %xmm0,%xmm1
+   6ed01:	66 0f 61 d0                                     	punpcklwd %xmm0,%xmm2
+   6ed05:	f3 41 0f 7f 0c be                               	movdqu %xmm1,(%r14,%rdi,4)
+   6ed0b:	f3 41 0f 7f 54 be 10                            	movdqu %xmm2,0x10(%r14,%rdi,4)
+   6ed12:	48 83 c7 08                                     	add    $0x8,%rdi
+   6ed16:	48 39 fa                                        	cmp    %rdi,%rdx
+   6ed19:	75 d5                                           	jne    6ecf0 <classic_compare_worker::encode+0x550>
+   6ed1b:	48 39 d6                                        	cmp    %rdx,%rsi
+   6ed1e:	0f 85 c3 fc ff ff                               	jne    6e9e7 <classic_compare_worker::encode+0x247>
+   6ed24:	48 c7 44 24 40 00 00 00 00                      	movq   $0x0,0x40(%rsp)
+   6ed2d:	48 c7 04 24 00 00 00 00                         	movq   $0x0,(%rsp)
+   6ed35:	41 8b b7 c0 00 00 00                            	mov    0xc0(%r15),%esi
+   6ed3c:	41 8b 97 c4 00 00 00                            	mov    0xc4(%r15),%edx
+   6ed43:	41 0f b7 8f c8 00 00 00                         	movzwl 0xc8(%r15),%ecx
+   6ed4b:	31 c0                                           	xor    %eax,%eax
+   6ed4d:	83 f9 03                                        	cmp    $0x3,%ecx
+   6ed50:	0f 94 c0                                        	sete   %al
+   6ed53:	45 0f b6 97 cc 00 00 00                         	movzbl 0xcc(%r15),%r10d
+   6ed5b:	45 0f b6 9f cb 00 00 00                         	movzbl 0xcb(%r15),%r11d
+   6ed63:	48 89 e3                                        	mov    %rsp,%rbx
+   6ed66:	4c 8d 64 24 40                                  	lea    0x40(%rsp),%r12
+   6ed6b:	f2 0f 10 05 95 21 fa ff                         	movsd  -0x5de6b(%rip),%xmm0        # 10f08 <anon.163a7daa153173e3324b1e1e59ef13e5.3.llvm.12432551406381563140+0x398>
+   6ed73:	4c 89 f7                                        	mov    %r14,%rdi
+   6ed76:	41 89 e8                                        	mov    %ebp,%r8d
+   6ed79:	41 b9 02 00 00 00                               	mov    $0x2,%r9d
+   6ed7f:	53                                              	push   %rbx
+   6ed80:	41 54                                           	push   %r12
+   6ed82:	50                                              	push   %rax
+   6ed83:	41 53                                           	push   %r11
+   6ed85:	41 52                                           	push   %r10
+   6ed87:	6a 01                                           	push   $0x1
+   6ed89:	ff 15 49 62 20 00                               	call   *0x206249(%rip)        # 274fd8 <_DYNAMIC+0x428>
+   6ed8f:	48 83 c4 30                                     	add    $0x30,%rsp
+   6ed93:	85 c0                                           	test   %eax,%eax
+   6ed95:	74 58                                           	je     6edef <classic_compare_worker::encode+0x64f>
+   6ed97:	4c 8b 24 24                                     	mov    (%rsp),%r12
+   6ed9b:	48 8b 5c 24 40                                  	mov    0x40(%rsp),%rbx
+   6eda0:	4d 3b a7 b8 00 00 00                            	cmp    0xb8(%r15),%r12
+   6eda7:	0f 86 b4 00 00 00                               	jbe    6ee61 <classic_compare_worker::encode+0x6c1>
+   6edad:	48 89 df                                        	mov    %rbx,%rdi
+   6edb0:	ff 15 0a 62 20 00                               	call   *0x20620a(%rip)        # 274fc0 <_DYNAMIC+0x410>
+   6edb6:	41 bc 15 00 00 00                               	mov    $0x15,%r12d
+   6edbc:	bf 15 00 00 00                                  	mov    $0x15,%edi
+   6edc1:	ff 15 f1 5f 20 00                               	call   *0x205ff1(%rip)        # 274db8 <malloc@GLIBC_2.2.5>
+   6edc7:	48 85 c0                                        	test   %rax,%rax
+   6edca:	0f 84 50 01 00 00                               	je     6ef20 <classic_compare_worker::encode+0x780>
+   6edd0:	0f 10 05 b8 24 fa ff                            	movups -0x5db48(%rip),%xmm0        # 1128f <anon.ee651107ab5319c6bc273e1a29320aaf.108.llvm.14746981713632465754+0x33f>
+   6edd7:	0f 11 00                                        	movups %xmm0,(%rax)
+   6edda:	48 b9 65 78 63 65 65 64 65 64                   	movabs $0x6465646565637865,%rcx
+   6ede4:	48 89 48 0d                                     	mov    %rcx,0xd(%rax)
+   6ede8:	b9 15 00 00 00                                  	mov    $0x15,%ecx
+   6eded:	eb 37                                           	jmp    6ee26 <classic_compare_worker::encode+0x686>
+   6edef:	41 bc 16 00 00 00                               	mov    $0x16,%r12d
+   6edf5:	bf 16 00 00 00                                  	mov    $0x16,%edi
+   6edfa:	ff 15 b8 5f 20 00                               	call   *0x205fb8(%rip)        # 274db8 <malloc@GLIBC_2.2.5>
+   6ee00:	48 85 c0                                        	test   %rax,%rax
+   6ee03:	0f 84 17 01 00 00                               	je     6ef20 <classic_compare_worker::encode+0x780>
+   6ee09:	0f 10 05 69 26 fa ff                            	movups -0x5d997(%rip),%xmm0        # 11479 <anon.ee651107ab5319c6bc273e1a29320aaf.108.llvm.14746981713632465754+0x529>
+   6ee10:	0f 11 00                                        	movups %xmm0,(%rax)
+   6ee13:	48 b9 65 20 66 61 69 6c 65 64                   	movabs $0x64656c6961662065,%rcx
+   6ee1d:	48 89 48 0e                                     	mov    %rcx,0xe(%rax)
+   6ee21:	b9 16 00 00 00                                  	mov    $0x16,%ecx
+   6ee26:	48 8b 54 24 38                                  	mov    0x38(%rsp),%rdx
+   6ee2b:	48 89 4a 08                                     	mov    %rcx,0x8(%rdx)
+   6ee2f:	48 89 42 10                                     	mov    %rax,0x10(%rdx)
+   6ee33:	48 89 4a 18                                     	mov    %rcx,0x18(%rdx)
+   6ee37:	48 c7 02 01 00 00 00                            	movq   $0x1,(%rdx)
+   6ee3e:	48 83 7c 24 30 00                               	cmpq   $0x0,0x30(%rsp)
+   6ee44:	74 09                                           	je     6ee4f <classic_compare_worker::encode+0x6af>
+   6ee46:	4c 89 f7                                        	mov    %r14,%rdi
+   6ee49:	ff 15 79 5f 20 00                               	call   *0x205f79(%rip)        # 274dc8 <free@GLIBC_2.2.5>
+   6ee4f:	48 81 c4 c8 00 00 00                            	add    $0xc8,%rsp
+   6ee56:	5b                                              	pop    %rbx
+   6ee57:	41 5c                                           	pop    %r12
+   6ee59:	41 5d                                           	pop    %r13
+   6ee5b:	41 5e                                           	pop    %r14
+   6ee5d:	41 5f                                           	pop    %r15
+   6ee5f:	5d                                              	pop    %rbp
+   6ee60:	c3                                              	ret
+   6ee61:	4d 85 e4                                        	test   %r12,%r12
+   6ee64:	79 0d                                           	jns    6ee73 <classic_compare_worker::encode+0x6d3>
+   6ee66:	31 ff                                           	xor    %edi,%edi
+   6ee68:	4c 89 e6                                        	mov    %r12,%rsi
+   6ee6b:	ff 15 8f 5f 20 00                               	call   *0x205f8f(%rip)        # 274e00 <_DYNAMIC+0x250>
+   6ee71:	0f 0b                                           	ud2
+   6ee73:	74 26                                           	je     6ee9b <classic_compare_worker::encode+0x6fb>
+   6ee75:	4c 89 e7                                        	mov    %r12,%rdi
+   6ee78:	ff 15 3a 5f 20 00                               	call   *0x205f3a(%rip)        # 274db8 <malloc@GLIBC_2.2.5>
+   6ee7e:	48 85 c0                                        	test   %rax,%rax
+   6ee81:	0f 84 99 00 00 00                               	je     6ef20 <classic_compare_worker::encode+0x780>
+   6ee87:	49 89 c7                                        	mov    %rax,%r15
+   6ee8a:	48 89 c7                                        	mov    %rax,%rdi
+   6ee8d:	48 89 de                                        	mov    %rbx,%rsi
+   6ee90:	4c 89 e2                                        	mov    %r12,%rdx
+   6ee93:	ff 15 3f 5f 20 00                               	call   *0x205f3f(%rip)        # 274dd8 <memcpy@GLIBC_2.14>
+   6ee99:	eb 06                                           	jmp    6eea1 <classic_compare_worker::encode+0x701>
+   6ee9b:	41 bf 01 00 00 00                               	mov    $0x1,%r15d
+   6eea1:	48 89 df                                        	mov    %rbx,%rdi
+   6eea4:	ff 15 16 61 20 00                               	call   *0x206116(%rip)        # 274fc0 <_DYNAMIC+0x410>
+   6eeaa:	48 8b 44 24 38                                  	mov    0x38(%rsp),%rax
+   6eeaf:	4c 89 60 08                                     	mov    %r12,0x8(%rax)
+   6eeb3:	4c 89 78 10                                     	mov    %r15,0x10(%rax)
+   6eeb7:	4c 89 60 18                                     	mov    %r12,0x18(%rax)
+   6eebb:	48 c7 00 00 00 00 00                            	movq   $0x0,(%rax)
+   6eec2:	48 83 7c 24 30 00                               	cmpq   $0x0,0x30(%rsp)
+   6eec8:	74 85                                           	je     6ee4f <classic_compare_worker::encode+0x6af>
+   6eeca:	e9 77 ff ff ff                                  	jmp    6ee46 <classic_compare_worker::encode+0x6a6>
+   6eecf:	48 83 7c 24 08 00                               	cmpq   $0x0,0x8(%rsp)
+   6eed5:	75 19                                           	jne    6eef0 <classic_compare_worker::encode+0x750>
+   6eed7:	eb 23                                           	jmp    6eefc <classic_compare_worker::encode+0x75c>
+   6eed9:	48 83 7c 24 08 00                               	cmpq   $0x0,0x8(%rsp)
+   6eedf:	48 89 de                                        	mov    %rbx,%rsi
+   6eee2:	75 0c                                           	jne    6eef0 <classic_compare_worker::encode+0x750>
+   6eee4:	eb 16                                           	jmp    6eefc <classic_compare_worker::encode+0x75c>
+   6eee6:	48 85 c9                                        	test   %rcx,%rcx
+   6eee9:	74 11                                           	je     6eefc <classic_compare_worker::encode+0x75c>
+   6eeeb:	48 8d 44 24 08                                  	lea    0x8(%rsp),%rax
+   6eef0:	48 8b 38                                        	mov    (%rax),%rdi
+   6eef3:	ff 15 cf 5e 20 00                               	call   *0x205ecf(%rip)        # 274dc8 <free@GLIBC_2.2.5>
+   6eef9:	48 89 de                                        	mov    %rbx,%rsi
+   6eefc:	48 8b 84 24 c0 00 00 00                         	mov    0xc0(%rsp),%rax
+   6ef04:	48 89 46 18                                     	mov    %rax,0x18(%rsi)
+   6ef08:	0f 10 84 24 b0 00 00 00                         	movups 0xb0(%rsp),%xmm0
+   6ef10:	0f 11 46 08                                     	movups %xmm0,0x8(%rsi)
+   6ef14:	48 c7 06 01 00 00 00                            	movq   $0x1,(%rsi)
+   6ef1b:	e9 2f ff ff ff                                  	jmp    6ee4f <classic_compare_worker::encode+0x6af>
+   6ef20:	bf 01 00 00 00                                  	mov    $0x1,%edi
+   6ef25:	e9 3e ff ff ff                                  	jmp    6ee68 <classic_compare_worker::encode+0x6c8>
+   6ef2a:	bf 04 00 00 00                                  	mov    $0x4,%edi
+   6ef2f:	48 89 de                                        	mov    %rbx,%rsi
+   6ef32:	ff 15 c8 5e 20 00                               	call   *0x205ec8(%rip)        # 274e00 <_DYNAMIC+0x250>
+   6ef38:	48 8d 3d d1 e6 1f 00                            	lea    0x1fe6d1(%rip),%rdi        # 26d610 <__frame_dummy_init_array_entry+0x290>
+   6ef3f:	ff 15 9b 60 20 00                               	call   *0x20609b(%rip)        # 274fe0 <_DYNAMIC+0x430>
+   6ef45:	eb 13                                           	jmp    6ef5a <classic_compare_worker::encode+0x7ba>
+   6ef47:	48 89 c3                                        	mov    %rax,%rbx
+   6ef4a:	48 89 e7                                        	mov    %rsp,%rdi
+   6ef4d:	e8 3e 5a ff ff                                  	call   64990 <core::ptr::drop_glue::<emuella_j2k_core::J2kError>>
+   6ef52:	48 89 df                                        	mov    %rbx,%rdi
+   6ef55:	e8 46 d2 1f 00                                  	call   26c1a0 <_Unwind_Resume@plt>
+   6ef5a:	48 89 c3                                        	mov    %rax,%rbx
+   6ef5d:	48 89 e7                                        	mov    %rsp,%rdi
+   6ef60:	e8 ab 59 ff ff                                  	call   64910 <core::ptr::drop_glue::<emuella_j2k_core::EncodeOptions>>
+   6ef65:	48 89 df                                        	mov    %rbx,%rdi
+   6ef68:	e8 33 d2 1f 00                                  	call   26c1a0 <_Unwind_Resume@plt>
+   6ef6d:	48 89 c3                                        	mov    %rax,%rbx
+   6ef70:	48 83 7c 24 30 00                               	cmpq   $0x0,0x30(%rsp)
+   6ef76:	74 09                                           	je     6ef81 <classic_compare_worker::encode+0x7e1>
+   6ef78:	4c 89 f7                                        	mov    %r14,%rdi
+   6ef7b:	ff 15 47 5e 20 00                               	call   *0x205e47(%rip)        # 274dc8 <free@GLIBC_2.2.5>
+   6ef81:	48 89 df                                        	mov    %rbx,%rdi
+   6ef84:	e8 17 d2 1f 00                                  	call   26c1a0 <_Unwind_Resume@plt>

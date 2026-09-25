@@ -1,0 +1,581 @@
+Disassembly of section .text:
+
+00000000000d60d0 <emuella_j2k_codestream::write_native_main_header>:
+   d60d0:	55                                              	push   %rbp
+   d60d1:	41 57                                           	push   %r15
+   d60d3:	41 56                                           	push   %r14
+   d60d5:	41 55                                           	push   %r13
+   d60d7:	41 54                                           	push   %r12
+   d60d9:	53                                              	push   %rbx
+   d60da:	48 83 ec 28                                     	sub    $0x28,%rsp
+   d60de:	44 89 4c 24 24                                  	mov    %r9d,0x24(%rsp)
+   d60e3:	44 89 44 24 20                                  	mov    %r8d,0x20(%rsp)
+   d60e8:	89 4c 24 1c                                     	mov    %ecx,0x1c(%rsp)
+   d60ec:	89 54 24 18                                     	mov    %edx,0x18(%rsp)
+   d60f0:	49 89 f4                                        	mov    %rsi,%r12
+   d60f3:	48 89 7c 24 10                                  	mov    %rdi,0x10(%rsp)
+   d60f8:	0f b7 5c 24 68                                  	movzwl 0x68(%rsp),%ebx
+   d60fd:	0f b6 84 24 88 00 00 00                         	movzbl 0x88(%rsp),%eax
+   d6105:	88 44 24 07                                     	mov    %al,0x7(%rsp)
+   d6109:	48 8b ac 24 80 00 00 00                         	mov    0x80(%rsp),%rbp
+   d6111:	48 8b 44 24 78                                  	mov    0x78(%rsp),%rax
+   d6116:	48 89 44 24 08                                  	mov    %rax,0x8(%rsp)
+   d611b:	0f b6 44 24 70                                  	movzbl 0x70(%rsp),%eax
+   d6120:	88 44 24 06                                     	mov    %al,0x6(%rsp)
+   d6124:	44 0f b6 7c 24 60                               	movzbl 0x60(%rsp),%r15d
+   d612a:	85 db                                           	test   %ebx,%ebx
+   d612c:	74 33                                           	je     d6161 <emuella_j2k_codestream::write_native_main_header+0x91>
+   d612e:	44 8d 2c 9d 00 00 00 00                         	lea    0x0(,%rbx,4),%r13d
+   d6136:	4c 89 ef                                        	mov    %r13,%rdi
+   d6139:	ff 15 c9 79 19 00                               	call   *0x1979c9(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+   d613f:	48 85 c0                                        	test   %rax,%rax
+   d6142:	0f 84 4a 09 00 00                               	je     d6a92 <emuella_j2k_codestream::write_native_main_header+0x9c2>
+   d6148:	49 89 c6                                        	mov    %rax,%r14
+   d614b:	41 0f b6 c7                                     	movzbl %r15b,%eax
+   d614f:	c1 e0 08                                        	shl    $0x8,%eax
+   d6152:	0d 00 00 01 01                                  	or     $0x1010000,%eax
+   d6157:	66 83 fb 08                                     	cmp    $0x8,%bx
+   d615b:	73 0c                                           	jae    d6169 <emuella_j2k_codestream::write_native_main_header+0x99>
+   d615d:	31 c9                                           	xor    %ecx,%ecx
+   d615f:	eb 4f                                           	jmp    d61b0 <emuella_j2k_codestream::write_native_main_header+0xe0>
+   d6161:	41 be 01 00 00 00                               	mov    $0x1,%r14d
+   d6167:	eb 53                                           	jmp    d61bc <emuella_j2k_codestream::write_native_main_header+0xec>
+   d6169:	89 d9                                           	mov    %ebx,%ecx
+   d616b:	83 e1 f8                                        	and    $0xfffffff8,%ecx
+   d616e:	66 0f 6e c0                                     	movd   %eax,%xmm0
+   d6172:	66 0f 70 c0 00                                  	pshufd $0x0,%xmm0,%xmm0
+   d6177:	8d 14 9d 00 00 00 00                            	lea    0x0(,%rbx,4),%edx
+   d617e:	83 e2 e0                                        	and    $0xffffffe0,%edx
+   d6181:	31 f6                                           	xor    %esi,%esi
+   d6183:	66 66 66 66 2e 0f 1f 84 00 00 00 00 00          	data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   d6190:	f3 41 0f 7f 04 36                               	movdqu %xmm0,(%r14,%rsi,1)
+   d6196:	f3 41 0f 7f 44 36 10                            	movdqu %xmm0,0x10(%r14,%rsi,1)
+   d619d:	48 83 c6 20                                     	add    $0x20,%rsi
+   d61a1:	48 39 f2                                        	cmp    %rsi,%rdx
+   d61a4:	75 ea                                           	jne    d6190 <emuella_j2k_codestream::write_native_main_header+0xc0>
+   d61a6:	39 d9                                           	cmp    %ebx,%ecx
+   d61a8:	74 12                                           	je     d61bc <emuella_j2k_codestream::write_native_main_header+0xec>
+   d61aa:	66 0f 1f 44 00 00                               	nopw   0x0(%rax,%rax,1)
+   d61b0:	41 89 04 8e                                     	mov    %eax,(%r14,%rcx,4)
+   d61b4:	48 ff c1                                        	inc    %rcx
+   d61b7:	48 39 cb                                        	cmp    %rcx,%rbx
+   d61ba:	75 f4                                           	jne    d61b0 <emuella_j2k_codestream::write_native_main_header+0xe0>
+   d61bc:	48 83 fd 07                                     	cmp    $0x7,%rbp
+   d61c0:	0f 85 8a 02 00 00                               	jne    d6450 <emuella_j2k_codestream::write_native_main_header+0x380>
+   d61c6:	66 b9 03 00                                     	mov    $0x3,%cx
+   d61ca:	89 d8                                           	mov    %ebx,%eax
+   d61cc:	66 f7 e1                                        	mul    %cx
+   d61cf:	0f 80 85 05 00 00                               	jo     d675a <emuella_j2k_codestream::write_native_main_header+0x68a>
+   d61d5:	89 c5                                           	mov    %eax,%ebp
+   d61d7:	66 83 f8 d9                                     	cmp    $0xffd9,%ax
+   d61db:	0f 87 9a 05 00 00                               	ja     d677b <emuella_j2k_codestream::write_native_main_header+0x6ab>
+   d61e1:	49 8b 04 24                                     	mov    (%r12),%rax
+   d61e5:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d61ea:	4c 29 e8                                        	sub    %r13,%rax
+   d61ed:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d61f1:	0f 86 b7 05 00 00                               	jbe    d67ae <emuella_j2k_codestream::write_native_main_header+0x6de>
+   d61f7:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d61fc:	66 42 c7 04 28 ff 4f                            	movw   $0x4fff,(%rax,%r13,1)
+   d6203:	49 83 c5 02                                     	add    $0x2,%r13
+   d6207:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d620c:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6210:	4c 29 e8                                        	sub    %r13,%rax
+   d6213:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d6217:	0f 86 b6 05 00 00                               	jbe    d67d3 <emuella_j2k_codestream::write_native_main_header+0x703>
+   d621d:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6222:	66 42 c7 04 28 ff 51                            	movw   $0x51ff,(%rax,%r13,1)
+   d6229:	49 83 c5 02                                     	add    $0x2,%r13
+   d622d:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6232:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6236:	4c 29 e8                                        	sub    %r13,%rax
+   d6239:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d623d:	0f 86 b5 05 00 00                               	jbe    d67f8 <emuella_j2k_codestream::write_native_main_header+0x728>
+   d6243:	83 c5 26                                        	add    $0x26,%ebp
+   d6246:	66 c1 c5 08                                     	rol    $0x8,%bp
+   d624a:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d624f:	66 42 89 2c 28                                  	mov    %bp,(%rax,%r13,1)
+   d6254:	49 83 c5 02                                     	add    $0x2,%r13
+   d6258:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d625d:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6261:	4c 29 e8                                        	sub    %r13,%rax
+   d6264:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d6268:	0f 86 af 05 00 00                               	jbe    d681d <emuella_j2k_codestream::write_native_main_header+0x74d>
+   d626e:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6273:	66 42 c7 04 28 00 00                            	movw   $0x0,(%rax,%r13,1)
+   d627a:	49 83 c5 02                                     	add    $0x2,%r13
+   d627e:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6283:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6287:	4c 29 e8                                        	sub    %r13,%rax
+   d628a:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d628e:	0f 86 ae 05 00 00                               	jbe    d6842 <emuella_j2k_codestream::write_native_main_header+0x772>
+   d6294:	8b 4c 24 18                                     	mov    0x18(%rsp),%ecx
+   d6298:	0f c9                                           	bswap  %ecx
+   d629a:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d629f:	42 89 0c 28                                     	mov    %ecx,(%rax,%r13,1)
+   d62a3:	49 83 c5 04                                     	add    $0x4,%r13
+   d62a7:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d62ac:	49 8b 04 24                                     	mov    (%r12),%rax
+   d62b0:	4c 29 e8                                        	sub    %r13,%rax
+   d62b3:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d62b7:	0f 86 aa 05 00 00                               	jbe    d6867 <emuella_j2k_codestream::write_native_main_header+0x797>
+   d62bd:	8b 4c 24 1c                                     	mov    0x1c(%rsp),%ecx
+   d62c1:	0f c9                                           	bswap  %ecx
+   d62c3:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d62c8:	42 89 0c 28                                     	mov    %ecx,(%rax,%r13,1)
+   d62cc:	49 83 c5 04                                     	add    $0x4,%r13
+   d62d0:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d62d5:	49 8b 04 24                                     	mov    (%r12),%rax
+   d62d9:	4c 29 e8                                        	sub    %r13,%rax
+   d62dc:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d62e0:	0f 86 a6 05 00 00                               	jbe    d688c <emuella_j2k_codestream::write_native_main_header+0x7bc>
+   d62e6:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d62eb:	42 c7 04 28 00 00 00 00                         	movl   $0x0,(%rax,%r13,1)
+   d62f3:	49 83 c5 04                                     	add    $0x4,%r13
+   d62f7:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d62fc:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6300:	4c 29 e8                                        	sub    %r13,%rax
+   d6303:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d6307:	0f 86 a4 05 00 00                               	jbe    d68b1 <emuella_j2k_codestream::write_native_main_header+0x7e1>
+   d630d:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6312:	42 c7 04 28 00 00 00 00                         	movl   $0x0,(%rax,%r13,1)
+   d631a:	49 83 c5 04                                     	add    $0x4,%r13
+   d631e:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6323:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6327:	4c 29 e8                                        	sub    %r13,%rax
+   d632a:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d632e:	0f 86 a2 05 00 00                               	jbe    d68d6 <emuella_j2k_codestream::write_native_main_header+0x806>
+   d6334:	8b 4c 24 20                                     	mov    0x20(%rsp),%ecx
+   d6338:	0f c9                                           	bswap  %ecx
+   d633a:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d633f:	42 89 0c 28                                     	mov    %ecx,(%rax,%r13,1)
+   d6343:	49 83 c5 04                                     	add    $0x4,%r13
+   d6347:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d634c:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6350:	4c 29 e8                                        	sub    %r13,%rax
+   d6353:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d6357:	0f 86 9e 05 00 00                               	jbe    d68fb <emuella_j2k_codestream::write_native_main_header+0x82b>
+   d635d:	8b 4c 24 24                                     	mov    0x24(%rsp),%ecx
+   d6361:	0f c9                                           	bswap  %ecx
+   d6363:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6368:	42 89 0c 28                                     	mov    %ecx,(%rax,%r13,1)
+   d636c:	49 83 c5 04                                     	add    $0x4,%r13
+   d6370:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6375:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6379:	4c 29 e8                                        	sub    %r13,%rax
+   d637c:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d6380:	0f 86 9a 05 00 00                               	jbe    d6920 <emuella_j2k_codestream::write_native_main_header+0x850>
+   d6386:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d638b:	42 c7 04 28 00 00 00 00                         	movl   $0x0,(%rax,%r13,1)
+   d6393:	49 83 c5 04                                     	add    $0x4,%r13
+   d6397:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d639c:	49 8b 04 24                                     	mov    (%r12),%rax
+   d63a0:	4c 29 e8                                        	sub    %r13,%rax
+   d63a3:	48 83 f8 03                                     	cmp    $0x3,%rax
+   d63a7:	0f 86 98 05 00 00                               	jbe    d6945 <emuella_j2k_codestream::write_native_main_header+0x875>
+   d63ad:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d63b2:	42 c7 04 28 00 00 00 00                         	movl   $0x0,(%rax,%r13,1)
+   d63ba:	49 83 c5 04                                     	add    $0x4,%r13
+   d63be:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d63c3:	49 8b 04 24                                     	mov    (%r12),%rax
+   d63c7:	4c 29 e8                                        	sub    %r13,%rax
+   d63ca:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d63ce:	0f 86 96 05 00 00                               	jbe    d696a <emuella_j2k_codestream::write_native_main_header+0x89a>
+   d63d4:	89 d8                                           	mov    %ebx,%eax
+   d63d6:	66 c1 c0 08                                     	rol    $0x8,%ax
+   d63da:	49 8b 4c 24 08                                  	mov    0x8(%r12),%rcx
+   d63df:	66 42 89 04 29                                  	mov    %ax,(%rcx,%r13,1)
+   d63e4:	49 83 c5 02                                     	add    $0x2,%r13
+   d63e8:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d63ed:	45 84 ff                                        	test   %r15b,%r15b
+   d63f0:	0f 84 25 03 00 00                               	je     d671b <emuella_j2k_codestream::write_native_main_header+0x64b>
+   d63f6:	66 85 db                                        	test   %bx,%bx
+   d63f9:	74 75                                           	je     d6470 <emuella_j2k_codestream::write_native_main_header+0x3a0>
+   d63fb:	41 fe cf                                        	dec    %r15b
+   d63fe:	89 dd                                           	mov    %ebx,%ebp
+   d6400:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6404:	4c 29 e8                                        	sub    %r13,%rax
+   d6407:	48 83 f8 02                                     	cmp    $0x2,%rax
+   d640b:	76 21                                           	jbe    d642e <emuella_j2k_codestream::write_native_main_header+0x35e>
+   d640d:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6412:	46 88 3c 28                                     	mov    %r15b,(%rax,%r13,1)
+   d6416:	66 42 c7 44 28 01 01 01                         	movw   $0x101,0x1(%rax,%r13,1)
+   d641e:	49 83 c5 03                                     	add    $0x3,%r13
+   d6422:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6427:	66 ff cd                                        	dec    %bp
+   d642a:	75 d4                                           	jne    d6400 <emuella_j2k_codestream::write_native_main_header+0x330>
+   d642c:	eb 42                                           	jmp    d6470 <emuella_j2k_codestream::write_native_main_header+0x3a0>
+   d642e:	ba 03 00 00 00                                  	mov    $0x3,%edx
+   d6433:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6438:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d643e:	4c 89 e7                                        	mov    %r12,%rdi
+   d6441:	4c 89 ee                                        	mov    %r13,%rsi
+   d6444:	e8 27 3e fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6449:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d644e:	eb bd                                           	jmp    d640d <emuella_j2k_codestream::write_native_main_header+0x33d>
+   d6450:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   d645a:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   d645f:	48 89 01                                        	mov    %rax,(%rcx)
+   d6462:	66 85 db                                        	test   %bx,%bx
+   d6465:	0f 85 d8 02 00 00                               	jne    d6743 <emuella_j2k_codestream::write_native_main_header+0x673>
+   d646b:	e9 2f 03 00 00                                  	jmp    d679f <emuella_j2k_codestream::write_native_main_header+0x6cf>
+   d6470:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6474:	4c 29 e8                                        	sub    %r13,%rax
+   d6477:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d647b:	0f 86 0e 05 00 00                               	jbe    d698f <emuella_j2k_codestream::write_native_main_header+0x8bf>
+   d6481:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6486:	66 42 c7 04 28 ff 52                            	movw   $0x52ff,(%rax,%r13,1)
+   d648d:	49 83 c5 02                                     	add    $0x2,%r13
+   d6491:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6496:	49 8b 04 24                                     	mov    (%r12),%rax
+   d649a:	4c 29 e8                                        	sub    %r13,%rax
+   d649d:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d64a1:	0f 86 0d 05 00 00                               	jbe    d69b4 <emuella_j2k_codestream::write_native_main_header+0x8e4>
+   d64a7:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d64ac:	66 42 c7 04 28 00 0c                            	movw   $0xc00,(%rax,%r13,1)
+   d64b3:	49 83 c5 02                                     	add    $0x2,%r13
+   d64b7:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d64bc:	49 8b 04 24                                     	mov    (%r12),%rax
+   d64c0:	4c 29 e8                                        	sub    %r13,%rax
+   d64c3:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d64c7:	0f 86 0c 05 00 00                               	jbe    d69d9 <emuella_j2k_codestream::write_native_main_header+0x909>
+   d64cd:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d64d2:	66 42 c7 04 28 00 00                            	movw   $0x0,(%rax,%r13,1)
+   d64d9:	49 83 c5 02                                     	add    $0x2,%r13
+   d64dd:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d64e2:	49 8b 04 24                                     	mov    (%r12),%rax
+   d64e6:	4c 29 e8                                        	sub    %r13,%rax
+   d64e9:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d64ed:	0f 86 0b 05 00 00                               	jbe    d69fe <emuella_j2k_codestream::write_native_main_header+0x92e>
+   d64f3:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d64f8:	66 42 c7 04 28 00 01                            	movw   $0x100,(%rax,%r13,1)
+   d64ff:	49 83 c5 02                                     	add    $0x2,%r13
+   d6503:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6508:	49 8b 04 24                                     	mov    (%r12),%rax
+   d650c:	4c 29 e8                                        	sub    %r13,%rax
+   d650f:	48 83 f8 05                                     	cmp    $0x5,%rax
+   d6513:	0f 86 0a 05 00 00                               	jbe    d6a23 <emuella_j2k_codestream::write_native_main_header+0x953>
+   d6519:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d651e:	0f b6 4c 24 06                                  	movzbl 0x6(%rsp),%ecx
+   d6523:	42 88 0c 28                                     	mov    %cl,(%rax,%r13,1)
+   d6527:	66 42 c7 44 28 01 02 04                         	movw   $0x402,0x1(%rax,%r13,1)
+   d652f:	42 c6 44 28 03 04                               	movb   $0x4,0x3(%rax,%r13,1)
+   d6535:	0f b6 4c 24 07                                  	movzbl 0x7(%rsp),%ecx
+   d653a:	42 88 4c 28 04                                  	mov    %cl,0x4(%rax,%r13,1)
+   d653f:	42 c6 44 28 05 01                               	movb   $0x1,0x5(%rax,%r13,1)
+   d6545:	49 83 c5 06                                     	add    $0x6,%r13
+   d6549:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d654e:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6552:	4c 29 e8                                        	sub    %r13,%rax
+   d6555:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d6559:	0f 86 e9 04 00 00                               	jbe    d6a48 <emuella_j2k_codestream::write_native_main_header+0x978>
+   d655f:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6564:	66 42 c7 04 28 ff 5c                            	movw   $0x5cff,(%rax,%r13,1)
+   d656b:	49 83 c5 02                                     	add    $0x2,%r13
+   d656f:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6574:	49 8b 04 24                                     	mov    (%r12),%rax
+   d6578:	4c 29 e8                                        	sub    %r13,%rax
+   d657b:	48 83 f8 01                                     	cmp    $0x1,%rax
+   d657f:	0f 86 e8 04 00 00                               	jbe    d6a6d <emuella_j2k_codestream::write_native_main_header+0x99d>
+   d6585:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d658a:	66 42 c7 04 28 00 0a                            	movw   $0xa00,(%rax,%r13,1)
+   d6591:	49 8d 45 02                                     	lea    0x2(%r13),%rax
+   d6595:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d659a:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d659e:	75 09                                           	jne    d65a9 <emuella_j2k_codestream::write_native_main_header+0x4d9>
+   d65a0:	4c 89 e7                                        	mov    %r12,%rdi
+   d65a3:	ff 15 e7 75 19 00                               	call   *0x1975e7(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d65a9:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d65ae:	42 c6 44 28 02 40                               	movb   $0x40,0x2(%rax,%r13,1)
+   d65b4:	49 8d 45 03                                     	lea    0x3(%r13),%rax
+   d65b8:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d65bd:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d65c2:	0f b6 29                                        	movzbl (%rcx),%ebp
+   d65c5:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d65c9:	75 09                                           	jne    d65d4 <emuella_j2k_codestream::write_native_main_header+0x504>
+   d65cb:	4c 89 e7                                        	mov    %r12,%rdi
+   d65ce:	ff 15 bc 75 19 00                               	call   *0x1975bc(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d65d4:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d65d8:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d65dd:	42 88 6c 28 03                                  	mov    %bpl,0x3(%rax,%r13,1)
+   d65e2:	49 8d 45 04                                     	lea    0x4(%r13),%rax
+   d65e6:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d65eb:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d65f0:	0f b6 69 01                                     	movzbl 0x1(%rcx),%ebp
+   d65f4:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d65f8:	75 09                                           	jne    d6603 <emuella_j2k_codestream::write_native_main_header+0x533>
+   d65fa:	4c 89 e7                                        	mov    %r12,%rdi
+   d65fd:	ff 15 8d 75 19 00                               	call   *0x19758d(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d6603:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d6607:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d660c:	42 88 6c 28 04                                  	mov    %bpl,0x4(%rax,%r13,1)
+   d6611:	49 8d 45 05                                     	lea    0x5(%r13),%rax
+   d6615:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d661a:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d661f:	0f b6 69 02                                     	movzbl 0x2(%rcx),%ebp
+   d6623:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d6627:	75 09                                           	jne    d6632 <emuella_j2k_codestream::write_native_main_header+0x562>
+   d6629:	4c 89 e7                                        	mov    %r12,%rdi
+   d662c:	ff 15 5e 75 19 00                               	call   *0x19755e(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d6632:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d6636:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d663b:	42 88 6c 28 05                                  	mov    %bpl,0x5(%rax,%r13,1)
+   d6640:	49 8d 45 06                                     	lea    0x6(%r13),%rax
+   d6644:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d6649:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d664e:	0f b6 69 03                                     	movzbl 0x3(%rcx),%ebp
+   d6652:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d6656:	75 09                                           	jne    d6661 <emuella_j2k_codestream::write_native_main_header+0x591>
+   d6658:	4c 89 e7                                        	mov    %r12,%rdi
+   d665b:	ff 15 2f 75 19 00                               	call   *0x19752f(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d6661:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d6665:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d666a:	42 88 6c 28 06                                  	mov    %bpl,0x6(%rax,%r13,1)
+   d666f:	49 8d 45 07                                     	lea    0x7(%r13),%rax
+   d6673:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d6678:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d667d:	0f b6 69 04                                     	movzbl 0x4(%rcx),%ebp
+   d6681:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d6685:	75 09                                           	jne    d6690 <emuella_j2k_codestream::write_native_main_header+0x5c0>
+   d6687:	4c 89 e7                                        	mov    %r12,%rdi
+   d668a:	ff 15 00 75 19 00                               	call   *0x197500(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d6690:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d6694:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d6699:	42 88 6c 28 07                                  	mov    %bpl,0x7(%rax,%r13,1)
+   d669e:	49 8d 45 08                                     	lea    0x8(%r13),%rax
+   d66a2:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d66a7:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d66ac:	0f b6 69 05                                     	movzbl 0x5(%rcx),%ebp
+   d66b0:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d66b4:	75 09                                           	jne    d66bf <emuella_j2k_codestream::write_native_main_header+0x5ef>
+   d66b6:	4c 89 e7                                        	mov    %r12,%rdi
+   d66b9:	ff 15 d1 74 19 00                               	call   *0x1974d1(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d66bf:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d66c3:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d66c8:	42 88 6c 28 08                                  	mov    %bpl,0x8(%rax,%r13,1)
+   d66cd:	49 8d 45 09                                     	lea    0x9(%r13),%rax
+   d66d1:	49 89 44 24 10                                  	mov    %rax,0x10(%r12)
+   d66d6:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+   d66db:	0f b6 69 06                                     	movzbl 0x6(%rcx),%ebp
+   d66df:	49 3b 04 24                                     	cmp    (%r12),%rax
+   d66e3:	75 09                                           	jne    d66ee <emuella_j2k_codestream::write_native_main_header+0x61e>
+   d66e5:	4c 89 e7                                        	mov    %r12,%rdi
+   d66e8:	ff 15 a2 74 19 00                               	call   *0x1974a2(%rip)        # 26db90 <_DYNAMIC+0x290>
+   d66ee:	40 c0 e5 03                                     	shl    $0x3,%bpl
+   d66f2:	49 8b 44 24 08                                  	mov    0x8(%r12),%rax
+   d66f7:	42 88 6c 28 09                                  	mov    %bpl,0x9(%rax,%r13,1)
+   d66fc:	49 83 c5 0a                                     	add    $0xa,%r13
+   d6700:	4d 89 6c 24 10                                  	mov    %r13,0x10(%r12)
+   d6705:	48 8b 44 24 10                                  	mov    0x10(%rsp),%rax
+   d670a:	48 c7 00 ff ff ff ff                            	movq   $0xffffffffffffffff,(%rax)
+   d6711:	66 85 db                                        	test   %bx,%bx
+   d6714:	75 2d                                           	jne    d6743 <emuella_j2k_codestream::write_native_main_header+0x673>
+   d6716:	e9 84 00 00 00                                  	jmp    d679f <emuella_j2k_codestream::write_native_main_header+0x6cf>
+   d671b:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   d6725:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   d672a:	48 89 01                                        	mov    %rax,(%rcx)
+   d672d:	c6 41 0f 00                                     	movb   $0x0,0xf(%rcx)
+   d6731:	66 c7 41 0d 00 00                               	movw   $0x0,0xd(%rcx)
+   d6737:	c7 41 09 00 00 00 00                            	movl   $0x0,0x9(%rcx)
+   d673e:	66 85 db                                        	test   %bx,%bx
+   d6741:	74 5c                                           	je     d679f <emuella_j2k_codestream::write_native_main_header+0x6cf>
+   d6743:	4c 89 f7                                        	mov    %r14,%rdi
+   d6746:	48 83 c4 28                                     	add    $0x28,%rsp
+   d674a:	5b                                              	pop    %rbx
+   d674b:	41 5c                                           	pop    %r12
+   d674d:	41 5d                                           	pop    %r13
+   d674f:	41 5e                                           	pop    %r14
+   d6751:	41 5f                                           	pop    %r15
+   d6753:	5d                                              	pop    %rbp
+   d6754:	ff 25 be 73 19 00                               	jmp    *0x1973be(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   d675a:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   d6764:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   d6769:	48 89 01                                        	mov    %rax,(%rcx)
+   d676c:	66 c7 41 0e 00 00                               	movw   $0x0,0xe(%rcx)
+   d6772:	c7 41 0a 00 00 00 00                            	movl   $0x0,0xa(%rcx)
+   d6779:	eb c8                                           	jmp    d6743 <emuella_j2k_codestream::write_native_main_header+0x673>
+   d677b:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   d6785:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   d678a:	48 89 01                                        	mov    %rax,(%rcx)
+   d678d:	66 c7 41 0e 00 00                               	movw   $0x0,0xe(%rcx)
+   d6793:	c7 41 0a 00 00 00 00                            	movl   $0x0,0xa(%rcx)
+   d679a:	66 85 db                                        	test   %bx,%bx
+   d679d:	75 a4                                           	jne    d6743 <emuella_j2k_codestream::write_native_main_header+0x673>
+   d679f:	48 83 c4 28                                     	add    $0x28,%rsp
+   d67a3:	5b                                              	pop    %rbx
+   d67a4:	41 5c                                           	pop    %r12
+   d67a6:	41 5d                                           	pop    %r13
+   d67a8:	41 5e                                           	pop    %r14
+   d67aa:	41 5f                                           	pop    %r15
+   d67ac:	5d                                              	pop    %rbp
+   d67ad:	c3                                              	ret
+   d67ae:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d67b3:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d67b8:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d67be:	4c 89 e7                                        	mov    %r12,%rdi
+   d67c1:	4c 89 ee                                        	mov    %r13,%rsi
+   d67c4:	e8 a7 3a fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d67c9:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d67ce:	e9 24 fa ff ff                                  	jmp    d61f7 <emuella_j2k_codestream::write_native_main_header+0x127>
+   d67d3:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d67d8:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d67dd:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d67e3:	4c 89 e7                                        	mov    %r12,%rdi
+   d67e6:	4c 89 ee                                        	mov    %r13,%rsi
+   d67e9:	e8 82 3a fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d67ee:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d67f3:	e9 25 fa ff ff                                  	jmp    d621d <emuella_j2k_codestream::write_native_main_header+0x14d>
+   d67f8:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d67fd:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6802:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6808:	4c 89 e7                                        	mov    %r12,%rdi
+   d680b:	4c 89 ee                                        	mov    %r13,%rsi
+   d680e:	e8 5d 3a fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6813:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6818:	e9 26 fa ff ff                                  	jmp    d6243 <emuella_j2k_codestream::write_native_main_header+0x173>
+   d681d:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d6822:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6827:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d682d:	4c 89 e7                                        	mov    %r12,%rdi
+   d6830:	4c 89 ee                                        	mov    %r13,%rsi
+   d6833:	e8 38 3a fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6838:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d683d:	e9 2c fa ff ff                                  	jmp    d626e <emuella_j2k_codestream::write_native_main_header+0x19e>
+   d6842:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d6847:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d684c:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6852:	4c 89 e7                                        	mov    %r12,%rdi
+   d6855:	4c 89 ee                                        	mov    %r13,%rsi
+   d6858:	e8 13 3a fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d685d:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6862:	e9 2d fa ff ff                                  	jmp    d6294 <emuella_j2k_codestream::write_native_main_header+0x1c4>
+   d6867:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d686c:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6871:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6877:	4c 89 e7                                        	mov    %r12,%rdi
+   d687a:	4c 89 ee                                        	mov    %r13,%rsi
+   d687d:	e8 ee 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6882:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6887:	e9 31 fa ff ff                                  	jmp    d62bd <emuella_j2k_codestream::write_native_main_header+0x1ed>
+   d688c:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d6891:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6896:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d689c:	4c 89 e7                                        	mov    %r12,%rdi
+   d689f:	4c 89 ee                                        	mov    %r13,%rsi
+   d68a2:	e8 c9 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d68a7:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d68ac:	e9 35 fa ff ff                                  	jmp    d62e6 <emuella_j2k_codestream::write_native_main_header+0x216>
+   d68b1:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d68b6:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d68bb:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d68c1:	4c 89 e7                                        	mov    %r12,%rdi
+   d68c4:	4c 89 ee                                        	mov    %r13,%rsi
+   d68c7:	e8 a4 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d68cc:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d68d1:	e9 37 fa ff ff                                  	jmp    d630d <emuella_j2k_codestream::write_native_main_header+0x23d>
+   d68d6:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d68db:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d68e0:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d68e6:	4c 89 e7                                        	mov    %r12,%rdi
+   d68e9:	4c 89 ee                                        	mov    %r13,%rsi
+   d68ec:	e8 7f 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d68f1:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d68f6:	e9 39 fa ff ff                                  	jmp    d6334 <emuella_j2k_codestream::write_native_main_header+0x264>
+   d68fb:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d6900:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6905:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d690b:	4c 89 e7                                        	mov    %r12,%rdi
+   d690e:	4c 89 ee                                        	mov    %r13,%rsi
+   d6911:	e8 5a 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6916:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d691b:	e9 3d fa ff ff                                  	jmp    d635d <emuella_j2k_codestream::write_native_main_header+0x28d>
+   d6920:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d6925:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d692a:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6930:	4c 89 e7                                        	mov    %r12,%rdi
+   d6933:	4c 89 ee                                        	mov    %r13,%rsi
+   d6936:	e8 35 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d693b:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6940:	e9 41 fa ff ff                                  	jmp    d6386 <emuella_j2k_codestream::write_native_main_header+0x2b6>
+   d6945:	ba 04 00 00 00                                  	mov    $0x4,%edx
+   d694a:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d694f:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6955:	4c 89 e7                                        	mov    %r12,%rdi
+   d6958:	4c 89 ee                                        	mov    %r13,%rsi
+   d695b:	e8 10 39 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6960:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6965:	e9 43 fa ff ff                                  	jmp    d63ad <emuella_j2k_codestream::write_native_main_header+0x2dd>
+   d696a:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d696f:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6974:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d697a:	4c 89 e7                                        	mov    %r12,%rdi
+   d697d:	4c 89 ee                                        	mov    %r13,%rsi
+   d6980:	e8 eb 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6985:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d698a:	e9 45 fa ff ff                                  	jmp    d63d4 <emuella_j2k_codestream::write_native_main_header+0x304>
+   d698f:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d6994:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6999:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d699f:	4c 89 e7                                        	mov    %r12,%rdi
+   d69a2:	4c 89 ee                                        	mov    %r13,%rsi
+   d69a5:	e8 c6 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d69aa:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d69af:	e9 cd fa ff ff                                  	jmp    d6481 <emuella_j2k_codestream::write_native_main_header+0x3b1>
+   d69b4:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d69b9:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d69be:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d69c4:	4c 89 e7                                        	mov    %r12,%rdi
+   d69c7:	4c 89 ee                                        	mov    %r13,%rsi
+   d69ca:	e8 a1 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d69cf:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d69d4:	e9 ce fa ff ff                                  	jmp    d64a7 <emuella_j2k_codestream::write_native_main_header+0x3d7>
+   d69d9:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d69de:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d69e3:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d69e9:	4c 89 e7                                        	mov    %r12,%rdi
+   d69ec:	4c 89 ee                                        	mov    %r13,%rsi
+   d69ef:	e8 7c 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d69f4:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d69f9:	e9 cf fa ff ff                                  	jmp    d64cd <emuella_j2k_codestream::write_native_main_header+0x3fd>
+   d69fe:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d6a03:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6a08:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6a0e:	4c 89 e7                                        	mov    %r12,%rdi
+   d6a11:	4c 89 ee                                        	mov    %r13,%rsi
+   d6a14:	e8 57 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6a19:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6a1e:	e9 d0 fa ff ff                                  	jmp    d64f3 <emuella_j2k_codestream::write_native_main_header+0x423>
+   d6a23:	ba 06 00 00 00                                  	mov    $0x6,%edx
+   d6a28:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6a2d:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6a33:	4c 89 e7                                        	mov    %r12,%rdi
+   d6a36:	4c 89 ee                                        	mov    %r13,%rsi
+   d6a39:	e8 32 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6a3e:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6a43:	e9 d1 fa ff ff                                  	jmp    d6519 <emuella_j2k_codestream::write_native_main_header+0x449>
+   d6a48:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d6a4d:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6a52:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6a58:	4c 89 e7                                        	mov    %r12,%rdi
+   d6a5b:	4c 89 ee                                        	mov    %r13,%rsi
+   d6a5e:	e8 0d 38 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6a63:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6a68:	e9 f2 fa ff ff                                  	jmp    d655f <emuella_j2k_codestream::write_native_main_header+0x48f>
+   d6a6d:	ba 02 00 00 00                                  	mov    $0x2,%edx
+   d6a72:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   d6a77:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   d6a7d:	4c 89 e7                                        	mov    %r12,%rdi
+   d6a80:	4c 89 ee                                        	mov    %r13,%rsi
+   d6a83:	e8 e8 37 fd ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   d6a88:	4d 8b 6c 24 10                                  	mov    0x10(%r12),%r13
+   d6a8d:	e9 f3 fa ff ff                                  	jmp    d6585 <emuella_j2k_codestream::write_native_main_header+0x4b5>
+   d6a92:	bf 01 00 00 00                                  	mov    $0x1,%edi
+   d6a97:	4c 89 ee                                        	mov    %r13,%rsi
+   d6a9a:	ff 15 b0 70 19 00                               	call   *0x1970b0(%rip)        # 26db50 <_DYNAMIC+0x250>
+   d6aa0:	eb 00                                           	jmp    d6aa2 <emuella_j2k_codestream::write_native_main_header+0x9d2>
+   d6aa2:	49 89 c7                                        	mov    %rax,%r15
+   d6aa5:	66 85 db                                        	test   %bx,%bx
+   d6aa8:	74 09                                           	je     d6ab3 <emuella_j2k_codestream::write_native_main_header+0x9e3>
+   d6aaa:	4c 89 f7                                        	mov    %r14,%rdi
+   d6aad:	ff 15 65 70 19 00                               	call   *0x197065(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   d6ab3:	4c 89 ff                                        	mov    %r15,%rdi
+   d6ab6:	e8 95 e7 18 00                                  	call   265250 <_Unwind_Resume@plt>

@@ -1,0 +1,307 @@
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless.rs b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+index e8e6f50f1333d7c5ad2d8745bd63ab54f6b2cd52..2f30fd4b139d2e618a7438e046f524c52f06f2da 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+@@ -60,6 +60,10 @@ fn prepare_forward53(
+             #[cfg(feature = "classic-execution-diagnostics")]
+             diagnostics::update(|d| d.forward53_panel_prepare_attempts += 1);
+             let result = workspace.prepare(plan, maximum);
++            #[cfg(all(test, feature = "std"))]
++            if forward53_tests::FAIL_OPTIONAL_PREPARATION.get() {
++                return Err(transform::TransformError::SizeOverflow);
++            }
+             #[cfg(feature = "classic-execution-diagnostics")]
+             if result.is_ok() {
+                 diagnostics::update(|d| {
+@@ -123,6 +127,41 @@ fn prepare_forward53_with_maximum(
+     Ok(None)
+ }
+ 
++// Keep optional panel state, execution and destruction outside the serial writer.
++// False is possible only before any component has been changed.
++#[inline(never)]
++fn transform_forward53_parallel<const PROFILE: bool>(
++    width: usize,
++    height: usize,
++    workers: usize,
++    coefficients: &mut [Vec<i32>],
++) -> Result<bool> {
++    #[cfg(all(test, feature = "std"))]
++    forward53_tests::OWNING_HELPER_CALLS.set(forward53_tests::OWNING_HELPER_CALLS.get() + 1);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let preparation = EncodeClock::start::<PROFILE>();
++    let prepared = prepare_forward53(width, height, workers)?;
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if PROFILE {
++        diagnostics::update(|d| d.dwt_scratch_resize_ns += preparation.ns());
++    }
++    let Some((plan, mut workspace)) = prepared else {
++        return Ok(false);
++    };
++    for plane in coefficients {
++        transform::forward_reversible_5_3_planned_bounded(plane, &plan, &mut workspace)
++            .map_err(|_| CodestreamError::SizeOverflow)?;
++    }
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let dropping = EncodeClock::start::<PROFILE>();
++    drop(workspace);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if PROFILE {
++        diagnostics::update(|d| d.dwt_scratch_drop_ns += dropping.ns());
++    }
++    Ok(true)
++}
++
+ /// Byte limits for owned raw classic lossless D2 encoding.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct LosslessEncodeLimits {
+@@ -624,44 +663,53 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+         timings.rct_pixels = if planes.len() == 3 { count as u64 } else { 0 };
+     }
+     let start = EncodeClock::start::<PROFILE>();
+-    #[cfg(feature = "classic-execution-diagnostics")]
+-    let preparation = EncodeClock::start::<PROFILE>();
+-    let mut prepared_transform = prepare_forward53(width_usize, height as usize, workers)?;
+     let mut transform_scratch = Vec::new();
+-    #[cfg(feature = "classic-execution-diagnostics")]
+-    if PROFILE {
+-        diagnostics::update(|d| d.dwt_scratch_resize_ns += preparation.ns());
+-    }
+-    let mut transform_components = || -> Result<()> {
++    let mut transform_components = || -> Result<bool> {
++        let parallel_admitted = workers > 1;
++        // The separate diagnostic override still admits its forced scalar panel
++        // route; ordinary single-worker encoding never enters the owning helper.
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let parallel_admitted = {
++            let (backend, panel_width) =
++                transform::forward53_diagnostic_policy(FORWARD53_BACKEND, FORWARD53_PANEL_WIDTH);
++            if !(1..=32).contains(&panel_width) {
++                return Err(CodestreamError::SizeOverflow);
++            }
++            parallel_admitted || backend == transform::Forward53Backend::RowPanelScalar
++        };
++        if parallel_admitted
++            && transform_forward53_parallel::<PROFILE>(
++                width_usize,
++                height as usize,
++                workers,
++                &mut coefficients,
++            )?
++        {
++            return Ok(true);
++        }
+         for plane in &mut coefficients {
+-            if let Some((plan, workspace)) = prepared_transform.as_mut() {
+-                transform::forward_reversible_5_3_planned_bounded(plane, plan, workspace)
+-                    .map_err(|_| CodestreamError::SizeOverflow)?;
+-            } else {
+-                forward_reversible_5_3_levels_with_scratch(
+-                    width,
+-                    height,
+-                    plane,
+-                    2,
+-                    "lossless D2 transform failed",
+-                    &mut transform_scratch,
+-                )?;
+-                #[cfg(feature = "classic-execution-diagnostics")]
+-                if PROFILE {
+-                    diagnostics::update(|d| {
+-                        d.forward53_original_helper_calls += 1;
+-                        d.forward53_original_scratch_capacity_bytes =
+-                            transform_scratch.capacity() * 4;
+-                    });
+-                }
++            forward_reversible_5_3_levels_with_scratch(
++                width,
++                height,
++                plane,
++                2,
++                "lossless D2 transform failed",
++                &mut transform_scratch,
++            )?;
++            #[cfg(feature = "classic-execution-diagnostics")]
++            if PROFILE {
++                diagnostics::update(|d| {
++                    d.forward53_original_helper_calls += 1;
++                    d.forward53_original_scratch_capacity_bytes = transform_scratch.capacity() * 4;
++                });
+             }
+         }
+-        Ok(())
++        Ok(false)
+     };
+     #[cfg(feature = "classic-execution-diagnostics")]
+     if PROFILE && diagnostics::enabled() {
+         let (result, detail) = transform::observe_forward_transform(transform_components);
+-        result?;
++        let used_panels = result?;
+         diagnostics::update(|d| {
+             d.dwt_validation_ns = detail.validation_ns;
+             d.dwt_vertical_gather_ns = detail.vertical_gather_ns;
+@@ -670,7 +718,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+             d.dwt_horizontal_lifting_ns = detail.horizontal_lifting_ns;
+             d.dwt_horizontal_copy_ns = detail.horizontal_copy_ns;
+             d.forward53 = detail;
+-            if prepared_transform.is_none() {
++            if !used_panels {
+                 d.forward53.level_backends = [Some(transform::Forward53Backend::Reference); 2];
+             }
+         });
+@@ -681,7 +729,6 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+     transform_components()?;
+     #[cfg(feature = "classic-execution-diagnostics")]
+     let dropping = EncodeClock::start::<PROFILE>();
+-    drop(prepared_transform);
+     drop(transform_scratch);
+     #[cfg(feature = "classic-execution-diagnostics")]
+     if PROFILE {
+@@ -859,6 +906,148 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+ mod forward53_tests {
+     use super::*;
+ 
++    #[cfg(feature = "std")]
++    std::thread_local! {
++        pub(super) static FAIL_OPTIONAL_PREPARATION: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
++        pub(super) static OWNING_HELPER_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
++    }
++
++    fn authored_planes(width: usize, height: usize) -> Vec<Vec<i32>> {
++        (0..3)
++            .map(|c| {
++                (0..width * height)
++                    .map(|n| ((n * 71 + c * 29) % 65536) as i32 - 32768)
++                    .collect()
++            })
++            .collect()
++    }
++
++    fn scalar_planes(width: usize, height: usize, planes: &mut [Vec<i32>]) {
++        let mut scratch = Vec::new();
++        for plane in planes {
++            forward_reversible_5_3_levels_with_scratch(
++                width as u32,
++                height as u32,
++                plane,
++                2,
++                "authored scalar transform failed",
++                &mut scratch,
++            )
++            .unwrap();
++        }
++    }
++
++    #[test]
++    fn owning_helper_declines_without_mutation() {
++        for (width, height, workers) in [(129, 131, 1), (16, 513, 8), (7, 9, 8)] {
++            let mut planes = authored_planes(width, height);
++            let original = planes.clone();
++            assert!(
++                !transform_forward53_parallel::<false>(width, height, workers, &mut planes)
++                    .unwrap()
++            );
++            assert_eq!(planes, original);
++        }
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn owning_helper_completes_components_and_mixed_levels_with_reuse() {
++        for workers in [2, 4, 8] {
++            let pool = rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap();
++            pool.install(|| {
++                for (width, height) in [(129, 131), (65, 67), (257, 259), (65, 67)] {
++                    let mut planes = authored_planes(width, height);
++                    let mut expected = planes.clone();
++                    scalar_planes(width, height, &mut expected);
++                    assert!(
++                        transform_forward53_parallel::<false>(width, height, workers, &mut planes)
++                            .unwrap()
++                    );
++                    assert_eq!(planes, expected);
++                }
++            });
++        }
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn owning_helper_error_after_a_component_never_declines_or_restarts() {
++        let (width, height) = (65, 67);
++        let original = authored_planes(width, height);
++        let mut expected = original.clone();
++        scalar_planes(width, height, &mut expected);
++        let mut planes = original.clone();
++        planes[1].pop();
++        let malformed = planes[1].clone();
++        assert!(transform_forward53_parallel::<false>(width, height, 4, &mut planes).is_err());
++        assert_eq!(planes[0], expected[0]);
++        assert_eq!(planes[1], malformed);
++        assert_eq!(planes[2], original[2]);
++        let mut reusable = original;
++        assert!(transform_forward53_parallel::<false>(width, height, 4, &mut reusable).unwrap());
++        assert_eq!(reusable, expected);
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn owning_helper_optional_failure_returns_unmodified_planes_for_scalar_fallback() {
++        struct Reset;
++        impl Drop for Reset {
++            fn drop(&mut self) {
++                FAIL_OPTIONAL_PREPARATION.set(false);
++            }
++        }
++        let (width, height) = (65, 67);
++        let mut planes = authored_planes(width, height);
++        let original = planes.clone();
++        FAIL_OPTIONAL_PREPARATION.set(true);
++        let reset = Reset;
++        assert!(!transform_forward53_parallel::<false>(width, height, 8, &mut planes).unwrap());
++        assert_eq!(planes, original);
++        scalar_planes(width, height, &mut planes);
++        drop(reset);
++        let mut parallel = original;
++        assert!(transform_forward53_parallel::<false>(width, height, 8, &mut parallel).unwrap());
++        assert_eq!(parallel, planes);
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn writer_skips_owning_helper_for_effective_single_worker() {
++        for requested in [1, 2, 4, 8] {
++            let pool = rayon::ThreadPoolBuilder::new()
++                .num_threads(requested)
++                .build()
++                .unwrap();
++            pool.install(|| {
++                let samples = vec![127; 129 * 131];
++                let planes = [LosslessD2Plane {
++                    samples: &samples,
++                    stride_bytes: 129,
++                    sample_step_bytes: 1,
++                }];
++                let limits = LosslessEncodeLimits::default();
++                let (requirements, admitted) =
++                    execution_requirements::<false>(129, 131, 1, limits).unwrap();
++                let serial = LosslessEncodeLimits {
++                    max_working_bytes: requirements.working_bytes
++                        - (admitted as u64 - 1) * WORKER_BYTES,
++                    ..limits
++                };
++                OWNING_HELPER_CALLS.set(0);
++                let reference = encode_lossless_d2(129, 131, 8, &planes, serial).unwrap();
++                assert_eq!(OWNING_HELPER_CALLS.get(), 0);
++                let parallel = encode_lossless_d2(129, 131, 8, &planes, limits).unwrap();
++                assert_eq!(parallel, reference);
++                assert_eq!(OWNING_HELPER_CALLS.get(), usize::from(admitted > 1));
++            });
++        }
++    }
++
+     #[test]
+     fn optional_workspace_shrinks_or_falls_back_before_allocation() {
+         for (width, height) in [

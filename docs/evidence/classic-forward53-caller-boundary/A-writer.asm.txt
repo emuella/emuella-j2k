@@ -1,0 +1,982 @@
+Disassembly of section .text:
+
+0000000000150110 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2>:
+  150110:	55                                              	push   %rbp
+  150111:	41 57                                           	push   %r15
+  150113:	41 56                                           	push   %r14
+  150115:	41 55                                           	push   %r13
+  150117:	41 54                                           	push   %r12
+  150119:	53                                              	push   %rbx
+  15011a:	48 81 ec 18 03 00 00                            	sub    $0x318,%rsp
+  150121:	49 89 ff                                        	mov    %rdi,%r15
+  150124:	89 74 24 04                                     	mov    %esi,0x4(%rsp)
+  150128:	89 54 24 24                                     	mov    %edx,0x24(%rsp)
+  15012c:	49 81 f9 ff ff 00 00                            	cmp    $0xffff,%r9
+  150133:	76 12                                           	jbe    150147 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x37>
+  150135:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+  15013f:	49 89 07                                        	mov    %rax,(%r15)
+  150142:	e9 b3 01 00 00                                  	jmp    1502fa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1ea>
+  150147:	4c 89 cb                                        	mov    %r9,%rbx
+  15014a:	41 89 cc                                        	mov    %ecx,%r12d
+  15014d:	4d 89 c6                                        	mov    %r8,%r14
+  150150:	4c 8b 8c 24 58 03 00 00                         	mov    0x358(%rsp),%r9
+  150158:	4c 8b 84 24 50 03 00 00                         	mov    0x350(%rsp),%r8
+  150160:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  150168:	89 d9                                           	mov    %ebx,%ecx
+  15016a:	e8 b1 99 f4 ff                                  	call   99b20 <emuella_j2k_codestream::scalable_lossless::execution_requirements::<false>>
+  15016f:	48 8b 84 24 50 01 00 00                         	mov    0x150(%rsp),%rax
+  150177:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+  15017b:	74 32                                           	je     1501af <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x9f>
+  15017d:	48 8b 8c 24 78 01 00 00                         	mov    0x178(%rsp),%rcx
+  150185:	f3 0f 6f 84 24 58 01 00 00                      	movdqu 0x158(%rsp),%xmm0
+  15018e:	f3 0f 6f 8c 24 68 01 00 00                      	movdqu 0x168(%rsp),%xmm1
+  150197:	49 89 07                                        	mov    %rax,(%r15)
+  15019a:	f3 41 0f 7f 47 08                               	movdqu %xmm0,0x8(%r15)
+  1501a0:	f3 41 0f 7f 4f 18                               	movdqu %xmm1,0x18(%r15)
+  1501a6:	49 89 4f 28                                     	mov    %rcx,0x28(%r15)
+  1501aa:	e9 4b 01 00 00                                  	jmp    1502fa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1ea>
+  1501af:	48 8b 94 24 78 01 00 00                         	mov    0x178(%rsp),%rdx
+  1501b7:	41 0f b6 f4                                     	movzbl %r12b,%esi
+  1501bb:	40 80 fe 10                                     	cmp    $0x10,%sil
+  1501bf:	74 09                                           	je     1501ca <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xba>
+  1501c1:	83 fe 08                                        	cmp    $0x8,%esi
+  1501c4:	0f 85 f9 00 00 00                               	jne    1502c3 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1b3>
+  1501ca:	48 83 fb 08                                     	cmp    $0x8,%rbx
+  1501ce:	0f 94 c0                                        	sete   %al
+  1501d1:	41 80 fc 10                                     	cmp    $0x10,%r12b
+  1501d5:	0f 95 c1                                        	setne  %cl
+  1501d8:	84 c1                                           	test   %al,%cl
+  1501da:	0f 85 e3 00 00 00                               	jne    1502c3 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1b3>
+  1501e0:	48 89 b4 24 40 02 00 00                         	mov    %rsi,0x240(%rsp)
+  1501e8:	48 89 94 24 48 01 00 00                         	mov    %rdx,0x148(%rsp)
+  1501f0:	44 89 e0                                        	mov    %r12d,%eax
+  1501f3:	c0 e8 03                                        	shr    $0x3,%al
+  1501f6:	44 0f b6 c0                                     	movzbl %al,%r8d
+  1501fa:	8b 44 24 04                                     	mov    0x4(%rsp),%eax
+  1501fe:	8b 54 24 24                                     	mov    0x24(%rsp),%edx
+  150202:	49 89 d5                                        	mov    %rdx,%r13
+  150205:	4c 0f af e8                                     	imul   %rax,%r13
+  150209:	48 89 9c 24 c8 00 00 00                         	mov    %rbx,0xc8(%rsp)
+  150211:	49 89 d9                                        	mov    %rbx,%r9
+  150214:	49 c1 e1 05                                     	shl    $0x5,%r9
+  150218:	4d 89 f2                                        	mov    %r14,%r10
+  15021b:	4b 8d 0c 0e                                     	lea    (%r14,%r9,1),%rcx
+  15021f:	48 89 8c 24 e0 00 00 00                         	mov    %rcx,0xe0(%rsp)
+  150227:	48 89 84 24 a8 00 00 00                         	mov    %rax,0xa8(%rsp)
+  15022f:	48 8d 48 ff                                     	lea    -0x1(%rax),%rcx
+  150233:	48 89 54 24 28                                  	mov    %rdx,0x28(%rsp)
+  150238:	48 8d 72 ff                                     	lea    -0x1(%rdx),%rsi
+  15023c:	0f 1f 40 00                                     	nopl   0x0(%rax)
+  150240:	4d 85 c9                                        	test   %r9,%r9
+  150243:	0f 84 c6 00 00 00                               	je     15030f <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1ff>
+  150249:	4d 8b 5a 18                                     	mov    0x18(%r10),%r11
+  15024d:	48 89 c8                                        	mov    %rcx,%rax
+  150250:	49 f7 e3                                        	mul    %r11
+  150253:	0f 80 dc fe ff ff                               	jo     150135 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x25>
+  150259:	48 89 c7                                        	mov    %rax,%rdi
+  15025c:	4c 01 c7                                        	add    %r8,%rdi
+  15025f:	0f 82 d0 fe ff ff                               	jb     150135 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x25>
+  150265:	49 8b 5a 10                                     	mov    0x10(%r10),%rbx
+  150269:	48 89 f0                                        	mov    %rsi,%rax
+  15026c:	48 f7 e3                                        	mul    %rbx
+  15026f:	0f 80 c0 fe ff ff                               	jo     150135 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x25>
+  150275:	48 01 f8                                        	add    %rdi,%rax
+  150278:	0f 82 b7 fe ff ff                               	jb     150135 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x25>
+  15027e:	4d 39 c3                                        	cmp    %r8,%r11
+  150281:	72 13                                           	jb     150296 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x186>
+  150283:	48 39 fb                                        	cmp    %rdi,%rbx
+  150286:	72 0e                                           	jb     150296 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x186>
+  150288:	49 83 c1 e0                                     	add    $0xffffffffffffffe0,%r9
+  15028c:	49 39 42 08                                     	cmp    %rax,0x8(%r10)
+  150290:	4d 8d 52 20                                     	lea    0x20(%r10),%r10
+  150294:	73 aa                                           	jae    150240 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x130>
+  150296:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+  1502a0:	48 ff c8                                        	dec    %rax
+  1502a3:	49 89 07                                        	mov    %rax,(%r15)
+  1502a6:	49 c7 47 08 00 00 00 00                         	movq   $0x0,0x8(%r15)
+  1502ae:	48 8d 05 ef 33 ec ff                            	lea    -0x13cc11(%rip),%rax        # 136a4 <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xe24>
+  1502b5:	49 89 47 18                                     	mov    %rax,0x18(%r15)
+  1502b9:	49 c7 47 20 43 00 00 00                         	movq   $0x43,0x20(%r15)
+  1502c1:	eb 2b                                           	jmp    1502ee <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1de>
+  1502c3:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+  1502cd:	48 ff c8                                        	dec    %rax
+  1502d0:	49 89 07                                        	mov    %rax,(%r15)
+  1502d3:	49 c7 47 08 00 00 00 00                         	movq   $0x0,0x8(%r15)
+  1502db:	48 8d 05 15 34 ec ff                            	lea    -0x13cbeb(%rip),%rax        # 136f7 <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xe77>
+  1502e2:	49 89 47 18                                     	mov    %rax,0x18(%r15)
+  1502e6:	49 c7 47 20 33 00 00 00                         	movq   $0x33,0x20(%r15)
+  1502ee:	66 41 c7 47 28 04 00                            	movw   $0x4,0x28(%r15)
+  1502f5:	41 c6 47 2c 0a                                  	movb   $0xa,0x2c(%r15)
+  1502fa:	4c 89 f8                                        	mov    %r15,%rax
+  1502fd:	48 81 c4 18 03 00 00                            	add    $0x318,%rsp
+  150304:	5b                                              	pop    %rbx
+  150305:	41 5c                                           	pop    %r12
+  150307:	41 5d                                           	pop    %r13
+  150309:	41 5e                                           	pop    %r14
+  15030b:	41 5f                                           	pop    %r15
+  15030d:	5d                                              	pop    %rbp
+  15030e:	c3                                              	ret
+  15030f:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  150317:	ba 08 00 00 00                                  	mov    $0x8,%edx
+  15031c:	b9 18 00 00 00                                  	mov    $0x18,%ecx
+  150321:	48 8b 9c 24 c8 00 00 00                         	mov    0xc8(%rsp),%rbx
+  150329:	48 89 de                                        	mov    %rbx,%rsi
+  15032c:	e8 4f 95 ff ff                                  	call   149880 <<alloc::raw_vec::RawVecInner>::try_allocate_in>
+  150331:	48 8b bc 24 58 01 00 00                         	mov    0x158(%rsp),%rdi
+  150339:	80 bc 24 50 01 00 00 00                         	cmpb   $0x0,0x150(%rsp)
+  150341:	0f 85 c7 03 00 00                               	jne    15070e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x5fe>
+  150347:	48 8b 84 24 60 01 00 00                         	mov    0x160(%rsp),%rax
+  15034f:	48 89 bc 24 b0 00 00 00                         	mov    %rdi,0xb0(%rsp)
+  150357:	48 89 84 24 b8 00 00 00                         	mov    %rax,0xb8(%rsp)
+  15035f:	48 c7 84 24 c0 00 00 00 00 00 00 00             	movq   $0x0,0xc0(%rsp)
+  15036b:	48 85 db                                        	test   %rbx,%rbx
+  15036e:	4c 89 7c 24 08                                  	mov    %r15,0x8(%rsp)
+  150373:	0f 84 10 04 00 00                               	je     150789 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x679>
+  150379:	4c 89 f2                                        	mov    %r14,%rdx
+  15037c:	41 8d 4c 24 ff                                  	lea    -0x1(%r12),%ecx
+  150381:	b8 ff ff ff ff                                  	mov    $0xffffffff,%eax
+  150386:	d3 e0                                           	shl    %cl,%eax
+  150388:	89 44 24 58                                     	mov    %eax,0x58(%rsp)
+  15038c:	4c 89 a4 24 d8 00 00 00                         	mov    %r12,0xd8(%rsp)
+  150394:	4c 89 ac 24 d0 00 00 00                         	mov    %r13,0xd0(%rsp)
+  15039c:	eb 53                                           	jmp    1503f1 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x2e1>
+  15039e:	66 90                                           	xchg   %ax,%ax
+  1503a0:	48 8b 54 24 30                                  	mov    0x30(%rsp),%rdx
+  1503a5:	48 83 c2 20                                     	add    $0x20,%rdx
+  1503a9:	48 8b 84 24 b8 00 00 00                         	mov    0xb8(%rsp),%rax
+  1503b1:	48 8d 0c 5b                                     	lea    (%rbx,%rbx,2),%rcx
+  1503b5:	4c 89 34 c8                                     	mov    %r14,(%rax,%rcx,8)
+  1503b9:	48 89 6c c8 08                                  	mov    %rbp,0x8(%rax,%rcx,8)
+  1503be:	4c 89 6c c8 10                                  	mov    %r13,0x10(%rax,%rcx,8)
+  1503c3:	48 ff c3                                        	inc    %rbx
+  1503c6:	48 89 9c 24 c0 00 00 00                         	mov    %rbx,0xc0(%rsp)
+  1503ce:	48 3b 94 24 e0 00 00 00                         	cmp    0xe0(%rsp),%rdx
+  1503d6:	4c 8b 7c 24 08                                  	mov    0x8(%rsp),%r15
+  1503db:	4c 8b a4 24 d8 00 00 00                         	mov    0xd8(%rsp),%r12
+  1503e3:	4c 8b ac 24 d0 00 00 00                         	mov    0xd0(%rsp),%r13
+  1503eb:	0f 84 41 02 00 00                               	je     150632 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x522>
+  1503f1:	48 c7 44 24 60 00 00 00 00                      	movq   $0x0,0x60(%rsp)
+  1503fa:	48 c7 44 24 68 04 00 00 00                      	movq   $0x4,0x68(%rsp)
+  150403:	48 c7 44 24 70 00 00 00 00                      	movq   $0x0,0x70(%rsp)
+  15040c:	b8 04 00 00 00                                  	mov    $0x4,%eax
+  150411:	4d 85 ed                                        	test   %r13,%r13
+  150414:	0f 85 89 01 00 00                               	jne    1505a3 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x493>
+  15041a:	83 7c 24 28 00                                  	cmpl   $0x0,0x28(%rsp)
+  15041f:	48 89 54 24 30                                  	mov    %rdx,0x30(%rsp)
+  150424:	0f 84 d2 01 00 00                               	je     1505fc <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x4ec>
+  15042a:	83 bc 24 a8 00 00 00 00                         	cmpl   $0x0,0xa8(%rsp)
+  150432:	0f 84 c4 01 00 00                               	je     1505fc <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x4ec>
+  150438:	48 8b 4a 10                                     	mov    0x10(%rdx),%rcx
+  15043c:	48 89 8c 24 e8 00 00 00                         	mov    %rcx,0xe8(%rsp)
+  150444:	4c 8b 72 18                                     	mov    0x18(%rdx),%r14
+  150448:	41 80 fc 08                                     	cmp    $0x8,%r12b
+  15044c:	0f 85 96 00 00 00                               	jne    1504e8 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x3d8>
+  150452:	48 8b 6a 08                                     	mov    0x8(%rdx),%rbp
+  150456:	31 db                                           	xor    %ebx,%ebx
+  150458:	45 31 ed                                        	xor    %r13d,%r13d
+  15045b:	31 c9                                           	xor    %ecx,%ecx
+  15045d:	eb 1e                                           	jmp    15047d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x36d>
+  15045f:	90                                              	nop
+  150460:	48 8b 5c 24 18                                  	mov    0x18(%rsp),%rbx
+  150465:	48 03 9c 24 e8 00 00 00                         	add    0xe8(%rsp),%rbx
+  15046d:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+  150472:	48 3b 4c 24 28                                  	cmp    0x28(%rsp),%rcx
+  150477:	0f 84 82 01 00 00                               	je     1505ff <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x4ef>
+  15047d:	48 ff c1                                        	inc    %rcx
+  150480:	48 89 4c 24 10                                  	mov    %rcx,0x10(%rsp)
+  150485:	4c 8b a4 24 a8 00 00 00                         	mov    0xa8(%rsp),%r12
+  15048d:	48 89 5c 24 18                                  	mov    %rbx,0x18(%rsp)
+  150492:	eb 25                                           	jmp    1504b9 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x3a9>
+  150494:	66 66 66 2e 0f 1f 84 00 00 00 00 00             	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  1504a0:	44 03 7c 24 58                                  	add    0x58(%rsp),%r15d
+  1504a5:	46 89 3c a8                                     	mov    %r15d,(%rax,%r13,4)
+  1504a9:	49 ff c5                                        	inc    %r13
+  1504ac:	4c 89 6c 24 70                                  	mov    %r13,0x70(%rsp)
+  1504b1:	4c 01 f3                                        	add    %r14,%rbx
+  1504b4:	49 ff cc                                        	dec    %r12
+  1504b7:	74 a7                                           	je     150460 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x350>
+  1504b9:	48 39 eb                                        	cmp    %rbp,%rbx
+  1504bc:	0f 83 1f 02 00 00                               	jae    1506e1 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x5d1>
+  1504c2:	48 8b 4c 24 30                                  	mov    0x30(%rsp),%rcx
+  1504c7:	48 8b 09                                        	mov    (%rcx),%rcx
+  1504ca:	44 0f b6 3c 19                                  	movzbl (%rcx,%rbx,1),%r15d
+  1504cf:	4c 3b 6c 24 60                                  	cmp    0x60(%rsp),%r13
+  1504d4:	75 ca                                           	jne    1504a0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x390>
+  1504d6:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  1504db:	ff 15 cf da 11 00                               	call   *0x11dacf(%rip)        # 26dfb0 <_DYNAMIC+0x6b0>
+  1504e1:	48 8b 44 24 68                                  	mov    0x68(%rsp),%rax
+  1504e6:	eb b8                                           	jmp    1504a0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x390>
+  1504e8:	48 8b 0a                                        	mov    (%rdx),%rcx
+  1504eb:	48 89 4c 24 18                                  	mov    %rcx,0x18(%rsp)
+  1504f0:	48 8b 6a 08                                     	mov    0x8(%rdx),%rbp
+  1504f4:	41 bc 01 00 00 00                               	mov    $0x1,%r12d
+  1504fa:	45 31 ed                                        	xor    %r13d,%r13d
+  1504fd:	31 c9                                           	xor    %ecx,%ecx
+  1504ff:	eb 2c                                           	jmp    15052d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x41d>
+  150501:	66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00    	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+  150510:	4c 8b 64 24 10                                  	mov    0x10(%rsp),%r12
+  150515:	4c 03 a4 24 e8 00 00 00                         	add    0xe8(%rsp),%r12
+  15051d:	48 8b 4c 24 50                                  	mov    0x50(%rsp),%rcx
+  150522:	48 3b 4c 24 28                                  	cmp    0x28(%rsp),%rcx
+  150527:	0f 84 d2 00 00 00                               	je     1505ff <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x4ef>
+  15052d:	48 ff c1                                        	inc    %rcx
+  150530:	48 89 4c 24 50                                  	mov    %rcx,0x50(%rsp)
+  150535:	4c 8b bc 24 a8 00 00 00                         	mov    0xa8(%rsp),%r15
+  15053d:	4c 89 64 24 10                                  	mov    %r12,0x10(%rsp)
+  150542:	eb 24                                           	jmp    150568 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x458>
+  150544:	66 66 66 2e 0f 1f 84 00 00 00 00 00             	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  150550:	03 5c 24 58                                     	add    0x58(%rsp),%ebx
+  150554:	42 89 1c a8                                     	mov    %ebx,(%rax,%r13,4)
+  150558:	49 ff c5                                        	inc    %r13
+  15055b:	4c 89 6c 24 70                                  	mov    %r13,0x70(%rsp)
+  150560:	4d 01 f4                                        	add    %r14,%r12
+  150563:	49 ff cf                                        	dec    %r15
+  150566:	74 a8                                           	je     150510 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x400>
+  150568:	49 8d 5c 24 ff                                  	lea    -0x1(%r12),%rbx
+  15056d:	48 39 eb                                        	cmp    %rbp,%rbx
+  150570:	0f 83 74 01 00 00                               	jae    1506ea <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x5da>
+  150576:	49 39 ec                                        	cmp    %rbp,%r12
+  150579:	0f 83 74 01 00 00                               	jae    1506f3 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x5e3>
+  15057f:	48 8b 4c 24 18                                  	mov    0x18(%rsp),%rcx
+  150584:	42 0f b7 5c 21 ff                               	movzwl -0x1(%rcx,%r12,1),%ebx
+  15058a:	4c 3b 6c 24 60                                  	cmp    0x60(%rsp),%r13
+  15058f:	75 bf                                           	jne    150550 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x440>
+  150591:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  150596:	ff 15 14 da 11 00                               	call   *0x11da14(%rip)        # 26dfb0 <_DYNAMIC+0x6b0>
+  15059c:	48 8b 44 24 68                                  	mov    0x68(%rsp),%rax
+  1505a1:	eb ad                                           	jmp    150550 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x440>
+  1505a3:	48 89 d3                                        	mov    %rdx,%rbx
+  1505a6:	ba 04 00 00 00                                  	mov    $0x4,%edx
+  1505ab:	41 b8 04 00 00 00                               	mov    $0x4,%r8d
+  1505b1:	41 b9 04 00 00 00                               	mov    $0x4,%r9d
+  1505b7:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  1505bf:	31 f6                                           	xor    %esi,%esi
+  1505c1:	4c 89 e9                                        	mov    %r13,%rcx
+  1505c4:	e8 57 91 ff ff                                  	call   149720 <<alloc::raw_vec::RawVecInner>::finish_grow>
+  1505c9:	80 bc 24 50 01 00 00 00                         	cmpb   $0x0,0x150(%rsp)
+  1505d1:	0f 85 9f 00 00 00                               	jne    150676 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x566>
+  1505d7:	48 8b 84 24 58 01 00 00                         	mov    0x158(%rsp),%rax
+  1505df:	48 89 44 24 68                                  	mov    %rax,0x68(%rsp)
+  1505e4:	4c 89 6c 24 60                                  	mov    %r13,0x60(%rsp)
+  1505e9:	48 89 da                                        	mov    %rbx,%rdx
+  1505ec:	83 7c 24 28 00                                  	cmpl   $0x0,0x28(%rsp)
+  1505f1:	48 89 54 24 30                                  	mov    %rdx,0x30(%rsp)
+  1505f6:	0f 85 2e fe ff ff                               	jne    15042a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x31a>
+  1505fc:	45 31 ed                                        	xor    %r13d,%r13d
+  1505ff:	4c 8b 74 24 60                                  	mov    0x60(%rsp),%r14
+  150604:	48 8b 6c 24 68                                  	mov    0x68(%rsp),%rbp
+  150609:	48 8b 9c 24 c0 00 00 00                         	mov    0xc0(%rsp),%rbx
+  150611:	48 3b 9c 24 b0 00 00 00                         	cmp    0xb0(%rsp),%rbx
+  150619:	0f 85 81 fd ff ff                               	jne    1503a0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x290>
+  15061f:	48 8d bc 24 b0 00 00 00                         	lea    0xb0(%rsp),%rdi
+  150627:	ff 15 8b d9 11 00                               	call   *0x11d98b(%rip)        # 26dfb8 <_DYNAMIC+0x6b8>
+  15062d:	e9 6e fd ff ff                                  	jmp    1503a0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x290>
+  150632:	48 83 fb 03                                     	cmp    $0x3,%rbx
+  150636:	0f 85 4d 01 00 00                               	jne    150789 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x679>
+  15063c:	48 8b b4 24 b8 00 00 00                         	mov    0xb8(%rsp),%rsi
+  150644:	48 8b 46 10                                     	mov    0x10(%rsi),%rax
+  150648:	48 3b 46 28                                     	cmp    0x28(%rsi),%rax
+  15064c:	75 28                                           	jne    150676 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x566>
+  15064e:	48 3b 46 40                                     	cmp    0x40(%rsi),%rax
+  150652:	75 22                                           	jne    150676 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x566>
+  150654:	48 85 c0                                        	test   %rax,%rax
+  150657:	0f 84 2c 01 00 00                               	je     150789 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x679>
+  15065d:	48 8b 4e 08                                     	mov    0x8(%rsi),%rcx
+  150661:	48 8b 56 20                                     	mov    0x20(%rsi),%rdx
+  150665:	48 8b 76 38                                     	mov    0x38(%rsi),%rsi
+  150669:	48 83 f8 04                                     	cmp    $0x4,%rax
+  15066d:	73 19                                           	jae    150688 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x578>
+  15066f:	31 ff                                           	xor    %edi,%edi
+  150671:	e9 e2 00 00 00                                  	jmp    150758 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x648>
+  150676:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+  150680:	49 89 07                                        	mov    %rax,(%r15)
+  150683:	e9 3c 02 00 00                                  	jmp    1508c4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x7b4>
+  150688:	48 89 c7                                        	mov    %rax,%rdi
+  15068b:	48 83 e7 fc                                     	and    $0xfffffffffffffffc,%rdi
+  15068f:	45 31 c0                                        	xor    %r8d,%r8d
+  150692:	f3 42 0f 6f 04 81                               	movdqu (%rcx,%r8,4),%xmm0
+  150698:	f3 42 0f 6f 0c 82                               	movdqu (%rdx,%r8,4),%xmm1
+  15069e:	f3 42 0f 6f 14 86                               	movdqu (%rsi,%r8,4),%xmm2
+  1506a4:	66 0f 6f d8                                     	movdqa %xmm0,%xmm3
+  1506a8:	66 0f fe da                                     	paddd  %xmm2,%xmm3
+  1506ac:	66 0f fa d1                                     	psubd  %xmm1,%xmm2
+  1506b0:	66 0f fa c1                                     	psubd  %xmm1,%xmm0
+  1506b4:	66 0f fe c9                                     	paddd  %xmm1,%xmm1
+  1506b8:	66 0f fe d9                                     	paddd  %xmm1,%xmm3
+  1506bc:	66 0f 72 e3 02                                  	psrad  $0x2,%xmm3
+  1506c1:	f3 42 0f 7f 1c 81                               	movdqu %xmm3,(%rcx,%r8,4)
+  1506c7:	f3 42 0f 7f 14 82                               	movdqu %xmm2,(%rdx,%r8,4)
+  1506cd:	f3 42 0f 7f 04 86                               	movdqu %xmm0,(%rsi,%r8,4)
+  1506d3:	49 83 c0 04                                     	add    $0x4,%r8
+  1506d7:	4c 39 c7                                        	cmp    %r8,%rdi
+  1506da:	75 b6                                           	jne    150692 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x582>
+  1506dc:	e9 a3 00 00 00                                  	jmp    150784 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x674>
+  1506e1:	48 8d 15 20 69 11 00                            	lea    0x116920(%rip),%rdx        # 267008 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x2e0>
+  1506e8:	eb 13                                           	jmp    1506fd <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x5ed>
+  1506ea:	48 8d 15 2f 69 11 00                            	lea    0x11692f(%rip),%rdx        # 267020 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x2f8>
+  1506f1:	eb 0a                                           	jmp    1506fd <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x5ed>
+  1506f3:	4c 89 e3                                        	mov    %r12,%rbx
+  1506f6:	48 8d 15 3b 69 11 00                            	lea    0x11693b(%rip),%rdx        # 267038 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x310>
+  1506fd:	48 89 df                                        	mov    %rbx,%rdi
+  150700:	48 89 ee                                        	mov    %rbp,%rsi
+  150703:	ff 15 57 d4 11 00                               	call   *0x11d457(%rip)        # 26db60 <_DYNAMIC+0x260>
+  150709:	e9 e0 0c 00 00                                  	jmp    1513ee <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12de>
+  15070e:	48 8b b4 24 60 01 00 00                         	mov    0x160(%rsp),%rsi
+  150716:	ff 15 34 d4 11 00                               	call   *0x11d434(%rip)        # 26db50 <_DYNAMIC+0x250>
+  15071c:	49 89 c7                                        	mov    %rax,%r15
+  15071f:	4d 85 f6                                        	test   %r14,%r14
+  150722:	74 1f                                           	je     150743 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x633>
+  150724:	48 89 ef                                        	mov    %rbp,%rdi
+  150727:	eb 14                                           	jmp    15073d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x62d>
+  150729:	eb 02                                           	jmp    15072d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x61d>
+  15072b:	eb 00                                           	jmp    15072d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x61d>
+  15072d:	49 89 c7                                        	mov    %rax,%r15
+  150730:	48 83 7c 24 60 00                               	cmpq   $0x0,0x60(%rsp)
+  150736:	74 0b                                           	je     150743 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x633>
+  150738:	48 8b 7c 24 68                                  	mov    0x68(%rsp),%rdi
+  15073d:	ff 15 d5 d3 11 00                               	call   *0x11d3d5(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  150743:	48 8d bc 24 b0 00 00 00                         	lea    0xb0(%rsp),%rdi
+  15074b:	e8 70 fa f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  150750:	4c 89 ff                                        	mov    %r15,%rdi
+  150753:	e8 f8 4a 11 00                                  	call   265250 <_Unwind_Resume@plt>
+  150758:	44 8b 04 b9                                     	mov    (%rcx,%rdi,4),%r8d
+  15075c:	44 8b 0c ba                                     	mov    (%rdx,%rdi,4),%r9d
+  150760:	47 8d 14 48                                     	lea    (%r8,%r9,2),%r10d
+  150764:	44 8b 1c be                                     	mov    (%rsi,%rdi,4),%r11d
+  150768:	45 01 da                                        	add    %r11d,%r10d
+  15076b:	41 c1 fa 02                                     	sar    $0x2,%r10d
+  15076f:	44 89 14 b9                                     	mov    %r10d,(%rcx,%rdi,4)
+  150773:	45 29 cb                                        	sub    %r9d,%r11d
+  150776:	44 89 1c ba                                     	mov    %r11d,(%rdx,%rdi,4)
+  15077a:	45 29 c8                                        	sub    %r9d,%r8d
+  15077d:	44 89 04 be                                     	mov    %r8d,(%rsi,%rdi,4)
+  150781:	48 ff c7                                        	inc    %rdi
+  150784:	48 39 f8                                        	cmp    %rdi,%rax
+  150787:	75 cf                                           	jne    150758 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x648>
+  150789:	48 c7 84 24 18 01 00 00 00 00 00 00             	movq   $0x0,0x118(%rsp)
+  150795:	48 c7 84 24 20 01 00 00 04 00 00 00             	movq   $0x4,0x120(%rsp)
+  1507a1:	48 c7 84 24 28 01 00 00 00 00 00 00             	movq   $0x0,0x128(%rsp)
+  1507ad:	48 8d 84 24 b0 00 00 00                         	lea    0xb0(%rsp),%rax
+  1507b5:	48 89 84 24 c0 02 00 00                         	mov    %rax,0x2c0(%rsp)
+  1507bd:	4c 8d 74 24 04                                  	lea    0x4(%rsp),%r14
+  1507c2:	4c 89 b4 24 c8 02 00 00                         	mov    %r14,0x2c8(%rsp)
+  1507ca:	48 8d 44 24 24                                  	lea    0x24(%rsp),%rax
+  1507cf:	48 89 84 24 d0 02 00 00                         	mov    %rax,0x2d0(%rsp)
+  1507d7:	48 8d 84 24 18 01 00 00                         	lea    0x118(%rsp),%rax
+  1507df:	48 89 84 24 d8 02 00 00                         	mov    %rax,0x2d8(%rsp)
+  1507e7:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  1507ef:	48 8d b4 24 c0 02 00 00                         	lea    0x2c0(%rsp),%rsi
+  1507f7:	e8 d4 e4 f7 ff                                  	call   cecd0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}>
+  1507fc:	48 83 bc 24 50 01 00 00 ff                      	cmpq   $0xffffffffffffffff,0x150(%rsp)
+  150805:	74 4b                                           	je     150852 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x742>
+  150807:	f3 0f 6f 84 24 50 01 00 00                      	movdqu 0x150(%rsp),%xmm0
+  150810:	f3 0f 6f 8c 24 60 01 00 00                      	movdqu 0x160(%rsp),%xmm1
+  150819:	f3 0f 6f 94 24 70 01 00 00                      	movdqu 0x170(%rsp),%xmm2
+  150822:	f3 41 0f 7f 57 20                               	movdqu %xmm2,0x20(%r15)
+  150828:	f3 41 0f 7f 4f 10                               	movdqu %xmm1,0x10(%r15)
+  15082e:	f3 41 0f 7f 07                                  	movdqu %xmm0,(%r15)
+  150833:	48 83 bc 24 18 01 00 00 00                      	cmpq   $0x0,0x118(%rsp)
+  15083c:	0f 84 82 00 00 00                               	je     1508c4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x7b4>
+  150842:	48 8b bc 24 20 01 00 00                         	mov    0x120(%rsp),%rdi
+  15084a:	ff 15 c8 d2 11 00                               	call   *0x11d2c8(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  150850:	eb 72                                           	jmp    1508c4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x7b4>
+  150852:	48 83 bc 24 18 01 00 00 00                      	cmpq   $0x0,0x118(%rsp)
+  15085b:	74 0e                                           	je     15086b <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x75b>
+  15085d:	48 8b bc 24 20 01 00 00                         	mov    0x120(%rsp),%rdi
+  150865:	ff 15 ad d2 11 00                               	call   *0x11d2ad(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  15086b:	8b 74 24 04                                     	mov    0x4(%rsp),%esi
+  15086f:	8b 54 24 24                                     	mov    0x24(%rsp),%edx
+  150873:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  15087b:	e8 d0 1a f8 ff                                  	call   d2350 <emuella_j2k_codestream::decomp_subband_specs>
+  150880:	48 8b 84 24 50 01 00 00                         	mov    0x150(%rsp),%rax
+  150888:	48 8b ac 24 58 01 00 00                         	mov    0x158(%rsp),%rbp
+  150890:	4c 8b ac 24 60 01 00 00                         	mov    0x160(%rsp),%r13
+  150898:	4c 8b a4 24 68 01 00 00                         	mov    0x168(%rsp),%r12
+  1508a0:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+  1508a4:	74 30                                           	je     1508d6 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x7c6>
+  1508a6:	f3 0f 6f 84 24 70 01 00 00                      	movdqu 0x170(%rsp),%xmm0
+  1508af:	f3 41 0f 7f 47 20                               	movdqu %xmm0,0x20(%r15)
+  1508b5:	49 89 07                                        	mov    %rax,(%r15)
+  1508b8:	49 89 6f 08                                     	mov    %rbp,0x8(%r15)
+  1508bc:	4d 89 6f 10                                     	mov    %r13,0x10(%r15)
+  1508c0:	4d 89 67 18                                     	mov    %r12,0x18(%r15)
+  1508c4:	48 8d bc 24 b0 00 00 00                         	lea    0xb0(%rsp),%rdi
+  1508cc:	e8 ef f8 f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  1508d1:	e9 24 fa ff ff                                  	jmp    1502fa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1ea>
+  1508d6:	48 8b b4 24 b8 00 00 00                         	mov    0xb8(%rsp),%rsi
+  1508de:	48 8b 84 24 c0 00 00 00                         	mov    0xc0(%rsp),%rax
+  1508e6:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+  1508ea:	48 8d 14 c6                                     	lea    (%rsi,%rax,8),%rdx
+  1508ee:	48 8d 9c 24 f8 01 00 00                         	lea    0x1f8(%rsp),%rbx
+  1508f6:	48 89 df                                        	mov    %rbx,%rdi
+  1508f9:	e8 02 fe 01 00                                  	call   170700 <<alloc::vec::Vec<&[i32]> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<&[i32], core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::vec::Vec<i32>>, <alloc::vec::Vec<i32>>::as_slice>>>::from_iter>
+  1508fe:	4b 8d 04 a4                                     	lea    (%r12,%r12,4),%rax
+  150902:	48 8d 04 c5 00 00 00 00                         	lea    0x0(,%rax,8),%rax
+  15090a:	4c 01 e8                                        	add    %r13,%rax
+  15090d:	4c 89 6c 24 60                                  	mov    %r13,0x60(%rsp)
+  150912:	48 89 44 24 68                                  	mov    %rax,0x68(%rsp)
+  150917:	4c 89 74 24 70                                  	mov    %r14,0x70(%rsp)
+  15091c:	48 89 5c 24 78                                  	mov    %rbx,0x78(%rsp)
+  150921:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  150929:	48 8d 74 24 60                                  	lea    0x60(%rsp),%rsi
+  15092e:	e8 dd a8 f4 ff                                  	call   9b210 <core::iter::adapters::try_process::<core::iter::adapters::map::Map<core::slice::iter::Iter<emuella_j2k_codestream::DecompSubbandSpec>, emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl<false, false>::{closure#6}>, u8, core::result::Result<core::convert::Infallible, emuella_j2k_codestream::CodestreamError>, <core::result::Result<alloc::vec::Vec<u8>, emuella_j2k_codestream::CodestreamError> as core::iter::traits::collect::FromIterator<core::result::Result<u8, emuella_j2k_codestream::CodestreamError>>>::from_iter<core::iter::adapters::map::Map<core::slice::iter::Iter<emuella_j2k_codestream::DecompSubbandSpec>, emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl<false, false>::{closure#6}>>::{closure#0}, alloc::vec::Vec<u8>>>
+  150933:	48 8b 84 24 50 01 00 00                         	mov    0x150(%rsp),%rax
+  15093b:	48 8b 94 24 58 01 00 00                         	mov    0x158(%rsp),%rdx
+  150943:	48 8b 9c 24 60 01 00 00                         	mov    0x160(%rsp),%rbx
+  15094b:	4c 8b b4 24 68 01 00 00                         	mov    0x168(%rsp),%r14
+  150953:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+  150957:	48 8b 8c 24 58 03 00 00                         	mov    0x358(%rsp),%rcx
+  15095f:	74 23                                           	je     150984 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x874>
+  150961:	f3 0f 6f 84 24 70 01 00 00                      	movdqu 0x170(%rsp),%xmm0
+  15096a:	f3 41 0f 7f 47 20                               	movdqu %xmm0,0x20(%r15)
+  150970:	49 89 07                                        	mov    %rax,(%r15)
+  150973:	49 89 57 08                                     	mov    %rdx,0x8(%r15)
+  150977:	49 89 5f 10                                     	mov    %rbx,0x10(%r15)
+  15097b:	4d 89 77 18                                     	mov    %r14,0x18(%r15)
+  15097f:	e9 e1 00 00 00                                  	jmp    150a65 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x955>
+  150984:	48 89 54 24 58                                  	mov    %rdx,0x58(%rsp)
+  150989:	48 c7 44 24 38 00 00 00 00                      	movq   $0x0,0x38(%rsp)
+  150992:	48 c7 44 24 40 01 00 00 00                      	movq   $0x1,0x40(%rsp)
+  15099b:	48 c7 44 24 48 00 00 00 00                      	movq   $0x0,0x48(%rsp)
+  1509a4:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  1509ac:	48 8d 74 24 38                                  	lea    0x38(%rsp),%rsi
+  1509b1:	ba 80 00 00 00                                  	mov    $0x80,%edx
+  1509b6:	e8 15 f6 ff ff                                  	call   14ffd0 <emuella_j2k_codestream::scalable_lossless::reserve_output>
+  1509bb:	48 83 bc 24 50 01 00 00 ff                      	cmpq   $0xffffffffffffffff,0x150(%rsp)
+  1509c4:	75 4f                                           	jne    150a15 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x905>
+  1509c6:	31 c0                                           	xor    %eax,%eax
+  1509c8:	4c 8b 94 24 c8 00 00 00                         	mov    0xc8(%rsp),%r10
+  1509d0:	49 83 fa 03                                     	cmp    $0x3,%r10
+  1509d4:	0f 94 c0                                        	sete   %al
+  1509d7:	8b 54 24 04                                     	mov    0x4(%rsp),%edx
+  1509db:	8b 4c 24 24                                     	mov    0x24(%rsp),%ecx
+  1509df:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  1509e7:	48 8d 74 24 38                                  	lea    0x38(%rsp),%rsi
+  1509ec:	41 89 d0                                        	mov    %edx,%r8d
+  1509ef:	41 89 c9                                        	mov    %ecx,%r9d
+  1509f2:	6a 00                                           	push   $0x0
+  1509f4:	41 56                                           	push   %r14
+  1509f6:	53                                              	push   %rbx
+  1509f7:	50                                              	push   %rax
+  1509f8:	41 52                                           	push   %r10
+  1509fa:	ff b4 24 68 02 00 00                            	push   0x268(%rsp)
+  150a01:	e8 ca 56 f8 ff                                  	call   d60d0 <emuella_j2k_codestream::write_native_main_header>
+  150a06:	48 83 c4 30                                     	add    $0x30,%rsp
+  150a0a:	48 83 bc 24 50 01 00 00 ff                      	cmpq   $0xffffffffffffffff,0x150(%rsp)
+  150a13:	74 7a                                           	je     150a8f <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x97f>
+  150a15:	f3 0f 6f 84 24 50 01 00 00                      	movdqu 0x150(%rsp),%xmm0
+  150a1e:	f3 0f 6f 8c 24 60 01 00 00                      	movdqu 0x160(%rsp),%xmm1
+  150a27:	f3 0f 6f 94 24 70 01 00 00                      	movdqu 0x170(%rsp),%xmm2
+  150a30:	f3 41 0f 7f 57 20                               	movdqu %xmm2,0x20(%r15)
+  150a36:	f3 41 0f 7f 4f 10                               	movdqu %xmm1,0x10(%r15)
+  150a3c:	f3 41 0f 7f 07                                  	movdqu %xmm0,(%r15)
+  150a41:	48 83 7c 24 38 00                               	cmpq   $0x0,0x38(%rsp)
+  150a47:	74 0b                                           	je     150a54 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x944>
+  150a49:	48 8b 7c 24 40                                  	mov    0x40(%rsp),%rdi
+  150a4e:	ff 15 c4 d0 11 00                               	call   *0x11d0c4(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  150a54:	48 83 7c 24 58 00                               	cmpq   $0x0,0x58(%rsp)
+  150a5a:	74 09                                           	je     150a65 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x955>
+  150a5c:	48 89 df                                        	mov    %rbx,%rdi
+  150a5f:	ff 15 b3 d0 11 00                               	call   *0x11d0b3(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  150a65:	48 83 bc 24 f8 01 00 00 00                      	cmpq   $0x0,0x1f8(%rsp)
+  150a6e:	74 0e                                           	je     150a7e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x96e>
+  150a70:	48 8b bc 24 00 02 00 00                         	mov    0x200(%rsp),%rdi
+  150a78:	ff 15 9a d0 11 00                               	call   *0x11d09a(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  150a7e:	48 85 ed                                        	test   %rbp,%rbp
+  150a81:	0f 84 3d fe ff ff                               	je     1508c4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x7b4>
+  150a87:	4c 89 ef                                        	mov    %r13,%rdi
+  150a8a:	e9 bb fd ff ff                                  	jmp    15084a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x73a>
+  150a8f:	48 8b 44 24 48                                  	mov    0x48(%rsp),%rax
+  150a94:	48 89 84 24 e0 00 00 00                         	mov    %rax,0xe0(%rsp)
+  150a9c:	48 8d 35 44 2c ec ff                            	lea    -0x13d3bc(%rip),%rsi        # 136e7 <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xe67>
+  150aa3:	48 8d 7c 24 38                                  	lea    0x38(%rsp),%rdi
+  150aa8:	ba 0e 00 00 00                                  	mov    $0xe,%edx
+  150aad:	e8 7e bc ff ff                                  	call   14c730 <<alloc::vec::Vec<u8>>::append_elements>
+  150ab2:	48 89 5c 24 18                                  	mov    %rbx,0x18(%rsp)
+  150ab7:	48 89 6c 24 10                                  	mov    %rbp,0x10(%rsp)
+  150abc:	48 c7 84 24 50 01 00 00 00 00 00 00             	movq   $0x0,0x150(%rsp)
+  150ac8:	48 c7 84 24 58 01 00 00 02 00 00 00             	movq   $0x2,0x158(%rsp)
+  150ad4:	66 0f ef c0                                     	pxor   %xmm0,%xmm0
+  150ad8:	f3 0f 7f 84 24 60 01 00 00                      	movdqu %xmm0,0x160(%rsp)
+  150ae1:	48 c7 84 24 70 01 00 00 01 00 00 00             	movq   $0x1,0x170(%rsp)
+  150aed:	f3 0f 7f 84 24 78 01 00 00                      	movdqu %xmm0,0x178(%rsp)
+  150af6:	48 c7 84 24 88 01 00 00 04 00 00 00             	movq   $0x4,0x188(%rsp)
+  150b02:	f3 0f 7f 84 24 90 01 00 00                      	movdqu %xmm0,0x190(%rsp)
+  150b0b:	48 c7 84 24 a0 01 00 00 08 00 00 00             	movq   $0x8,0x1a0(%rsp)
+  150b17:	f3 0f 7f 84 24 a8 01 00 00                      	movdqu %xmm0,0x1a8(%rsp)
+  150b20:	48 c7 84 24 b8 01 00 00 01 00 00 00             	movq   $0x1,0x1b8(%rsp)
+  150b2c:	f3 0f 7f 84 24 c0 01 00 00                      	movdqu %xmm0,0x1c0(%rsp)
+  150b35:	48 c7 84 24 d0 01 00 00 01 00 00 00             	movq   $0x1,0x1d0(%rsp)
+  150b41:	f3 0f 7f 84 24 d8 01 00 00                      	movdqu %xmm0,0x1d8(%rsp)
+  150b4a:	48 c7 84 24 e8 01 00 00 04 00 00 00             	movq   $0x4,0x1e8(%rsp)
+  150b56:	48 c7 84 24 f0 01 00 00 00 00 00 00             	movq   $0x0,0x1f0(%rsp)
+  150b62:	31 f6                                           	xor    %esi,%esi
+  150b64:	48 8b 84 24 48 01 00 00                         	mov    0x148(%rsp),%rax
+  150b6c:	48 83 f8 02                                     	cmp    $0x2,%rax
+  150b70:	48 0f 43 f0                                     	cmovae %rax,%rsi
+  150b74:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  150b79:	e8 b2 38 ff ff                                  	call   144430 <<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>::new>
+  150b7e:	8b 44 24 60                                     	mov    0x60(%rsp),%eax
+  150b82:	0f 10 44 24 68                                  	movups 0x68(%rsp),%xmm0
+  150b87:	0f 29 84 24 10 02 00 00                         	movaps %xmm0,0x210(%rsp)
+  150b8f:	0f 10 44 24 78                                  	movups 0x78(%rsp),%xmm0
+  150b94:	0f 29 84 24 20 02 00 00                         	movaps %xmm0,0x220(%rsp)
+  150b9c:	0f 10 84 24 88 00 00 00                         	movups 0x88(%rsp),%xmm0
+  150ba4:	0f 29 84 24 30 02 00 00                         	movaps %xmm0,0x230(%rsp)
+  150bac:	83 f8 01                                        	cmp    $0x1,%eax
+  150baf:	75 33                                           	jne    150be4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xad4>
+  150bb1:	66 0f 6f 84 24 10 02 00 00                      	movdqa 0x210(%rsp),%xmm0
+  150bba:	66 0f 6f 8c 24 20 02 00 00                      	movdqa 0x220(%rsp),%xmm1
+  150bc3:	66 0f 6f 94 24 30 02 00 00                      	movdqa 0x230(%rsp),%xmm2
+  150bcc:	48 8b 44 24 08                                  	mov    0x8(%rsp),%rax
+  150bd1:	f3 0f 7f 50 20                                  	movdqu %xmm2,0x20(%rax)
+  150bd6:	f3 0f 7f 48 10                                  	movdqu %xmm1,0x10(%rax)
+  150bdb:	f3 0f 7f 00                                     	movdqu %xmm0,(%rax)
+  150bdf:	e9 00 07 00 00                                  	jmp    1512e4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x11d4>
+  150be4:	66 0f 6f 84 24 10 02 00 00                      	movdqa 0x210(%rsp),%xmm0
+  150bed:	66 0f 6f 8c 24 20 02 00 00                      	movdqa 0x220(%rsp),%xmm1
+  150bf6:	66 0f 6f 94 24 30 02 00 00                      	movdqa 0x230(%rsp),%xmm2
+  150bff:	66 0f 7f 94 24 b0 02 00 00                      	movdqa %xmm2,0x2b0(%rsp)
+  150c08:	66 0f 7f 8c 24 a0 02 00 00                      	movdqa %xmm1,0x2a0(%rsp)
+  150c11:	66 0f 7f 84 24 90 02 00 00                      	movdqa %xmm0,0x290(%rsp)
+  150c1a:	4d 39 e6                                        	cmp    %r12,%r14
+  150c1d:	4d 0f 42 e6                                     	cmovb  %r14,%r12
+  150c21:	48 8b 84 24 c0 00 00 00                         	mov    0xc0(%rsp),%rax
+  150c29:	48 85 c0                                        	test   %rax,%rax
+  150c2c:	0f 84 48 05 00 00                               	je     15117a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x106a>
+  150c32:	48 8b 8c 24 98 02 00 00                         	mov    0x298(%rsp),%rcx
+  150c3a:	48 89 8c 24 a8 00 00 00                         	mov    %rcx,0xa8(%rsp)
+  150c42:	48 8b 8c 24 a0 02 00 00                         	mov    0x2a0(%rsp),%rcx
+  150c4a:	48 89 8c 24 e8 00 00 00                         	mov    %rcx,0xe8(%rsp)
+  150c52:	48 c7 44 24 30 00 00 00 00                      	movq   $0x0,0x30(%rsp)
+  150c5b:	48 8b 54 24 30                                  	mov    0x30(%rsp),%rdx
+  150c60:	8d 4a 01                                        	lea    0x1(%rdx),%ecx
+  150c63:	80 fa 02                                        	cmp    $0x2,%dl
+  150c66:	0f b6 d1                                        	movzbl %cl,%edx
+  150c69:	b9 02 00 00 00                                  	mov    $0x2,%ecx
+  150c6e:	0f 44 d1                                        	cmove  %ecx,%edx
+  150c71:	89 94 24 d0 00 00 00                            	mov    %edx,0xd0(%rsp)
+  150c78:	48 85 c0                                        	test   %rax,%rax
+  150c7b:	0f 84 cf 04 00 00                               	je     151150 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1040>
+  150c81:	48 8b 8c 24 b8 00 00 00                         	mov    0xb8(%rsp),%rcx
+  150c89:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+  150c8d:	48 89 4c 24 28                                  	mov    %rcx,0x28(%rsp)
+  150c92:	48 8d 04 c1                                     	lea    (%rcx,%rax,8),%rax
+  150c96:	48 89 84 24 c8 00 00 00                         	mov    %rax,0xc8(%rsp)
+  150c9e:	48 8b 44 24 48                                  	mov    0x48(%rsp),%rax
+  150ca3:	48 89 44 24 50                                  	mov    %rax,0x50(%rsp)
+  150ca8:	bf 90 00 00 00                                  	mov    $0x90,%edi
+  150cad:	ff 15 55 ce 11 00                               	call   *0x11ce55(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+  150cb3:	48 85 c0                                        	test   %rax,%rax
+  150cb6:	0f 84 22 07 00 00                               	je     1513de <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12ce>
+  150cbc:	48 c7 84 24 30 01 00 00 03 00 00 00             	movq   $0x3,0x130(%rsp)
+  150cc8:	48 89 84 24 38 01 00 00                         	mov    %rax,0x138(%rsp)
+  150cd0:	48 c7 84 24 40 01 00 00 00 00 00 00             	movq   $0x0,0x140(%rsp)
+  150cdc:	48 c7 84 24 48 02 00 00 00 00 00 00             	movq   $0x0,0x248(%rsp)
+  150ce8:	48 c7 84 24 50 02 00 00 08 00 00 00             	movq   $0x8,0x250(%rsp)
+  150cf4:	48 c7 84 24 58 02 00 00 00 00 00 00             	movq   $0x0,0x258(%rsp)
+  150d00:	48 83 bc 24 48 01 00 00 01                      	cmpq   $0x1,0x148(%rsp)
+  150d09:	0f 86 4d 01 00 00                               	jbe    150e5c <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xd4c>
+  150d0f:	4d 89 ef                                        	mov    %r13,%r15
+  150d12:	31 db                                           	xor    %ebx,%ebx
+  150d14:	48 8d ac 24 f0 00 00 00                         	lea    0xf0(%rsp),%rbp
+  150d1c:	eb 07                                           	jmp    150d25 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xc15>
+  150d1e:	49 83 c7 28                                     	add    $0x28,%r15
+  150d22:	48 ff c3                                        	inc    %rbx
+  150d25:	4c 39 e3                                        	cmp    %r12,%rbx
+  150d28:	0f 83 18 02 00 00                               	jae    150f46 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xe36>
+  150d2e:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  150d33:	41 38 47 21                                     	cmp    %al,0x21(%r15)
+  150d37:	75 e5                                           	jne    150d1e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xc0e>
+  150d39:	48 8b 44 24 28                                  	mov    0x28(%rsp),%rax
+  150d3e:	4c 8b 40 08                                     	mov    0x8(%rax),%r8
+  150d42:	4c 8b 48 10                                     	mov    0x10(%rax),%r9
+  150d46:	49 8b 47 20                                     	mov    0x20(%r15),%rax
+  150d4a:	48 89 84 24 10 01 00 00                         	mov    %rax,0x110(%rsp)
+  150d52:	f3 41 0f 6f 07                                  	movdqu (%r15),%xmm0
+  150d57:	f3 41 0f 6f 4f 10                               	movdqu 0x10(%r15),%xmm1
+  150d5d:	66 0f 7f 8c 24 00 01 00 00                      	movdqa %xmm1,0x100(%rsp)
+  150d66:	66 0f 7f 84 24 f0 00 00 00                      	movdqa %xmm0,0xf0(%rsp)
+  150d6f:	8b 4c 24 04                                     	mov    0x4(%rsp),%ecx
+  150d73:	48 8b 44 24 18                                  	mov    0x18(%rsp),%rax
+  150d78:	0f b6 04 18                                     	movzbl (%rax,%rbx,1),%eax
+  150d7c:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  150d81:	48 8b b4 24 a8 00 00 00                         	mov    0xa8(%rsp),%rsi
+  150d89:	48 8b 94 24 e8 00 00 00                         	mov    0xe8(%rsp),%rdx
+  150d91:	ff b4 24 58 03 00 00                            	push   0x358(%rsp)
+  150d98:	4c 8d 54 24 40                                  	lea    0x40(%rsp),%r10
+  150d9d:	41 52                                           	push   %r10
+  150d9f:	50                                              	push   %rax
+  150da0:	55                                              	push   %rbp
+  150da1:	e8 aa 54 f3 ff                                  	call   86250 <<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>::encode_subband::<false, false>>
+  150da6:	48 83 c4 20                                     	add    $0x20,%rsp
+  150daa:	48 8b 44 24 60                                  	mov    0x60(%rsp),%rax
+  150daf:	48 8b ac 24 90 00 00 00                         	mov    0x90(%rsp),%rbp
+  150db7:	48 8d 4c 24 68                                  	lea    0x68(%rsp),%rcx
+  150dbc:	0f 10 01                                        	movups (%rcx),%xmm0
+  150dbf:	0f 10 49 10                                     	movups 0x10(%rcx),%xmm1
+  150dc3:	0f 29 84 24 60 02 00 00                         	movaps %xmm0,0x260(%rsp)
+  150dcb:	0f 29 8c 24 70 02 00 00                         	movaps %xmm1,0x270(%rsp)
+  150dd3:	48 8b 49 20                                     	mov    0x20(%rcx),%rcx
+  150dd7:	48 89 8c 24 80 02 00 00                         	mov    %rcx,0x280(%rsp)
+  150ddf:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+  150de3:	0f 84 a8 04 00 00                               	je     151291 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1181>
+  150de9:	4c 8b b4 24 98 00 00 00                         	mov    0x98(%rsp),%r14
+  150df1:	48 89 84 24 10 02 00 00                         	mov    %rax,0x210(%rsp)
+  150df9:	48 8b 84 24 80 02 00 00                         	mov    0x280(%rsp),%rax
+  150e01:	48 8d 8c 24 18 02 00 00                         	lea    0x218(%rsp),%rcx
+  150e09:	48 89 41 20                                     	mov    %rax,0x20(%rcx)
+  150e0d:	66 0f 6f 84 24 60 02 00 00                      	movdqa 0x260(%rsp),%xmm0
+  150e16:	66 0f 6f 8c 24 70 02 00 00                      	movdqa 0x270(%rsp),%xmm1
+  150e1f:	f3 0f 7f 49 10                                  	movdqu %xmm1,0x10(%rcx)
+  150e24:	f3 0f 7f 01                                     	movdqu %xmm0,(%rcx)
+  150e28:	48 8d bc 24 30 01 00 00                         	lea    0x130(%rsp),%rdi
+  150e30:	48 8d b4 24 10 02 00 00                         	lea    0x210(%rsp),%rsi
+  150e38:	e8 e3 94 ff ff                                  	call   14a320 <<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>::push_mut>
+  150e3d:	48 85 ed                                        	test   %rbp,%rbp
+  150e40:	48 8d ac 24 f0 00 00 00                         	lea    0xf0(%rsp),%rbp
+  150e48:	0f 84 d0 fe ff ff                               	je     150d1e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xc0e>
+  150e4e:	4c 89 f7                                        	mov    %r14,%rdi
+  150e51:	ff 15 c1 cc 11 00                               	call   *0x11ccc1(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  150e57:	e9 c2 fe ff ff                                  	jmp    150d1e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xc0e>
+  150e5c:	4c 89 eb                                        	mov    %r13,%rbx
+  150e5f:	45 31 f6                                        	xor    %r14d,%r14d
+  150e62:	4c 8d bc 24 f0 00 00 00                         	lea    0xf0(%rsp),%r15
+  150e6a:	eb 07                                           	jmp    150e73 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xd63>
+  150e6c:	48 83 c3 28                                     	add    $0x28,%rbx
+  150e70:	49 ff c6                                        	inc    %r14
+  150e73:	4d 39 e6                                        	cmp    %r12,%r14
+  150e76:	0f 83 ca 00 00 00                               	jae    150f46 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xe36>
+  150e7c:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  150e81:	38 43 21                                        	cmp    %al,0x21(%rbx)
+  150e84:	75 e6                                           	jne    150e6c <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xd5c>
+  150e86:	48 8b 44 24 28                                  	mov    0x28(%rsp),%rax
+  150e8b:	48 8b 50 08                                     	mov    0x8(%rax),%rdx
+  150e8f:	48 8b 48 10                                     	mov    0x10(%rax),%rcx
+  150e93:	48 8b 43 20                                     	mov    0x20(%rbx),%rax
+  150e97:	48 89 84 24 10 01 00 00                         	mov    %rax,0x110(%rsp)
+  150e9f:	f3 0f 6f 03                                     	movdqu (%rbx),%xmm0
+  150ea3:	f3 0f 6f 4b 10                                  	movdqu 0x10(%rbx),%xmm1
+  150ea8:	66 0f 7f 8c 24 00 01 00 00                      	movdqa %xmm1,0x100(%rsp)
+  150eb1:	66 0f 7f 84 24 f0 00 00 00                      	movdqa %xmm0,0xf0(%rsp)
+  150eba:	8b 74 24 04                                     	mov    0x4(%rsp),%esi
+  150ebe:	48 8b 44 24 18                                  	mov    0x18(%rsp),%rax
+  150ec3:	46 0f b6 0c 30                                  	movzbl (%rax,%r14,1),%r9d
+  150ec8:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  150ecd:	4d 89 f8                                        	mov    %r15,%r8
+  150ed0:	ff b4 24 58 03 00 00                            	push   0x358(%rsp)
+  150ed7:	6a 01                                           	push   $0x1
+  150ed9:	48 8d 84 24 60 01 00 00                         	lea    0x160(%rsp),%rax
+  150ee1:	50                                              	push   %rax
+  150ee2:	48 8d 44 24 50                                  	lea    0x50(%rsp),%rax
+  150ee7:	50                                              	push   %rax
+  150ee8:	e8 73 42 f3 ff                                  	call   85160 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>>
+  150eed:	48 83 c4 20                                     	add    $0x20,%rsp
+  150ef1:	8b 44 24 60                                     	mov    0x60(%rsp),%eax
+  150ef5:	48 8d 4c 24 68                                  	lea    0x68(%rsp),%rcx
+  150efa:	f3 0f 6f 01                                     	movdqu (%rcx),%xmm0
+  150efe:	f3 0f 6f 49 10                                  	movdqu 0x10(%rcx),%xmm1
+  150f03:	f3 0f 6f 51 20                                  	movdqu 0x20(%rcx),%xmm2
+  150f08:	66 0f 7f 84 24 e0 02 00 00                      	movdqa %xmm0,0x2e0(%rsp)
+  150f11:	66 0f 7f 8c 24 f0 02 00 00                      	movdqa %xmm1,0x2f0(%rsp)
+  150f1a:	66 0f 7f 94 24 00 03 00 00                      	movdqa %xmm2,0x300(%rsp)
+  150f23:	83 f8 01                                        	cmp    $0x1,%eax
+  150f26:	0f 84 39 03 00 00                               	je     151265 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1155>
+  150f2c:	48 8d bc 24 30 01 00 00                         	lea    0x130(%rsp),%rdi
+  150f34:	48 8d b4 24 e0 02 00 00                         	lea    0x2e0(%rsp),%rsi
+  150f3c:	e8 df 93 ff ff                                  	call   14a320 <<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>::push_mut>
+  150f41:	e9 26 ff ff ff                                  	jmp    150e6c <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xd5c>
+  150f46:	48 c7 84 24 f0 00 00 00 00 00 00 00             	movq   $0x0,0xf0(%rsp)
+  150f52:	48 c7 84 24 f8 00 00 00 01 00 00 00             	movq   $0x1,0xf8(%rsp)
+  150f5e:	48 8d 84 24 00 01 00 00                         	lea    0x100(%rsp),%rax
+  150f66:	66 0f ef c0                                     	pxor   %xmm0,%xmm0
+  150f6a:	f3 0f 7f 00                                     	movdqu %xmm0,(%rax)
+  150f6e:	4c 8b b4 24 38 01 00 00                         	mov    0x138(%rsp),%r14
+  150f76:	48 8b 9c 24 40 01 00 00                         	mov    0x140(%rsp),%rbx
+  150f7e:	48 89 d8                                        	mov    %rbx,%rax
+  150f81:	48 c1 e0 04                                     	shl    $0x4,%rax
+  150f85:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+  150f89:	48 89 84 24 d8 00 00 00                         	mov    %rax,0xd8(%rsp)
+  150f91:	48 85 db                                        	test   %rbx,%rbx
+  150f94:	74 38                                           	je     150fce <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xebe>
+  150f96:	48 8b 84 24 d8 00 00 00                         	mov    0xd8(%rsp),%rax
+  150f9e:	4c 01 f0                                        	add    %r14,%rax
+  150fa1:	4c 89 f1                                        	mov    %r14,%rcx
+  150fa4:	48 8b 71 08                                     	mov    0x8(%rcx),%rsi
+  150fa8:	48 8b 51 10                                     	mov    0x10(%rcx),%rdx
+  150fac:	48 83 c1 30                                     	add    $0x30,%rcx
+  150fb0:	48 c1 e2 05                                     	shl    $0x5,%rdx
+  150fb4:	48 85 d2                                        	test   %rdx,%rdx
+  150fb7:	74 10                                           	je     150fc9 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xeb9>
+  150fb9:	48 83 c2 e0                                     	add    $0xffffffffffffffe0,%rdx
+  150fbd:	80 7e 1b 00                                     	cmpb   $0x0,0x1b(%rsi)
+  150fc1:	48 8d 76 20                                     	lea    0x20(%rsi),%rsi
+  150fc5:	74 ed                                           	je     150fb4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xea4>
+  150fc7:	eb 09                                           	jmp    150fd2 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xec2>
+  150fc9:	48 39 c1                                        	cmp    %rax,%rcx
+  150fcc:	75 d6                                           	jne    150fa4 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xe94>
+  150fce:	31 ed                                           	xor    %ebp,%ebp
+  150fd0:	eb 03                                           	jmp    150fd5 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xec5>
+  150fd2:	40 b5 01                                        	mov    $0x1,%bpl
+  150fd5:	40 0f b6 d5                                     	movzbl %bpl,%edx
+  150fd9:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  150fde:	48 8d b4 24 f0 00 00 00                         	lea    0xf0(%rsp),%rsi
+  150fe6:	e8 e5 a8 ff ff                                  	call   14b8d0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>
+  150feb:	48 83 7c 24 60 ff                               	cmpq   $0xffffffffffffffff,0x60(%rsp)
+  150ff1:	0f 85 b3 01 00 00                               	jne    1511aa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x109a>
+  150ff7:	48 85 db                                        	test   %rbx,%rbx
+  150ffa:	0f 94 c0                                        	sete   %al
+  150ffd:	40 80 f5 01                                     	xor    $0x1,%bpl
+  151001:	40 08 c5                                        	or     %al,%bpl
+  151004:	4c 8d bc 24 f0 00 00 00                         	lea    0xf0(%rsp),%r15
+  15100c:	48 8b ac 24 d8 00 00 00                         	mov    0xd8(%rsp),%rbp
+  151014:	75 39                                           	jne    15104f <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xf3f>
+  151016:	31 db                                           	xor    %ebx,%ebx
+  151018:	4d 8b 44 1e 08                                  	mov    0x8(%r14,%rbx,1),%r8
+  15101d:	4d 8b 4c 1e 10                                  	mov    0x10(%r14,%rbx,1),%r9
+  151022:	41 0f b7 4c 1e 2a                               	movzwl 0x2a(%r14,%rbx,1),%ecx
+  151028:	41 8b 54 1e 28                                  	mov    0x28(%r14,%rbx,1),%edx
+  15102d:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  151032:	4c 89 fe                                        	mov    %r15,%rsi
+  151035:	e8 36 2e f9 ff                                  	call   e3e70 <emuella_j2k_codestream::write_component_packet_header>
+  15103a:	48 83 7c 24 60 ff                               	cmpq   $0xffffffffffffffff,0x60(%rsp)
+  151040:	0f 85 64 01 00 00                               	jne    1511aa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x109a>
+  151046:	48 83 c3 30                                     	add    $0x30,%rbx
+  15104a:	48 39 dd                                        	cmp    %rbx,%rbp
+  15104d:	75 c9                                           	jne    151018 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xf08>
+  15104f:	48 8b 84 24 08 01 00 00                         	mov    0x108(%rsp),%rax
+  151057:	a8 07                                           	test   $0x7,%al
+  151059:	74 10                                           	je     15106b <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xf5b>
+  15105b:	48 83 e0 f8                                     	and    $0xfffffffffffffff8,%rax
+  15105f:	48 83 c0 08                                     	add    $0x8,%rax
+  151063:	48 89 84 24 08 01 00 00                         	mov    %rax,0x108(%rsp)
+  15106b:	48 8b 9c 24 f8 00 00 00                         	mov    0xf8(%rsp),%rbx
+  151073:	4c 8b bc 24 00 01 00 00                         	mov    0x100(%rsp),%r15
+  15107b:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  151080:	48 8d 74 24 38                                  	lea    0x38(%rsp),%rsi
+  151085:	4c 89 fa                                        	mov    %r15,%rdx
+  151088:	48 8b 8c 24 58 03 00 00                         	mov    0x358(%rsp),%rcx
+  151090:	e8 3b ef ff ff                                  	call   14ffd0 <emuella_j2k_codestream::scalable_lossless::reserve_output>
+  151095:	48 83 7c 24 60 ff                               	cmpq   $0xffffffffffffffff,0x60(%rsp)
+  15109b:	0f 85 09 01 00 00                               	jne    1511aa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x109a>
+  1510a1:	48 8b 6c 24 48                                  	mov    0x48(%rsp),%rbp
+  1510a6:	49 8d 34 2f                                     	lea    (%r15,%rbp,1),%rsi
+  1510aa:	48 8d 7c 24 38                                  	lea    0x38(%rsp),%rdi
+  1510af:	e8 cc 62 ff ff                                  	call   147380 <<alloc::vec::Vec<u8>>::resize>
+  1510b4:	48 8b 7c 24 40                                  	mov    0x40(%rsp),%rdi
+  1510b9:	48 8b 74 24 48                                  	mov    0x48(%rsp),%rsi
+  1510be:	48 8b 54 24 50                                  	mov    0x50(%rsp),%rdx
+  1510c3:	4d 8d 34 17                                     	lea    (%r15,%rdx,1),%r14
+  1510c7:	48 89 e9                                        	mov    %rbp,%rcx
+  1510ca:	4d 89 f0                                        	mov    %r14,%r8
+  1510cd:	e8 8e 50 f3 ff                                  	call   86160 <<[u8]>::copy_within::<core::ops::range::Range<usize>>>
+  1510d2:	48 8b 54 24 48                                  	mov    0x48(%rsp),%rdx
+  1510d7:	4c 3b 74 24 50                                  	cmp    0x50(%rsp),%r14
+  1510dc:	0f 82 d3 02 00 00                               	jb     1513b5 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12a5>
+  1510e2:	49 39 d6                                        	cmp    %rdx,%r14
+  1510e5:	0f 87 ca 02 00 00                               	ja     1513b5 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12a5>
+  1510eb:	48 8b 7c 24 50                                  	mov    0x50(%rsp),%rdi
+  1510f0:	48 03 7c 24 40                                  	add    0x40(%rsp),%rdi
+  1510f5:	48 89 de                                        	mov    %rbx,%rsi
+  1510f8:	4c 89 fa                                        	mov    %r15,%rdx
+  1510fb:	ff 15 27 ca 11 00                               	call   *0x11ca27(%rip)        # 26db28 <memcpy@GLIBC_2.14>
+  151101:	48 83 bc 24 f0 00 00 00 00                      	cmpq   $0x0,0xf0(%rsp)
+  15110a:	74 0e                                           	je     15111a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x100a>
+  15110c:	48 8b bc 24 f8 00 00 00                         	mov    0xf8(%rsp),%rdi
+  151114:	ff 15 fe c9 11 00                               	call   *0x11c9fe(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  15111a:	48 8b 5c 24 28                                  	mov    0x28(%rsp),%rbx
+  15111f:	48 83 c3 18                                     	add    $0x18,%rbx
+  151123:	48 8d bc 24 48 02 00 00                         	lea    0x248(%rsp),%rdi
+  15112b:	e8 90 f0 f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  151130:	48 8d bc 24 30 01 00 00                         	lea    0x130(%rsp),%rdi
+  151138:	e8 53 f7 f3 ff                                  	call   90890 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>
+  15113d:	48 89 5c 24 28                                  	mov    %rbx,0x28(%rsp)
+  151142:	48 3b 9c 24 c8 00 00 00                         	cmp    0xc8(%rsp),%rbx
+  15114a:	0f 85 4e fb ff ff                               	jne    150c9e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xb8e>
+  151150:	80 7c 24 30 02                                  	cmpb   $0x2,0x30(%rsp)
+  151155:	74 23                                           	je     15117a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x106a>
+  151157:	80 bc 24 d0 00 00 00 02                         	cmpb   $0x2,0xd0(%rsp)
+  15115f:	77 19                                           	ja     15117a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x106a>
+  151161:	48 8b 84 24 c0 00 00 00                         	mov    0xc0(%rsp),%rax
+  151169:	8b 8c 24 d0 00 00 00                            	mov    0xd0(%rsp),%ecx
+  151170:	48 89 4c 24 30                                  	mov    %rcx,0x30(%rsp)
+  151175:	e9 e1 fa ff ff                                  	jmp    150c5b <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0xb4b>
+  15117a:	48 8b 54 24 48                                  	mov    0x48(%rsp),%rdx
+  15117f:	48 89 d0                                        	mov    %rdx,%rax
+  151182:	48 2b 84 24 e0 00 00 00                         	sub    0xe0(%rsp),%rax
+  15118a:	48 89 c1                                        	mov    %rax,%rcx
+  15118d:	48 c1 e9 20                                     	shr    $0x20,%rcx
+  151191:	74 5d                                           	je     1511f0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x10e0>
+  151193:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+  15119d:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+  1511a2:	48 89 01                                        	mov    %rax,(%rcx)
+  1511a5:	e9 2d 01 00 00                                  	jmp    1512d7 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x11c7>
+  1511aa:	0f 10 44 24 60                                  	movups 0x60(%rsp),%xmm0
+  1511af:	0f 10 4c 24 70                                  	movups 0x70(%rsp),%xmm1
+  1511b4:	f3 0f 6f 94 24 80 00 00 00                      	movdqu 0x80(%rsp),%xmm2
+  1511bd:	48 8b 44 24 08                                  	mov    0x8(%rsp),%rax
+  1511c2:	f3 0f 7f 50 20                                  	movdqu %xmm2,0x20(%rax)
+  1511c7:	0f 11 48 10                                     	movups %xmm1,0x10(%rax)
+  1511cb:	0f 11 00                                        	movups %xmm0,(%rax)
+  1511ce:	48 83 bc 24 f0 00 00 00 00                      	cmpq   $0x0,0xf0(%rsp)
+  1511d7:	0f 84 e0 00 00 00                               	je     1512bd <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x11ad>
+  1511dd:	48 8b bc 24 f8 00 00 00                         	mov    0xf8(%rsp),%rdi
+  1511e5:	ff 15 2d c9 11 00                               	call   *0x11c92d(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  1511eb:	e9 cd 00 00 00                                  	jmp    1512bd <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x11ad>
+  1511f0:	48 8b 8c 24 e0 00 00 00                         	mov    0xe0(%rsp),%rcx
+  1511f8:	48 8d 79 06                                     	lea    0x6(%rcx),%rdi
+  1511fc:	48 83 c1 0a                                     	add    $0xa,%rcx
+  151200:	48 39 d1                                        	cmp    %rdx,%rcx
+  151203:	0f 87 c3 01 00 00                               	ja     1513cc <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12bc>
+  151209:	48 8b 4c 24 40                                  	mov    0x40(%rsp),%rcx
+  15120e:	0f c8                                           	bswap  %eax
+  151210:	89 04 39                                        	mov    %eax,(%rcx,%rdi,1)
+  151213:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+  151218:	48 8d 74 24 38                                  	lea    0x38(%rsp),%rsi
+  15121d:	ba 02 00 00 00                                  	mov    $0x2,%edx
+  151222:	48 8b 8c 24 58 03 00 00                         	mov    0x358(%rsp),%rcx
+  15122a:	e8 a1 ed ff ff                                  	call   14ffd0 <emuella_j2k_codestream::scalable_lossless::reserve_output>
+  15122f:	48 83 7c 24 60 ff                               	cmpq   $0xffffffffffffffff,0x60(%rsp)
+  151235:	0f 84 d6 00 00 00                               	je     151311 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1201>
+  15123b:	f3 0f 6f 44 24 60                               	movdqu 0x60(%rsp),%xmm0
+  151241:	f3 0f 6f 4c 24 70                               	movdqu 0x70(%rsp),%xmm1
+  151247:	f3 0f 6f 94 24 80 00 00 00                      	movdqu 0x80(%rsp),%xmm2
+  151250:	48 8b 44 24 08                                  	mov    0x8(%rsp),%rax
+  151255:	f3 0f 7f 50 20                                  	movdqu %xmm2,0x20(%rax)
+  15125a:	f3 0f 7f 48 10                                  	movdqu %xmm1,0x10(%rax)
+  15125f:	f3 0f 7f 00                                     	movdqu %xmm0,(%rax)
+  151263:	eb 72                                           	jmp    1512d7 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x11c7>
+  151265:	0f 28 84 24 e0 02 00 00                         	movaps 0x2e0(%rsp),%xmm0
+  15126d:	0f 28 8c 24 f0 02 00 00                         	movaps 0x2f0(%rsp),%xmm1
+  151275:	66 0f 6f 94 24 00 03 00 00                      	movdqa 0x300(%rsp),%xmm2
+  15127e:	48 8b 44 24 08                                  	mov    0x8(%rsp),%rax
+  151283:	f3 0f 7f 50 20                                  	movdqu %xmm2,0x20(%rax)
+  151288:	0f 11 48 10                                     	movups %xmm1,0x10(%rax)
+  15128c:	0f 11 00                                        	movups %xmm0,(%rax)
+  15128f:	eb 2c                                           	jmp    1512bd <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x11ad>
+  151291:	48 8b 84 24 80 02 00 00                         	mov    0x280(%rsp),%rax
+  151299:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+  15129e:	48 89 41 20                                     	mov    %rax,0x20(%rcx)
+  1512a2:	0f 28 84 24 60 02 00 00                         	movaps 0x260(%rsp),%xmm0
+  1512aa:	0f 28 8c 24 70 02 00 00                         	movaps 0x270(%rsp),%xmm1
+  1512b2:	0f 11 49 10                                     	movups %xmm1,0x10(%rcx)
+  1512b6:	0f 11 01                                        	movups %xmm0,(%rcx)
+  1512b9:	48 89 69 28                                     	mov    %rbp,0x28(%rcx)
+  1512bd:	48 8d bc 24 48 02 00 00                         	lea    0x248(%rsp),%rdi
+  1512c5:	e8 f6 ee f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  1512ca:	48 8d bc 24 30 01 00 00                         	lea    0x130(%rsp),%rdi
+  1512d2:	e8 b9 f5 f3 ff                                  	call   90890 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>
+  1512d7:	48 8d bc 24 90 02 00 00                         	lea    0x290(%rsp),%rdi
+  1512df:	e8 cc 83 f4 ff                                  	call   996b0 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>
+  1512e4:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  1512ec:	e8 6f 69 f4 ff                                  	call   97c60 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>
+  1512f1:	4c 8b 7c 24 08                                  	mov    0x8(%rsp),%r15
+  1512f6:	48 8b 6c 24 10                                  	mov    0x10(%rsp),%rbp
+  1512fb:	48 8b 5c 24 18                                  	mov    0x18(%rsp),%rbx
+  151300:	48 83 7c 24 38 00                               	cmpq   $0x0,0x38(%rsp)
+  151306:	0f 85 3d f7 ff ff                               	jne    150a49 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x939>
+  15130c:	e9 43 f7 ff ff                                  	jmp    150a54 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x944>
+  151311:	48 8d 35 dd 23 ec ff                            	lea    -0x13dc23(%rip),%rsi        # 136f5 <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xe75>
+  151318:	48 8d 7c 24 38                                  	lea    0x38(%rsp),%rdi
+  15131d:	ba 02 00 00 00                                  	mov    $0x2,%edx
+  151322:	e8 09 b4 ff ff                                  	call   14c730 <<alloc::vec::Vec<u8>>::append_elements>
+  151327:	48 8b 44 24 48                                  	mov    0x48(%rsp),%rax
+  15132c:	48 8b 4c 24 08                                  	mov    0x8(%rsp),%rcx
+  151331:	48 89 41 18                                     	mov    %rax,0x18(%rcx)
+  151335:	f3 0f 6f 44 24 38                               	movdqu 0x38(%rsp),%xmm0
+  15133b:	f3 0f 7f 41 08                                  	movdqu %xmm0,0x8(%rcx)
+  151340:	48 c7 01 ff ff ff ff                            	movq   $0xffffffffffffffff,(%rcx)
+  151347:	48 8d bc 24 90 02 00 00                         	lea    0x290(%rsp),%rdi
+  15134f:	e8 5c 83 f4 ff                                  	call   996b0 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>
+  151354:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  15135c:	e8 ff 68 f4 ff                                  	call   97c60 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>
+  151361:	48 83 7c 24 58 00                               	cmpq   $0x0,0x58(%rsp)
+  151367:	74 0b                                           	je     151374 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1264>
+  151369:	48 8b 7c 24 18                                  	mov    0x18(%rsp),%rdi
+  15136e:	ff 15 a4 c7 11 00                               	call   *0x11c7a4(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  151374:	48 83 bc 24 f8 01 00 00 00                      	cmpq   $0x0,0x1f8(%rsp)
+  15137d:	74 0e                                           	je     15138d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x127d>
+  15137f:	48 8b bc 24 00 02 00 00                         	mov    0x200(%rsp),%rdi
+  151387:	ff 15 8b c7 11 00                               	call   *0x11c78b(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  15138d:	48 83 7c 24 10 00                               	cmpq   $0x0,0x10(%rsp)
+  151393:	74 09                                           	je     15139e <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x128e>
+  151395:	4c 89 ef                                        	mov    %r13,%rdi
+  151398:	ff 15 7a c7 11 00                               	call   *0x11c77a(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  15139e:	48 8d bc 24 b0 00 00 00                         	lea    0xb0(%rsp),%rdi
+  1513a6:	e8 15 ee f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  1513ab:	4c 8b 7c 24 08                                  	mov    0x8(%rsp),%r15
+  1513b0:	e9 45 ef ff ff                                  	jmp    1502fa <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1ea>
+  1513b5:	48 8d 0d c4 5c 11 00                            	lea    0x115cc4(%rip),%rcx        # 267080 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x358>
+  1513bc:	48 8b 7c 24 50                                  	mov    0x50(%rsp),%rdi
+  1513c1:	4c 89 f6                                        	mov    %r14,%rsi
+  1513c4:	ff 15 a6 c9 11 00                               	call   *0x11c9a6(%rip)        # 26dd70 <_DYNAMIC+0x470>
+  1513ca:	eb 22                                           	jmp    1513ee <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12de>
+  1513cc:	48 89 ce                                        	mov    %rcx,%rsi
+  1513cf:	48 8d 0d 7a 5c 11 00                            	lea    0x115c7a(%rip),%rcx        # 267050 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x328>
+  1513d6:	ff 15 94 c9 11 00                               	call   *0x11c994(%rip)        # 26dd70 <_DYNAMIC+0x470>
+  1513dc:	eb 10                                           	jmp    1513ee <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x12de>
+  1513de:	bf 08 00 00 00                                  	mov    $0x8,%edi
+  1513e3:	be 90 00 00 00                                  	mov    $0x90,%esi
+  1513e8:	ff 15 62 c7 11 00                               	call   *0x11c762(%rip)        # 26db50 <_DYNAMIC+0x250>
+  1513ee:	0f 0b                                           	ud2
+  1513f0:	e9 85 00 00 00                                  	jmp    15147a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x136a>
+  1513f5:	49 89 c7                                        	mov    %rax,%r15
+  1513f8:	48 85 ed                                        	test   %rbp,%rbp
+  1513fb:	0f 84 95 00 00 00                               	je     151496 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1386>
+  151401:	4c 89 f7                                        	mov    %r14,%rdi
+  151404:	e9 87 00 00 00                                  	jmp    151490 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1380>
+  151409:	eb 14                                           	jmp    15141f <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x130f>
+  15140b:	eb 6d                                           	jmp    15147a <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x136a>
+  15140d:	48 89 5c 24 18                                  	mov    %rbx,0x18(%rsp)
+  151412:	48 89 6c 24 10                                  	mov    %rbp,0x10(%rsp)
+  151417:	49 89 c7                                        	mov    %rax,%r15
+  15141a:	e9 ab 00 00 00                                  	jmp    1514ca <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13ba>
+  15141f:	49 89 c7                                        	mov    %rax,%r15
+  151422:	eb 72                                           	jmp    151496 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1386>
+  151424:	48 89 6c 24 10                                  	mov    %rbp,0x10(%rsp)
+  151429:	49 89 c7                                        	mov    %rax,%r15
+  15142c:	e9 bf 00 00 00                                  	jmp    1514f0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13e0>
+  151431:	48 89 6c 24 10                                  	mov    %rbp,0x10(%rsp)
+  151436:	49 89 c7                                        	mov    %rax,%r15
+  151439:	e9 cb 00 00 00                                  	jmp    151509 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13f9>
+  15143e:	49 89 c7                                        	mov    %rax,%r15
+  151441:	48 8d bc 24 b0 00 00 00                         	lea    0xb0(%rsp),%rdi
+  151449:	e8 72 ed f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  15144e:	4c 89 ff                                        	mov    %r15,%rdi
+  151451:	e8 fa 3d 11 00                                  	call   265250 <_Unwind_Resume@plt>
+  151456:	49 89 c7                                        	mov    %rax,%r15
+  151459:	eb 55                                           	jmp    1514b0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13a0>
+  15145b:	49 89 c7                                        	mov    %rax,%r15
+  15145e:	48 83 bc 24 18 01 00 00 00                      	cmpq   $0x0,0x118(%rsp)
+  151467:	0f 84 d6 f2 ff ff                               	je     150743 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x633>
+  15146d:	48 8b bc 24 20 01 00 00                         	mov    0x120(%rsp),%rdi
+  151475:	e9 c3 f2 ff ff                                  	jmp    15073d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x62d>
+  15147a:	49 89 c7                                        	mov    %rax,%r15
+  15147d:	48 83 bc 24 f0 00 00 00 00                      	cmpq   $0x0,0xf0(%rsp)
+  151486:	74 0e                                           	je     151496 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x1386>
+  151488:	48 8b bc 24 f8 00 00 00                         	mov    0xf8(%rsp),%rdi
+  151490:	ff 15 82 c6 11 00                               	call   *0x11c682(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  151496:	48 8d bc 24 48 02 00 00                         	lea    0x248(%rsp),%rdi
+  15149e:	e8 1d ed f3 ff                                  	call   901c0 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>
+  1514a3:	48 8d bc 24 30 01 00 00                         	lea    0x130(%rsp),%rdi
+  1514ab:	e8 e0 f3 f3 ff                                  	call   90890 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>
+  1514b0:	48 8d bc 24 90 02 00 00                         	lea    0x290(%rsp),%rdi
+  1514b8:	e8 f3 81 f4 ff                                  	call   996b0 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>
+  1514bd:	48 8d bc 24 50 01 00 00                         	lea    0x150(%rsp),%rdi
+  1514c5:	e8 96 67 f4 ff                                  	call   97c60 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>
+  1514ca:	48 83 7c 24 38 00                               	cmpq   $0x0,0x38(%rsp)
+  1514d0:	74 0b                                           	je     1514dd <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13cd>
+  1514d2:	48 8b 7c 24 40                                  	mov    0x40(%rsp),%rdi
+  1514d7:	ff 15 3b c6 11 00                               	call   *0x11c63b(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  1514dd:	48 83 7c 24 58 00                               	cmpq   $0x0,0x58(%rsp)
+  1514e3:	74 0b                                           	je     1514f0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13e0>
+  1514e5:	48 8b 7c 24 18                                  	mov    0x18(%rsp),%rdi
+  1514ea:	ff 15 28 c6 11 00                               	call   *0x11c628(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  1514f0:	48 83 bc 24 f8 01 00 00 00                      	cmpq   $0x0,0x1f8(%rsp)
+  1514f9:	74 0e                                           	je     151509 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x13f9>
+  1514fb:	48 8b bc 24 00 02 00 00                         	mov    0x200(%rsp),%rdi
+  151503:	ff 15 0f c6 11 00                               	call   *0x11c60f(%rip)        # 26db18 <free@GLIBC_2.2.5>
+  151509:	48 83 7c 24 10 00                               	cmpq   $0x0,0x10(%rsp)
+  15150f:	0f 84 2e f2 ff ff                               	je     150743 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x633>
+  151515:	4c 89 ef                                        	mov    %r13,%rdi
+  151518:	e9 20 f2 ff ff                                  	jmp    15073d <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2+0x62d>

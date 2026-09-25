@@ -1,0 +1,1031 @@
+Disassembly of section .text:
+
+00000000000e3e70 <emuella_j2k_codestream::write_component_packet_header>:
+   e3e70:	55                                              	push   %rbp
+   e3e71:	41 57                                           	push   %r15
+   e3e73:	41 56                                           	push   %r14
+   e3e75:	41 55                                           	push   %r13
+   e3e77:	41 54                                           	push   %r12
+   e3e79:	53                                              	push   %rbx
+   e3e7a:	48 81 ec b8 01 00 00                            	sub    $0x1b8,%rsp
+   e3e81:	4c 89 8c 24 b8 00 00 00                         	mov    %r9,0xb8(%rsp)
+   e3e89:	89 cd                                           	mov    %ecx,%ebp
+   e3e8b:	41 89 d4                                        	mov    %edx,%r12d
+   e3e8e:	48 89 fb                                        	mov    %rdi,%rbx
+   e3e91:	41 0f b7 c4                                     	movzwl %r12w,%eax
+   e3e95:	44 0f b7 ed                                     	movzwl %bp,%r13d
+   e3e99:	4c 0f af e8                                     	imul   %rax,%r13
+   e3e9d:	4d 85 ed                                        	test   %r13,%r13
+   e3ea0:	0f 84 09 06 00 00                               	je     e44af <emuella_j2k_codestream::write_component_packet_header+0x63f>
+   e3ea6:	4d 89 c6                                        	mov    %r8,%r14
+   e3ea9:	49 89 f7                                        	mov    %rsi,%r15
+   e3eac:	4a 8d 04 ad 00 00 00 00                         	lea    0x0(,%r13,4),%rax
+   e3eb4:	48 8d 3c 40                                     	lea    (%rax,%rax,2),%rdi
+   e3eb8:	48 89 7c 24 20                                  	mov    %rdi,0x20(%rsp)
+   e3ebd:	ff 15 45 9c 18 00                               	call   *0x189c45(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+   e3ec3:	48 85 c0                                        	test   %rax,%rax
+   e3ec6:	0f 84 c1 10 00 00                               	je     e4f8d <emuella_j2k_codestream::write_component_packet_header+0x111d>
+   e3ecc:	44 89 a4 24 e8 00 00 00                         	mov    %r12d,0xe8(%rsp)
+   e3ed4:	89 ac 24 ec 00 00 00                            	mov    %ebp,0xec(%rsp)
+   e3edb:	4c 89 bc 24 b0 00 00 00                         	mov    %r15,0xb0(%rsp)
+   e3ee3:	4c 89 b4 24 a8 00 00 00                         	mov    %r14,0xa8(%rsp)
+   e3eeb:	48 89 5c 24 78                                  	mov    %rbx,0x78(%rsp)
+   e3ef0:	48 8b 94 24 b8 00 00 00                         	mov    0xb8(%rsp),%rdx
+   e3ef8:	48 89 d1                                        	mov    %rdx,%rcx
+   e3efb:	48 c1 e1 05                                     	shl    $0x5,%rcx
+   e3eff:	48 89 8c 24 c8 00 00 00                         	mov    %rcx,0xc8(%rsp)
+   e3f07:	4c 89 ac 24 f0 00 00 00                         	mov    %r13,0xf0(%rsp)
+   e3f0f:	4c 89 ac 24 90 00 00 00                         	mov    %r13,0x90(%rsp)
+   e3f17:	48 89 84 24 98 00 00 00                         	mov    %rax,0x98(%rsp)
+   e3f1f:	48 c7 84 24 a0 00 00 00 00 00 00 00             	movq   $0x0,0xa0(%rsp)
+   e3f2b:	48 85 d2                                        	test   %rdx,%rdx
+   e3f2e:	0f 84 87 00 00 00                               	je     e3fbb <emuella_j2k_codestream::write_component_packet_header+0x14b>
+   e3f34:	41 bf 08 00 00 00                               	mov    $0x8,%r15d
+   e3f3a:	45 31 f6                                        	xor    %r14d,%r14d
+   e3f3d:	48 8d 9c 24 90 00 00 00                         	lea    0x90(%rsp),%rbx
+   e3f45:	4c 8b 25 54 a2 18 00                            	mov    0x18a254(%rip),%r12        # 26e1a0 <_DYNAMIC+0x8a0>
+   e3f4c:	45 31 ed                                        	xor    %r13d,%r13d
+   e3f4f:	eb 42                                           	jmp    e3f93 <emuella_j2k_codestream::write_component_packet_header+0x123>
+   e3f51:	66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00    	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e3f60:	83 f5 01                                        	xor    $0x1,%ebp
+   e3f63:	42 c7 44 38 f8 00 00 00 00                      	movl   $0x0,-0x8(%rax,%r15,1)
+   e3f6c:	42 89 6c 38 fc                                  	mov    %ebp,-0x4(%rax,%r15,1)
+   e3f71:	42 c6 04 38 00                                  	movb   $0x0,(%rax,%r15,1)
+   e3f76:	49 ff c6                                        	inc    %r14
+   e3f79:	4c 89 b4 24 a0 00 00 00                         	mov    %r14,0xa0(%rsp)
+   e3f81:	49 83 c7 0c                                     	add    $0xc,%r15
+   e3f85:	49 83 c5 20                                     	add    $0x20,%r13
+   e3f89:	4c 39 ac 24 c8 00 00 00                         	cmp    %r13,0xc8(%rsp)
+   e3f91:	74 2b                                           	je     e3fbe <emuella_j2k_codestream::write_component_packet_header+0x14e>
+   e3f93:	48 8b 8c 24 a8 00 00 00                         	mov    0xa8(%rsp),%rcx
+   e3f9b:	42 0f b6 6c 29 1b                               	movzbl 0x1b(%rcx,%r13,1),%ebp
+   e3fa1:	4c 3b b4 24 90 00 00 00                         	cmp    0x90(%rsp),%r14
+   e3fa9:	75 b5                                           	jne    e3f60 <emuella_j2k_codestream::write_component_packet_header+0xf0>
+   e3fab:	48 89 df                                        	mov    %rbx,%rdi
+   e3fae:	41 ff d4                                        	call   *%r12
+   e3fb1:	48 8b 84 24 98 00 00 00                         	mov    0x98(%rsp),%rax
+   e3fb9:	eb a5                                           	jmp    e3f60 <emuella_j2k_codestream::write_component_packet_header+0xf0>
+   e3fbb:	45 31 f6                                        	xor    %r14d,%r14d
+   e3fbe:	4c 8b a4 24 f0 00 00 00                         	mov    0xf0(%rsp),%r12
+   e3fc6:	4d 39 e6                                        	cmp    %r12,%r14
+   e3fc9:	0f 85 c2 04 00 00                               	jne    e4491 <emuella_j2k_codestream::write_component_packet_header+0x621>
+   e3fcf:	48 c7 44 24 60 00 00 00 00                      	movq   $0x0,0x60(%rsp)
+   e3fd8:	48 c7 44 24 68 08 00 00 00                      	movq   $0x8,0x68(%rsp)
+   e3fe1:	48 c7 44 24 70 00 00 00 00                      	movq   $0x0,0x70(%rsp)
+   e3fea:	4c 8b bc 24 90 00 00 00                         	mov    0x90(%rsp),%r15
+   e3ff2:	4c 8b b4 24 98 00 00 00                         	mov    0x98(%rsp),%r14
+   e3ffa:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+   e3fff:	ff 15 db 9f 18 00                               	call   *0x189fdb(%rip)        # 26dfe0 <_DYNAMIC+0x6e0>
+   e4005:	48 8b 84 24 a8 00 00 00                         	mov    0xa8(%rsp),%rax
+   e400d:	48 8b 8c 24 c8 00 00 00                         	mov    0xc8(%rsp),%rcx
+   e4015:	48 01 c8                                        	add    %rcx,%rax
+   e4018:	48 89 84 24 58 01 00 00                         	mov    %rax,0x158(%rsp)
+   e4020:	48 8b 5c 24 68                                  	mov    0x68(%rsp),%rbx
+   e4025:	4c 89 3b                                        	mov    %r15,(%rbx)
+   e4028:	4c 89 73 08                                     	mov    %r14,0x8(%rbx)
+   e402c:	4c 89 63 10                                     	mov    %r12,0x10(%rbx)
+   e4030:	8b 84 24 e8 00 00 00                            	mov    0xe8(%rsp),%eax
+   e4037:	66 89 43 18                                     	mov    %ax,0x18(%rbx)
+   e403b:	8b 84 24 ec 00 00 00                            	mov    0xec(%rsp),%eax
+   e4042:	66 89 43 1a                                     	mov    %ax,0x1a(%rbx)
+   e4046:	48 c7 44 24 70 01 00 00 00                      	movq   $0x1,0x70(%rsp)
+   e404f:	41 be 01 00 00 00                               	mov    $0x1,%r14d
+   e4055:	4c 8b 25 ac 9a 18 00                            	mov    0x189aac(%rip),%r12        # 26db08 <malloc@GLIBC_2.2.5>
+   e405c:	eb 48                                           	jmp    e40a6 <emuella_j2k_codestream::write_component_packet_header+0x236>
+   e405e:	66 90                                           	xchg   %ax,%ax
+   e4060:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+   e4065:	ff 15 75 9f 18 00                               	call   *0x189f75(%rip)        # 26dfe0 <_DYNAMIC+0x6e0>
+   e406b:	48 8b 5c 24 68                                  	mov    0x68(%rsp),%rbx
+   e4070:	4c 89 3c 2b                                     	mov    %r15,(%rbx,%rbp,1)
+   e4074:	48 8b 44 24 18                                  	mov    0x18(%rsp),%rax
+   e4079:	48 89 44 2b 08                                  	mov    %rax,0x8(%rbx,%rbp,1)
+   e407e:	4c 89 6c 2b 10                                  	mov    %r13,0x10(%rbx,%rbp,1)
+   e4083:	8b 84 24 c0 00 00 00                            	mov    0xc0(%rsp),%eax
+   e408a:	66 89 44 2b 18                                  	mov    %ax,0x18(%rbx,%rbp,1)
+   e408f:	8b 44 24 2c                                     	mov    0x2c(%rsp),%eax
+   e4093:	66 89 44 2b 1a                                  	mov    %ax,0x1a(%rbx,%rbp,1)
+   e4098:	49 ff c6                                        	inc    %r14
+   e409b:	4c 89 74 24 70                                  	mov    %r14,0x70(%rsp)
+   e40a0:	0f 84 0a 05 00 00                               	je     e45b0 <emuella_j2k_codestream::write_component_packet_header+0x740>
+   e40a6:	4c 89 f5                                        	mov    %r14,%rbp
+   e40a9:	48 c1 e5 05                                     	shl    $0x5,%rbp
+   e40ad:	0f b7 54 2b f8                                  	movzwl -0x8(%rbx,%rbp,1),%edx
+   e40b2:	89 d0                                           	mov    %edx,%eax
+   e40b4:	83 f0 01                                        	xor    $0x1,%eax
+   e40b7:	0f b7 74 2b fa                                  	movzwl -0x6(%rbx,%rbp,1),%esi
+   e40bc:	89 f1                                           	mov    %esi,%ecx
+   e40be:	83 f1 01                                        	xor    $0x1,%ecx
+   e40c1:	66 09 c1                                        	or     %ax,%cx
+   e40c4:	0f 84 16 04 00 00                               	je     e44e0 <emuella_j2k_codestream::write_component_packet_header+0x670>
+   e40ca:	89 d0                                           	mov    %edx,%eax
+   e40cc:	d1 e8                                           	shr    $1,%eax
+   e40ce:	48 89 54 24 18                                  	mov    %rdx,0x18(%rsp)
+   e40d3:	89 d1                                           	mov    %edx,%ecx
+   e40d5:	29 c1                                           	sub    %eax,%ecx
+   e40d7:	0f b7 c6                                        	movzwl %si,%eax
+   e40da:	d1 e8                                           	shr    $1,%eax
+   e40dc:	89 b4 24 f8 00 00 00                            	mov    %esi,0xf8(%rsp)
+   e40e3:	89 f2                                           	mov    %esi,%edx
+   e40e5:	29 c2                                           	sub    %eax,%edx
+   e40e7:	89 8c 24 c0 00 00 00                            	mov    %ecx,0xc0(%rsp)
+   e40ee:	0f b7 c1                                        	movzwl %cx,%eax
+   e40f1:	89 54 24 2c                                     	mov    %edx,0x2c(%rsp)
+   e40f5:	44 0f b7 fa                                     	movzwl %dx,%r15d
+   e40f9:	4c 0f af f8                                     	imul   %rax,%r15
+   e40fd:	4d 85 ff                                        	test   %r15,%r15
+   e4100:	74 2e                                           	je     e4130 <emuella_j2k_codestream::write_component_packet_header+0x2c0>
+   e4102:	4a 8d 04 bd 00 00 00 00                         	lea    0x0(,%r15,4),%rax
+   e410a:	4c 8d 2c 40                                     	lea    (%rax,%rax,2),%r13
+   e410e:	4c 89 ef                                        	mov    %r13,%rdi
+   e4111:	41 ff d4                                        	call   *%r12
+   e4114:	48 85 c0                                        	test   %rax,%rax
+   e4117:	0f 84 54 0e 00 00                               	je     e4f71 <emuella_j2k_codestream::write_component_packet_header+0x1101>
+   e411d:	49 89 c2                                        	mov    %rax,%r10
+   e4120:	eb 14                                           	jmp    e4136 <emuella_j2k_codestream::write_component_packet_header+0x2c6>
+   e4122:	66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e4130:	41 ba 04 00 00 00                               	mov    $0x4,%r10d
+   e4136:	4c 89 7c 24 30                                  	mov    %r15,0x30(%rsp)
+   e413b:	4c 89 54 24 38                                  	mov    %r10,0x38(%rsp)
+   e4140:	48 c7 44 24 40 00 00 00 00                      	movq   $0x0,0x40(%rsp)
+   e4149:	66 83 bc 24 f8 00 00 00 00                      	cmpw   $0x0,0xf8(%rsp)
+   e4152:	0f 84 e8 02 00 00                               	je     e4440 <emuella_j2k_codestream::write_component_packet_header+0x5d0>
+   e4158:	48 8b 54 24 18                                  	mov    0x18(%rsp),%rdx
+   e415d:	48 85 d2                                        	test   %rdx,%rdx
+   e4160:	0f 84 da 02 00 00                               	je     e4440 <emuella_j2k_codestream::write_component_packet_header+0x5d0>
+   e4166:	48 89 ac 24 10 01 00 00                         	mov    %rbp,0x110(%rsp)
+   e416e:	48 01 eb                                        	add    %rbp,%rbx
+   e4171:	8b 84 24 c0 00 00 00                            	mov    0xc0(%rsp),%eax
+   e4178:	66 83 f8 02                                     	cmp    $0x2,%ax
+   e417c:	89 c1                                           	mov    %eax,%ecx
+   e417e:	b8 01 00 00 00                                  	mov    $0x1,%eax
+   e4183:	0f 42 c8                                        	cmovb  %eax,%ecx
+   e4186:	89 8c 24 d8 00 00 00                            	mov    %ecx,0xd8(%rsp)
+   e418d:	8b 4c 24 2c                                     	mov    0x2c(%rsp),%ecx
+   e4191:	66 83 f9 02                                     	cmp    $0x2,%cx
+   e4195:	0f 42 c8                                        	cmovb  %eax,%ecx
+   e4198:	89 8c 24 8c 00 00 00                            	mov    %ecx,0x8c(%rsp)
+   e419f:	8d 04 12                                        	lea    (%rdx,%rdx,1),%eax
+   e41a2:	48 89 84 24 20 01 00 00                         	mov    %rax,0x120(%rsp)
+   e41aa:	8d 04 d5 00 00 00 00                            	lea    0x0(,%rdx,8),%eax
+   e41b1:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+   e41b5:	48 89 84 24 18 01 00 00                         	mov    %rax,0x118(%rsp)
+   e41bd:	8d 04 95 00 00 00 00                            	lea    0x0(,%rdx,4),%eax
+   e41c4:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+   e41c8:	48 89 84 24 80 00 00 00                         	mov    %rax,0x80(%rsp)
+   e41d0:	66 b8 02 00                                     	mov    $0x2,%ax
+   e41d4:	41 b8 04 00 00 00                               	mov    $0x4,%r8d
+   e41da:	45 31 c9                                        	xor    %r9d,%r9d
+   e41dd:	31 ff                                           	xor    %edi,%edi
+   e41df:	48 c7 84 24 d0 00 00 00 00 00 00 00             	movq   $0x0,0xd0(%rsp)
+   e41eb:	31 d2                                           	xor    %edx,%edx
+   e41ed:	eb 4f                                           	jmp    e423e <emuella_j2k_codestream::write_component_packet_header+0x3ce>
+   e41ef:	90                                              	nop
+   e41f0:	48 8b 94 24 28 01 00 00                         	mov    0x128(%rsp),%rdx
+   e41f8:	ff c2                                           	inc    %edx
+   e41fa:	48 83 84 24 d0 00 00 00 02                      	addq   $0x2,0xd0(%rsp)
+   e4203:	8b 84 24 00 01 00 00                            	mov    0x100(%rsp),%eax
+   e420a:	83 c0 02                                        	add    $0x2,%eax
+   e420d:	4c 8b 8c 24 30 01 00 00                         	mov    0x130(%rsp),%r9
+   e4215:	4c 03 8c 24 20 01 00 00                         	add    0x120(%rsp),%r9
+   e421d:	4c 8b 84 24 38 01 00 00                         	mov    0x138(%rsp),%r8
+   e4225:	4c 03 84 24 18 01 00 00                         	add    0x118(%rsp),%r8
+   e422d:	66 3b 94 24 8c 00 00 00                         	cmp    0x8c(%rsp),%dx
+   e4235:	48 89 cf                                        	mov    %rcx,%rdi
+   e4238:	0f 84 22 02 00 00                               	je     e4460 <emuella_j2k_codestream::write_component_packet_header+0x5f0>
+   e423e:	8b b4 24 f8 00 00 00                            	mov    0xf8(%rsp),%esi
+   e4245:	66 39 c6                                        	cmp    %ax,%si
+   e4248:	89 84 24 00 01 00 00                            	mov    %eax,0x100(%rsp)
+   e424f:	0f 42 c6                                        	cmovb  %esi,%eax
+   e4252:	8d 0c 12                                        	lea    (%rdx,%rdx,1),%ecx
+   e4255:	48 89 94 24 28 01 00 00                         	mov    %rdx,0x128(%rsp)
+   e425d:	8d 14 55 02 00 00 00                            	lea    0x2(,%rdx,2),%edx
+   e4264:	66 39 d6                                        	cmp    %dx,%si
+   e4267:	0f 42 d6                                        	cmovb  %esi,%edx
+   e426a:	66 39 d1                                        	cmp    %dx,%cx
+   e426d:	4c 89 84 24 38 01 00 00                         	mov    %r8,0x138(%rsp)
+   e4275:	4c 89 8c 24 30 01 00 00                         	mov    %r9,0x130(%rsp)
+   e427d:	0f 83 4d 01 00 00                               	jae    e43d0 <emuella_j2k_codestream::write_component_packet_header+0x560>
+   e4283:	44 0f b7 e8                                     	movzwl %ax,%r13d
+   e4287:	66 b8 02 00                                     	mov    $0x2,%ax
+   e428b:	45 31 ff                                        	xor    %r15d,%r15d
+   e428e:	4c 89 84 24 08 01 00 00                         	mov    %r8,0x108(%rsp)
+   e4296:	4c 89 8c 24 e0 00 00 00                         	mov    %r9,0xe0(%rsp)
+   e429e:	48 89 f9                                        	mov    %rdi,%rcx
+   e42a1:	45 31 e4                                        	xor    %r12d,%r12d
+   e42a4:	eb 62                                           	jmp    e4308 <emuella_j2k_codestream::write_component_packet_header+0x498>
+   e42a6:	66 2e 0f 1f 84 00 00 00 00 00                   	cs nopw 0x0(%rax,%rax,1)
+   e42b0:	41 ff c4                                        	inc    %r12d
+   e42b3:	48 8b 54 24 38                                  	mov    0x38(%rsp),%rdx
+   e42b8:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   e42bd:	48 8d 04 49                                     	lea    (%rcx,%rcx,2),%rax
+   e42c1:	c7 04 82 00 00 00 00                            	movl   $0x0,(%rdx,%rax,4)
+   e42c8:	89 6c 82 04                                     	mov    %ebp,0x4(%rdx,%rax,4)
+   e42cc:	49 89 d2                                        	mov    %rdx,%r10
+   e42cf:	c6 44 82 08 00                                  	movb   $0x0,0x8(%rdx,%rax,4)
+   e42d4:	48 ff c1                                        	inc    %rcx
+   e42d7:	48 89 4c 24 40                                  	mov    %rcx,0x40(%rsp)
+   e42dc:	49 83 c7 02                                     	add    $0x2,%r15
+   e42e0:	8b 44 24 28                                     	mov    0x28(%rsp),%eax
+   e42e4:	83 c0 02                                        	add    $0x2,%eax
+   e42e7:	48 83 84 24 e0 00 00 00 02                      	addq   $0x2,0xe0(%rsp)
+   e42f0:	48 83 84 24 08 01 00 00 18                      	addq   $0x18,0x108(%rsp)
+   e42f9:	66 44 3b a4 24 d8 00 00 00                      	cmp    0xd8(%rsp),%r12w
+   e4302:	0f 84 e8 fe ff ff                               	je     e41f0 <emuella_j2k_codestream::write_component_packet_header+0x380>
+   e4308:	48 89 4c 24 10                                  	mov    %rcx,0x10(%rsp)
+   e430d:	89 44 24 28                                     	mov    %eax,0x28(%rsp)
+   e4311:	0f b7 c0                                        	movzwl %ax,%eax
+   e4314:	48 8b 74 24 18                                  	mov    0x18(%rsp),%rsi
+   e4319:	48 39 c6                                        	cmp    %rax,%rsi
+   e431c:	48 0f 42 c6                                     	cmovb  %rsi,%rax
+   e4320:	43 8d 0c 24                                     	lea    (%r12,%r12,1),%ecx
+   e4324:	42 8d 14 65 02 00 00 00                         	lea    0x2(,%r12,2),%edx
+   e432c:	66 39 d6                                        	cmp    %dx,%si
+   e432f:	0f 43 f2                                        	cmovae %edx,%esi
+   e4332:	bd ff ff ff ff                                  	mov    $0xffffffff,%ebp
+   e4337:	66 39 f1                                        	cmp    %si,%cx
+   e433a:	73 6d                                           	jae    e43a9 <emuella_j2k_codestream::write_component_packet_header+0x539>
+   e433c:	48 8b 73 f0                                     	mov    -0x10(%rbx),%rsi
+   e4340:	48 8b 8c 24 08 01 00 00                         	mov    0x108(%rsp),%rcx
+   e4348:	48 8b 94 24 e0 00 00 00                         	mov    0xe0(%rsp),%rdx
+   e4350:	4c 8b 84 24 d0 00 00 00                         	mov    0xd0(%rsp),%r8
+   e4358:	0f 1f 84 00 00 00 00 00                         	nopl   0x0(%rax,%rax,1)
+   e4360:	49 ff c0                                        	inc    %r8
+   e4363:	49 89 c9                                        	mov    %rcx,%r9
+   e4366:	48 89 d7                                        	mov    %rdx,%rdi
+   e4369:	49 89 c2                                        	mov    %rax,%r10
+   e436c:	0f 1f 40 00                                     	nopl   0x0(%rax)
+   e4370:	48 39 f7                                        	cmp    %rsi,%rdi
+   e4373:	0f 83 55 01 00 00                               	jae    e44ce <emuella_j2k_codestream::write_component_packet_header+0x65e>
+   e4379:	4c 8b 5b e8                                     	mov    -0x18(%rbx),%r11
+   e437d:	47 8b 1c 0b                                     	mov    (%r11,%r9,1),%r11d
+   e4381:	41 39 eb                                        	cmp    %ebp,%r11d
+   e4384:	41 0f 42 eb                                     	cmovb  %r11d,%ebp
+   e4388:	49 ff ca                                        	dec    %r10
+   e438b:	48 ff c7                                        	inc    %rdi
+   e438e:	49 83 c1 0c                                     	add    $0xc,%r9
+   e4392:	4d 39 d7                                        	cmp    %r10,%r15
+   e4395:	75 d9                                           	jne    e4370 <emuella_j2k_codestream::write_component_packet_header+0x500>
+   e4397:	48 03 54 24 18                                  	add    0x18(%rsp),%rdx
+   e439c:	48 03 8c 24 80 00 00 00                         	add    0x80(%rsp),%rcx
+   e43a4:	4d 39 e8                                        	cmp    %r13,%r8
+   e43a7:	75 b7                                           	jne    e4360 <emuella_j2k_codestream::write_component_packet_header+0x4f0>
+   e43a9:	48 8b 44 24 10                                  	mov    0x10(%rsp),%rax
+   e43ae:	48 3b 44 24 30                                  	cmp    0x30(%rsp),%rax
+   e43b3:	0f 85 f7 fe ff ff                               	jne    e42b0 <emuella_j2k_codestream::write_component_packet_header+0x440>
+   e43b9:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e43be:	ff 15 dc 9d 18 00                               	call   *0x189ddc(%rip)        # 26e1a0 <_DYNAMIC+0x8a0>
+   e43c4:	e9 e7 fe ff ff                                  	jmp    e42b0 <emuella_j2k_codestream::write_component_packet_header+0x440>
+   e43c9:	0f 1f 80 00 00 00 00                            	nopl   0x0(%rax)
+   e43d0:	48 8d 04 7f                                     	lea    (%rdi,%rdi,2),%rax
+   e43d4:	4c 8d 3c 85 08 00 00 00                         	lea    0x8(,%rax,4),%r15
+   e43dc:	8b 84 24 d8 00 00 00                            	mov    0xd8(%rsp),%eax
+   e43e3:	89 c5                                           	mov    %eax,%ebp
+   e43e5:	48 89 f9                                        	mov    %rdi,%rcx
+   e43e8:	eb 35                                           	jmp    e441f <emuella_j2k_codestream::write_component_packet_header+0x5af>
+   e43ea:	66 0f 1f 44 00 00                               	nopw   0x0(%rax,%rax,1)
+   e43f0:	48 b8 00 00 00 00 ff ff ff ff                   	movabs $0xffffffff00000000,%rax
+   e43fa:	4a 89 44 39 f8                                  	mov    %rax,-0x8(%rcx,%r15,1)
+   e43ff:	49 89 ca                                        	mov    %rcx,%r10
+   e4402:	42 c6 04 39 00                                  	movb   $0x0,(%rcx,%r15,1)
+   e4407:	49 ff c4                                        	inc    %r12
+   e440a:	4c 89 64 24 40                                  	mov    %r12,0x40(%rsp)
+   e440f:	49 83 c7 0c                                     	add    $0xc,%r15
+   e4413:	66 ff cd                                        	dec    %bp
+   e4416:	4c 89 e1                                        	mov    %r12,%rcx
+   e4419:	0f 84 d1 fd ff ff                               	je     e41f0 <emuella_j2k_codestream::write_component_packet_header+0x380>
+   e441f:	48 3b 4c 24 30                                  	cmp    0x30(%rsp),%rcx
+   e4424:	49 89 cc                                        	mov    %rcx,%r12
+   e4427:	4c 89 d1                                        	mov    %r10,%rcx
+   e442a:	75 c4                                           	jne    e43f0 <emuella_j2k_codestream::write_component_packet_header+0x580>
+   e442c:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4431:	ff 15 69 9d 18 00                               	call   *0x189d69(%rip)        # 26e1a0 <_DYNAMIC+0x8a0>
+   e4437:	48 8b 4c 24 38                                  	mov    0x38(%rsp),%rcx
+   e443c:	eb b2                                           	jmp    e43f0 <emuella_j2k_codestream::write_component_packet_header+0x580>
+   e443e:	66 90                                           	xchg   %ax,%ax
+   e4440:	4c 89 54 24 18                                  	mov    %r10,0x18(%rsp)
+   e4445:	45 31 ed                                        	xor    %r13d,%r13d
+   e4448:	4c 3b 74 24 60                                  	cmp    0x60(%rsp),%r14
+   e444d:	0f 84 0d fc ff ff                               	je     e4060 <emuella_j2k_codestream::write_component_packet_header+0x1f0>
+   e4453:	e9 13 fc ff ff                                  	jmp    e406b <emuella_j2k_codestream::write_component_packet_header+0x1fb>
+   e4458:	0f 1f 84 00 00 00 00 00                         	nopl   0x0(%rax,%rax,1)
+   e4460:	49 89 fd                                        	mov    %rdi,%r13
+   e4463:	4c 8b 7c 24 30                                  	mov    0x30(%rsp),%r15
+   e4468:	48 8b 44 24 38                                  	mov    0x38(%rsp),%rax
+   e446d:	48 89 44 24 18                                  	mov    %rax,0x18(%rsp)
+   e4472:	4c 8b 25 8f 96 18 00                            	mov    0x18968f(%rip),%r12        # 26db08 <malloc@GLIBC_2.2.5>
+   e4479:	48 8b ac 24 10 01 00 00                         	mov    0x110(%rsp),%rbp
+   e4481:	4c 3b 74 24 60                                  	cmp    0x60(%rsp),%r14
+   e4486:	0f 85 df fb ff ff                               	jne    e406b <emuella_j2k_codestream::write_component_packet_header+0x1fb>
+   e448c:	e9 cf fb ff ff                                  	jmp    e4060 <emuella_j2k_codestream::write_component_packet_header+0x1f0>
+   e4491:	48 83 bc 24 90 00 00 00 00                      	cmpq   $0x0,0x90(%rsp)
+   e449a:	74 0e                                           	je     e44aa <emuella_j2k_codestream::write_component_packet_header+0x63a>
+   e449c:	48 8b bc 24 98 00 00 00                         	mov    0x98(%rsp),%rdi
+   e44a4:	ff 15 6e 96 18 00                               	call   *0x18966e(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e44aa:	48 8b 5c 24 78                                  	mov    0x78(%rsp),%rbx
+   e44af:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   e44b9:	48 89 03                                        	mov    %rax,(%rbx)
+   e44bc:	48 81 c4 b8 01 00 00                            	add    $0x1b8,%rsp
+   e44c3:	5b                                              	pop    %rbx
+   e44c4:	41 5c                                           	pop    %r12
+   e44c6:	41 5d                                           	pop    %r13
+   e44c8:	41 5e                                           	pop    %r14
+   e44ca:	41 5f                                           	pop    %r15
+   e44cc:	5d                                              	pop    %rbp
+   e44cd:	c3                                              	ret
+   e44ce:	48 8d 15 d3 2a 18 00                            	lea    0x182ad3(%rip),%rdx        # 266fa8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x280>
+   e44d5:	ff 15 85 96 18 00                               	call   *0x189685(%rip)        # 26db60 <_DYNAMIC+0x260>
+   e44db:	e9 db 0a 00 00                                  	jmp    e4fbb <emuella_j2k_codestream::write_component_packet_header+0x114b>
+   e44e0:	48 8b 6c 24 60                                  	mov    0x60(%rsp),%rbp
+   e44e5:	4c 8b 7c 24 20                                  	mov    0x20(%rsp),%r15
+   e44ea:	4c 89 ff                                        	mov    %r15,%rdi
+   e44ed:	ff 15 15 96 18 00                               	call   *0x189615(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+   e44f3:	48 85 c0                                        	test   %rax,%rax
+   e44f6:	0f 84 b1 0a 00 00                               	je     e4fad <emuella_j2k_codestream::write_component_packet_header+0x113d>
+   e44fc:	48 89 6c 24 20                                  	mov    %rbp,0x20(%rsp)
+   e4501:	48 8b 8c 24 f0 00 00 00                         	mov    0xf0(%rsp),%rcx
+   e4509:	48 89 8c 24 90 00 00 00                         	mov    %rcx,0x90(%rsp)
+   e4511:	48 89 84 24 98 00 00 00                         	mov    %rax,0x98(%rsp)
+   e4519:	48 c7 84 24 a0 00 00 00 00 00 00 00             	movq   $0x0,0xa0(%rsp)
+   e4525:	48 83 bc 24 b8 00 00 00 00                      	cmpq   $0x0,0xb8(%rsp)
+   e452e:	0f 84 90 00 00 00                               	je     e45c4 <emuella_j2k_codestream::write_component_packet_header+0x754>
+   e4534:	41 bd 08 00 00 00                               	mov    $0x8,%r13d
+   e453a:	45 31 e4                                        	xor    %r12d,%r12d
+   e453d:	31 ed                                           	xor    %ebp,%ebp
+   e453f:	eb 3f                                           	jmp    e4580 <emuella_j2k_codestream::write_component_packet_header+0x710>
+   e4541:	66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00    	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e4550:	42 c7 44 28 f8 00 00 00 00                      	movl   $0x0,-0x8(%rax,%r13,1)
+   e4559:	46 89 7c 28 fc                                  	mov    %r15d,-0x4(%rax,%r13,1)
+   e455e:	42 c6 04 28 00                                  	movb   $0x0,(%rax,%r13,1)
+   e4563:	49 ff c4                                        	inc    %r12
+   e4566:	4c 89 a4 24 a0 00 00 00                         	mov    %r12,0xa0(%rsp)
+   e456e:	49 83 c5 0c                                     	add    $0xc,%r13
+   e4572:	48 83 c5 20                                     	add    $0x20,%rbp
+   e4576:	48 39 ac 24 c8 00 00 00                         	cmp    %rbp,0xc8(%rsp)
+   e457e:	74 47                                           	je     e45c7 <emuella_j2k_codestream::write_component_packet_header+0x757>
+   e4580:	48 8b 8c 24 a8 00 00 00                         	mov    0xa8(%rsp),%rcx
+   e4588:	44 0f b6 7c 29 1a                               	movzbl 0x1a(%rcx,%rbp,1),%r15d
+   e458e:	4c 3b a4 24 90 00 00 00                         	cmp    0x90(%rsp),%r12
+   e4596:	75 b8                                           	jne    e4550 <emuella_j2k_codestream::write_component_packet_header+0x6e0>
+   e4598:	48 8d bc 24 90 00 00 00                         	lea    0x90(%rsp),%rdi
+   e45a0:	ff 15 fa 9b 18 00                               	call   *0x189bfa(%rip)        # 26e1a0 <_DYNAMIC+0x8a0>
+   e45a6:	48 8b 84 24 98 00 00 00                         	mov    0x98(%rsp),%rax
+   e45ae:	eb a0                                           	jmp    e4550 <emuella_j2k_codestream::write_component_packet_header+0x6e0>
+   e45b0:	48 83 7c 24 60 00                               	cmpq   $0x0,0x60(%rsp)
+   e45b6:	0f 84 ee fe ff ff                               	je     e44aa <emuella_j2k_codestream::write_component_packet_header+0x63a>
+   e45bc:	48 89 df                                        	mov    %rbx,%rdi
+   e45bf:	e9 e0 fe ff ff                                  	jmp    e44a4 <emuella_j2k_codestream::write_component_packet_header+0x634>
+   e45c4:	45 31 e4                                        	xor    %r12d,%r12d
+   e45c7:	4c 3b a4 24 f0 00 00 00                         	cmp    0xf0(%rsp),%r12
+   e45cf:	0f 85 ba 04 00 00                               	jne    e4a8f <emuella_j2k_codestream::write_component_packet_header+0xc1f>
+   e45d5:	48 c7 44 24 60 00 00 00 00                      	movq   $0x0,0x60(%rsp)
+   e45de:	48 c7 44 24 68 08 00 00 00                      	movq   $0x8,0x68(%rsp)
+   e45e7:	48 c7 44 24 70 00 00 00 00                      	movq   $0x0,0x70(%rsp)
+   e45f0:	4c 8b ac 24 90 00 00 00                         	mov    0x90(%rsp),%r13
+   e45f8:	4c 8b bc 24 98 00 00 00                         	mov    0x98(%rsp),%r15
+   e4600:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+   e4605:	ff 15 d5 99 18 00                               	call   *0x1899d5(%rip)        # 26dfe0 <_DYNAMIC+0x6e0>
+   e460b:	48 8b 6c 24 68                                  	mov    0x68(%rsp),%rbp
+   e4610:	4c 89 6d 00                                     	mov    %r13,0x0(%rbp)
+   e4614:	4c 89 7d 08                                     	mov    %r15,0x8(%rbp)
+   e4618:	48 8b 84 24 f0 00 00 00                         	mov    0xf0(%rsp),%rax
+   e4620:	48 89 45 10                                     	mov    %rax,0x10(%rbp)
+   e4624:	8b 84 24 e8 00 00 00                            	mov    0xe8(%rsp),%eax
+   e462b:	66 89 45 18                                     	mov    %ax,0x18(%rbp)
+   e462f:	8b 84 24 ec 00 00 00                            	mov    0xec(%rsp),%eax
+   e4636:	66 89 45 1a                                     	mov    %ax,0x1a(%rbp)
+   e463a:	48 c7 44 24 70 01 00 00 00                      	movq   $0x1,0x70(%rsp)
+   e4643:	41 bd 01 00 00 00                               	mov    $0x1,%r13d
+   e4649:	eb 4f                                           	jmp    e469a <emuella_j2k_codestream::write_component_packet_header+0x82a>
+   e464b:	48 8d 7c 24 60                                  	lea    0x60(%rsp),%rdi
+   e4650:	ff 15 8a 99 18 00                               	call   *0x18998a(%rip)        # 26dfe0 <_DYNAMIC+0x6e0>
+   e4656:	48 8b 6c 24 68                                  	mov    0x68(%rsp),%rbp
+   e465b:	48 8b 84 24 c0 00 00 00                         	mov    0xc0(%rsp),%rax
+   e4663:	4c 89 7c 05 00                                  	mov    %r15,0x0(%rbp,%rax,1)
+   e4668:	4c 89 64 05 08                                  	mov    %r12,0x8(%rbp,%rax,1)
+   e466d:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   e4672:	48 89 4c 05 10                                  	mov    %rcx,0x10(%rbp,%rax,1)
+   e4677:	8b 4c 24 2c                                     	mov    0x2c(%rsp),%ecx
+   e467b:	66 89 4c 05 18                                  	mov    %cx,0x18(%rbp,%rax,1)
+   e4680:	8b 8c 24 b8 00 00 00                            	mov    0xb8(%rsp),%ecx
+   e4687:	66 89 4c 05 1a                                  	mov    %cx,0x1a(%rbp,%rax,1)
+   e468c:	49 ff c5                                        	inc    %r13
+   e468f:	4c 89 6c 24 70                                  	mov    %r13,0x70(%rsp)
+   e4694:	0f 84 4a 06 00 00                               	je     e4ce4 <emuella_j2k_codestream::write_component_packet_header+0xe74>
+   e469a:	4c 89 e9                                        	mov    %r13,%rcx
+   e469d:	48 c1 e1 05                                     	shl    $0x5,%rcx
+   e46a1:	0f b7 54 0d f8                                  	movzwl -0x8(%rbp,%rcx,1),%edx
+   e46a6:	89 d0                                           	mov    %edx,%eax
+   e46a8:	83 f0 01                                        	xor    $0x1,%eax
+   e46ab:	48 89 8c 24 c0 00 00 00                         	mov    %rcx,0xc0(%rsp)
+   e46b3:	0f b7 74 0d fa                                  	movzwl -0x6(%rbp,%rcx,1),%esi
+   e46b8:	89 f1                                           	mov    %esi,%ecx
+   e46ba:	83 f1 01                                        	xor    $0x1,%ecx
+   e46bd:	66 09 c1                                        	or     %ax,%cx
+   e46c0:	0f 84 02 04 00 00                               	je     e4ac8 <emuella_j2k_codestream::write_component_packet_header+0xc58>
+   e46c6:	89 d0                                           	mov    %edx,%eax
+   e46c8:	d1 e8                                           	shr    $1,%eax
+   e46ca:	48 89 54 24 18                                  	mov    %rdx,0x18(%rsp)
+   e46cf:	89 d1                                           	mov    %edx,%ecx
+   e46d1:	29 c1                                           	sub    %eax,%ecx
+   e46d3:	0f b7 c6                                        	movzwl %si,%eax
+   e46d6:	d1 e8                                           	shr    $1,%eax
+   e46d8:	89 b4 24 8c 00 00 00                            	mov    %esi,0x8c(%rsp)
+   e46df:	89 f2                                           	mov    %esi,%edx
+   e46e1:	29 c2                                           	sub    %eax,%edx
+   e46e3:	89 4c 24 2c                                     	mov    %ecx,0x2c(%rsp)
+   e46e7:	0f b7 c1                                        	movzwl %cx,%eax
+   e46ea:	89 94 24 b8 00 00 00                            	mov    %edx,0xb8(%rsp)
+   e46f1:	44 0f b7 fa                                     	movzwl %dx,%r15d
+   e46f5:	4c 0f af f8                                     	imul   %rax,%r15
+   e46f9:	4d 85 ff                                        	test   %r15,%r15
+   e46fc:	74 1f                                           	je     e471d <emuella_j2k_codestream::write_component_packet_header+0x8ad>
+   e46fe:	4a 8d 04 bd 00 00 00 00                         	lea    0x0(,%r15,4),%rax
+   e4706:	4c 8d 24 40                                     	lea    (%rax,%rax,2),%r12
+   e470a:	4c 89 e7                                        	mov    %r12,%rdi
+   e470d:	ff 15 f5 93 18 00                               	call   *0x1893f5(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+   e4713:	48 85 c0                                        	test   %rax,%rax
+   e4716:	75 0a                                           	jne    e4722 <emuella_j2k_codestream::write_component_packet_header+0x8b2>
+   e4718:	e9 80 08 00 00                                  	jmp    e4f9d <emuella_j2k_codestream::write_component_packet_header+0x112d>
+   e471d:	b8 04 00 00 00                                  	mov    $0x4,%eax
+   e4722:	4c 89 7c 24 30                                  	mov    %r15,0x30(%rsp)
+   e4727:	48 89 44 24 38                                  	mov    %rax,0x38(%rsp)
+   e472c:	48 c7 44 24 40 00 00 00 00                      	movq   $0x0,0x40(%rsp)
+   e4735:	66 83 bc 24 8c 00 00 00 00                      	cmpw   $0x0,0x8c(%rsp)
+   e473e:	0f 84 05 03 00 00                               	je     e4a49 <emuella_j2k_codestream::write_component_packet_header+0xbd9>
+   e4744:	48 8b 54 24 18                                  	mov    0x18(%rsp),%rdx
+   e4749:	48 85 d2                                        	test   %rdx,%rdx
+   e474c:	0f 84 f7 02 00 00                               	je     e4a49 <emuella_j2k_codestream::write_component_packet_header+0xbd9>
+   e4752:	49 89 c2                                        	mov    %rax,%r10
+   e4755:	4c 89 ac 24 10 01 00 00                         	mov    %r13,0x110(%rsp)
+   e475d:	48 03 ac 24 c0 00 00 00                         	add    0xc0(%rsp),%rbp
+   e4765:	8b 44 24 2c                                     	mov    0x2c(%rsp),%eax
+   e4769:	66 83 f8 02                                     	cmp    $0x2,%ax
+   e476d:	89 c1                                           	mov    %eax,%ecx
+   e476f:	b8 01 00 00 00                                  	mov    $0x1,%eax
+   e4774:	0f 42 c8                                        	cmovb  %eax,%ecx
+   e4777:	89 8c 24 d0 00 00 00                            	mov    %ecx,0xd0(%rsp)
+   e477e:	8b 8c 24 b8 00 00 00                            	mov    0xb8(%rsp),%ecx
+   e4785:	66 83 f9 02                                     	cmp    $0x2,%cx
+   e4789:	0f 42 c8                                        	cmovb  %eax,%ecx
+   e478c:	89 8c 24 20 01 00 00                            	mov    %ecx,0x120(%rsp)
+   e4793:	8d 04 12                                        	lea    (%rdx,%rdx,1),%eax
+   e4796:	48 89 84 24 18 01 00 00                         	mov    %rax,0x118(%rsp)
+   e479e:	8d 04 d5 00 00 00 00                            	lea    0x0(,%rdx,8),%eax
+   e47a5:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+   e47a9:	48 89 84 24 c8 00 00 00                         	mov    %rax,0xc8(%rsp)
+   e47b1:	8d 04 95 00 00 00 00                            	lea    0x0(,%rdx,4),%eax
+   e47b8:	48 8d 04 40                                     	lea    (%rax,%rax,2),%rax
+   e47bc:	48 89 84 24 80 00 00 00                         	mov    %rax,0x80(%rsp)
+   e47c4:	66 b8 02 00                                     	mov    $0x2,%ax
+   e47c8:	41 b8 04 00 00 00                               	mov    $0x4,%r8d
+   e47ce:	45 31 c9                                        	xor    %r9d,%r9d
+   e47d1:	31 ff                                           	xor    %edi,%edi
+   e47d3:	48 c7 84 24 00 01 00 00 00 00 00 00             	movq   $0x0,0x100(%rsp)
+   e47df:	31 d2                                           	xor    %edx,%edx
+   e47e1:	eb 5b                                           	jmp    e483e <emuella_j2k_codestream::write_component_packet_header+0x9ce>
+   e47e3:	66 66 66 66 2e 0f 1f 84 00 00 00 00 00          	data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e47f0:	48 8b 94 24 f8 00 00 00                         	mov    0xf8(%rsp),%rdx
+   e47f8:	ff c2                                           	inc    %edx
+   e47fa:	48 83 84 24 00 01 00 00 02                      	addq   $0x2,0x100(%rsp)
+   e4803:	8b 84 24 38 01 00 00                            	mov    0x138(%rsp),%eax
+   e480a:	83 c0 02                                        	add    $0x2,%eax
+   e480d:	4c 8b 8c 24 28 01 00 00                         	mov    0x128(%rsp),%r9
+   e4815:	4c 03 8c 24 18 01 00 00                         	add    0x118(%rsp),%r9
+   e481d:	4c 8b 84 24 30 01 00 00                         	mov    0x130(%rsp),%r8
+   e4825:	4c 03 84 24 c8 00 00 00                         	add    0xc8(%rsp),%r8
+   e482d:	66 3b 94 24 20 01 00 00                         	cmp    0x120(%rsp),%dx
+   e4835:	48 89 cf                                        	mov    %rcx,%rdi
+   e4838:	0f 84 27 02 00 00                               	je     e4a65 <emuella_j2k_codestream::write_component_packet_header+0xbf5>
+   e483e:	8b b4 24 8c 00 00 00                            	mov    0x8c(%rsp),%esi
+   e4845:	66 39 c6                                        	cmp    %ax,%si
+   e4848:	89 84 24 38 01 00 00                            	mov    %eax,0x138(%rsp)
+   e484f:	0f 42 c6                                        	cmovb  %esi,%eax
+   e4852:	8d 0c 12                                        	lea    (%rdx,%rdx,1),%ecx
+   e4855:	48 89 94 24 f8 00 00 00                         	mov    %rdx,0xf8(%rsp)
+   e485d:	8d 14 55 02 00 00 00                            	lea    0x2(,%rdx,2),%edx
+   e4864:	66 39 d6                                        	cmp    %dx,%si
+   e4867:	0f 42 d6                                        	cmovb  %esi,%edx
+   e486a:	66 39 d1                                        	cmp    %dx,%cx
+   e486d:	4c 89 84 24 30 01 00 00                         	mov    %r8,0x130(%rsp)
+   e4875:	4c 89 8c 24 28 01 00 00                         	mov    %r9,0x128(%rsp)
+   e487d:	0f 83 5d 01 00 00                               	jae    e49e0 <emuella_j2k_codestream::write_component_packet_header+0xb70>
+   e4883:	48 89 f9                                        	mov    %rdi,%rcx
+   e4886:	44 0f b7 e8                                     	movzwl %ax,%r13d
+   e488a:	66 b8 02 00                                     	mov    $0x2,%ax
+   e488e:	45 31 e4                                        	xor    %r12d,%r12d
+   e4891:	4c 89 84 24 e0 00 00 00                         	mov    %r8,0xe0(%rsp)
+   e4899:	4c 89 8c 24 d8 00 00 00                         	mov    %r9,0xd8(%rsp)
+   e48a1:	31 d2                                           	xor    %edx,%edx
+   e48a3:	eb 69                                           	jmp    e490e <emuella_j2k_codestream::write_component_packet_header+0xa9e>
+   e48a5:	66 66 2e 0f 1f 84 00 00 00 00 00                	data16 cs nopw 0x0(%rax,%rax,1)
+   e48b0:	48 8b 94 24 08 01 00 00                         	mov    0x108(%rsp),%rdx
+   e48b8:	ff c2                                           	inc    %edx
+   e48ba:	4c 8b 54 24 38                                  	mov    0x38(%rsp),%r10
+   e48bf:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   e48c4:	48 8d 04 49                                     	lea    (%rcx,%rcx,2),%rax
+   e48c8:	41 c7 04 82 00 00 00 00                         	movl   $0x0,(%r10,%rax,4)
+   e48d0:	45 89 7c 82 04                                  	mov    %r15d,0x4(%r10,%rax,4)
+   e48d5:	41 c6 44 82 08 00                               	movb   $0x0,0x8(%r10,%rax,4)
+   e48db:	48 ff c1                                        	inc    %rcx
+   e48de:	48 89 4c 24 40                                  	mov    %rcx,0x40(%rsp)
+   e48e3:	49 83 c4 02                                     	add    $0x2,%r12
+   e48e7:	8b 44 24 28                                     	mov    0x28(%rsp),%eax
+   e48eb:	83 c0 02                                        	add    $0x2,%eax
+   e48ee:	48 83 84 24 d8 00 00 00 02                      	addq   $0x2,0xd8(%rsp)
+   e48f7:	48 83 84 24 e0 00 00 00 18                      	addq   $0x18,0xe0(%rsp)
+   e4900:	66 3b 94 24 d0 00 00 00                         	cmp    0xd0(%rsp),%dx
+   e4908:	0f 84 e2 fe ff ff                               	je     e47f0 <emuella_j2k_codestream::write_component_packet_header+0x980>
+   e490e:	48 89 4c 24 10                                  	mov    %rcx,0x10(%rsp)
+   e4913:	89 44 24 28                                     	mov    %eax,0x28(%rsp)
+   e4917:	0f b7 c0                                        	movzwl %ax,%eax
+   e491a:	48 8b 74 24 18                                  	mov    0x18(%rsp),%rsi
+   e491f:	48 39 c6                                        	cmp    %rax,%rsi
+   e4922:	48 0f 42 c6                                     	cmovb  %rsi,%rax
+   e4926:	8d 0c 12                                        	lea    (%rdx,%rdx,1),%ecx
+   e4929:	48 89 94 24 08 01 00 00                         	mov    %rdx,0x108(%rsp)
+   e4931:	8d 14 55 02 00 00 00                            	lea    0x2(,%rdx,2),%edx
+   e4938:	66 39 d6                                        	cmp    %dx,%si
+   e493b:	0f 43 f2                                        	cmovae %edx,%esi
+   e493e:	41 bf ff ff ff ff                               	mov    $0xffffffff,%r15d
+   e4944:	66 39 f1                                        	cmp    %si,%cx
+   e4947:	73 70                                           	jae    e49b9 <emuella_j2k_codestream::write_component_packet_header+0xb49>
+   e4949:	48 8b 75 f0                                     	mov    -0x10(%rbp),%rsi
+   e494d:	48 8b 8c 24 e0 00 00 00                         	mov    0xe0(%rsp),%rcx
+   e4955:	48 8b 94 24 d8 00 00 00                         	mov    0xd8(%rsp),%rdx
+   e495d:	4c 8b 84 24 00 01 00 00                         	mov    0x100(%rsp),%r8
+   e4965:	66 66 2e 0f 1f 84 00 00 00 00 00                	data16 cs nopw 0x0(%rax,%rax,1)
+   e4970:	49 ff c0                                        	inc    %r8
+   e4973:	49 89 c9                                        	mov    %rcx,%r9
+   e4976:	48 89 d7                                        	mov    %rdx,%rdi
+   e4979:	49 89 c2                                        	mov    %rax,%r10
+   e497c:	0f 1f 40 00                                     	nopl   0x0(%rax)
+   e4980:	48 39 f7                                        	cmp    %rsi,%rdi
+   e4983:	0f 83 2d 01 00 00                               	jae    e4ab6 <emuella_j2k_codestream::write_component_packet_header+0xc46>
+   e4989:	4c 8b 5d e8                                     	mov    -0x18(%rbp),%r11
+   e498d:	47 8b 1c 0b                                     	mov    (%r11,%r9,1),%r11d
+   e4991:	45 39 fb                                        	cmp    %r15d,%r11d
+   e4994:	45 0f 42 fb                                     	cmovb  %r11d,%r15d
+   e4998:	49 ff ca                                        	dec    %r10
+   e499b:	48 ff c7                                        	inc    %rdi
+   e499e:	49 83 c1 0c                                     	add    $0xc,%r9
+   e49a2:	4d 39 d4                                        	cmp    %r10,%r12
+   e49a5:	75 d9                                           	jne    e4980 <emuella_j2k_codestream::write_component_packet_header+0xb10>
+   e49a7:	48 03 54 24 18                                  	add    0x18(%rsp),%rdx
+   e49ac:	48 03 8c 24 80 00 00 00                         	add    0x80(%rsp),%rcx
+   e49b4:	4d 39 e8                                        	cmp    %r13,%r8
+   e49b7:	75 b7                                           	jne    e4970 <emuella_j2k_codestream::write_component_packet_header+0xb00>
+   e49b9:	48 8b 44 24 10                                  	mov    0x10(%rsp),%rax
+   e49be:	48 3b 44 24 30                                  	cmp    0x30(%rsp),%rax
+   e49c3:	0f 85 e7 fe ff ff                               	jne    e48b0 <emuella_j2k_codestream::write_component_packet_header+0xa40>
+   e49c9:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e49ce:	ff 15 cc 97 18 00                               	call   *0x1897cc(%rip)        # 26e1a0 <_DYNAMIC+0x8a0>
+   e49d4:	e9 d7 fe ff ff                                  	jmp    e48b0 <emuella_j2k_codestream::write_component_packet_header+0xa40>
+   e49d9:	0f 1f 80 00 00 00 00                            	nopl   0x0(%rax)
+   e49e0:	48 8d 04 7f                                     	lea    (%rdi,%rdi,2),%rax
+   e49e4:	4c 8d 3c 85 08 00 00 00                         	lea    0x8(,%rax,4),%r15
+   e49ec:	8b 84 24 d0 00 00 00                            	mov    0xd0(%rsp),%eax
+   e49f3:	41 89 c4                                        	mov    %eax,%r12d
+   e49f6:	48 89 f9                                        	mov    %rdi,%rcx
+   e49f9:	eb 32                                           	jmp    e4a2d <emuella_j2k_codestream::write_component_packet_header+0xbbd>
+   e49fb:	0f 1f 44 00 00                                  	nopl   0x0(%rax,%rax,1)
+   e4a00:	48 b8 00 00 00 00 ff ff ff ff                   	movabs $0xffffffff00000000,%rax
+   e4a0a:	4b 89 44 3a f8                                  	mov    %rax,-0x8(%r10,%r15,1)
+   e4a0f:	43 c6 04 3a 00                                  	movb   $0x0,(%r10,%r15,1)
+   e4a14:	49 ff c5                                        	inc    %r13
+   e4a17:	4c 89 6c 24 40                                  	mov    %r13,0x40(%rsp)
+   e4a1c:	49 83 c7 0c                                     	add    $0xc,%r15
+   e4a20:	66 41 ff cc                                     	dec    %r12w
+   e4a24:	4c 89 e9                                        	mov    %r13,%rcx
+   e4a27:	0f 84 c3 fd ff ff                               	je     e47f0 <emuella_j2k_codestream::write_component_packet_header+0x980>
+   e4a2d:	48 3b 4c 24 30                                  	cmp    0x30(%rsp),%rcx
+   e4a32:	49 89 cd                                        	mov    %rcx,%r13
+   e4a35:	75 c9                                           	jne    e4a00 <emuella_j2k_codestream::write_component_packet_header+0xb90>
+   e4a37:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4a3c:	ff 15 5e 97 18 00                               	call   *0x18975e(%rip)        # 26e1a0 <_DYNAMIC+0x8a0>
+   e4a42:	4c 8b 54 24 38                                  	mov    0x38(%rsp),%r10
+   e4a47:	eb b7                                           	jmp    e4a00 <emuella_j2k_codestream::write_component_packet_header+0xb90>
+   e4a49:	48 c7 44 24 10 00 00 00 00                      	movq   $0x0,0x10(%rsp)
+   e4a52:	49 89 c4                                        	mov    %rax,%r12
+   e4a55:	4c 3b 6c 24 60                                  	cmp    0x60(%rsp),%r13
+   e4a5a:	0f 85 f6 fb ff ff                               	jne    e4656 <emuella_j2k_codestream::write_component_packet_header+0x7e6>
+   e4a60:	e9 e6 fb ff ff                                  	jmp    e464b <emuella_j2k_codestream::write_component_packet_header+0x7db>
+   e4a65:	48 89 7c 24 10                                  	mov    %rdi,0x10(%rsp)
+   e4a6a:	4c 8b 7c 24 30                                  	mov    0x30(%rsp),%r15
+   e4a6f:	48 8b 44 24 38                                  	mov    0x38(%rsp),%rax
+   e4a74:	4c 8b ac 24 10 01 00 00                         	mov    0x110(%rsp),%r13
+   e4a7c:	49 89 c4                                        	mov    %rax,%r12
+   e4a7f:	4c 3b 6c 24 60                                  	cmp    0x60(%rsp),%r13
+   e4a84:	0f 84 c1 fb ff ff                               	je     e464b <emuella_j2k_codestream::write_component_packet_header+0x7db>
+   e4a8a:	e9 c7 fb ff ff                                  	jmp    e4656 <emuella_j2k_codestream::write_component_packet_header+0x7e6>
+   e4a8f:	48 83 bc 24 90 00 00 00 00                      	cmpq   $0x0,0x90(%rsp)
+   e4a98:	4c 8b 6c 24 20                                  	mov    0x20(%rsp),%r13
+   e4a9d:	0f 84 57 02 00 00                               	je     e4cfa <emuella_j2k_codestream::write_component_packet_header+0xe8a>
+   e4aa3:	48 8b bc 24 98 00 00 00                         	mov    0x98(%rsp),%rdi
+   e4aab:	ff 15 67 90 18 00                               	call   *0x189067(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e4ab1:	e9 44 02 00 00                                  	jmp    e4cfa <emuella_j2k_codestream::write_component_packet_header+0xe8a>
+   e4ab6:	48 8d 15 eb 24 18 00                            	lea    0x1824eb(%rip),%rdx        # 266fa8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x280>
+   e4abd:	ff 15 9d 90 18 00                               	call   *0x18909d(%rip)        # 26db60 <_DYNAMIC+0x260>
+   e4ac3:	e9 f3 04 00 00                                  	jmp    e4fbb <emuella_j2k_codestream::write_component_packet_header+0x114b>
+   e4ac8:	48 8b 44 24 70                                  	mov    0x70(%rsp),%rax
+   e4acd:	0f 10 44 24 60                                  	movups 0x60(%rsp),%xmm0
+   e4ad2:	0f 29 84 24 80 01 00 00                         	movaps %xmm0,0x180(%rsp)
+   e4ada:	0f 29 84 24 40 01 00 00                         	movaps %xmm0,0x140(%rsp)
+   e4ae2:	48 89 44 24 10                                  	mov    %rax,0x10(%rsp)
+   e4ae7:	48 89 84 24 50 01 00 00                         	mov    %rax,0x150(%rsp)
+   e4aef:	48 8b 84 24 48 01 00 00                         	mov    0x148(%rsp),%rax
+   e4af7:	48 89 84 24 80 00 00 00                         	mov    %rax,0x80(%rsp)
+   e4aff:	48 8b 84 24 a8 00 00 00                         	mov    0xa8(%rsp),%rax
+   e4b07:	48 3b 84 24 58 01 00 00                         	cmp    0x158(%rsp),%rax
+   e4b0f:	0f 84 7b 02 00 00                               	je     e4d90 <emuella_j2k_codestream::write_component_packet_header+0xf20>
+   e4b15:	44 0f b6 60 1b                                  	movzbl 0x1b(%rax),%r12d
+   e4b1a:	44 0f b7 78 10                                  	movzwl 0x10(%rax),%r15d
+   e4b1f:	49 89 c5                                        	mov    %rax,%r13
+   e4b22:	0f b7 68 12                                     	movzwl 0x12(%rax),%ebp
+   e4b26:	c7 04 24 01 00 00 00                            	movl   $0x1,(%rsp)
+   e4b2d:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4b32:	48 89 de                                        	mov    %rbx,%rsi
+   e4b35:	4c 89 f2                                        	mov    %r14,%rdx
+   e4b38:	48 8b 8c 24 b0 00 00 00                         	mov    0xb0(%rsp),%rcx
+   e4b40:	45 89 f8                                        	mov    %r15d,%r8d
+   e4b43:	41 89 e9                                        	mov    %ebp,%r9d
+   e4b46:	e8 35 64 06 00                                  	call   14af80 <<emuella_j2k_codestream::EncTagTree>::encode>
+   e4b4b:	48 83 7c 24 30 ff                               	cmpq   $0xffffffffffffffff,0x30(%rsp)
+   e4b51:	0f 85 15 02 00 00                               	jne    e4d6c <emuella_j2k_codestream::write_component_packet_header+0xefc>
+   e4b57:	49 8d 45 20                                     	lea    0x20(%r13),%rax
+   e4b5b:	45 84 e4                                        	test   %r12b,%r12b
+   e4b5e:	74 a7                                           	je     e4b07 <emuella_j2k_codestream::write_component_packet_header+0xc97>
+   e4b60:	c7 04 24 ff ff ff ff                            	movl   $0xffffffff,(%rsp)
+   e4b67:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4b6c:	48 8b b4 24 80 00 00 00                         	mov    0x80(%rsp),%rsi
+   e4b74:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+   e4b79:	48 8b 8c 24 b0 00 00 00                         	mov    0xb0(%rsp),%rcx
+   e4b81:	45 89 f8                                        	mov    %r15d,%r8d
+   e4b84:	41 89 e9                                        	mov    %ebp,%r9d
+   e4b87:	e8 f4 63 06 00                                  	call   14af80 <<emuella_j2k_codestream::EncTagTree>::encode>
+   e4b8c:	48 83 7c 24 30 ff                               	cmpq   $0xffffffffffffffff,0x30(%rsp)
+   e4b92:	0f 85 d4 01 00 00                               	jne    e4d6c <emuella_j2k_codestream::write_component_packet_header+0xefc>
+   e4b98:	49 83 c5 20                                     	add    $0x20,%r13
+   e4b9c:	4c 89 ac 24 a8 00 00 00                         	mov    %r13,0xa8(%rsp)
+   e4ba4:	41 0f b7 6d f8                                  	movzwl -0x8(%r13),%ebp
+   e4ba9:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4bae:	48 8b b4 24 b0 00 00 00                         	mov    0xb0(%rsp),%rsi
+   e4bb6:	89 ea                                           	mov    %ebp,%edx
+   e4bb8:	e8 63 0a ff ff                                  	call   d5620 <emuella_j2k_codestream::write_coding_pass_count>
+   e4bbd:	48 83 7c 24 30 ff                               	cmpq   $0xffffffffffffffff,0x30(%rsp)
+   e4bc3:	0f 85 a3 01 00 00                               	jne    e4d6c <emuella_j2k_codestream::write_component_packet_header+0xefc>
+   e4bc9:	85 ed                                           	test   %ebp,%ebp
+   e4bcb:	4c 8b ac 24 b0 00 00 00                         	mov    0xb0(%rsp),%r13
+   e4bd3:	0f 84 89 03 00 00                               	je     e4f62 <emuella_j2k_codestream::write_component_packet_header+0x10f2>
+   e4bd9:	48 8b 84 24 a8 00 00 00                         	mov    0xa8(%rsp),%rax
+   e4be1:	4c 8b 60 e8                                     	mov    -0x18(%rax),%r12
+   e4be5:	0f bd c5                                        	bsr    %ebp,%eax
+   e4be8:	48 89 44 24 18                                  	mov    %rax,0x18(%rsp)
+   e4bed:	83 f0 1f                                        	xor    $0x1f,%eax
+   e4bf0:	41 b7 22                                        	mov    $0x22,%r15b
+   e4bf3:	41 28 c7                                        	sub    %al,%r15b
+   e4bf6:	4c 89 e0                                        	mov    %r12,%rax
+   e4bf9:	44 89 f9                                        	mov    %r15d,%ecx
+   e4bfc:	48 d3 e8                                        	shr    %cl,%rax
+   e4bff:	48 85 c0                                        	test   %rax,%rax
+   e4c02:	74 61                                           	je     e4c65 <emuella_j2k_codestream::write_component_packet_header+0xdf5>
+   e4c04:	40 b5 fd                                        	mov    $0xfd,%bpl
+   e4c07:	41 b7 04                                        	mov    $0x4,%r15b
+   e4c0a:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4c0f:	4c 89 ee                                        	mov    %r13,%rsi
+   e4c12:	ba 01 00 00 00                                  	mov    $0x1,%edx
+   e4c17:	e8 b4 6c 06 00                                  	call   14b8d0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>
+   e4c1c:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+   e4c21:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+   e4c25:	0f 85 0e 02 00 00                               	jne    e4e39 <emuella_j2k_codestream::write_component_packet_header+0xfc9>
+   e4c2b:	45 84 ff                                        	test   %r15b,%r15b
+   e4c2e:	0f 84 18 03 00 00                               	je     e4f4c <emuella_j2k_codestream::write_component_packet_header+0x10dc>
+   e4c34:	48 8b 44 24 18                                  	mov    0x18(%rsp),%rax
+   e4c39:	42 8d 0c 38                                     	lea    (%rax,%r15,1),%ecx
+   e4c3d:	4c 89 e0                                        	mov    %r12,%rax
+   e4c40:	31 d2                                           	xor    %edx,%edx
+   e4c42:	48 0f ad d0                                     	shrd   %cl,%rdx,%rax
+   e4c46:	f6 c1 40                                        	test   $0x40,%cl
+   e4c49:	48 0f 45 c2                                     	cmovne %rdx,%rax
+   e4c4d:	40 fe cd                                        	dec    %bpl
+   e4c50:	41 fe c7                                        	inc    %r15b
+   e4c53:	48 85 c0                                        	test   %rax,%rax
+   e4c56:	75 b2                                           	jne    e4c0a <emuella_j2k_codestream::write_component_packet_header+0xd9a>
+   e4c58:	4c 8b 7c 24 18                                  	mov    0x18(%rsp),%r15
+   e4c5d:	41 28 ef                                        	sub    %bpl,%r15b
+   e4c60:	40 f6 dd                                        	neg    %bpl
+   e4c63:	eb 03                                           	jmp    e4c68 <emuella_j2k_codestream::write_component_packet_header+0xdf8>
+   e4c65:	40 b5 03                                        	mov    $0x3,%bpl
+   e4c68:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4c6d:	4c 89 ee                                        	mov    %r13,%rsi
+   e4c70:	31 d2                                           	xor    %edx,%edx
+   e4c72:	e8 59 6c 06 00                                  	call   14b8d0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>
+   e4c77:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+   e4c7c:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+   e4c80:	0f 85 b3 01 00 00                               	jne    e4e39 <emuella_j2k_codestream::write_component_packet_header+0xfc9>
+   e4c86:	4d 89 fd                                        	mov    %r15,%r13
+   e4c89:	41 38 ef                                        	cmp    %bpl,%r15b
+   e4c8c:	4c 8b bc 24 b0 00 00 00                         	mov    0xb0(%rsp),%r15
+   e4c94:	0f 82 e7 02 00 00                               	jb     e4f81 <emuella_j2k_codestream::write_component_packet_header+0x1111>
+   e4c9a:	4c 89 e0                                        	mov    %r12,%rax
+   e4c9d:	48 c1 e8 20                                     	shr    $0x20,%rax
+   e4ca1:	0f 85 94 02 00 00                               	jne    e4f3b <emuella_j2k_codestream::write_component_packet_header+0x10cb>
+   e4ca7:	41 8d 6d ff                                     	lea    -0x1(%r13),%ebp
+   e4cab:	40 0f b6 c5                                     	movzbl %bpl,%eax
+   e4caf:	31 d2                                           	xor    %edx,%edx
+   e4cb1:	41 0f a3 c4                                     	bt     %eax,%r12d
+   e4cb5:	0f 92 c2                                        	setb   %dl
+   e4cb8:	48 8d 7c 24 30                                  	lea    0x30(%rsp),%rdi
+   e4cbd:	4c 89 fe                                        	mov    %r15,%rsi
+   e4cc0:	e8 0b 6c 06 00                                  	call   14b8d0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>
+   e4cc5:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+   e4cca:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+   e4cce:	0f 85 13 02 00 00                               	jne    e4ee7 <emuella_j2k_codestream::write_component_packet_header+0x1077>
+   e4cd4:	40 80 c5 ff                                     	add    $0xff,%bpl
+   e4cd8:	72 d1                                           	jb     e4cab <emuella_j2k_codestream::write_component_packet_header+0xe3b>
+   e4cda:	44 88 6c 24 28                                  	mov    %r13b,0x28(%rsp)
+   e4cdf:	e9 1b fe ff ff                                  	jmp    e4aff <emuella_j2k_codestream::write_component_packet_header+0xc8f>
+   e4ce4:	48 83 7c 24 60 00                               	cmpq   $0x0,0x60(%rsp)
+   e4cea:	74 09                                           	je     e4cf5 <emuella_j2k_codestream::write_component_packet_header+0xe85>
+   e4cec:	48 89 ef                                        	mov    %rbp,%rdi
+   e4cef:	ff 15 23 8e 18 00                               	call   *0x188e23(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e4cf5:	4c 8b 6c 24 20                                  	mov    0x20(%rsp),%r13
+   e4cfa:	0f 10 84 24 a0 01 00 00                         	movups 0x1a0(%rsp),%xmm0
+   e4d02:	0f 29 84 24 80 01 00 00                         	movaps %xmm0,0x180(%rsp)
+   e4d0a:	48 8b 84 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rax
+   e4d12:	48 89 84 24 90 01 00 00                         	mov    %rax,0x190(%rsp)
+   e4d1a:	48 8b 4c 24 78                                  	mov    0x78(%rsp),%rcx
+   e4d1f:	48 89 41 18                                     	mov    %rax,0x18(%rcx)
+   e4d23:	0f 11 41 08                                     	movups %xmm0,0x8(%rcx)
+   e4d27:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   e4d31:	48 89 01                                        	mov    %rax,(%rcx)
+   e4d34:	4c 8d 7b 08                                     	lea    0x8(%rbx),%r15
+   e4d38:	4c 8b 25 d9 8d 18 00                            	mov    0x188dd9(%rip),%r12        # 26db18 <free@GLIBC_2.2.5>
+   e4d3f:	eb 1c                                           	jmp    e4d5d <emuella_j2k_codestream::write_component_packet_header+0xeed>
+   e4d41:	66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00    	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e4d50:	49 83 c7 20                                     	add    $0x20,%r15
+   e4d54:	49 ff ce                                        	dec    %r14
+   e4d57:	0f 84 b9 00 00 00                               	je     e4e16 <emuella_j2k_codestream::write_component_packet_header+0xfa6>
+   e4d5d:	49 83 7f f8 00                                  	cmpq   $0x0,-0x8(%r15)
+   e4d62:	74 ec                                           	je     e4d50 <emuella_j2k_codestream::write_component_packet_header+0xee0>
+   e4d64:	49 8b 3f                                        	mov    (%r15),%rdi
+   e4d67:	41 ff d4                                        	call   *%r12
+   e4d6a:	eb e4                                           	jmp    e4d50 <emuella_j2k_codestream::write_component_packet_header+0xee0>
+   e4d6c:	0f 10 44 24 30                                  	movups 0x30(%rsp),%xmm0
+   e4d71:	0f 10 4c 24 40                                  	movups 0x40(%rsp),%xmm1
+   e4d76:	0f 10 54 24 50                                  	movups 0x50(%rsp),%xmm2
+   e4d7b:	48 8b 44 24 78                                  	mov    0x78(%rsp),%rax
+   e4d80:	0f 11 50 20                                     	movups %xmm2,0x20(%rax)
+   e4d84:	0f 11 48 10                                     	movups %xmm1,0x10(%rax)
+   e4d88:	0f 11 00                                        	movups %xmm0,(%rax)
+   e4d8b:	e9 1b 01 00 00                                  	jmp    e4eab <emuella_j2k_codestream::write_component_packet_header+0x103b>
+   e4d90:	48 8b 44 24 78                                  	mov    0x78(%rsp),%rax
+   e4d95:	48 c7 00 ff ff ff ff                            	movq   $0xffffffffffffffff,(%rax)
+   e4d9c:	48 8b 6c 24 10                                  	mov    0x10(%rsp),%rbp
+   e4da1:	48 85 ed                                        	test   %rbp,%rbp
+   e4da4:	4c 8b 6c 24 20                                  	mov    0x20(%rsp),%r13
+   e4da9:	74 2d                                           	je     e4dd8 <emuella_j2k_codestream::write_component_packet_header+0xf68>
+   e4dab:	48 8b 84 24 80 00 00 00                         	mov    0x80(%rsp),%rax
+   e4db3:	4c 8d 78 08                                     	lea    0x8(%rax),%r15
+   e4db7:	4c 8b 25 5a 8d 18 00                            	mov    0x188d5a(%rip),%r12        # 26db18 <free@GLIBC_2.2.5>
+   e4dbe:	eb 09                                           	jmp    e4dc9 <emuella_j2k_codestream::write_component_packet_header+0xf59>
+   e4dc0:	49 83 c7 20                                     	add    $0x20,%r15
+   e4dc4:	48 ff cd                                        	dec    %rbp
+   e4dc7:	74 0f                                           	je     e4dd8 <emuella_j2k_codestream::write_component_packet_header+0xf68>
+   e4dc9:	49 83 7f f8 00                                  	cmpq   $0x0,-0x8(%r15)
+   e4dce:	74 f0                                           	je     e4dc0 <emuella_j2k_codestream::write_component_packet_header+0xf50>
+   e4dd0:	49 8b 3f                                        	mov    (%r15),%rdi
+   e4dd3:	41 ff d4                                        	call   *%r12
+   e4dd6:	eb e8                                           	jmp    e4dc0 <emuella_j2k_codestream::write_component_packet_header+0xf50>
+   e4dd8:	48 83 bc 24 40 01 00 00 00                      	cmpq   $0x0,0x140(%rsp)
+   e4de1:	74 0e                                           	je     e4df1 <emuella_j2k_codestream::write_component_packet_header+0xf81>
+   e4de3:	48 8b bc 24 80 00 00 00                         	mov    0x80(%rsp),%rdi
+   e4deb:	ff 15 27 8d 18 00                               	call   *0x188d27(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e4df1:	4c 8d 7b 08                                     	lea    0x8(%rbx),%r15
+   e4df5:	4c 8b 25 1c 8d 18 00                            	mov    0x188d1c(%rip),%r12        # 26db18 <free@GLIBC_2.2.5>
+   e4dfc:	eb 09                                           	jmp    e4e07 <emuella_j2k_codestream::write_component_packet_header+0xf97>
+   e4dfe:	49 83 c7 20                                     	add    $0x20,%r15
+   e4e02:	49 ff ce                                        	dec    %r14
+   e4e05:	74 0f                                           	je     e4e16 <emuella_j2k_codestream::write_component_packet_header+0xfa6>
+   e4e07:	49 83 7f f8 00                                  	cmpq   $0x0,-0x8(%r15)
+   e4e0c:	74 f0                                           	je     e4dfe <emuella_j2k_codestream::write_component_packet_header+0xf8e>
+   e4e0e:	49 8b 3f                                        	mov    (%r15),%rdi
+   e4e11:	41 ff d4                                        	call   *%r12
+   e4e14:	eb e8                                           	jmp    e4dfe <emuella_j2k_codestream::write_component_packet_header+0xf8e>
+   e4e16:	4d 85 ed                                        	test   %r13,%r13
+   e4e19:	0f 84 9d f6 ff ff                               	je     e44bc <emuella_j2k_codestream::write_component_packet_header+0x64c>
+   e4e1f:	48 89 df                                        	mov    %rbx,%rdi
+   e4e22:	48 81 c4 b8 01 00 00                            	add    $0x1b8,%rsp
+   e4e29:	5b                                              	pop    %rbx
+   e4e2a:	41 5c                                           	pop    %r12
+   e4e2c:	41 5d                                           	pop    %r13
+   e4e2e:	41 5e                                           	pop    %r14
+   e4e30:	41 5f                                           	pop    %r15
+   e4e32:	5d                                              	pop    %rbp
+   e4e33:	ff 25 df 8c 18 00                               	jmp    *0x188cdf(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e4e39:	0f b6 74 24 38                                  	movzbl 0x38(%rsp),%esi
+   e4e3e:	0f b6 4c 24 3f                                  	movzbl 0x3f(%rsp),%ecx
+   e4e43:	c1 e1 10                                        	shl    $0x10,%ecx
+   e4e46:	0f b7 54 24 3d                                  	movzwl 0x3d(%rsp),%edx
+   e4e4b:	09 ca                                           	or     %ecx,%edx
+   e4e4d:	48 c1 e2 20                                     	shl    $0x20,%rdx
+   e4e51:	8b 4c 24 39                                     	mov    0x39(%rsp),%ecx
+   e4e55:	48 09 d1                                        	or     %rdx,%rcx
+   e4e58:	0f 10 44 24 40                                  	movups 0x40(%rsp),%xmm0
+   e4e5d:	0f 29 84 24 60 01 00 00                         	movaps %xmm0,0x160(%rsp)
+   e4e65:	0f 10 44 24 50                                  	movups 0x50(%rsp),%xmm0
+   e4e6a:	0f 29 84 24 70 01 00 00                         	movaps %xmm0,0x170(%rsp)
+   e4e72:	48 8b 54 24 78                                  	mov    0x78(%rsp),%rdx
+   e4e77:	48 89 02                                        	mov    %rax,(%rdx)
+   e4e7a:	40 88 72 08                                     	mov    %sil,0x8(%rdx)
+   e4e7e:	89 4a 09                                        	mov    %ecx,0x9(%rdx)
+   e4e81:	48 89 c8                                        	mov    %rcx,%rax
+   e4e84:	48 c1 e8 30                                     	shr    $0x30,%rax
+   e4e88:	88 42 0f                                        	mov    %al,0xf(%rdx)
+   e4e8b:	48 c1 e9 20                                     	shr    $0x20,%rcx
+   e4e8f:	66 89 4a 0d                                     	mov    %cx,0xd(%rdx)
+   e4e93:	0f 28 84 24 60 01 00 00                         	movaps 0x160(%rsp),%xmm0
+   e4e9b:	0f 28 8c 24 70 01 00 00                         	movaps 0x170(%rsp),%xmm1
+   e4ea3:	0f 11 42 10                                     	movups %xmm0,0x10(%rdx)
+   e4ea7:	0f 11 4a 20                                     	movups %xmm1,0x20(%rdx)
+   e4eab:	4c 8b 6c 24 20                                  	mov    0x20(%rsp),%r13
+   e4eb0:	48 8b 6c 24 10                                  	mov    0x10(%rsp),%rbp
+   e4eb5:	48 85 ed                                        	test   %rbp,%rbp
+   e4eb8:	74 5f                                           	je     e4f19 <emuella_j2k_codestream::write_component_packet_header+0x10a9>
+   e4eba:	48 8b 84 24 80 00 00 00                         	mov    0x80(%rsp),%rax
+   e4ec2:	4c 8d 78 08                                     	lea    0x8(%rax),%r15
+   e4ec6:	4c 8b 25 4b 8c 18 00                            	mov    0x188c4b(%rip),%r12        # 26db18 <free@GLIBC_2.2.5>
+   e4ecd:	eb 09                                           	jmp    e4ed8 <emuella_j2k_codestream::write_component_packet_header+0x1068>
+   e4ecf:	49 83 c7 20                                     	add    $0x20,%r15
+   e4ed3:	48 ff cd                                        	dec    %rbp
+   e4ed6:	74 41                                           	je     e4f19 <emuella_j2k_codestream::write_component_packet_header+0x10a9>
+   e4ed8:	49 83 7f f8 00                                  	cmpq   $0x0,-0x8(%r15)
+   e4edd:	74 f0                                           	je     e4ecf <emuella_j2k_codestream::write_component_packet_header+0x105f>
+   e4edf:	49 8b 3f                                        	mov    (%r15),%rdi
+   e4ee2:	41 ff d4                                        	call   *%r12
+   e4ee5:	eb e8                                           	jmp    e4ecf <emuella_j2k_codestream::write_component_packet_header+0x105f>
+   e4ee7:	48 8b 4c 24 58                                  	mov    0x58(%rsp),%rcx
+   e4eec:	48 8b 54 24 78                                  	mov    0x78(%rsp),%rdx
+   e4ef1:	48 89 4a 28                                     	mov    %rcx,0x28(%rdx)
+   e4ef5:	0f 10 44 24 38                                  	movups 0x38(%rsp),%xmm0
+   e4efa:	0f 10 4c 24 48                                  	movups 0x48(%rsp),%xmm1
+   e4eff:	0f 11 4a 18                                     	movups %xmm1,0x18(%rdx)
+   e4f03:	0f 11 42 08                                     	movups %xmm0,0x8(%rdx)
+   e4f07:	48 8b 6c 24 10                                  	mov    0x10(%rsp),%rbp
+   e4f0c:	48 89 02                                        	mov    %rax,(%rdx)
+   e4f0f:	4c 8b 6c 24 20                                  	mov    0x20(%rsp),%r13
+   e4f14:	48 85 ed                                        	test   %rbp,%rbp
+   e4f17:	75 a1                                           	jne    e4eba <emuella_j2k_codestream::write_component_packet_header+0x104a>
+   e4f19:	48 83 bc 24 40 01 00 00 00                      	cmpq   $0x0,0x140(%rsp)
+   e4f22:	0f 84 0c fe ff ff                               	je     e4d34 <emuella_j2k_codestream::write_component_packet_header+0xec4>
+   e4f28:	48 8b bc 24 80 00 00 00                         	mov    0x80(%rsp),%rdi
+   e4f30:	ff 15 e2 8b 18 00                               	call   *0x188be2(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e4f36:	e9 f9 fd ff ff                                  	jmp    e4d34 <emuella_j2k_codestream::write_component_packet_header+0xec4>
+   e4f3b:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   e4f45:	48 8b 54 24 78                                  	mov    0x78(%rsp),%rdx
+   e4f4a:	eb bb                                           	jmp    e4f07 <emuella_j2k_codestream::write_component_packet_header+0x1097>
+   e4f4c:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   e4f56:	31 c9                                           	xor    %ecx,%ecx
+   e4f58:	0f b6 74 24 28                                  	movzbl 0x28(%rsp),%esi
+   e4f5d:	e9 10 ff ff ff                                  	jmp    e4e72 <emuella_j2k_codestream::write_component_packet_header+0x1002>
+   e4f62:	48 8d 3d d7 2a 18 00                            	lea    0x182ad7(%rip),%rdi        # 267a40 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0xd18>
+   e4f69:	ff 15 41 8f 18 00                               	call   *0x188f41(%rip)        # 26deb0 <_DYNAMIC+0x5b0>
+   e4f6f:	eb 4a                                           	jmp    e4fbb <emuella_j2k_codestream::write_component_packet_header+0x114b>
+   e4f71:	bf 04 00 00 00                                  	mov    $0x4,%edi
+   e4f76:	4c 89 ee                                        	mov    %r13,%rsi
+   e4f79:	ff 15 d1 8b 18 00                               	call   *0x188bd1(%rip)        # 26db50 <_DYNAMIC+0x250>
+   e4f7f:	eb 3a                                           	jmp    e4fbb <emuella_j2k_codestream::write_component_packet_header+0x114b>
+   e4f81:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   e4f8b:	eb cb                                           	jmp    e4f58 <emuella_j2k_codestream::write_component_packet_header+0x10e8>
+   e4f8d:	bf 04 00 00 00                                  	mov    $0x4,%edi
+   e4f92:	48 8b 74 24 20                                  	mov    0x20(%rsp),%rsi
+   e4f97:	ff 15 b3 8b 18 00                               	call   *0x188bb3(%rip)        # 26db50 <_DYNAMIC+0x250>
+   e4f9d:	bf 04 00 00 00                                  	mov    $0x4,%edi
+   e4fa2:	4c 89 e6                                        	mov    %r12,%rsi
+   e4fa5:	ff 15 a5 8b 18 00                               	call   *0x188ba5(%rip)        # 26db50 <_DYNAMIC+0x250>
+   e4fab:	eb 0e                                           	jmp    e4fbb <emuella_j2k_codestream::write_component_packet_header+0x114b>
+   e4fad:	bf 04 00 00 00                                  	mov    $0x4,%edi
+   e4fb2:	4c 89 fe                                        	mov    %r15,%rsi
+   e4fb5:	ff 15 95 8b 18 00                               	call   *0x188b95(%rip)        # 26db50 <_DYNAMIC+0x250>
+   e4fbb:	0f 0b                                           	ud2
+   e4fbd:	e9 a2 00 00 00                                  	jmp    e5064 <emuella_j2k_codestream::write_component_packet_header+0x11f4>
+   e4fc2:	e9 9d 00 00 00                                  	jmp    e5064 <emuella_j2k_codestream::write_component_packet_header+0x11f4>
+   e4fc7:	e9 98 00 00 00                                  	jmp    e5064 <emuella_j2k_codestream::write_component_packet_header+0x11f4>
+   e4fcc:	49 89 c4                                        	mov    %rax,%r12
+   e4fcf:	4d 85 ed                                        	test   %r13,%r13
+   e4fd2:	0f 84 e1 00 00 00                               	je     e50b9 <emuella_j2k_codestream::write_component_packet_header+0x1249>
+   e4fd8:	4c 89 ff                                        	mov    %r15,%rdi
+   e4fdb:	e9 d3 00 00 00                                  	jmp    e50b3 <emuella_j2k_codestream::write_component_packet_header+0x1243>
+   e4fe0:	49 89 c4                                        	mov    %rax,%r12
+   e4fe3:	e9 fd 00 00 00                                  	jmp    e50e5 <emuella_j2k_codestream::write_component_packet_header+0x1275>
+   e4fe8:	eb 7a                                           	jmp    e5064 <emuella_j2k_codestream::write_component_packet_header+0x11f4>
+   e4fea:	49 89 c5                                        	mov    %rax,%r13
+   e4fed:	4d 85 ff                                        	test   %r15,%r15
+   e4ff0:	75 08                                           	jne    e4ffa <emuella_j2k_codestream::write_component_packet_header+0x118a>
+   e4ff2:	4d 89 ec                                        	mov    %r13,%r12
+   e4ff5:	e9 bf 00 00 00                                  	jmp    e50b9 <emuella_j2k_codestream::write_component_packet_header+0x1249>
+   e4ffa:	4c 89 e7                                        	mov    %r12,%rdi
+   e4ffd:	ff 15 15 8b 18 00                               	call   *0x188b15(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e5003:	4d 89 ec                                        	mov    %r13,%r12
+   e5006:	e9 ae 00 00 00                                  	jmp    e50b9 <emuella_j2k_codestream::write_component_packet_header+0x1249>
+   e500b:	49 89 c4                                        	mov    %rax,%r12
+   e500e:	e9 a6 00 00 00                                  	jmp    e50b9 <emuella_j2k_codestream::write_component_packet_header+0x1249>
+   e5013:	49 89 c4                                        	mov    %rax,%r12
+   e5016:	4d 85 ff                                        	test   %r15,%r15
+   e5019:	0f 84 50 01 00 00                               	je     e516f <emuella_j2k_codestream::write_component_packet_header+0x12ff>
+   e501f:	4c 89 f7                                        	mov    %r14,%rdi
+   e5022:	e9 42 01 00 00                                  	jmp    e5169 <emuella_j2k_codestream::write_component_packet_header+0x12f9>
+   e5027:	49 89 c4                                        	mov    %rax,%r12
+   e502a:	48 83 bc 24 90 00 00 00 00                      	cmpq   $0x0,0x90(%rsp)
+   e5033:	0f 84 a7 00 00 00                               	je     e50e0 <emuella_j2k_codestream::write_component_packet_header+0x1270>
+   e5039:	48 8b bc 24 98 00 00 00                         	mov    0x98(%rsp),%rdi
+   e5041:	e9 94 00 00 00                                  	jmp    e50da <emuella_j2k_codestream::write_component_packet_header+0x126a>
+   e5046:	49 89 c4                                        	mov    %rax,%r12
+   e5049:	4d 85 ff                                        	test   %r15,%r15
+   e504c:	0f 84 1d 01 00 00                               	je     e516f <emuella_j2k_codestream::write_component_packet_header+0x12ff>
+   e5052:	48 8b 7c 24 18                                  	mov    0x18(%rsp),%rdi
+   e5057:	e9 0d 01 00 00                                  	jmp    e5169 <emuella_j2k_codestream::write_component_packet_header+0x12f9>
+   e505c:	49 89 c4                                        	mov    %rax,%r12
+   e505f:	e9 0b 01 00 00                                  	jmp    e516f <emuella_j2k_codestream::write_component_packet_header+0x12ff>
+   e5064:	49 89 c4                                        	mov    %rax,%r12
+   e5067:	48 8d bc 24 40 01 00 00                         	lea    0x140(%rsp),%rdi
+   e506f:	e8 1c 2e fb ff                                  	call   97e90 <core::ptr::drop_glue::<emuella_j2k_codestream::EncTagTree>>
+   e5074:	eb 6a                                           	jmp    e50e0 <emuella_j2k_codestream::write_component_packet_header+0x1270>
+   e5076:	49 89 c4                                        	mov    %rax,%r12
+   e5079:	48 83 bc 24 90 00 00 00 00                      	cmpq   $0x0,0x90(%rsp)
+   e5082:	0f 84 07 01 00 00                               	je     e518f <emuella_j2k_codestream::write_component_packet_header+0x131f>
+   e5088:	48 8b 9c 24 98 00 00 00                         	mov    0x98(%rsp),%rbx
+   e5090:	e9 f1 00 00 00                                  	jmp    e5186 <emuella_j2k_codestream::write_component_packet_header+0x1316>
+   e5095:	eb 0c                                           	jmp    e50a3 <emuella_j2k_codestream::write_component_packet_header+0x1233>
+   e5097:	eb 0a                                           	jmp    e50a3 <emuella_j2k_codestream::write_component_packet_header+0x1233>
+   e5099:	e9 bb 00 00 00                                  	jmp    e5159 <emuella_j2k_codestream::write_component_packet_header+0x12e9>
+   e509e:	e9 b6 00 00 00                                  	jmp    e5159 <emuella_j2k_codestream::write_component_packet_header+0x12e9>
+   e50a3:	49 89 c4                                        	mov    %rax,%r12
+   e50a6:	48 83 7c 24 30 00                               	cmpq   $0x0,0x30(%rsp)
+   e50ac:	74 0b                                           	je     e50b9 <emuella_j2k_codestream::write_component_packet_header+0x1249>
+   e50ae:	48 8b 7c 24 38                                  	mov    0x38(%rsp),%rdi
+   e50b3:	ff 15 5f 8a 18 00                               	call   *0x188a5f(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e50b9:	48 8b 44 24 68                                  	mov    0x68(%rsp),%rax
+   e50be:	48 89 44 24 18                                  	mov    %rax,0x18(%rsp)
+   e50c3:	4c 8b 6c 24 70                                  	mov    0x70(%rsp),%r13
+   e50c8:	4d 85 ed                                        	test   %r13,%r13
+   e50cb:	75 52                                           	jne    e511f <emuella_j2k_codestream::write_component_packet_header+0x12af>
+   e50cd:	48 83 7c 24 60 00                               	cmpq   $0x0,0x60(%rsp)
+   e50d3:	74 0b                                           	je     e50e0 <emuella_j2k_codestream::write_component_packet_header+0x1270>
+   e50d5:	48 8b 7c 24 18                                  	mov    0x18(%rsp),%rdi
+   e50da:	ff 15 38 8a 18 00                               	call   *0x188a38(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e50e0:	48 8b 6c 24 20                                  	mov    0x20(%rsp),%rbp
+   e50e5:	4c 8d 7b 08                                     	lea    0x8(%rbx),%r15
+   e50e9:	4c 8b 2d 28 8a 18 00                            	mov    0x188a28(%rip),%r13        # 26db18 <free@GLIBC_2.2.5>
+   e50f0:	eb 17                                           	jmp    e5109 <emuella_j2k_codestream::write_component_packet_header+0x1299>
+   e50f2:	66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e5100:	49 83 c7 20                                     	add    $0x20,%r15
+   e5104:	49 ff ce                                        	dec    %r14
+   e5107:	74 0f                                           	je     e5118 <emuella_j2k_codestream::write_component_packet_header+0x12a8>
+   e5109:	49 83 7f f8 00                                  	cmpq   $0x0,-0x8(%r15)
+   e510e:	74 f0                                           	je     e5100 <emuella_j2k_codestream::write_component_packet_header+0x1290>
+   e5110:	49 8b 3f                                        	mov    (%r15),%rdi
+   e5113:	41 ff d5                                        	call   *%r13
+   e5116:	eb e8                                           	jmp    e5100 <emuella_j2k_codestream::write_component_packet_header+0x1290>
+   e5118:	48 85 ed                                        	test   %rbp,%rbp
+   e511b:	75 69                                           	jne    e5186 <emuella_j2k_codestream::write_component_packet_header+0x1316>
+   e511d:	eb 70                                           	jmp    e518f <emuella_j2k_codestream::write_component_packet_header+0x131f>
+   e511f:	48 8b 44 24 18                                  	mov    0x18(%rsp),%rax
+   e5124:	48 8d 68 08                                     	lea    0x8(%rax),%rbp
+   e5128:	4c 8b 3d e9 89 18 00                            	mov    0x1889e9(%rip),%r15        # 26db18 <free@GLIBC_2.2.5>
+   e512f:	eb 18                                           	jmp    e5149 <emuella_j2k_codestream::write_component_packet_header+0x12d9>
+   e5131:	66 66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00    	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e5140:	48 83 c5 20                                     	add    $0x20,%rbp
+   e5144:	49 ff cd                                        	dec    %r13
+   e5147:	74 84                                           	je     e50cd <emuella_j2k_codestream::write_component_packet_header+0x125d>
+   e5149:	48 83 7d f8 00                                  	cmpq   $0x0,-0x8(%rbp)
+   e514e:	74 f0                                           	je     e5140 <emuella_j2k_codestream::write_component_packet_header+0x12d0>
+   e5150:	48 8b 7d 00                                     	mov    0x0(%rbp),%rdi
+   e5154:	41 ff d7                                        	call   *%r15
+   e5157:	eb e7                                           	jmp    e5140 <emuella_j2k_codestream::write_component_packet_header+0x12d0>
+   e5159:	49 89 c4                                        	mov    %rax,%r12
+   e515c:	48 83 7c 24 30 00                               	cmpq   $0x0,0x30(%rsp)
+   e5162:	74 0b                                           	je     e516f <emuella_j2k_codestream::write_component_packet_header+0x12ff>
+   e5164:	48 8b 7c 24 38                                  	mov    0x38(%rsp),%rdi
+   e5169:	ff 15 a9 89 18 00                               	call   *0x1889a9(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e516f:	48 8b 5c 24 68                                  	mov    0x68(%rsp),%rbx
+   e5174:	4c 8b 74 24 70                                  	mov    0x70(%rsp),%r14
+   e5179:	4d 85 f6                                        	test   %r14,%r14
+   e517c:	75 19                                           	jne    e5197 <emuella_j2k_codestream::write_component_packet_header+0x1327>
+   e517e:	48 83 7c 24 60 00                               	cmpq   $0x0,0x60(%rsp)
+   e5184:	74 09                                           	je     e518f <emuella_j2k_codestream::write_component_packet_header+0x131f>
+   e5186:	48 89 df                                        	mov    %rbx,%rdi
+   e5189:	ff 15 89 89 18 00                               	call   *0x188989(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   e518f:	4c 89 e7                                        	mov    %r12,%rdi
+   e5192:	e8 b9 00 18 00                                  	call   265250 <_Unwind_Resume@plt>
+   e5197:	4c 8d 7b 08                                     	lea    0x8(%rbx),%r15
+   e519b:	4c 8b 2d 76 89 18 00                            	mov    0x188976(%rip),%r13        # 26db18 <free@GLIBC_2.2.5>
+   e51a2:	eb 15                                           	jmp    e51b9 <emuella_j2k_codestream::write_component_packet_header+0x1349>
+   e51a4:	66 66 66 2e 0f 1f 84 00 00 00 00 00             	data16 data16 cs nopw 0x0(%rax,%rax,1)
+   e51b0:	49 83 c7 20                                     	add    $0x20,%r15
+   e51b4:	49 ff ce                                        	dec    %r14
+   e51b7:	74 c5                                           	je     e517e <emuella_j2k_codestream::write_component_packet_header+0x130e>
+   e51b9:	49 83 7f f8 00                                  	cmpq   $0x0,-0x8(%r15)
+   e51be:	74 f0                                           	je     e51b0 <emuella_j2k_codestream::write_component_packet_header+0x1340>
+   e51c0:	49 8b 3f                                        	mov    (%r15),%rdi
+   e51c3:	41 ff d5                                        	call   *%r13
+   e51c6:	eb e8                                           	jmp    e51b0 <emuella_j2k_codestream::write_component_packet_header+0x1340>

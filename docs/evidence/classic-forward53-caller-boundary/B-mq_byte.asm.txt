@@ -1,0 +1,90 @@
+Disassembly of section .text:
+
+00000000001db410 <<emuella_j2k_tier1::mq::Encoder>::byte_out>:
+  1db410:	55                                              	push   %rbp
+  1db411:	41 57                                           	push   %r15
+  1db413:	41 56                                           	push   %r14
+  1db415:	41 54                                           	push   %r12
+  1db417:	53                                              	push   %rbx
+  1db418:	44 0f b6 77 46                                  	movzbl 0x46(%rdi),%r14d
+  1db41d:	80 7f 45 00                                     	cmpb   $0x0,0x45(%rdi)
+  1db421:	c6 47 45 00                                     	movb   $0x0,0x45(%rdi)
+  1db425:	74 4b                                           	je     1db472 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x62>
+  1db427:	41 80 fe ff                                     	cmp    $0xff,%r14b
+  1db42b:	74 67                                           	je     1db494 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x84>
+  1db42d:	8b 6f 14                                        	mov    0x14(%rdi),%ebp
+  1db430:	81 fd ff ff ff 07                               	cmp    $0x7ffffff,%ebp
+  1db436:	76 0d                                           	jbe    1db445 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x35>
+  1db438:	41 fe c6                                        	inc    %r14b
+  1db43b:	41 80 fe ff                                     	cmp    $0xff,%r14b
+  1db43f:	0f 84 94 00 00 00                               	je     1db4d9 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0xc9>
+  1db445:	48 8b 5f 08                                     	mov    0x8(%rdi),%rbx
+  1db449:	4c 8b 7b 10                                     	mov    0x10(%rbx),%r15
+  1db44d:	4c 3b 3b                                        	cmp    (%rbx),%r15
+  1db450:	75 0f                                           	jne    1db461 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x51>
+  1db452:	49 89 fc                                        	mov    %rdi,%r12
+  1db455:	48 89 df                                        	mov    %rbx,%rdi
+  1db458:	ff 15 02 99 09 00                               	call   *0x99902(%rip)        # 274d60 <_DYNAMIC+0x270>
+  1db45e:	4c 89 e7                                        	mov    %r12,%rdi
+  1db461:	48 8b 43 08                                     	mov    0x8(%rbx),%rax
+  1db465:	46 88 34 38                                     	mov    %r14b,(%rax,%r15,1)
+  1db469:	49 ff c7                                        	inc    %r15
+  1db46c:	4c 89 7b 10                                     	mov    %r15,0x10(%rbx)
+  1db470:	eb 03                                           	jmp    1db475 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x65>
+  1db472:	8b 6f 14                                        	mov    0x14(%rdi),%ebp
+  1db475:	89 e8                                           	mov    %ebp,%eax
+  1db477:	c1 e8 13                                        	shr    $0x13,%eax
+  1db47a:	c6 47 45 01                                     	movb   $0x1,0x45(%rdi)
+  1db47e:	88 47 46                                        	mov    %al,0x46(%rdi)
+  1db481:	81 e5 ff ff 07 00                               	and    $0x7ffff,%ebp
+  1db487:	89 6f 14                                        	mov    %ebp,0x14(%rdi)
+  1db48a:	b8 08 00 00 00                                  	mov    $0x8,%eax
+  1db48f:	e9 99 00 00 00                                  	jmp    1db52d <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x11d>
+  1db494:	48 8b 5f 08                                     	mov    0x8(%rdi),%rbx
+  1db498:	4c 8b 73 10                                     	mov    0x10(%rbx),%r14
+  1db49c:	4c 3b 33                                        	cmp    (%rbx),%r14
+  1db49f:	75 0f                                           	jne    1db4b0 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0xa0>
+  1db4a1:	49 89 ff                                        	mov    %rdi,%r15
+  1db4a4:	48 89 df                                        	mov    %rbx,%rdi
+  1db4a7:	ff 15 b3 98 09 00                               	call   *0x998b3(%rip)        # 274d60 <_DYNAMIC+0x270>
+  1db4ad:	4c 89 ff                                        	mov    %r15,%rdi
+  1db4b0:	48 8b 43 08                                     	mov    0x8(%rbx),%rax
+  1db4b4:	42 c6 04 30 ff                                  	movb   $0xff,(%rax,%r14,1)
+  1db4b9:	49 ff c6                                        	inc    %r14
+  1db4bc:	4c 89 73 10                                     	mov    %r14,0x10(%rbx)
+  1db4c0:	8b 47 14                                        	mov    0x14(%rdi),%eax
+  1db4c3:	89 c1                                           	mov    %eax,%ecx
+  1db4c5:	c1 e9 14                                        	shr    $0x14,%ecx
+  1db4c8:	c6 47 45 01                                     	movb   $0x1,0x45(%rdi)
+  1db4cc:	88 4f 46                                        	mov    %cl,0x46(%rdi)
+  1db4cf:	25 ff ff 0f 00                                  	and    $0xfffff,%eax
+  1db4d4:	89 47 14                                        	mov    %eax,0x14(%rdi)
+  1db4d7:	eb 4f                                           	jmp    1db528 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0x118>
+  1db4d9:	41 89 ee                                        	mov    %ebp,%r14d
+  1db4dc:	41 81 e6 ff ff ff 07                            	and    $0x7ffffff,%r14d
+  1db4e3:	44 89 77 14                                     	mov    %r14d,0x14(%rdi)
+  1db4e7:	48 8b 5f 08                                     	mov    0x8(%rdi),%rbx
+  1db4eb:	4c 8b 7b 10                                     	mov    0x10(%rbx),%r15
+  1db4ef:	4c 3b 3b                                        	cmp    (%rbx),%r15
+  1db4f2:	75 0f                                           	jne    1db503 <<emuella_j2k_tier1::mq::Encoder>::byte_out+0xf3>
+  1db4f4:	49 89 fc                                        	mov    %rdi,%r12
+  1db4f7:	48 89 df                                        	mov    %rbx,%rdi
+  1db4fa:	ff 15 60 98 09 00                               	call   *0x99860(%rip)        # 274d60 <_DYNAMIC+0x270>
+  1db500:	4c 89 e7                                        	mov    %r12,%rdi
+  1db503:	48 8b 43 08                                     	mov    0x8(%rbx),%rax
+  1db507:	42 c6 04 38 ff                                  	movb   $0xff,(%rax,%r15,1)
+  1db50c:	49 ff c7                                        	inc    %r15
+  1db50f:	4c 89 7b 10                                     	mov    %r15,0x10(%rbx)
+  1db513:	41 c1 ee 14                                     	shr    $0x14,%r14d
+  1db517:	c6 47 45 01                                     	movb   $0x1,0x45(%rdi)
+  1db51b:	44 88 77 46                                     	mov    %r14b,0x46(%rdi)
+  1db51f:	81 e5 ff ff 0f 00                               	and    $0xfffff,%ebp
+  1db525:	89 6f 14                                        	mov    %ebp,0x14(%rdi)
+  1db528:	b8 07 00 00 00                                  	mov    $0x7,%eax
+  1db52d:	89 47 18                                        	mov    %eax,0x18(%rdi)
+  1db530:	5b                                              	pop    %rbx
+  1db531:	41 5c                                           	pop    %r12
+  1db533:	41 5e                                           	pop    %r14
+  1db535:	41 5f                                           	pop    %r15
+  1db537:	5d                                              	pop    %rbp
+  1db538:	c3                                              	ret
