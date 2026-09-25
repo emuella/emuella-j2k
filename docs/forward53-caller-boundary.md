@@ -1,10 +1,64 @@
 # Classic forward 5/3 caller boundary v1 — source archive
 
-This prospective experiment retains one caller-boundary refactoring of the
-archived parallel-dispatch source. Production is unchanged: the patch is a
-source-only record, with no enabled repair, dormant option or automatic
-qualification campaign. The closed [parallel-dispatch outcome](forward53-parallel-dispatch.md)
-and [serial attribution](forward53-serial-attribution.md) remain unchanged.
+The completed prospective experiment found **no worthwhile supported repair at
+this budget**. The owning-helper boundary is present in C's ordinary executable,
+but C/B's primary 99% interval contains zero: neither a benefit nor an adverse
+intervention effect is resolved. Production is unchanged. The exact C source and
+authored tests remain a source-only archive, with no selected repair, enabled
+option, automatic next experiment or qualification campaign. The closed
+[parallel-dispatch outcome](forward53-parallel-dispatch.md) and
+[serial attribution](forward53-serial-attribution.md) remain unchanged.
+
+## Prospective measured outcome
+
+The full Boca RGB8/style-zero/one-worker endpoint completed all 126 starts:
+three ordinary preflights, three separate allocation calls and 120 ordinary
+observations (40 per arm). There were no failures, missing receipts, replacements
+or unstarted slots. All invocations matched the 14,339,292-byte reference stream
+and every reconstructed sample. The single installed balanced-reusable
+reservation used physical CPU 0, its reserved unused SMT sibling and an off-core
+controller; independent restoration passed. Acquisition consumed 653.847358
+seconds of the 45-minute ceiling. Separate allocation calls each observed
+362,401,748 additional requested peak bytes and 707 successful allocation or
+reallocation requests, within the unchanged bounds; those calls supplied no
+timing samples. Allocation requests, process RSS and CPU time remain distinct.
+
+The ordinary means were A **2,480.778231 ms**, B **2,457.900420 ms**, and
+C **2,460.321638 ms**. Positive time change means slower; positive saving favours
+the numerator treatment.
+
+| Contrast | Mean time change ms | Mean saving ms | Relative change | 99% relative-time interval | Legacy ±5% verdict |
+|---|---:|---:|---:|---|---|
+| C/B, sole primary | +2.421219 | −2.421219 | +0.098508% | [−0.120744%, +0.318239%] | Equivalent |
+| B/A, present archived cost | −22.877811 | +22.877811 | −0.922203% | [−1.136246%, −0.707702%] | Equivalent |
+| C/A, distance from reference | −20.456592 | +20.456592 | −0.824604% | [−1.039415%, −0.609333%] | Equivalent |
+
+The unchanged ratio-of-arithmetic-means comparator used each arm's complete
+40-observation vector once per contrast. The fixed three-arm schedule retained
+20 occurrences of each relative pair ordering and position counts A 14/12/14,
+B 13/14/13, C 13/14/13. Pairs were not always adjacent; this was the reviewed
+three-arm extension, not the historical two-arm AB/BA protocol. Contrasts share
+observations, so these are individual 99% intervals, not joint 99% coverage or
+120 independent pairs. No trimming, pooling, additional rounds or alternative
+estimator was used.
+
+C/B's upper bound is above zero, so the frozen intervention-benefit screen fails.
+C/A's upper bound is below +1%, satisfying the existing serial bound for this
+endpoint only. That favourable C/A result cannot establish that the caller
+boundary helped. The source simplification therefore has no supported measured
+gain warranting selection as a repair at this budget. The small positive C/B
+point estimate remains an unresolved adverse direction, not a proven regression.
+B/A did not reproduce the historical slowdown; this prospective result does not
+revise the closed historical confirmation or identify its cause. No full-matrix
+qualification or production promotion follows.
+
+The benchmark owns acquisition, all samples, allocation/resource/environment
+receipts, comparator output and restoration evidence. Its final report SHA-256
+is `25bd665805f4c15076b83c7b8030415a9f12b0920d2c396a99adf97b67cb92c8`.
+The actual A/B/C executables, symbols, source inventories and build/linker
+receipts remain in the approved evidence store. The compiled interpretation
+below limits the narrower causal claim even though the experiment itself is
+valid and complete.
 
 ## Exact source and declared intervention
 

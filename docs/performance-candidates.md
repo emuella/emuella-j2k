@@ -395,3 +395,11 @@ The scoped `inline(never)` decision precedes the measured build. This archive
 introduces no enabled codec change, option or automatic qualification campaign.
 The source record retains the recovery identities, compiled-code interpretation
 and the scope of the prospective evidence separately from historical outcomes.
+
+The complete 126-start prospective acquisition found **no worthwhile supported
+repair at this budget**. C/B changed mean time by +2.421219 ms, with a 99%
+relative interval [−0.120744%, +0.318239%], leaving benefit and harm unresolved.
+C/A satisfied the serial bound for this endpoint, but that does not prove a
+boundary benefit. B/A's present result did not reproduce the historical
+slowdown. C remains recoverable source only; no repair selection, production
+promotion, full-matrix qualification or automatic next experiment follows.
