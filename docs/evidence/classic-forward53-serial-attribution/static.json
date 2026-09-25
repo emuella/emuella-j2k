@@ -1,0 +1,3802 @@
+{
+  "schema": "classic-forward53-serial-attribution/static-v1",
+  "tools": {
+    "nm": "GNU nm (GNU Binutils) 2.46.1",
+    "objdump": "GNU objdump (GNU Binutils) 2.46.1",
+    "readelf": "GNU readelf (GNU Binutils) 2.46.1"
+  },
+  "arms": {
+    "baseline": {
+      "whole_sha256": "1066f9d95250b32bdf0be4dcc31efcb5ba9951fb2d8b567bf25916507222b335",
+      "file_bytes": 17721568,
+      "sections": {
+        ".text": {
+          "address": "0x614d0",
+          "bytes": 2113388,
+          "sha256": "c7d788fd8704f0fe46c131165a4d3db547ffc1b793325f7a7fa740bb18b3acc2"
+        },
+        ".rodata": {
+          "address": "0xcc40",
+          "bytes": 125568,
+          "sha256": "cdd5b5aba02ee4f6e1f4735a2f64445de0a4d1bd9125e0d4c8b8b475d78f062a"
+        },
+        ".data.rel.ro": {
+          "address": "0x2666b8",
+          "bytes": 29896,
+          "sha256": "464ba74bace491ca7ed1234bdd85bca0b80c1912af38cfbd5b1d899719e582be"
+        },
+        ".eh_frame": {
+          "address": "0x3b450",
+          "bytes": 151672,
+          "sha256": "5ff66d0a20be9c7b46884719d8bfdad60ef0238b9ce3a61c9af4ceb0282e1ef1"
+        },
+        ".gcc_except_table": {
+          "address": "0x2b6c0",
+          "bytes": 46976,
+          "sha256": "69ba6fde56db7c9717aec953994d144a8441068c387b6cd089c13e4d9ce5dfef"
+        },
+        ".debug_line": {
+          "address": "0x0",
+          "bytes": 1353785,
+          "sha256": "7c1fc014ae5555296192ab4ae524211d14da5c1844576569db1b6c10b98d8cd0"
+        },
+        ".debug_info": {
+          "address": "0x0",
+          "bytes": 3665060,
+          "sha256": "b2ad41b56a4d9038cb2d515cbc5fbb44b96f9f6689aa23513aeb49d9e277d254"
+        }
+      },
+      "functions": {
+        "worker_encode": {
+          "symbol": "classic_compare_worker::encode",
+          "address": "0x6d400",
+          "bytes": 2025,
+          "address_mod_64": 0,
+          "sha256": "3913660b0a7a8130dc73cfaa41c2c10142513af19c29b43990ba7be6283e300a",
+          "normalised_sha256": "065aa57c165712163206f7ff3ac30166491c5e3d49b05f76848426ad7cf91390",
+          "instructions": 459,
+          "rsp_operand_instructions": 64,
+          "stack_subtractions": [
+            "sub    $0xc8,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x6d807": "emuella_j2k_core::scalable_lossless::encode_lossless_bypass_with_limits",
+            "0x6d84e": "emuella_j2k_core::scalable_lossless::encode_with_limits"
+          },
+          "calls": [
+            {
+              "address": "0x6d479",
+              "instruction": "call   *0x200919(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x6d498",
+              "instruction": "call   *0x2008fa(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x6d4aa",
+              "instruction": "call   *0x200938(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6d4eb",
+              "instruction": "call   *0x2008f7(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6d518",
+              "instruction": "call   6ebf0 <<classic_compare_worker::Request>::info>"
+            },
+            {
+              "address": "0x6d807",
+              "instruction": "call   *0x20078b(%rip)        # 26df98 <_DYNAMIC+0x418>"
+            },
+            {
+              "address": "0x6d84e",
+              "instruction": "call   *0x20074c(%rip)        # 26dfa0 <_DYNAMIC+0x420>"
+            },
+            {
+              "address": "0x6d8b2",
+              "instruction": "call   *0x200578(%rip)        # 26de30 <_DYNAMIC+0x2b0>"
+            },
+            {
+              "address": "0x6d9e9",
+              "instruction": "call   *0x2005b9(%rip)        # 26dfa8 <_DYNAMIC+0x428>"
+            },
+            {
+              "address": "0x6da10",
+              "instruction": "call   *0x20057a(%rip)        # 26df90 <_DYNAMIC+0x410>"
+            },
+            {
+              "address": "0x6da21",
+              "instruction": "call   *0x2003c1(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6da5a",
+              "instruction": "call   *0x200388(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6daa9",
+              "instruction": "call   *0x200321(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6dacb",
+              "instruction": "call   *0x2002c7(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x6dad8",
+              "instruction": "call   *0x20030a(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6daf3",
+              "instruction": "call   *0x2002bf(%rip)        # 26ddb8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x6db04",
+              "instruction": "call   *0x200486(%rip)        # 26df90 <_DYNAMIC+0x410>"
+            },
+            {
+              "address": "0x6db53",
+              "instruction": "call   *0x200277(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6db92",
+              "instruction": "call   *0x200200(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x6db9f",
+              "instruction": "call   *0x20040b(%rip)        # 26dfb0 <_DYNAMIC+0x430>"
+            },
+            {
+              "address": "0x6dbad",
+              "instruction": "call   635f0 <core::ptr::drop_glue::<emuella_j2k_core::J2kError>>"
+            },
+            {
+              "address": "0x6dbb5",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x6dbc0",
+              "instruction": "call   63570 <core::ptr::drop_glue::<emuella_j2k_core::EncodeOptions>>"
+            },
+            {
+              "address": "0x6dbc8",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x6dbdb",
+              "instruction": "call   *0x2001ef(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6dbe4",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "facade": {
+          "symbol": "emuella_j2k_core::scalable_lossless::encode_with_limits",
+          "address": "0x18d210",
+          "bytes": 1831,
+          "address_mod_64": 16,
+          "sha256": "5eefaf00ba5d2b1b533243e91ec4a37a686581180f9449da536abb0c1931346b",
+          "normalised_sha256": "25de805403241f130bc9f56fe441ce943a9749e4e779e295b550625ee80edb0b",
+          "instructions": 370,
+          "rsp_operand_instructions": 93,
+          "stack_subtractions": [
+            "sub    $0x138,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x18d80c": "emuella_j2k_codestream::scalable_lossless::encode_lossless_d2",
+            "0x18d82c": "emuella_j2k_core::map_codestream_error"
+          },
+          "calls": [
+            {
+              "address": "0x18d24a",
+              "instruction": "call   17bf20 <emuella_j2k_core::scalable_lossless::requirements::<false>>"
+            },
+            {
+              "address": "0x18d285",
+              "instruction": "call   17e330 <emuella_j2k_core::validate_image_view>"
+            },
+            {
+              "address": "0x18d5ed",
+              "instruction": "call   *0xe07f5(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x18d80c",
+              "instruction": "call   *0xe0dce(%rip)        # 26e5e0 <_DYNAMIC+0xa60>"
+            },
+            {
+              "address": "0x18d82c",
+              "instruction": "call   *0xe0e3e(%rip)        # 26e670 <_DYNAMIC+0xaf0>"
+            },
+            {
+              "address": "0x18d881",
+              "instruction": "call   *0xe0769(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x18d894",
+              "instruction": "call   *0xe0756(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x18d8a4",
+              "instruction": "call   *0xe04ee(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x18d8b3",
+              "instruction": "call   *0xe04ef(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d8c5",
+              "instruction": "call   *0xe04dd(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d8d7",
+              "instruction": "call   *0xe04cb(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d8e9",
+              "instruction": "call   *0xe04b9(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d8fb",
+              "instruction": "call   *0xe04a7(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d90d",
+              "instruction": "call   *0xe0495(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d91f",
+              "instruction": "call   *0xe0483(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x18d931",
+              "instruction": "call   *0xe0471(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "cleanup": {
+          "symbol": "emuella_j2k_tier1::cleanup_pass_encode::<false>",
+          "address": "0x1af920",
+          "bytes": 4887,
+          "address_mod_64": 32,
+          "sha256": "2c10ef946de99f99d85fb55835950f92140e2fd1aeca418e0693c76ec1163db4",
+          "normalised_sha256": "9ffe567eb184304e943169a18c8cefb63937020b0c882ddb59fdae4290336ddc",
+          "instructions": 1258,
+          "rsp_operand_instructions": 166,
+          "stack_subtractions": [
+            "sub    $0xc8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1afb06",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1afb9a",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1afc31",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1afcc7",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1afda5",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1aff77",
+              "instruction": "call   *0xbde73(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1aff94",
+              "instruction": "call   *0xbde56(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1affce",
+              "instruction": "call   *0xbde1c(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b001f",
+              "instruction": "call   1af620 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b01f5",
+              "instruction": "call   *0xbdbf5(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0216",
+              "instruction": "call   *0xbdbd4(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0255",
+              "instruction": "call   *0xbdb95(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b03b5",
+              "instruction": "call   *0xbda35(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b03d5",
+              "instruction": "call   *0xbda15(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0411",
+              "instruction": "call   *0xbd9d9(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0576",
+              "instruction": "call   *0xbd874(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0592",
+              "instruction": "call   *0xbd858(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b05cc",
+              "instruction": "call   *0xbd81e(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0615",
+              "instruction": "call   1af620 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b06b8",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b0864",
+              "instruction": "call   *0xbd586(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0881",
+              "instruction": "call   *0xbd569(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b08cd",
+              "instruction": "call   *0xbd51d(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b091f",
+              "instruction": "call   1af620 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b0a56",
+              "instruction": "call   *0xbd394(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0a73",
+              "instruction": "call   *0xbd377(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0abf",
+              "instruction": "call   *0xbd32b(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b0b14",
+              "instruction": "call   *0xbd28e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b26",
+              "instruction": "call   *0xbd27c(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b3b",
+              "instruction": "call   *0xbd267(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b50",
+              "instruction": "call   *0xbd252(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b63",
+              "instruction": "call   *0xbd23f(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b76",
+              "instruction": "call   *0xbd22c(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b89",
+              "instruction": "call   *0xbd219(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0b9c",
+              "instruction": "call   *0xbd206(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0baf",
+              "instruction": "call   *0xbd1f3(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0bc4",
+              "instruction": "call   *0xbd1de(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0bd6",
+              "instruction": "call   *0xbd1cc(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0bee",
+              "instruction": "call   *0xbd1b4(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0c06",
+              "instruction": "call   *0xbd19c(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0c1e",
+              "instruction": "call   *0xbd184(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b0c31",
+              "instruction": "call   *0xbd171(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "significance": {
+          "symbol": "emuella_j2k_tier1::significance_propagation_pass_encode::<false>",
+          "address": "0x1b8ba0",
+          "bytes": 1387,
+          "address_mod_64": 32,
+          "sha256": "33759466e2706b5b065f47726d579a1cc66b103a5a5f3b89c5feecf40d871cb4",
+          "normalised_sha256": "7ad5b1656e13ef7d286fd6f75e6df65483762448f588e3178d00ab4b0641fff4",
+          "instructions": 343,
+          "rsp_operand_instructions": 65,
+          "stack_subtractions": [
+            "sub    $0xa8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1b8d4d",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b8dda",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b8fb1",
+              "instruction": "call   *0xb4e39(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b8fe1",
+              "instruction": "call   *0xb4e09(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b9029",
+              "instruction": "call   *0xb4dc1(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b908c",
+              "instruction": "call   1af620 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b90c9",
+              "instruction": "call   *0xb4cd9(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b90db",
+              "instruction": "call   *0xb4cc7(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b90f0",
+              "instruction": "call   *0xb4cb2(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b9105",
+              "instruction": "call   *0xb4c9d(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "magnitude": {
+          "symbol": "emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>",
+          "address": "0x1b6b20",
+          "bytes": 1240,
+          "address_mod_64": 32,
+          "sha256": "58265d8d4c9a32ddddef0a5a526445207c0617975b18a1ea27288aa4811e2e13",
+          "normalised_sha256": "26fd17a0adf0e65c651aa81be455923f2bac5ce2922a10e047d1c427957e23a0",
+          "instructions": 319,
+          "rsp_operand_instructions": 45,
+          "stack_subtractions": [
+            "sub    $0x98,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1b6d13",
+              "instruction": "call   1af2d0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b6f25",
+              "instruction": "call   *0xb6ec5(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b6f54",
+              "instruction": "call   *0xb6e96(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b6f9c",
+              "instruction": "call   *0xb6e4e(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1b6fcb",
+              "instruction": "call   *0xb6dd7(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b6fe0",
+              "instruction": "call   *0xb6dc2(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1b6ff2",
+              "instruction": "call   *0xb6db0(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "mq_bit": {
+          "symbol": "<emuella_j2k_tier1::mq::Encoder>::write_bit",
+          "address": "0x1d9c00",
+          "bytes": 230,
+          "address_mod_64": 0,
+          "sha256": "052dc06d4ab78871195901144683fa02d1d29e5086a3f32872496766dd700cd5",
+          "normalised_sha256": "58b76c063a4f67d23c1a138e2c3f766a5a45bffcc8cd37859a66aa5cb3ad169c",
+          "instructions": 67,
+          "rsp_operand_instructions": 0,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1d9cb0",
+              "instruction": "call   1d9ad0 <<emuella_j2k_tier1::mq::Encoder>::byte_out>"
+            },
+            {
+              "address": "0x1d9ccb",
+              "instruction": "call   *0x940d7(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x1d9ce0",
+              "instruction": "call   *0x940c2(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "mq_byte": {
+          "symbol": "<emuella_j2k_tier1::mq::Encoder>::byte_out",
+          "address": "0x1d9ad0",
+          "bytes": 297,
+          "address_mod_64": 16,
+          "sha256": "ab7bc14f1e4a5895b23dc4fe59de102095ef8d8c7c8e0d64a505c83eec1f4fab",
+          "normalised_sha256": "63b2046862f7524df0a0aee2bbcbd99fe7ec6956f1ec34222b3ecbb64233ece9",
+          "instructions": 87,
+          "rsp_operand_instructions": 0,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1d9b18",
+              "instruction": "call   *0x942d2(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1d9b67",
+              "instruction": "call   *0x94283(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1d9bba",
+              "instruction": "call   *0x94230(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            }
+          ]
+        },
+        "writer": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::encode_lossless_d2",
+          "address": "0x150330",
+          "bytes": 5133,
+          "address_mod_64": 48,
+          "sha256": "52d2e4b0832001dc59e3309557b20e208e651d8707646f5c048b91a249b7e11a",
+          "normalised_sha256": "29269be87d2a7bd6712f4e1da79f3a47f9471d3f5f9a77d5de91d4e5ad5ca0ff",
+          "instructions": 979,
+          "rsp_operand_instructions": 373,
+          "stack_subtractions": [
+            "sub    $0x318,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x15038a",
+              "instruction": "call   99ba0 <emuella_j2k_codestream::scalable_lossless::execution_requirements::<false>>"
+            },
+            {
+              "address": "0x15054c",
+              "instruction": "call   149b00 <<alloc::raw_vec::RawVecInner>::try_allocate_in>"
+            },
+            {
+              "address": "0x1506fb",
+              "instruction": "call   *0x11db2f(%rip)        # 26e230 <_DYNAMIC+0x6b0>"
+            },
+            {
+              "address": "0x1507b6",
+              "instruction": "call   *0x11da74(%rip)        # 26e230 <_DYNAMIC+0x6b0>"
+            },
+            {
+              "address": "0x1507e4",
+              "instruction": "call   1499a0 <<alloc::raw_vec::RawVecInner>::finish_grow>"
+            },
+            {
+              "address": "0x150847",
+              "instruction": "call   *0x11d9eb(%rip)        # 26e238 <_DYNAMIC+0x6b8>"
+            },
+            {
+              "address": "0x150923",
+              "instruction": "call   *0x11d47f(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x150936",
+              "instruction": "call   *0x11d45c(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x15095d",
+              "instruction": "call   *0x11d46d(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15096b",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x150973",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x150a17",
+              "instruction": "call   c3770 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}>"
+            },
+            {
+              "address": "0x150a6a",
+              "instruction": "call   *0x11d360(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x150a85",
+              "instruction": "call   *0x11d345(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x150a9b",
+              "instruction": "call   d24c0 <emuella_j2k_codestream::decomp_subband_specs>"
+            },
+            {
+              "address": "0x150aec",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x150b19",
+              "instruction": "call   170980 <<alloc::vec::Vec<&[i32]> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<&[i32], core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::vec::Vec<i32>>, <alloc::vec::Vec<i32>>::as_slice>>>::from_iter>"
+            },
+            {
+              "address": "0x150b4e",
+              "instruction": "call   9b490 <core::iter::adapters::try_process::<core::iter::adapters::map::Map<core::slice::iter::Iter<emuella_j2k_codestream::DecompSubbandSpec>, emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl<false, false>::{closure#6}>, u8, core::result::Result<core::convert::Infallible, emuella_j2k_codestream::CodestreamError>, <core::result::Result<alloc::vec::Vec<u8>, emuella_j2k_codestream::CodestreamError> as core::iter::traits::collect::FromIterator<core::result::Result<u8, emuella_j2k_codestream::CodestreamError>>>::from_iter<core::iter::adapters::map::Map<core::slice::iter::Iter<emuella_j2k_codestream::DecompSubbandSpec>, emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl<false, false>::{closure#6}>>::{closure#0}, alloc::vec::Vec<u8>>>"
+            },
+            {
+              "address": "0x150bd6",
+              "instruction": "call   1501f0 <emuella_j2k_codestream::scalable_lossless::reserve_output>"
+            },
+            {
+              "address": "0x150c21",
+              "instruction": "call   d6240 <emuella_j2k_codestream::write_native_main_header>"
+            },
+            {
+              "address": "0x150c6e",
+              "instruction": "call   *0x11d15c(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x150c7f",
+              "instruction": "call   *0x11d14b(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x150c98",
+              "instruction": "call   *0x11d132(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x150ccd",
+              "instruction": "call   14ca40 <<alloc::vec::Vec<u8>>::append_elements>"
+            },
+            {
+              "address": "0x150d99",
+              "instruction": "call   1446b0 <<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>::new>"
+            },
+            {
+              "address": "0x150ecd",
+              "instruction": "call   *0x11cf15(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x150fc1",
+              "instruction": "call   864d0 <<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>::encode_subband::<false, false>>"
+            },
+            {
+              "address": "0x151058",
+              "instruction": "call   14a5a0 <<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>::push_mut>"
+            },
+            {
+              "address": "0x151071",
+              "instruction": "call   *0x11cd59(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x151108",
+              "instruction": "call   853e0 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>>"
+            },
+            {
+              "address": "0x15115c",
+              "instruction": "call   14a5a0 <<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>::push_mut>"
+            },
+            {
+              "address": "0x151206",
+              "instruction": "call   14bb50 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0x151255",
+              "instruction": "call   e3fe0 <emuella_j2k_codestream::write_component_packet_header>"
+            },
+            {
+              "address": "0x1512b0",
+              "instruction": "call   1501f0 <emuella_j2k_codestream::scalable_lossless::reserve_output>"
+            },
+            {
+              "address": "0x1512cf",
+              "instruction": "call   144ff0 <<alloc::vec::Vec<u8>>::resize>"
+            },
+            {
+              "address": "0x1512ed",
+              "instruction": "call   863e0 <<[u8]>::copy_within::<core::ops::range::Range<usize>>>"
+            },
+            {
+              "address": "0x15131b",
+              "instruction": "call   *0x11ca97(%rip)        # 26ddb8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x151334",
+              "instruction": "call   *0x11ca96(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15134b",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x151358",
+              "instruction": "call   90a30 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>"
+            },
+            {
+              "address": "0x151405",
+              "instruction": "call   *0x11c9c5(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15144a",
+              "instruction": "call   1501f0 <emuella_j2k_codestream::scalable_lossless::reserve_output>"
+            },
+            {
+              "address": "0x1514e5",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x1514f2",
+              "instruction": "call   90a30 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>"
+            },
+            {
+              "address": "0x1514ff",
+              "instruction": "call   99930 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>"
+            },
+            {
+              "address": "0x15150c",
+              "instruction": "call   99710 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>"
+            },
+            {
+              "address": "0x151542",
+              "instruction": "call   14ca40 <<alloc::vec::Vec<u8>>::append_elements>"
+            },
+            {
+              "address": "0x15156f",
+              "instruction": "call   99930 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>"
+            },
+            {
+              "address": "0x15157c",
+              "instruction": "call   99710 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>"
+            },
+            {
+              "address": "0x15158e",
+              "instruction": "call   *0x11c83c(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1515a7",
+              "instruction": "call   *0x11c823(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1515b8",
+              "instruction": "call   *0x11c812(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1515c6",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x1515e4",
+              "instruction": "call   *0x11ca06(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x1515f6",
+              "instruction": "call   *0x11c9f4(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x151608",
+              "instruction": "call   *0x11c78a(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x151669",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x151671",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x1516b0",
+              "instruction": "call   *0x11c71a(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1516be",
+              "instruction": "call   90360 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x1516cb",
+              "instruction": "call   90a30 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>"
+            },
+            {
+              "address": "0x1516d8",
+              "instruction": "call   99930 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>"
+            },
+            {
+              "address": "0x1516e5",
+              "instruction": "call   99710 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>"
+            },
+            {
+              "address": "0x1516f7",
+              "instruction": "call   *0x11c6d3(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15170a",
+              "instruction": "call   *0x11c6c0(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x151723",
+              "instruction": "call   *0x11c6a7(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            }
+          ]
+        },
+        "components": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}",
+          "address": "0xc3770",
+          "bytes": 191,
+          "address_mod_64": 48,
+          "sha256": "58599b2d3ed211771bf8fabc05203e4dfac3c31e02e51f266c6bb02b3d845fe2",
+          "normalised_sha256": "68db34a19021c5ad08436540e5259e747711f48eee846048824e675c75ad4124",
+          "instructions": 56,
+          "rsp_operand_instructions": 8,
+          "stack_subtractions": [
+            "sub    $0x38,%rsp",
+            "sub    $0x8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0xc37db",
+              "instruction": "call   114830 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch>"
+            }
+          ]
+        },
+        "prepare": null,
+        "levels": {
+          "symbol": "emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch",
+          "address": "0x114830",
+          "bytes": 981,
+          "address_mod_64": 48,
+          "sha256": "5b638660080d1b79a33840308b914c7ac2c5e4fb8dbffb30eb58969a0ffbec3c",
+          "normalised_sha256": "6277ff45a6ccf3e2ec2571a952d61b771e9b7ade9fdf21f892599da42521daa5",
+          "instructions": 238,
+          "rsp_operand_instructions": 50,
+          "stack_subtractions": [
+            "sub    $0x88,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x114985": "emuella_j2k_transform::forward_reversible_5_3_bounded",
+            "0x114b3e": "emuella_j2k_transform::forward_reversible_5_3_bounded"
+          },
+          "calls": [
+            {
+              "address": "0x1148fe",
+              "instruction": "call   *0x159654(%rip)        # 26df58 <memset@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x114985",
+              "instruction": "call   *0x159b8d(%rip)        # 26e518 <_DYNAMIC+0x998>"
+            },
+            {
+              "address": "0x114ad0",
+              "instruction": "call   *0x159482(%rip)        # 26df58 <memset@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x114b3e",
+              "instruction": "call   *0x1599d4(%rip)        # 26e518 <_DYNAMIC+0x998>"
+            },
+            {
+              "address": "0x114b7d",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0x114bdd",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            }
+          ]
+        },
+        "bounded53": {
+          "symbol": "emuella_j2k_transform::forward_reversible_5_3_bounded",
+          "address": "0x2013c0",
+          "bytes": 1380,
+          "address_mod_64": 0,
+          "sha256": "d23a92633e202d73c3a20f9572acd76575b985e7fc7c9a348661e47501ae49f7",
+          "normalised_sha256": "737c545550afddb20162c5e5f5e6a6bf9ca18b5b094bd8553ba0dbc9897ddc67",
+          "instructions": 345,
+          "rsp_operand_instructions": 55,
+          "stack_subtractions": [
+            "sub    $0x68,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x2014ea",
+              "instruction": "call   201230 <emuella_j2k_transform::validate_samples_in_range>"
+            },
+            {
+              "address": "0x2015d2",
+              "instruction": "call   202d50 <emuella_j2k_transform::transform_line_forward_first_high_bounded>"
+            },
+            {
+              "address": "0x2016c2",
+              "instruction": "call   2021d0 <emuella_j2k_transform::transform_line_forward_first_low_bounded>"
+            },
+            {
+              "address": "0x201798",
+              "instruction": "call   202d50 <emuella_j2k_transform::transform_line_forward_first_high_bounded>"
+            },
+            {
+              "address": "0x2017ad",
+              "instruction": "call   *0x6c605(%rip)        # 26ddb8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x20180f",
+              "instruction": "call   2021d0 <emuella_j2k_transform::transform_line_forward_first_low_bounded>"
+            },
+            {
+              "address": "0x201824",
+              "instruction": "call   *0x6c58e(%rip)        # 26ddb8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x20186c",
+              "instruction": "call   *0x6c77e(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x201885",
+              "instruction": "call   *0x6c59d(%rip)        # 26de28 <_DYNAMIC+0x2a8>"
+            },
+            {
+              "address": "0x20189e",
+              "instruction": "call   *0x6c584(%rip)        # 26de28 <_DYNAMIC+0x2a8>"
+            },
+            {
+              "address": "0x2018d9",
+              "instruction": "call   *0x6c711(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x2018ee",
+              "instruction": "call   *0x6c4b4(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x201903",
+              "instruction": "call   *0x6c49f(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20191e",
+              "instruction": "call   *0x6c6cc(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            }
+          ]
+        },
+        "low_line": {
+          "symbol": "emuella_j2k_transform::transform_line_forward_first_low_bounded",
+          "address": "0x2021d0",
+          "bytes": 1430,
+          "address_mod_64": 16,
+          "sha256": "02fada519ac0970e561f64ff33e4c5c7d9b183856e4659947f03002cbaae48e7",
+          "normalised_sha256": "06b6c86bcc6cbcb0455ffb36d127e9f38063fec3b00d57f302f30e0a3760e9fd",
+          "instructions": 359,
+          "rsp_operand_instructions": 2,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x20260a",
+              "instruction": "call   *0x6b798(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20261e",
+              "instruction": "call   *0x6b784(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202631",
+              "instruction": "call   *0x6b771(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202647",
+              "instruction": "call   *0x6b75b(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202657",
+              "instruction": "call   *0x6b74b(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202667",
+              "instruction": "call   *0x6b73b(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20267a",
+              "instruction": "call   *0x6b728(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20268d",
+              "instruction": "call   *0x6b715(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2026a0",
+              "instruction": "call   *0x6b702(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2026b3",
+              "instruction": "call   *0x6b6ef(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2026c7",
+              "instruction": "call   *0x6b6db(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2026da",
+              "instruction": "call   *0x6b6c8(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2026ed",
+              "instruction": "call   *0x6b6b5(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202704",
+              "instruction": "call   *0x6b69e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202714",
+              "instruction": "call   *0x6b68e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202727",
+              "instruction": "call   *0x6b67b(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20273a",
+              "instruction": "call   *0x6b668(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20274d",
+              "instruction": "call   *0x6b655(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x202760",
+              "instruction": "call   *0x6b642(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "high_line": {
+          "symbol": "emuella_j2k_transform::transform_line_forward_first_high_bounded",
+          "address": "0x202d50",
+          "bytes": 1313,
+          "address_mod_64": 16,
+          "sha256": "7c14c136750467d3a2e2f9b3245e5d6ee3319c0169e1ff9eab73037b72a60932",
+          "normalised_sha256": "f03af5577286b169c000668b109cec66b9dadea41a47c371c7ccccdf36583fcd",
+          "instructions": 322,
+          "rsp_operand_instructions": 0,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x203131",
+              "instruction": "call   *0x6ac71(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203144",
+              "instruction": "call   *0x6ac5e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203154",
+              "instruction": "call   *0x6ac4e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20316a",
+              "instruction": "call   *0x6ac38(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203181",
+              "instruction": "call   *0x6ac21(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203194",
+              "instruction": "call   *0x6ac0e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2031a7",
+              "instruction": "call   *0x6abfb(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2031bb",
+              "instruction": "call   *0x6abe7(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2031ce",
+              "instruction": "call   *0x6abd4(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2031e4",
+              "instruction": "call   *0x6abbe(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x2031f4",
+              "instruction": "call   *0x6abae(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20320b",
+              "instruction": "call   *0x6ab97(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20321e",
+              "instruction": "call   *0x6ab84(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203231",
+              "instruction": "call   *0x6ab71(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203244",
+              "instruction": "call   *0x6ab5e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x203254",
+              "instruction": "call   *0x6ab4e(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0x20326b",
+              "instruction": "call   *0x6ab37(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            }
+          ]
+        },
+        "subband": {
+          "symbol": "emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>",
+          "address": "0x853e0",
+          "bytes": 2606,
+          "address_mod_64": 32,
+          "sha256": "fa9fa32d58017f6a65b24882cccdd2658ec9e7e0308e794943a6c096cc5fdbff",
+          "normalised_sha256": "842da886e041c0dd325aa9850d429da18359f287cdc812c2a74c0fdf48ec5e27",
+          "instructions": 517,
+          "rsp_operand_instructions": 167,
+          "stack_subtractions": [
+            "sub    $0x178,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x8595a": "emuella_j2k_tier1::encode_baseline_code_block_with_strided_scratch"
+          },
+          "calls": [
+            {
+              "address": "0x85508",
+              "instruction": "call   *0x1e88da(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x8595a",
+              "instruction": "call   *0x1e88f8(%rip)        # 26e258 <_DYNAMIC+0x6d8>"
+            },
+            {
+              "address": "0x85a52",
+              "instruction": "call   *0x1e8360(%rip)        # 26ddb8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x85aa1",
+              "instruction": "call   *0x1e87b9(%rip)        # 26e260 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0x85aec",
+              "instruction": "call   1499a0 <<alloc::raw_vec::RawVecInner>::finish_grow>"
+            },
+            {
+              "address": "0x85b3f",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0x85d90",
+              "instruction": "call   *0x1e803a(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x85da7",
+              "instruction": "call   *0x1e8023(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x85dc7",
+              "instruction": "call   *0x1e7fcb(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0x85de3",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x85ded",
+              "instruction": "call   *0x1e7fdd(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x85e00",
+              "instruction": "call   *0x1e7fca(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x85e09",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "tier1_strided": {
+          "symbol": "emuella_j2k_tier1::encode_baseline_code_block_with_strided_scratch",
+          "address": "0x1d4b70",
+          "bytes": 506,
+          "address_mod_64": 48,
+          "sha256": "7a2b74df90cb03d58c5c9c05ef51c86e36bebf60bab9348d2881ccad3662169f",
+          "normalised_sha256": "d9af51e4a4f3aea3c1a1cd0e2ef1dfebb19843f9805ff9f342acc053f5cb3f85",
+          "instructions": 136,
+          "rsp_operand_instructions": 14,
+          "stack_subtractions": [
+            "sub    $0xb8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1d4c6b",
+              "instruction": "call   1dc550 <emuella_j2k_tier1::packed_encode::encode>"
+            },
+            {
+              "address": "0x1d4caa",
+              "instruction": "call   1daad0 <<emuella_j2k_tier1::CodeBlockEncodeScratch>::prepare_strided_with_max>"
+            },
+            {
+              "address": "0x1d4d1d",
+              "instruction": "call   1d1320 <emuella_j2k_tier1::encode_prepared_baseline_code_block>"
+            }
+          ]
+        },
+        "tier1_prepared": {
+          "symbol": "emuella_j2k_tier1::encode_prepared_baseline_code_block",
+          "address": "0x1d1320",
+          "bytes": 5789,
+          "address_mod_64": 32,
+          "sha256": "8d70a3af3ae57fd549dc1fca344501671ee87a85dc1b143e7449964a5f739ab9",
+          "normalised_sha256": "c8f1989593e001b52d3df58baf7e169116503ca72d16dd64841c3ae64ff01073",
+          "instructions": 1367,
+          "rsp_operand_instructions": 325,
+          "stack_subtractions": [
+            "sub    $0x128,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1d160d",
+              "instruction": "call   1ba280 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<false>>"
+            },
+            {
+              "address": "0x1d1643",
+              "instruction": "call   1af920 <emuella_j2k_tier1::cleanup_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d1672",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1683",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1697",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d16a8",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d178f",
+              "instruction": "call   1d29c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d17a0",
+              "instruction": "call   1b8ba0 <emuella_j2k_tier1::significance_propagation_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d17b1",
+              "instruction": "call   1b6b20 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d1849",
+              "instruction": "call   1d0840 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d18ce",
+              "instruction": "call   *0x9c51c(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1d19d9",
+              "instruction": "call   *0x9ccb1(%rip)        # 26e690 <_DYNAMIC+0xb10>"
+            },
+            {
+              "address": "0x1d1a7d",
+              "instruction": "call   1ba280 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<false>>"
+            },
+            {
+              "address": "0x1d1ab3",
+              "instruction": "call   1af920 <emuella_j2k_tier1::cleanup_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d1ae2",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1af3",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1b07",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1b18",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1bff",
+              "instruction": "call   1d29c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d1c10",
+              "instruction": "call   1b8ba0 <emuella_j2k_tier1::significance_propagation_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d1c21",
+              "instruction": "call   1b6b20 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d1cc9",
+              "instruction": "call   1d0840 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d1d4f",
+              "instruction": "call   *0x9c09b(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1d1e49",
+              "instruction": "call   *0x9c841(%rip)        # 26e690 <_DYNAMIC+0xb10>"
+            },
+            {
+              "address": "0x1d1f7d",
+              "instruction": "call   1ba730 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<true>>"
+            },
+            {
+              "address": "0x1d1fb3",
+              "instruction": "call   1b0c40 <emuella_j2k_tier1::cleanup_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d1fe2",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d1ff3",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d2007",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d2018",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d20ff",
+              "instruction": "call   1d29c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d2110",
+              "instruction": "call   1b9110 <emuella_j2k_tier1::significance_propagation_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d2121",
+              "instruction": "call   1b7000 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d21b9",
+              "instruction": "call   1d0840 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d223e",
+              "instruction": "call   *0x9bbac(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1d2339",
+              "instruction": "call   *0x9c351(%rip)        # 26e690 <_DYNAMIC+0xb10>"
+            },
+            {
+              "address": "0x1d248d",
+              "instruction": "call   1ba730 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<true>>"
+            },
+            {
+              "address": "0x1d24c3",
+              "instruction": "call   1b0c40 <emuella_j2k_tier1::cleanup_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d24f2",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d2503",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d2517",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d2528",
+              "instruction": "call   1d9c00 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d260f",
+              "instruction": "call   1d29c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d2620",
+              "instruction": "call   1b9110 <emuella_j2k_tier1::significance_propagation_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d2631",
+              "instruction": "call   1b7000 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d26d9",
+              "instruction": "call   1d0840 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d275f",
+              "instruction": "call   *0x9b68b(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0x1d2859",
+              "instruction": "call   *0x9be31(%rip)        # 26e690 <_DYNAMIC+0xb10>"
+            },
+            {
+              "address": "0x1d2991",
+              "instruction": "call   *0x9b659(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x1d29a4",
+              "instruction": "call   *0x9b646(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x1d29b7",
+              "instruction": "call   *0x9b633(%rip)        # 26dff0 <_DYNAMIC+0x470>"
+            }
+          ]
+        },
+        "packet_header": {
+          "symbol": "emuella_j2k_codestream::write_component_packet_header",
+          "address": "0xe3fe0",
+          "bytes": 4952,
+          "address_mod_64": 32,
+          "sha256": "9643dce749b19eb638a8187b86522ff45a854686eb4623b75574d144bbdc74ee",
+          "normalised_sha256": "2225bd3aa0e42a1e9153ff2f32c05768da5d38b27604bb1e415a53dfb20edbc8",
+          "instructions": 1028,
+          "rsp_operand_instructions": 308,
+          "stack_subtractions": [
+            "sub    $0x1b8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0xe402d",
+              "instruction": "call   *0x189db5(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe411e",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe416f",
+              "instruction": "call   *0x18a0eb(%rip)        # 26e260 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe41d5",
+              "instruction": "call   *0x18a085(%rip)        # 26e260 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe4281",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe452e",
+              "instruction": "call   *0x189eec(%rip)        # 26e420 <_DYNAMIC+0x8a0>"
+            },
+            {
+              "address": "0xe45a1",
+              "instruction": "call   *0x189e79(%rip)        # 26e420 <_DYNAMIC+0x8a0>"
+            },
+            {
+              "address": "0xe4614",
+              "instruction": "call   *0x1897b6(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe4645",
+              "instruction": "call   *0x18975d(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0xe465d",
+              "instruction": "call   *0x189785(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe4710",
+              "instruction": "call   *0x189d0a(%rip)        # 26e420 <_DYNAMIC+0x8a0>"
+            },
+            {
+              "address": "0xe4775",
+              "instruction": "call   *0x189ae5(%rip)        # 26e260 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe47c0",
+              "instruction": "call   *0x189a9a(%rip)        # 26e260 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe487d",
+              "instruction": "call   *0x189565(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe4b3e",
+              "instruction": "call   *0x1898dc(%rip)        # 26e420 <_DYNAMIC+0x8a0>"
+            },
+            {
+              "address": "0xe4bac",
+              "instruction": "call   *0x18986e(%rip)        # 26e420 <_DYNAMIC+0x8a0>"
+            },
+            {
+              "address": "0xe4c1b",
+              "instruction": "call   *0x1891af(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe4c2d",
+              "instruction": "call   *0x189175(%rip)        # 26dda8 <_DYNAMIC+0x228>"
+            },
+            {
+              "address": "0xe4cb6",
+              "instruction": "call   14b200 <<emuella_j2k_codestream::EncTagTree>::encode>"
+            },
+            {
+              "address": "0xe4cf7",
+              "instruction": "call   14b200 <<emuella_j2k_codestream::EncTagTree>::encode>"
+            },
+            {
+              "address": "0xe4d28",
+              "instruction": "call   d5790 <emuella_j2k_codestream::write_coding_pass_count>"
+            },
+            {
+              "address": "0xe4d87",
+              "instruction": "call   14bb50 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0xe4de2",
+              "instruction": "call   14bb50 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0xe4e30",
+              "instruction": "call   14bb50 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0xe4e5f",
+              "instruction": "call   *0x188f6b(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe4ed7",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe4f43",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe4f5b",
+              "instruction": "call   *0x188e6f(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe4f81",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe5052",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe50a0",
+              "instruction": "call   *0x188d2a(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe50d9",
+              "instruction": "call   *0x189051(%rip)        # 26e130 <_DYNAMIC+0x5b0>"
+            },
+            {
+              "address": "0xe50e9",
+              "instruction": "call   *0x188ca9(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0xe5107",
+              "instruction": "call   *0x188c8b(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0xe5115",
+              "instruction": "call   *0x188c7d(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0xe5125",
+              "instruction": "call   *0x188c6d(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0xe516d",
+              "instruction": "call   *0x188c5d(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe51df",
+              "instruction": "call   97f70 <core::ptr::drop_glue::<emuella_j2k_codestream::EncTagTree>>"
+            },
+            {
+              "address": "0xe5223",
+              "instruction": "call   *0x188ba7(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe524a",
+              "instruction": "call   *0x188b80(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe5283",
+              "instruction": "call   *%r13"
+            },
+            {
+              "address": "0xe52c4",
+              "instruction": "call   *%r15"
+            },
+            {
+              "address": "0xe52d9",
+              "instruction": "call   *0x188af1(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe52f9",
+              "instruction": "call   *0x188ad1(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe5302",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0xe5333",
+              "instruction": "call   *%r13"
+            }
+          ]
+        },
+        "main_header": {
+          "symbol": "emuella_j2k_codestream::write_native_main_header",
+          "address": "0xd6240",
+          "bytes": 2539,
+          "address_mod_64": 0,
+          "sha256": "639f526e9906f437c2975b1599801c88779c1d8f0f5507e66e8ef42a7bb36e5d",
+          "normalised_sha256": "9f1645f6b72d3c9b5c06ffc605000e4a09efec5b8e8c8531b220f1b32b03ae98",
+          "instructions": 578,
+          "rsp_operand_instructions": 32,
+          "stack_subtractions": [
+            "sub    $0x28,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0xd62a9",
+              "instruction": "call   *0x197b39(%rip)        # 26dde8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xd65b4",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6713",
+              "instruction": "call   *0x1976d7(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd673e",
+              "instruction": "call   *0x1976ac(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd676d",
+              "instruction": "call   *0x19767d(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd679c",
+              "instruction": "call   *0x19764e(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd67cb",
+              "instruction": "call   *0x19761f(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd67fa",
+              "instruction": "call   *0x1975f0(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd6829",
+              "instruction": "call   *0x1975c1(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd6858",
+              "instruction": "call   *0x197592(%rip)        # 26ddf0 <_DYNAMIC+0x270>"
+            },
+            {
+              "address": "0xd6934",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6959",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd697e",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd69a3",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd69c8",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd69ed",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6a12",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6a37",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6a5c",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6a81",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6aa6",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6acb",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6af0",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6b15",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6b3a",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6b5f",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6b84",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6ba9",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6bce",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6bf3",
+              "instruction": "call   aa4f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd6c0a",
+              "instruction": "call   *0x197188(%rip)        # 26dd98 <_DYNAMIC+0x218>"
+            },
+            {
+              "address": "0xd6c1d",
+              "instruction": "call   *0x1971ad(%rip)        # 26ddd0 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xd6c26",
+              "instruction": "call   2654b0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "reserve_output": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::reserve_output",
+          "address": "0x1501f0",
+          "bytes": 319,
+          "address_mod_64": 48,
+          "sha256": "72321d8fbd624c08606e4d873ab4ba79c21b678e6b18b21558cc51fb66ae20f1",
+          "normalised_sha256": "e6387321ebf8a7a6ad878609f9bcda61c8b6aa4aede011c8b85d2357d925b34a",
+          "instructions": 79,
+          "rsp_operand_instructions": 2,
+          "stack_subtractions": [
+            "sub    $0x18,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1502d1",
+              "instruction": "call   1499a0 <<alloc::raw_vec::RawVecInner>::finish_grow>"
+            }
+          ]
+        }
+      }
+    },
+    "candidate": {
+      "whole_sha256": "6a29754a59c8be33b4a0777f60cbf1a49479924a1bd331e132e15546ceda73ea",
+      "file_bytes": 17982232,
+      "sections": {
+        ".text": {
+          "address": "0x627f0",
+          "bytes": 2136348,
+          "sha256": "53ca681df44c6f218a2d6c5eb410e5185311493aada3b321d0b6038368969af3"
+        },
+        ".rodata": {
+          "address": "0xcfc0",
+          "bytes": 125696,
+          "sha256": "e5a180fe9475584a39e3782a9c4f29f3ccee1e4f0b6a6fd89c876905d8961ea4"
+        },
+        ".data.rel.ro": {
+          "address": "0x26d388",
+          "bytes": 30760,
+          "sha256": "a8cc43fe79910a79052d935ed5bcb6ce39720f71c29c03bbf39d72f786c326f3"
+        },
+        ".eh_frame": {
+          "address": "0x3be10",
+          "bytes": 154080,
+          "sha256": "6f505e330c0bb809a4362cc517121d936588f9a3aace137ccfa9f4fca338d343"
+        },
+        ".gcc_except_table": {
+          "address": "0x2bac0",
+          "bytes": 48204,
+          "sha256": "0c8dfc40f1c548aff7370f960085756e049c8839e6f64b35f7e627ca4ae129f5"
+        },
+        ".debug_line": {
+          "address": "0x0",
+          "bytes": 1367576,
+          "sha256": "99c5dd0d38a904b2b9bc911d029b5e9597063adb1db6acfa18f9cfd6170286c3"
+        },
+        ".debug_info": {
+          "address": "0x0",
+          "bytes": 3705748,
+          "sha256": "8109ea342140b07a91281d063efc1fc5d1b976114dd7fb324842830d03639997"
+        }
+      },
+      "functions": {
+        "worker_encode": {
+          "symbol": "classic_compare_worker::encode",
+          "address": "0x6e8a0",
+          "bytes": 2025,
+          "address_mod_64": 32,
+          "sha256": "b7d5ca394fb0736b5c86058b10c63827ae6ed58914c8c4b7a62ff9ce175e108f",
+          "normalised_sha256": "065aa57c165712163206f7ff3ac30166491c5e3d49b05f76848426ad7cf91390",
+          "instructions": 459,
+          "rsp_operand_instructions": 64,
+          "stack_subtractions": [
+            "sub    $0xc8,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x6eca7": "emuella_j2k_core::scalable_lossless::encode_lossless_bypass_with_limits",
+            "0x6ecee": "emuella_j2k_core::scalable_lossless::encode_with_limits"
+          },
+          "calls": [
+            {
+              "address": "0x6e919",
+              "instruction": "call   *0x2064e1(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x6e938",
+              "instruction": "call   *0x2064c2(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x6e94a",
+              "instruction": "call   *0x206468(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6e98b",
+              "instruction": "call   *0x206427(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6e9b8",
+              "instruction": "call   70090 <<classic_compare_worker::Request>::info>"
+            },
+            {
+              "address": "0x6eca7",
+              "instruction": "call   *0x20631b(%rip)        # 274fc8 <_DYNAMIC+0x418>"
+            },
+            {
+              "address": "0x6ecee",
+              "instruction": "call   *0x2062dc(%rip)        # 274fd0 <_DYNAMIC+0x420>"
+            },
+            {
+              "address": "0x6ed52",
+              "instruction": "call   *0x206120(%rip)        # 274e78 <_DYNAMIC+0x2c8>"
+            },
+            {
+              "address": "0x6ee89",
+              "instruction": "call   *0x206149(%rip)        # 274fd8 <_DYNAMIC+0x428>"
+            },
+            {
+              "address": "0x6eeb0",
+              "instruction": "call   *0x20610a(%rip)        # 274fc0 <_DYNAMIC+0x410>"
+            },
+            {
+              "address": "0x6eec1",
+              "instruction": "call   *0x205ef1(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6eefa",
+              "instruction": "call   *0x205eb8(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6ef49",
+              "instruction": "call   *0x205e79(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6ef6b",
+              "instruction": "call   *0x205e8f(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x6ef78",
+              "instruction": "call   *0x205e3a(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6ef93",
+              "instruction": "call   *0x205e3f(%rip)        # 274dd8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x6efa4",
+              "instruction": "call   *0x206016(%rip)        # 274fc0 <_DYNAMIC+0x410>"
+            },
+            {
+              "address": "0x6eff3",
+              "instruction": "call   *0x205dcf(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6f032",
+              "instruction": "call   *0x205dc8(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x6f03f",
+              "instruction": "call   *0x205f9b(%rip)        # 274fe0 <_DYNAMIC+0x430>"
+            },
+            {
+              "address": "0x6f04d",
+              "instruction": "call   64a00 <core::ptr::drop_glue::<emuella_j2k_core::J2kError>>"
+            },
+            {
+              "address": "0x6f055",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x6f060",
+              "instruction": "call   64980 <core::ptr::drop_glue::<emuella_j2k_core::EncodeOptions>>"
+            },
+            {
+              "address": "0x6f068",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x6f07b",
+              "instruction": "call   *0x205d47(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x6f084",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "facade": {
+          "symbol": "emuella_j2k_core::scalable_lossless::encode_with_limits",
+          "address": "0x18ec10",
+          "bytes": 1831,
+          "address_mod_64": 16,
+          "sha256": "432a9475cd5306df562714ae422d2659601e34a6d12f0fd3c5cc33d28bbd3cbd",
+          "normalised_sha256": "25de805403241f130bc9f56fe441ce943a9749e4e779e295b550625ee80edb0b",
+          "instructions": 370,
+          "rsp_operand_instructions": 93,
+          "stack_subtractions": [
+            "sub    $0x138,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x18f20c": "emuella_j2k_codestream::scalable_lossless::encode_lossless_d2",
+            "0x18f22c": "emuella_j2k_core::map_codestream_error"
+          },
+          "calls": [
+            {
+              "address": "0x18ec4a",
+              "instruction": "call   17d920 <emuella_j2k_core::scalable_lossless::requirements::<false>>"
+            },
+            {
+              "address": "0x18ec85",
+              "instruction": "call   17fd30 <emuella_j2k_core::validate_image_view>"
+            },
+            {
+              "address": "0x18efed",
+              "instruction": "call   *0xe5dc5(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x18f20c",
+              "instruction": "call   *0xe6416(%rip)        # 275628 <_DYNAMIC+0xa78>"
+            },
+            {
+              "address": "0x18f22c",
+              "instruction": "call   *0xe6486(%rip)        # 2756b8 <_DYNAMIC+0xb08>"
+            },
+            {
+              "address": "0x18f281",
+              "instruction": "call   *0xe5d99(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x18f294",
+              "instruction": "call   *0xe5d86(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x18f2a4",
+              "instruction": "call   *0xe5b56(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x18f2b3",
+              "instruction": "call   *0xe5b57(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f2c5",
+              "instruction": "call   *0xe5b45(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f2d7",
+              "instruction": "call   *0xe5b33(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f2e9",
+              "instruction": "call   *0xe5b21(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f2fb",
+              "instruction": "call   *0xe5b0f(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f30d",
+              "instruction": "call   *0xe5afd(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f31f",
+              "instruction": "call   *0xe5aeb(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x18f331",
+              "instruction": "call   *0xe5ad9(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "cleanup": {
+          "symbol": "emuella_j2k_tier1::cleanup_pass_encode::<false>",
+          "address": "0x1b1320",
+          "bytes": 4887,
+          "address_mod_64": 32,
+          "sha256": "281b7de2c59a6c95682b3bf2a910f0bf4556741f6f609fb653b0a7441922c175",
+          "normalised_sha256": "9ffe567eb184304e943169a18c8cefb63937020b0c882ddb59fdae4290336ddc",
+          "instructions": 1258,
+          "rsp_operand_instructions": 166,
+          "stack_subtractions": [
+            "sub    $0xc8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1b1506",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b159a",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b1631",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b16c7",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b17a5",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b1977",
+              "instruction": "call   *0xc34c3(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1994",
+              "instruction": "call   *0xc34a6(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b19ce",
+              "instruction": "call   *0xc346c(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1a1f",
+              "instruction": "call   1b1020 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b1bf5",
+              "instruction": "call   *0xc3245(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1c16",
+              "instruction": "call   *0xc3224(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1c55",
+              "instruction": "call   *0xc31e5(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1db5",
+              "instruction": "call   *0xc3085(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1dd5",
+              "instruction": "call   *0xc3065(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1e11",
+              "instruction": "call   *0xc3029(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1f76",
+              "instruction": "call   *0xc2ec4(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1f92",
+              "instruction": "call   *0xc2ea8(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b1fcc",
+              "instruction": "call   *0xc2e6e(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b2015",
+              "instruction": "call   1b1020 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b20b8",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b2264",
+              "instruction": "call   *0xc2bd6(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b2281",
+              "instruction": "call   *0xc2bb9(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b22cd",
+              "instruction": "call   *0xc2b6d(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b231f",
+              "instruction": "call   1b1020 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1b2456",
+              "instruction": "call   *0xc29e4(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b2473",
+              "instruction": "call   *0xc29c7(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b24bf",
+              "instruction": "call   *0xc297b(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b2514",
+              "instruction": "call   *0xc28f6(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2526",
+              "instruction": "call   *0xc28e4(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b253b",
+              "instruction": "call   *0xc28cf(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2550",
+              "instruction": "call   *0xc28ba(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2563",
+              "instruction": "call   *0xc28a7(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2576",
+              "instruction": "call   *0xc2894(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2589",
+              "instruction": "call   *0xc2881(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b259c",
+              "instruction": "call   *0xc286e(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b25af",
+              "instruction": "call   *0xc285b(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b25c4",
+              "instruction": "call   *0xc2846(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b25d6",
+              "instruction": "call   *0xc2834(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b25ee",
+              "instruction": "call   *0xc281c(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2606",
+              "instruction": "call   *0xc2804(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b261e",
+              "instruction": "call   *0xc27ec(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b2631",
+              "instruction": "call   *0xc27d9(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "significance": {
+          "symbol": "emuella_j2k_tier1::significance_propagation_pass_encode::<false>",
+          "address": "0x1ba5a0",
+          "bytes": 1387,
+          "address_mod_64": 32,
+          "sha256": "cdf80c839132f5b1519658a66f788fdd40c394fd8e1a465c8590d40b6c2985f0",
+          "normalised_sha256": "7ad5b1656e13ef7d286fd6f75e6df65483762448f588e3178d00ab4b0641fff4",
+          "instructions": 343,
+          "rsp_operand_instructions": 65,
+          "stack_subtractions": [
+            "sub    $0xa8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1ba74d",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1ba7da",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1ba9b1",
+              "instruction": "call   *0xba489(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1ba9e1",
+              "instruction": "call   *0xba459(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1baa29",
+              "instruction": "call   *0xba411(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1baa8c",
+              "instruction": "call   1b1020 <emuella_j2k_tier1::encode_sign_bit_at::<false>>"
+            },
+            {
+              "address": "0x1baac9",
+              "instruction": "call   *0xba341(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1baadb",
+              "instruction": "call   *0xba32f(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1baaf0",
+              "instruction": "call   *0xba31a(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1bab05",
+              "instruction": "call   *0xba305(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "magnitude": {
+          "symbol": "emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>",
+          "address": "0x1b8520",
+          "bytes": 1240,
+          "address_mod_64": 32,
+          "sha256": "0109a21eaf4747568d302350654692535e4dd93f656e64146a412740d0598504",
+          "normalised_sha256": "26fd17a0adf0e65c651aa81be455923f2bac5ce2922a10e047d1c427957e23a0",
+          "instructions": 319,
+          "rsp_operand_instructions": 45,
+          "stack_subtractions": [
+            "sub    $0x98,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1b8713",
+              "instruction": "call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>"
+            },
+            {
+              "address": "0x1b8925",
+              "instruction": "call   *0xbc515(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b8954",
+              "instruction": "call   *0xbc4e6(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b899c",
+              "instruction": "call   *0xbc49e(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1b89cb",
+              "instruction": "call   *0xbc43f(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b89e0",
+              "instruction": "call   *0xbc42a(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1b89f2",
+              "instruction": "call   *0xbc418(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "mq_bit": {
+          "symbol": "<emuella_j2k_tier1::mq::Encoder>::write_bit",
+          "address": "0x1db600",
+          "bytes": 230,
+          "address_mod_64": 0,
+          "sha256": "a36a235805d2b640cfd1f965a83f8c7d906443828ced2f0b29d4c3f732f3b421",
+          "normalised_sha256": "58b76c063a4f67d23c1a138e2c3f766a5a45bffcc8cd37859a66aa5cb3ad169c",
+          "instructions": 67,
+          "rsp_operand_instructions": 0,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1db6b0",
+              "instruction": "call   1db4d0 <<emuella_j2k_tier1::mq::Encoder>::byte_out>"
+            },
+            {
+              "address": "0x1db6cb",
+              "instruction": "call   *0x9973f(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x1db6e0",
+              "instruction": "call   *0x9972a(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "mq_byte": {
+          "symbol": "<emuella_j2k_tier1::mq::Encoder>::byte_out",
+          "address": "0x1db4d0",
+          "bytes": 297,
+          "address_mod_64": 16,
+          "sha256": "8753dbb1bea0d60fbae665f27f3c66cd7a3c9dd154f138359ad6be43cd53f52a",
+          "normalised_sha256": "63b2046862f7524df0a0aee2bbcbd99fe7ec6956f1ec34222b3ecbb64233ece9",
+          "instructions": 87,
+          "rsp_operand_instructions": 0,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1db518",
+              "instruction": "call   *0x99922(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1db567",
+              "instruction": "call   *0x998d3(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1db5ba",
+              "instruction": "call   *0x99880(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            }
+          ]
+        },
+        "writer": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::encode_lossless_d2",
+          "address": "0x151a50",
+          "bytes": 5543,
+          "address_mod_64": 16,
+          "sha256": "404e3739340196dba99f4ad2b0e01ec85ea366ebbe90b5a2238af37360db0b81",
+          "normalised_sha256": "5d63ce46cc5ae985723f061cd5c4cd3ad638e3d047fb552c3e3aa2e56db2cf56",
+          "instructions": 1029,
+          "rsp_operand_instructions": 404,
+          "stack_subtractions": [
+            "sub    $0x478,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x151aab",
+              "instruction": "call   9afa0 <emuella_j2k_codestream::scalable_lossless::execution_requirements::<false>>"
+            },
+            {
+              "address": "0x151c76",
+              "instruction": "call   14ad70 <<alloc::raw_vec::RawVecInner>::try_allocate_in>"
+            },
+            {
+              "address": "0x151e14",
+              "instruction": "call   *0x123446(%rip)        # 275260 <_DYNAMIC+0x6b0>"
+            },
+            {
+              "address": "0x151ecf",
+              "instruction": "call   *0x12338b(%rip)        # 275260 <_DYNAMIC+0x6b0>"
+            },
+            {
+              "address": "0x151f00",
+              "instruction": "call   14ac10 <<alloc::raw_vec::RawVecInner>::finish_grow>"
+            },
+            {
+              "address": "0x151f69",
+              "instruction": "call   *0x1232f9(%rip)        # 275268 <_DYNAMIC+0x6b8>"
+            },
+            {
+              "address": "0x152043",
+              "instruction": "call   *0x122dc7(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x152056",
+              "instruction": "call   *0x122da4(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x152083",
+              "instruction": "call   *0x122d3f(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15208e",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152096",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x1520e6",
+              "instruction": "call   151600 <emuella_j2k_codestream::scalable_lossless::prepare_forward53>"
+            },
+            {
+              "address": "0x152167",
+              "instruction": "call   *%r13"
+            },
+            {
+              "address": "0x15218f",
+              "instruction": "call   *%r13"
+            },
+            {
+              "address": "0x15220d",
+              "instruction": "call   d0150 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}>"
+            },
+            {
+              "address": "0x15225f",
+              "instruction": "call   *0x122b63(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15227c",
+              "instruction": "call   *0x122b46(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1522a0",
+              "instruction": "call   *0x122b22(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1522b9",
+              "instruction": "call   *0x122b09(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x1522cf",
+              "instruction": "call   d3730 <emuella_j2k_codestream::decomp_subband_specs>"
+            },
+            {
+              "address": "0x152322",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152351",
+              "instruction": "call   172380 <<alloc::vec::Vec<&[i32]> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<&[i32], core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::vec::Vec<i32>>, <alloc::vec::Vec<i32>>::as_slice>>>::from_iter>"
+            },
+            {
+              "address": "0x152395",
+              "instruction": "call   9c690 <core::iter::adapters::try_process::<core::iter::adapters::map::Map<core::slice::iter::Iter<emuella_j2k_codestream::DecompSubbandSpec>, emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl<false, false>::{closure#6}>, u8, core::result::Result<core::convert::Infallible, emuella_j2k_codestream::CodestreamError>, <core::result::Result<alloc::vec::Vec<u8>, emuella_j2k_codestream::CodestreamError> as core::iter::traits::collect::FromIterator<core::result::Result<u8, emuella_j2k_codestream::CodestreamError>>>::from_iter<core::iter::adapters::map::Map<core::slice::iter::Iter<emuella_j2k_codestream::DecompSubbandSpec>, emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl<false, false>::{closure#6}>>::{closure#0}, alloc::vec::Vec<u8>>>"
+            },
+            {
+              "address": "0x15242c",
+              "instruction": "call   1514c0 <emuella_j2k_codestream::scalable_lossless::reserve_output>"
+            },
+            {
+              "address": "0x1524b3",
+              "instruction": "call   d74b0 <emuella_j2k_codestream::write_native_main_header>"
+            },
+            {
+              "address": "0x15251d",
+              "instruction": "call   14dc20 <<alloc::vec::Vec<u8>>::append_elements>"
+            },
+            {
+              "address": "0x1525e2",
+              "instruction": "call   145920 <<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>::new>"
+            },
+            {
+              "address": "0x152718",
+              "instruction": "call   *0x12269a(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152812",
+              "instruction": "call   876d0 <<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>::encode_subband::<false, false>>"
+            },
+            {
+              "address": "0x1528af",
+              "instruction": "call   14b810 <<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>::push_mut>"
+            },
+            {
+              "address": "0x1528c5",
+              "instruction": "call   *0x1224fd(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x15295f",
+              "instruction": "call   865e0 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>>"
+            },
+            {
+              "address": "0x1529b9",
+              "instruction": "call   14b810 <<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>::push_mut>"
+            },
+            {
+              "address": "0x152a57",
+              "instruction": "call   14cdc0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0x152aa1",
+              "instruction": "call   e5250 <emuella_j2k_codestream::write_component_packet_header>"
+            },
+            {
+              "address": "0x152b02",
+              "instruction": "call   1514c0 <emuella_j2k_codestream::scalable_lossless::reserve_output>"
+            },
+            {
+              "address": "0x152b24",
+              "instruction": "call   145f30 <<alloc::vec::Vec<u8>>::resize>"
+            },
+            {
+              "address": "0x152b42",
+              "instruction": "call   875e0 <<[u8]>::copy_within::<core::ops::range::Range<usize>>>"
+            },
+            {
+              "address": "0x152b70",
+              "instruction": "call   *%r13"
+            },
+            {
+              "address": "0x152b86",
+              "instruction": "call   *0x12223c(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152b9d",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152baa",
+              "instruction": "call   91c30 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>"
+            },
+            {
+              "address": "0x152c5b",
+              "instruction": "call   *0x122167(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152ca3",
+              "instruction": "call   1514c0 <emuella_j2k_codestream::scalable_lossless::reserve_output>"
+            },
+            {
+              "address": "0x152d44",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152d51",
+              "instruction": "call   91c30 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>"
+            },
+            {
+              "address": "0x152d5e",
+              "instruction": "call   9ab30 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>"
+            },
+            {
+              "address": "0x152d6b",
+              "instruction": "call   990e0 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>"
+            },
+            {
+              "address": "0x152d90",
+              "instruction": "call   *0x122032(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152da5",
+              "instruction": "call   *0x12201d(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152dbe",
+              "instruction": "call   *0x122004(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152de6",
+              "instruction": "call   14dc20 <<alloc::vec::Vec<u8>>::append_elements>"
+            },
+            {
+              "address": "0x152e12",
+              "instruction": "call   9ab30 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>"
+            },
+            {
+              "address": "0x152e1f",
+              "instruction": "call   990e0 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>"
+            },
+            {
+              "address": "0x152e31",
+              "instruction": "call   *0x121f91(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152e4a",
+              "instruction": "call   *0x121f78(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152e5d",
+              "instruction": "call   *0x121f65(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152e68",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152e85",
+              "instruction": "call   *0x122195(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x152e97",
+              "instruction": "call   *0x122183(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x152ea9",
+              "instruction": "call   *0x121f51(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x152f1b",
+              "instruction": "call   *0x121ea7(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152f45",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152f4d",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x152f68",
+              "instruction": "call   *0x121e5a(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152f76",
+              "instruction": "call   91560 <core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<emuella_j2k_accel::OutputRect>>>>"
+            },
+            {
+              "address": "0x152f83",
+              "instruction": "call   91c30 <core::ptr::drop_glue::<alloc::vec::Vec<emuella_j2k_codestream::NativeDecompSubband>>>"
+            },
+            {
+              "address": "0x152f90",
+              "instruction": "call   9ab30 <core::ptr::drop_glue::<emuella_j2k_codestream::scalable_lossless::parallel::BlockWorkers>>"
+            },
+            {
+              "address": "0x152f9d",
+              "instruction": "call   990e0 <core::ptr::drop_glue::<emuella_j2k_tier1::CodeBlockEncodeScratch>>"
+            },
+            {
+              "address": "0x152faf",
+              "instruction": "call   *0x121e13(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152fc2",
+              "instruction": "call   *0x121e00(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x152fdb",
+              "instruction": "call   *0x121de7(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            }
+          ]
+        },
+        "components": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}",
+          "address": "0xd0150",
+          "bytes": 291,
+          "address_mod_64": 16,
+          "sha256": "a2ed7d07715e7501c3f2c069ee5439cd836ee856ead94112fd584a5a83bb3b65",
+          "normalised_sha256": "e09d6f8b1f81cf0016f1f01fd17bc5b3dadd64e4872476276195f21c4e20a590",
+          "instructions": 79,
+          "rsp_operand_instructions": 16,
+          "stack_subtractions": [
+            "sub    $0x58,%rsp",
+            "sub    $0x8,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0xd0216": "emuella_j2k_transform::analysis53::forward_reversible_5_3_planned_bounded"
+          },
+          "calls": [
+            {
+              "address": "0xd01e3",
+              "instruction": "call   115aa0 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch>"
+            },
+            {
+              "address": "0xd0216",
+              "instruction": "call   *0x1a519c(%rip)        # 2753b8 <_DYNAMIC+0x808>"
+            }
+          ]
+        },
+        "prepare": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::prepare_forward53",
+          "address": "0x151600",
+          "bytes": 1102,
+          "address_mod_64": 0,
+          "sha256": "8b584d0d04638163fd9a8b38aaa285b2213156eb89c36d88452a9866bd2d5fac",
+          "normalised_sha256": "1af84c173bfac288b04438bef4724bafd9b7e05ab53c163e6418a0e44fd58c74",
+          "instructions": 212,
+          "rsp_operand_instructions": 80,
+          "stack_subtractions": [
+            "sub    $0x2a8,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x151773": "<emuella_j2k_transform::analysis53::Forward53Plan>::new",
+            "0x15190c": "<emuella_j2k_transform::analysis53::Forward53Workspace>::prepare"
+          },
+          "calls": [
+            {
+              "address": "0x151773",
+              "instruction": "call   *0x123e9f(%rip)        # 275618 <_DYNAMIC+0xa68>"
+            },
+            {
+              "address": "0x15190c",
+              "instruction": "call   *0x123d0e(%rip)        # 275620 <_DYNAMIC+0xa70>"
+            },
+            {
+              "address": "0x151929",
+              "instruction": "call   *0x123499(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x151a40",
+              "instruction": "call   *0x123382(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x151a49",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "levels": {
+          "symbol": "emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch",
+          "address": "0x115aa0",
+          "bytes": 981,
+          "address_mod_64": 32,
+          "sha256": "62bf79fd9aa553a84ede6420349d3753b4d63771cd4c4105969307eeca8afe11",
+          "normalised_sha256": "6277ff45a6ccf3e2ec2571a952d61b771e9b7ade9fdf21f892599da42521daa5",
+          "instructions": 238,
+          "rsp_operand_instructions": 50,
+          "stack_subtractions": [
+            "sub    $0x88,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x115bf5": "emuella_j2k_transform::forward_reversible_5_3_bounded",
+            "0x115dae": "emuella_j2k_transform::forward_reversible_5_3_bounded"
+          },
+          "calls": [
+            {
+              "address": "0x115b6e",
+              "instruction": "call   *0x15f274(%rip)        # 274de8 <memset@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x115bf5",
+              "instruction": "call   *0x15f955(%rip)        # 275550 <_DYNAMIC+0x9a0>"
+            },
+            {
+              "address": "0x115d40",
+              "instruction": "call   *0x15f0a2(%rip)        # 274de8 <memset@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x115dae",
+              "instruction": "call   *0x15f79c(%rip)        # 275550 <_DYNAMIC+0x9a0>"
+            },
+            {
+              "address": "0x115ded",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0x115e4d",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            }
+          ]
+        },
+        "bounded53": {
+          "symbol": "emuella_j2k_transform::forward_reversible_5_3_bounded",
+          "address": "0x2057f0",
+          "bytes": 1380,
+          "address_mod_64": 48,
+          "sha256": "e621e0e9a056b7f946f20601dd7462f7e1d35a00ef97c4be68664eb3726dc553",
+          "normalised_sha256": "737c545550afddb20162c5e5f5e6a6bf9ca18b5b094bd8553ba0dbc9897ddc67",
+          "instructions": 345,
+          "rsp_operand_instructions": 55,
+          "stack_subtractions": [
+            "sub    $0x68,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x20591a",
+              "instruction": "call   205660 <emuella_j2k_transform::validate_samples_in_range>"
+            },
+            {
+              "address": "0x205a02",
+              "instruction": "call   207180 <emuella_j2k_transform::transform_line_forward_first_high_bounded>"
+            },
+            {
+              "address": "0x205af2",
+              "instruction": "call   206600 <emuella_j2k_transform::transform_line_forward_first_low_bounded>"
+            },
+            {
+              "address": "0x205bc8",
+              "instruction": "call   207180 <emuella_j2k_transform::transform_line_forward_first_high_bounded>"
+            },
+            {
+              "address": "0x205bdd",
+              "instruction": "call   *0x6f1f5(%rip)        # 274dd8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x205c3f",
+              "instruction": "call   206600 <emuella_j2k_transform::transform_line_forward_first_low_bounded>"
+            },
+            {
+              "address": "0x205c54",
+              "instruction": "call   *0x6f17e(%rip)        # 274dd8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x205c9c",
+              "instruction": "call   *0x6f37e(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x205cb5",
+              "instruction": "call   *0x6f1b5(%rip)        # 274e70 <_DYNAMIC+0x2c0>"
+            },
+            {
+              "address": "0x205cce",
+              "instruction": "call   *0x6f19c(%rip)        # 274e70 <_DYNAMIC+0x2c0>"
+            },
+            {
+              "address": "0x205d09",
+              "instruction": "call   *0x6f311(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x205d1e",
+              "instruction": "call   *0x6f0ec(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x205d33",
+              "instruction": "call   *0x6f0d7(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x205d4e",
+              "instruction": "call   *0x6f2cc(%rip)        # 275020 <_DYNAMIC+0x470>"
+            }
+          ]
+        },
+        "low_line": {
+          "symbol": "emuella_j2k_transform::transform_line_forward_first_low_bounded",
+          "address": "0x206600",
+          "bytes": 1438,
+          "address_mod_64": 0,
+          "sha256": "27650950146cbbf0106aba956f6aafb1f407d89a424678089bd4379cb1ed640b",
+          "normalised_sha256": "a0e0f9bba77662008ee5e4d39541e1b92a4410d9ee89bb186163536af6f3d45a",
+          "instructions": 358,
+          "rsp_operand_instructions": 3,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x206a3a",
+              "instruction": "call   *0x6e3d0(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206a4e",
+              "instruction": "call   *0x6e3bc(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206a61",
+              "instruction": "call   *0x6e3a9(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206a77",
+              "instruction": "call   *0x6e393(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206a87",
+              "instruction": "call   *0x6e383(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206a9a",
+              "instruction": "call   *0x6e370(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206ab0",
+              "instruction": "call   *0x6e35a(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206ac3",
+              "instruction": "call   *0x6e347(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206ad6",
+              "instruction": "call   *0x6e334(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206ae9",
+              "instruction": "call   *0x6e321(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206afc",
+              "instruction": "call   *0x6e30e(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b13",
+              "instruction": "call   *0x6e2f7(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b26",
+              "instruction": "call   *0x6e2e4(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b36",
+              "instruction": "call   *0x6e2d4(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b49",
+              "instruction": "call   *0x6e2c1(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b5c",
+              "instruction": "call   *0x6e2ae(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b6f",
+              "instruction": "call   *0x6e29b(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b82",
+              "instruction": "call   *0x6e288(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x206b98",
+              "instruction": "call   *0x6e272(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "high_line": {
+          "symbol": "emuella_j2k_transform::transform_line_forward_first_high_bounded",
+          "address": "0x207180",
+          "bytes": 1327,
+          "address_mod_64": 0,
+          "sha256": "a345de30763905a996ffecf2bca978fbda467c63074aafe5de91248b715d8f8f",
+          "normalised_sha256": "a6e32bdef92e04cd563a50e45cf085d016dad93f599548b88caac883310c2ae5",
+          "instructions": 326,
+          "rsp_operand_instructions": 0,
+          "stack_subtractions": [],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x207561",
+              "instruction": "call   *0x6d8a9(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207574",
+              "instruction": "call   *0x6d896(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207584",
+              "instruction": "call   *0x6d886(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x20759a",
+              "instruction": "call   *0x6d870(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x2075b1",
+              "instruction": "call   *0x6d859(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x2075c4",
+              "instruction": "call   *0x6d846(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x2075d7",
+              "instruction": "call   *0x6d833(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x2075eb",
+              "instruction": "call   *0x6d81f(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x2075fe",
+              "instruction": "call   *0x6d80c(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207614",
+              "instruction": "call   *0x6d7f6(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207624",
+              "instruction": "call   *0x6d7e6(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207639",
+              "instruction": "call   *0x6d7d1(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x20764c",
+              "instruction": "call   *0x6d7be(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x20765f",
+              "instruction": "call   *0x6d7ab(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207672",
+              "instruction": "call   *0x6d798(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207682",
+              "instruction": "call   *0x6d788(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x207697",
+              "instruction": "call   *0x6d773(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0x2076a9",
+              "instruction": "call   *0x6d761(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            }
+          ]
+        },
+        "subband": {
+          "symbol": "emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>",
+          "address": "0x865e0",
+          "bytes": 2606,
+          "address_mod_64": 32,
+          "sha256": "ce94a677c6929407a5932bd4b5f4c3eb185ff5fbe2b0864e5d4a190507e4e0b7",
+          "normalised_sha256": "842da886e041c0dd325aa9850d429da18359f287cdc812c2a74c0fdf48ec5e27",
+          "instructions": 517,
+          "rsp_operand_instructions": 167,
+          "stack_subtractions": [
+            "sub    $0x178,%rsp"
+          ],
+          "own_indirect_call_targets": {
+            "0x86b5a": "emuella_j2k_tier1::encode_baseline_code_block_with_strided_scratch"
+          },
+          "calls": [
+            {
+              "address": "0x86708",
+              "instruction": "call   *0x1ee6aa(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x86b5a",
+              "instruction": "call   *0x1ee728(%rip)        # 275288 <_DYNAMIC+0x6d8>"
+            },
+            {
+              "address": "0x86c52",
+              "instruction": "call   *0x1ee180(%rip)        # 274dd8 <memcpy@GLIBC_2.14>"
+            },
+            {
+              "address": "0x86ca1",
+              "instruction": "call   *0x1ee5e9(%rip)        # 275290 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0x86cec",
+              "instruction": "call   14ac10 <<alloc::raw_vec::RawVecInner>::finish_grow>"
+            },
+            {
+              "address": "0x86d3f",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0x86f90",
+              "instruction": "call   *0x1ede32(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x86fa7",
+              "instruction": "call   *0x1ede1b(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x86fc7",
+              "instruction": "call   *0x1ede33(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0x86fe3",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0x86fed",
+              "instruction": "call   *0x1eddd5(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x87000",
+              "instruction": "call   *0x1eddc2(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0x87009",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "tier1_strided": {
+          "symbol": "emuella_j2k_tier1::encode_baseline_code_block_with_strided_scratch",
+          "address": "0x1d6570",
+          "bytes": 506,
+          "address_mod_64": 48,
+          "sha256": "7bd9a9e992cc7ac06a1014fec02e7f52f0906d109d55755b6ad2ec2a0453ae7c",
+          "normalised_sha256": "d9af51e4a4f3aea3c1a1cd0e2ef1dfebb19843f9805ff9f342acc053f5cb3f85",
+          "instructions": 136,
+          "rsp_operand_instructions": 14,
+          "stack_subtractions": [
+            "sub    $0xb8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1d666b",
+              "instruction": "call   1ddf50 <emuella_j2k_tier1::packed_encode::encode>"
+            },
+            {
+              "address": "0x1d66aa",
+              "instruction": "call   1dc4d0 <<emuella_j2k_tier1::CodeBlockEncodeScratch>::prepare_strided_with_max>"
+            },
+            {
+              "address": "0x1d671d",
+              "instruction": "call   1d2d20 <emuella_j2k_tier1::encode_prepared_baseline_code_block>"
+            }
+          ]
+        },
+        "tier1_prepared": {
+          "symbol": "emuella_j2k_tier1::encode_prepared_baseline_code_block",
+          "address": "0x1d2d20",
+          "bytes": 5789,
+          "address_mod_64": 32,
+          "sha256": "a6ee2504be006e0c870a332abf346c61147582d146a51a9bd27e37946d373e87",
+          "normalised_sha256": "c8f1989593e001b52d3df58baf7e169116503ca72d16dd64841c3ae64ff01073",
+          "instructions": 1367,
+          "rsp_operand_instructions": 325,
+          "stack_subtractions": [
+            "sub    $0x128,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1d300d",
+              "instruction": "call   1bbc80 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<false>>"
+            },
+            {
+              "address": "0x1d3043",
+              "instruction": "call   1b1320 <emuella_j2k_tier1::cleanup_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d3072",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3083",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3097",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d30a8",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d318f",
+              "instruction": "call   1d43c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d31a0",
+              "instruction": "call   1ba5a0 <emuella_j2k_tier1::significance_propagation_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d31b1",
+              "instruction": "call   1b8520 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d3249",
+              "instruction": "call   1d2240 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d32ce",
+              "instruction": "call   *0xa1b6c(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1d33d9",
+              "instruction": "call   *0xa1e79(%rip)        # 275258 <_DYNAMIC+0x6a8>"
+            },
+            {
+              "address": "0x1d347d",
+              "instruction": "call   1bbc80 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<false>>"
+            },
+            {
+              "address": "0x1d34b3",
+              "instruction": "call   1b1320 <emuella_j2k_tier1::cleanup_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d34e2",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d34f3",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3507",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3518",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d35ff",
+              "instruction": "call   1d43c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d3610",
+              "instruction": "call   1ba5a0 <emuella_j2k_tier1::significance_propagation_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d3621",
+              "instruction": "call   1b8520 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>>"
+            },
+            {
+              "address": "0x1d36c9",
+              "instruction": "call   1d2240 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d374f",
+              "instruction": "call   *0xa16eb(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1d3849",
+              "instruction": "call   *0xa1a09(%rip)        # 275258 <_DYNAMIC+0x6a8>"
+            },
+            {
+              "address": "0x1d397d",
+              "instruction": "call   1bc130 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<true>>"
+            },
+            {
+              "address": "0x1d39b3",
+              "instruction": "call   1b2640 <emuella_j2k_tier1::cleanup_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d39e2",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d39f3",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3a07",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3a18",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3aff",
+              "instruction": "call   1d43c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d3b10",
+              "instruction": "call   1bab10 <emuella_j2k_tier1::significance_propagation_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d3b21",
+              "instruction": "call   1b8a00 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d3bb9",
+              "instruction": "call   1d2240 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d3c3e",
+              "instruction": "call   *0xa11fc(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1d3d39",
+              "instruction": "call   *0xa1519(%rip)        # 275258 <_DYNAMIC+0x6a8>"
+            },
+            {
+              "address": "0x1d3e8d",
+              "instruction": "call   1bc130 <emuella_j2k_tier1::significance_propagation_pass_encode_raw::<true>>"
+            },
+            {
+              "address": "0x1d3ec3",
+              "instruction": "call   1b2640 <emuella_j2k_tier1::cleanup_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d3ef2",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3f03",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3f17",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d3f28",
+              "instruction": "call   1db600 <<emuella_j2k_tier1::mq::Encoder>::write_bit>"
+            },
+            {
+              "address": "0x1d400f",
+              "instruction": "call   1d43c0 <emuella_j2k_tier1::magnitude_refinement_pass_encode_raw>"
+            },
+            {
+              "address": "0x1d4020",
+              "instruction": "call   1bab10 <emuella_j2k_tier1::significance_propagation_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d4031",
+              "instruction": "call   1b8a00 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<true>>"
+            },
+            {
+              "address": "0x1d40d9",
+              "instruction": "call   1d2240 <emuella_j2k_tier1::terminate_arithmetic_segment>"
+            },
+            {
+              "address": "0x1d415f",
+              "instruction": "call   *0xa0cdb(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0x1d4259",
+              "instruction": "call   *0xa0ff9(%rip)        # 275258 <_DYNAMIC+0x6a8>"
+            },
+            {
+              "address": "0x1d4391",
+              "instruction": "call   *0xa0c89(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x1d43a4",
+              "instruction": "call   *0xa0c76(%rip)        # 275020 <_DYNAMIC+0x470>"
+            },
+            {
+              "address": "0x1d43b7",
+              "instruction": "call   *0xa0c63(%rip)        # 275020 <_DYNAMIC+0x470>"
+            }
+          ]
+        },
+        "packet_header": {
+          "symbol": "emuella_j2k_codestream::write_component_packet_header",
+          "address": "0xe5250",
+          "bytes": 4952,
+          "address_mod_64": 16,
+          "sha256": "d291d8341f9075745248b75259fc5e1c33460585adf22713734ed50f22d94424",
+          "normalised_sha256": "2225bd3aa0e42a1e9153ff2f32c05768da5d38b27604bb1e415a53dfb20edbc8",
+          "instructions": 1028,
+          "rsp_operand_instructions": 308,
+          "stack_subtractions": [
+            "sub    $0x1b8,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0xe529d",
+              "instruction": "call   *0x18fb15(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe538e",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe53df",
+              "instruction": "call   *0x18feab(%rip)        # 275290 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe5445",
+              "instruction": "call   *0x18fe45(%rip)        # 275290 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe54f1",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe579e",
+              "instruction": "call   *0x18fcb4(%rip)        # 275458 <_DYNAMIC+0x8a8>"
+            },
+            {
+              "address": "0xe5811",
+              "instruction": "call   *0x18fc41(%rip)        # 275458 <_DYNAMIC+0x8a8>"
+            },
+            {
+              "address": "0xe5884",
+              "instruction": "call   *0x18f53e(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe58b5",
+              "instruction": "call   *0x18f555(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0xe58cd",
+              "instruction": "call   *0x18f4e5(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe5980",
+              "instruction": "call   *0x18fad2(%rip)        # 275458 <_DYNAMIC+0x8a8>"
+            },
+            {
+              "address": "0xe59e5",
+              "instruction": "call   *0x18f8a5(%rip)        # 275290 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe5a30",
+              "instruction": "call   *0x18f85a(%rip)        # 275290 <_DYNAMIC+0x6e0>"
+            },
+            {
+              "address": "0xe5aed",
+              "instruction": "call   *0x18f2c5(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe5dae",
+              "instruction": "call   *0x18f6a4(%rip)        # 275458 <_DYNAMIC+0x8a8>"
+            },
+            {
+              "address": "0xe5e1c",
+              "instruction": "call   *0x18f636(%rip)        # 275458 <_DYNAMIC+0x8a8>"
+            },
+            {
+              "address": "0xe5e8b",
+              "instruction": "call   *0x18ef37(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe5e9d",
+              "instruction": "call   *0x18ef6d(%rip)        # 274e10 <_DYNAMIC+0x260>"
+            },
+            {
+              "address": "0xe5f26",
+              "instruction": "call   14c470 <<emuella_j2k_codestream::EncTagTree>::encode>"
+            },
+            {
+              "address": "0xe5f67",
+              "instruction": "call   14c470 <<emuella_j2k_codestream::EncTagTree>::encode>"
+            },
+            {
+              "address": "0xe5f98",
+              "instruction": "call   d6a00 <emuella_j2k_codestream::write_coding_pass_count>"
+            },
+            {
+              "address": "0xe5ff7",
+              "instruction": "call   14cdc0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0xe6052",
+              "instruction": "call   14cdc0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0xe60a0",
+              "instruction": "call   14cdc0 <<emuella_j2k_codestream::PacketBitWriter>::write_bit>"
+            },
+            {
+              "address": "0xe60cf",
+              "instruction": "call   *0x18ecf3(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe6147",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe61b3",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe61cb",
+              "instruction": "call   *0x18ebf7(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe61f1",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe62c2",
+              "instruction": "call   *%r12"
+            },
+            {
+              "address": "0xe6310",
+              "instruction": "call   *0x18eab2(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe6349",
+              "instruction": "call   *0x18ee11(%rip)        # 275160 <_DYNAMIC+0x5b0>"
+            },
+            {
+              "address": "0xe6359",
+              "instruction": "call   *0x18eaa1(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0xe6377",
+              "instruction": "call   *0x18ea83(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0xe6385",
+              "instruction": "call   *0x18ea75(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0xe6395",
+              "instruction": "call   *0x18ea65(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0xe63dd",
+              "instruction": "call   *0x18e9e5(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe644f",
+              "instruction": "call   99310 <core::ptr::drop_glue::<emuella_j2k_codestream::EncTagTree>>"
+            },
+            {
+              "address": "0xe6493",
+              "instruction": "call   *0x18e92f(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe64ba",
+              "instruction": "call   *0x18e908(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe64f3",
+              "instruction": "call   *%r13"
+            },
+            {
+              "address": "0xe6534",
+              "instruction": "call   *%r15"
+            },
+            {
+              "address": "0xe6549",
+              "instruction": "call   *0x18e879(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe6569",
+              "instruction": "call   *0x18e859(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xe6572",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            },
+            {
+              "address": "0xe65a3",
+              "instruction": "call   *%r13"
+            }
+          ]
+        },
+        "main_header": {
+          "symbol": "emuella_j2k_codestream::write_native_main_header",
+          "address": "0xd74b0",
+          "bytes": 2539,
+          "address_mod_64": 48,
+          "sha256": "1d784921af3e73e90b563a5f67fe789d6ec61bed7d1949e5ab7dbc07a92a5201",
+          "normalised_sha256": "9f1645f6b72d3c9b5c06ffc605000e4a09efec5b8e8c8531b220f1b32b03ae98",
+          "instructions": 578,
+          "rsp_operand_instructions": 32,
+          "stack_subtractions": [
+            "sub    $0x28,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0xd7519",
+              "instruction": "call   *0x19d899(%rip)        # 274db8 <malloc@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xd7824",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7983",
+              "instruction": "call   *0x19d4b7(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd79ae",
+              "instruction": "call   *0x19d48c(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd79dd",
+              "instruction": "call   *0x19d45d(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd7a0c",
+              "instruction": "call   *0x19d42e(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd7a3b",
+              "instruction": "call   *0x19d3ff(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd7a6a",
+              "instruction": "call   *0x19d3d0(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd7a99",
+              "instruction": "call   *0x19d3a1(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd7ac8",
+              "instruction": "call   *0x19d372(%rip)        # 274e40 <_DYNAMIC+0x290>"
+            },
+            {
+              "address": "0xd7ba4",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7bc9",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7bee",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7c13",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7c38",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7c5d",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7c82",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7ca7",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7ccc",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7cf1",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7d16",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7d3b",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7d60",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7d85",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7daa",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7dcf",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7df4",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7e19",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7e3e",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7e63",
+              "instruction": "call   ab6f0 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>"
+            },
+            {
+              "address": "0xd7e7a",
+              "instruction": "call   *0x19cf80(%rip)        # 274e00 <_DYNAMIC+0x250>"
+            },
+            {
+              "address": "0xd7e8d",
+              "instruction": "call   *0x19cf35(%rip)        # 274dc8 <free@GLIBC_2.2.5>"
+            },
+            {
+              "address": "0xd7e96",
+              "instruction": "call   26c1a0 <_Unwind_Resume@plt>"
+            }
+          ]
+        },
+        "reserve_output": {
+          "symbol": "emuella_j2k_codestream::scalable_lossless::reserve_output",
+          "address": "0x1514c0",
+          "bytes": 319,
+          "address_mod_64": 0,
+          "sha256": "e0c80c8db0f4ecf3473af783e6bdf0811331c28220f939f27ae67aa655953934",
+          "normalised_sha256": "e6387321ebf8a7a6ad878609f9bcda61c8b6aa4aede011c8b85d2357d925b34a",
+          "instructions": 79,
+          "rsp_operand_instructions": 2,
+          "stack_subtractions": [
+            "sub    $0x18,%rsp"
+          ],
+          "own_indirect_call_targets": {},
+          "calls": [
+            {
+              "address": "0x1515a1",
+              "instruction": "call   14ac10 <<alloc::raw_vec::RawVecInner>::finish_grow>"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
