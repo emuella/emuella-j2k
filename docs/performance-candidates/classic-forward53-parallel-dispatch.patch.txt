@@ -1,0 +1,2100 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 02301aedd52f50bb78c268dfbeeb5ea5faaf84bb..dd85cd4b4f13b0bd5c5997fb422ff0fa0ff0db83 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -49,6 +49,10 @@ jobs:
+       - run: cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
+       - run: cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
+       - run: cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::parallel
++      - run: cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::forward53_tests
++      - run: cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
++      - run: cargo test --release -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --test forward53_panels
++      - run: cargo test --release -p emuella-j2k-test-support --features classic-execution-diagnostics --test forward53_panels ordinary_dispatch
+       - run: cargo test -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics
+       - run: cargo test -p emuella-j2k-test-support --example lossless_parallel
+       - run: cargo clippy --workspace --all-targets -- -D warnings
+diff --git a/crates/emuella-j2k-codestream/src/lib.rs b/crates/emuella-j2k-codestream/src/lib.rs
+index 90517837b65ff3d0b9d051d365c78030a50c742a..9db5af80d030c15297c4aaeae3cfccd19bc76451 100644
+--- a/crates/emuella-j2k-codestream/src/lib.rs
++++ b/crates/emuella-j2k-codestream/src/lib.rs
+@@ -109,6 +109,8 @@ const fn parallel_decode_dispatch_available() -> bool {
+ 
+ mod scalable_lossless;
+ #[cfg(feature = "classic-execution-diagnostics")]
++pub use emuella_j2k_transform::{Forward53Backend, with_forward53_diagnostic_policy};
++#[cfg(feature = "classic-execution-diagnostics")]
+ pub use scalable_lossless::diagnostics::{LosslessExecutionDiagnostic, observe_lossless_encode};
+ #[cfg(all(feature = "std", feature = "test-fixtures"))]
+ pub use scalable_lossless::encode_lossless_d2_bypass_execution_profiled;
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless.rs b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+index 9aa1ca9207a997756249714b9bcd4ac873e0d8cc..e8e6f50f1333d7c5ad2d8745bd63ab54f6b2cd52 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless.rs
+@@ -12,6 +12,117 @@ pub use bypass::encode_lossless_d2_bypass_test_fixture;
+ 
+ const WORKER_BYTES: u64 = 4 * 1024 * 1024;
+ 
++// Source-bound development policy. Promotion requires independent confirmation.
++const FORWARD53_BACKEND: transform::Forward53Backend =
++    transform::Forward53Backend::RowPanelParallel;
++const FORWARD53_PANEL_WIDTH: usize = 16;
++
++type PreparedForward53 = (transform::Forward53Plan, transform::Forward53Workspace);
++
++fn prepare_forward53(
++    width: usize,
++    height: usize,
++    workers: usize,
++) -> Result<Option<PreparedForward53>> {
++    let backend = FORWARD53_BACKEND;
++    let panel_width = FORWARD53_PANEL_WIDTH;
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let (backend, panel_width) = transform::forward53_diagnostic_policy(backend, panel_width);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if !(1..=32).contains(&panel_width) {
++        return Err(CodestreamError::SizeOverflow);
++    }
++    // Admission already reflects the existing pool and Tier-1 memory budget.
++    // Do not construct a plan or initialise panel storage for serial calls.
++    if backend == transform::Forward53Backend::Reference
++        || width.saturating_mul(height) < 4096
++        || (backend == transform::Forward53Backend::RowPanelParallel
++            && (workers < 2 || width.div_ceil(panel_width) < 2 || height < 2))
++    {
++        return Ok(None);
++    }
++    // Only the DWT and Tier-1 local terms are reused. Descriptors, output and
++    // coefficient allowances remain untouched; 4 KiB preserves fixed metadata.
++    let maximum = workers
++        .min(8)
++        .checked_mul(WORKER_BYTES as usize)
++        .and_then(|n| n.checked_add(width.max(height).checked_mul(12)?))
++        .and_then(|n| n.checked_sub(4096))
++        .ok_or(CodestreamError::SizeOverflow)?;
++    prepare_forward53_with_maximum(
++        width,
++        height,
++        workers,
++        maximum,
++        backend,
++        panel_width,
++        |workspace, plan, maximum| {
++            #[cfg(feature = "classic-execution-diagnostics")]
++            diagnostics::update(|d| d.forward53_panel_prepare_attempts += 1);
++            let result = workspace.prepare(plan, maximum);
++            #[cfg(feature = "classic-execution-diagnostics")]
++            if result.is_ok() {
++                diagnostics::update(|d| {
++                    d.forward53_panel_initialised_bytes += plan.workspace_bytes()
++                });
++            }
++            result
++        },
++    )
++}
++
++fn prepare_forward53_with_maximum(
++    width: usize,
++    height: usize,
++    workers: usize,
++    maximum: usize,
++    backend: transform::Forward53Backend,
++    panel_width: usize,
++    mut prepare: impl FnMut(
++        &mut transform::Forward53Workspace,
++        &transform::Forward53Plan,
++        usize,
++    ) -> core::result::Result<(), transform::TransformError>,
++) -> Result<Option<PreparedForward53>> {
++    let config = |w, h| transform::Reversible53Config {
++        width: w,
++        height: h,
++        stride: width,
++        edges: transform::Reversible53Edges::from_tile_origin(0, 0, w, h),
++        sample_range: transform::ComponentSampleRange::signed(32),
++    };
++    let levels = [
++        config(width, height),
++        config(width.div_ceil(2), height.div_ceil(2)),
++    ];
++    let minimum_slots = if backend == transform::Forward53Backend::RowPanelScalar {
++        1
++    } else {
++        2
++    };
++    let mut slots = workers.min(8);
++    while slots >= minimum_slots {
++        let plan = transform::Forward53Plan::new(&levels, backend, panel_width, slots)
++            .map_err(|_| CodestreamError::SizeOverflow)?;
++        if plan.backend() == transform::Forward53Backend::Reference {
++            return Ok(None);
++        }
++        // A capacity-ineligible plan never requests or initialises storage.
++        if plan.workspace_bytes() <= maximum {
++            let mut workspace = transform::Forward53Workspace::new();
++            if prepare(&mut workspace, &plan, maximum).is_ok() {
++                return Ok(Some((plan, workspace)));
++            }
++            // Drop every failed optional reservation before retry or fallback.
++        }
++        if slots == minimum_slots {
++            break;
++        }
++        slots = slots.div_ceil(2);
++    }
++    Ok(None)
++}
++
+ /// Byte limits for owned raw classic lossless D2 encoding.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct LosslessEncodeLimits {
+@@ -513,17 +624,37 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+         timings.rct_pixels = if planes.len() == 3 { count as u64 } else { 0 };
+     }
+     let start = EncodeClock::start::<PROFILE>();
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let preparation = EncodeClock::start::<PROFILE>();
++    let mut prepared_transform = prepare_forward53(width_usize, height as usize, workers)?;
+     let mut transform_scratch = Vec::new();
++    #[cfg(feature = "classic-execution-diagnostics")]
++    if PROFILE {
++        diagnostics::update(|d| d.dwt_scratch_resize_ns += preparation.ns());
++    }
+     let mut transform_components = || -> Result<()> {
+         for plane in &mut coefficients {
+-            forward_reversible_5_3_levels_with_scratch(
+-                width,
+-                height,
+-                plane,
+-                2,
+-                "lossless D2 transform failed",
+-                &mut transform_scratch,
+-            )?;
++            if let Some((plan, workspace)) = prepared_transform.as_mut() {
++                transform::forward_reversible_5_3_planned_bounded(plane, plan, workspace)
++                    .map_err(|_| CodestreamError::SizeOverflow)?;
++            } else {
++                forward_reversible_5_3_levels_with_scratch(
++                    width,
++                    height,
++                    plane,
++                    2,
++                    "lossless D2 transform failed",
++                    &mut transform_scratch,
++                )?;
++                #[cfg(feature = "classic-execution-diagnostics")]
++                if PROFILE {
++                    diagnostics::update(|d| {
++                        d.forward53_original_helper_calls += 1;
++                        d.forward53_original_scratch_capacity_bytes =
++                            transform_scratch.capacity() * 4;
++                    });
++                }
++            }
+         }
+         Ok(())
+     };
+@@ -538,6 +669,10 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+             d.dwt_vertical_store_ns = detail.vertical_store_ns;
+             d.dwt_horizontal_lifting_ns = detail.horizontal_lifting_ns;
+             d.dwt_horizontal_copy_ns = detail.horizontal_copy_ns;
++            d.forward53 = detail;
++            if prepared_transform.is_none() {
++                d.forward53.level_backends = [Some(transform::Forward53Backend::Reference); 2];
++            }
+         });
+     } else {
+         transform_components()?;
+@@ -546,6 +681,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+     transform_components()?;
+     #[cfg(feature = "classic-execution-diagnostics")]
+     let dropping = EncodeClock::start::<PROFILE>();
++    drop(prepared_transform);
+     drop(transform_scratch);
+     #[cfg(feature = "classic-execution-diagnostics")]
+     if PROFILE {
+@@ -718,3 +854,91 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
+     }
+     Ok(output)
+ }
++
++#[cfg(test)]
++mod forward53_tests {
++    use super::*;
++
++    #[test]
++    fn optional_workspace_shrinks_or_falls_back_before_allocation() {
++        for (width, height) in [
++            (4, 32768),
++            (32768, 4),
++            (129, 131),
++            (32768, 2048),
++            (2048, 32768),
++        ] {
++            for workers in [1, 2, 4, 8] {
++                let prepared = prepare_forward53(width, height, workers).unwrap();
++                if workers == 1 || width <= 16 || !cfg!(feature = "parallel") {
++                    assert!(prepared.is_none());
++                }
++                if let Some((plan, workspace)) = prepared {
++                    assert!(plan.slots() >= 2 && plan.slots() <= workers);
++                    assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
++                    assert!(
++                        workspace.capacity_bytes()
++                            <= 12 * width.max(height) + WORKER_BYTES as usize * workers - 4096
++                    );
++                }
++            }
++        }
++        let mut attempts = 0;
++        let mut prepare =
++            |w: &mut transform::Forward53Workspace, p: &transform::Forward53Plan, m| {
++                attempts += 1;
++                w.prepare(p, m)
++            };
++        let absent = prepare_forward53_with_maximum(
++            513,
++            515,
++            8,
++            12 * 515,
++            FORWARD53_BACKEND,
++            16,
++            &mut prepare,
++        )
++        .unwrap();
++        assert!(absent.is_none());
++        assert_eq!(attempts, 0);
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn failed_optional_reservations_are_released_and_never_become_scalar_panels() {
++        let mut attempts = Vec::new();
++        let absent = prepare_forward53_with_maximum(
++            513,
++            515,
++            8,
++            32 << 20,
++            FORWARD53_BACKEND,
++            16,
++            |workspace, plan, maximum| {
++                assert_eq!(workspace.capacity_bytes(), 0);
++                attempts.push(plan.slots());
++                workspace.prepare(plan, maximum)?;
++                Err(transform::TransformError::SizeOverflow)
++            },
++        )
++        .unwrap();
++        assert!(absent.is_none());
++        assert_eq!(attempts, [8, 4, 2]);
++        let (plan, workspace) = prepare_forward53_with_maximum(
++            513,
++            515,
++            8,
++            2 * 4 * (16 * 515 + 515),
++            FORWARD53_BACKEND,
++            16,
++            |w, p, m| w.prepare(p, m),
++        )
++        .unwrap()
++        .unwrap();
++        assert_eq!(plan.slots(), 2);
++        assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
++        let (wide, _) = prepare_forward53(513, 515, usize::MAX).unwrap().unwrap();
++        let (eight, _) = prepare_forward53(513, 515, 8).unwrap().unwrap();
++        assert_eq!(wide.workspace_bytes(), eight.workspace_bytes());
++    }
++}
+diff --git a/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs b/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
+index 456ef5cfdd8e550b5422b105a0a62b111476d83d..3c11f12fdd481abff9e32fb890f376abc224df0c 100644
+--- a/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
++++ b/crates/emuella-j2k-codestream/src/scalable_lossless/diagnostics.rs
+@@ -50,6 +50,11 @@ pub struct LosslessExecutionDiagnostic {
+     pub forward_rct_ns: u128,
+     pub dwt_scratch_resize_ns: u128,
+     pub dwt_scratch_drop_ns: u128,
++    pub forward53_panel_prepare_attempts: usize,
++    pub forward53_panel_initialised_bytes: usize,
++    pub forward53_original_helper_calls: usize,
++    pub forward53_original_scratch_capacity_bytes: usize,
++    pub forward53: emuella_j2k_transform::ForwardTransformDiagnostic,
+     pub dwt_validation_ns: u128,
+     pub dwt_vertical_gather_ns: u128,
+     pub dwt_vertical_lifting_ns: u128,
+diff --git a/crates/emuella-j2k-test-support/Cargo.toml b/crates/emuella-j2k-test-support/Cargo.toml
+index ac5bb97dedd0684331f43202103e35e288f1039a..7efe872c7ef84e364aab1a41bc46a532d438e238 100644
+--- a/crates/emuella-j2k-test-support/Cargo.toml
++++ b/crates/emuella-j2k-test-support/Cargo.toml
+@@ -10,6 +10,7 @@ repository.workspace = true
+ homepage.workspace = true
+ 
+ [features]
++classic-execution-diagnostics = ["emuella-j2k-codestream/classic-execution-diagnostics"]
+ parallel = ["emuella-j2k-core/parallel"]
+ simd = ["emuella-j2k-core/simd"]
+ 
+diff --git a/crates/emuella-j2k-test-support/examples/forward53_diagnostics.rs b/crates/emuella-j2k-test-support/examples/forward53_diagnostics.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b06412e2a2a9565bd60f44e3a49effe1fe62a45c
+--- /dev/null
++++ b/crates/emuella-j2k-test-support/examples/forward53_diagnostics.rs
+@@ -0,0 +1,107 @@
++//! Separate-build writer diagnostics. Reads one authorised packed RAW input;
++//! emits aggregate identities and counters only, never samples or coefficients.
++#[cfg(not(all(feature = "parallel", feature = "classic-execution-diagnostics")))]
++fn main() {
++    panic!("forward53_diagnostics requires parallel,classic-execution-diagnostics");
++}
++
++#[cfg(all(feature = "parallel", feature = "classic-execution-diagnostics"))]
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    use emuella_j2k_codestream as cs;
++    use serde_json::json;
++    use sha2::{Digest, Sha256};
++    let args: Vec<_> = std::env::args().collect();
++    if args.len() != 10 {
++        return Err("usage: forward53_diagnostics RAW WIDTH HEIGHT COMPONENTS BITS WORKERS STYLE reference|scalar|parallel PANEL_WIDTH".into());
++    }
++    let width: u32 = args[2].parse()?;
++    let height: u32 = args[3].parse()?;
++    let components: usize = args[4].parse()?;
++    let bits: u8 = args[5].parse()?;
++    let workers: usize = args[6].parse()?;
++    let style: u8 = args[7].parse()?;
++    let backend = match args[8].as_str() {
++        "reference" => cs::Forward53Backend::Reference,
++        "scalar" => cs::Forward53Backend::RowPanelScalar,
++        "parallel" => cs::Forward53Backend::RowPanelParallel,
++        _ => return Err("unknown diagnostic backend".into()),
++    };
++    let panel_width: usize = args[9].parse()?;
++    if !matches!(components, 1 | 3 | 8)
++        || !matches!(bits, 8 | 16)
++        || !matches!(workers, 1 | 2 | 4 | 8)
++        || !matches!(panel_width, 8 | 16 | 32)
++        || style > 1
++    {
++        return Err("unsupported diagnostic shape".into());
++    }
++    let raw = std::fs::read(&args[1])?;
++    let bytes = usize::from(bits / 8);
++    let required = (width as usize)
++        .checked_mul(height as usize)
++        .and_then(|n| n.checked_mul(components))
++        .and_then(|n| n.checked_mul(bytes))
++        .ok_or("shape overflow")?;
++    if raw.len() != required {
++        return Err("RAW length does not match packed shape".into());
++    }
++    let planes: Vec<_> = (0..components)
++        .map(|c| cs::LosslessD2Plane {
++            samples: &raw[c * bytes..],
++            stride_bytes: width as usize * components * bytes,
++            sample_step_bytes: components * bytes,
++        })
++        .collect();
++    let pool = rayon::ThreadPoolBuilder::new()
++        .num_threads(workers)
++        .build()?;
++    pool.broadcast(|_| ());
++    let (stream, d) = pool.install(|| {
++        cs::with_forward53_diagnostic_policy(backend, panel_width, || {
++            cs::observe_lossless_encode(|| {
++                if style == 0 {
++                    cs::encode_lossless_d2(
++                        width,
++                        height,
++                        bits,
++                        &planes,
++                        cs::LosslessEncodeLimits::default(),
++                    )
++                } else {
++                    cs::encode_lossless_d2_bypass(
++                        width,
++                        height,
++                        bits,
++                        &planes,
++                        cs::LosslessEncodeLimits::default(),
++                    )
++                }
++            })
++        })
++    });
++    let stream = stream?;
++    let hash = |bytes: &[u8]| {
++        Sha256::digest(bytes)
++            .iter()
++            .map(|b| format!("{b:02x}"))
++            .collect::<String>()
++    };
++    println!(
++        "{}",
++        json!({
++            "schema":"forward53-diagnostics/v1", "width":width,"height":height,"components":components,
++            "bits":bits,"style":style,"requested_workers":workers,"input_sha256":hash(&raw),
++            "stream_sha256":hash(&stream),"stream_bytes":stream.len(),"total_ns":d.timings.total_ns,
++            "forward_dwt_ns":d.timings.forward_dwt_ns,"workspace_prepare_ns":d.dwt_scratch_resize_ns,
++            "workspace_drop_ns":d.dwt_scratch_drop_ns,"tier1_admitted_workers":d.execution.effective_workers,
++            "level_backends":d.forward53.level_backends.map(|b|b.map(|b|format!("{b:?}"))),
++            "panel_width":d.forward53.panel_width,"logical_slots":d.forward53.logical_slots,
++            "workspace_capacity_bytes":d.forward53.workspace_capacity_bytes,
++            "gather_lift_join_ns":d.forward53.gather_lift_join_ns,"scatter_join_ns":d.forward53.scatter_join_ns,
++            "horizontal_join_ns":d.forward53.horizontal_join_ns,"peak_active_slots":d.forward53.peak_active_slots,
++            "participating_workers":d.forward53.participating_workers,
++            "scalar_axis_ns":d.dwt_vertical_gather_ns+d.dwt_vertical_lifting_ns+d.dwt_vertical_store_ns+d.dwt_horizontal_lifting_ns+d.dwt_horizontal_copy_ns
++        })
++    );
++    Ok(())
++}
+diff --git a/crates/emuella-j2k-test-support/tests/forward53_panels.rs b/crates/emuella-j2k-test-support/tests/forward53_panels.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..893e3163cf13ba8b139901ace86dbb68b1ae603e
+--- /dev/null
++++ b/crates/emuella-j2k-test-support/tests/forward53_panels.rs
+@@ -0,0 +1,350 @@
++#![cfg(feature = "classic-execution-diagnostics")]
++use emuella_j2k_codestream as cs;
++use emuella_j2k_core::*;
++
++#[test]
++fn all_backends_workers_styles_full_range_components_and_padding_have_exact_bytes() {
++    let pools: Vec<_> = [1, 2, 4, 8]
++        .map(|workers| {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap()
++        })
++        .into();
++    for (components, bits) in [(1, 8), (1, 16), (3, 8), (3, 16), (8, 16)] {
++        let (width, height) = (129usize, 131usize);
++        let bytes = bits / 8;
++        for pattern in 0..2 {
++            let mut rng = 0x97128315u32;
++            let packed: Vec<u8> = (0..width * height * components)
++                .flat_map(|n| {
++                    rng ^= rng << 13;
++                    rng ^= rng >> 17;
++                    rng ^= rng << 5;
++                    let value: u16 = if pattern == 1 {
++                        1 << (bits - 1)
++                    } else {
++                        match n % 11 {
++                            0 => 0,
++                            1 => u16::MAX,
++                            2..=4 => 1 << (bits - 1),
++                            _ => rng as u16,
++                        }
++                    };
++                    value.to_le_bytes()[..bytes].to_vec()
++                })
++                .collect();
++            // Planar source has padding and no final trailing row storage.
++            let stride = width * bytes + 5;
++            let planar: Vec<Vec<u8>> = (0..components)
++                .map(|c| {
++                    let mut p = vec![0xa5; (height - 1) * stride + width * bytes];
++                    for y in 0..height {
++                        for x in 0..width {
++                            let source = ((y * width + x) * components + c) * bytes;
++                            p[y * stride + x * bytes..y * stride + (x + 1) * bytes]
++                                .copy_from_slice(&packed[source..source + bytes]);
++                        }
++                    }
++                    p
++                })
++                .collect();
++            let planes: Vec<_> = planar
++                .iter()
++                .map(|samples| cs::LosslessD2Plane {
++                    samples,
++                    stride_bytes: stride,
++                    sample_step_bytes: bytes,
++                })
++                .collect();
++            for bypass in [false, true] {
++                let limits = cs::LosslessEncodeLimits {
++                    max_working_bytes: 128 << 20,
++                    max_output_bytes: 4 << 20,
++                };
++                let encode = |limits| {
++                    if bypass {
++                        cs::encode_lossless_d2_bypass(
++                            width as u32,
++                            height as u32,
++                            bits as u8,
++                            &planes,
++                            limits,
++                        )
++                    } else {
++                        cs::encode_lossless_d2(
++                            width as u32,
++                            height as u32,
++                            bits as u8,
++                            &planes,
++                            limits,
++                        )
++                    }
++                };
++                let requirements = |limits| {
++                    if bypass {
++                        cs::lossless_d2_bypass_requirements(
++                            width as u32,
++                            height as u32,
++                            components as u16,
++                            limits,
++                        )
++                    } else {
++                        cs::lossless_d2_requirements(
++                            width as u32,
++                            height as u32,
++                            components as u16,
++                            limits,
++                        )
++                    }
++                };
++                let reference = pools[0].install(|| {
++                    cs::with_forward53_diagnostic_policy(
++                        cs::Forward53Backend::Reference,
++                        16,
++                        || encode(limits).unwrap(),
++                    )
++                });
++                let serial = pools[0].install(|| requirements(limits).unwrap());
++                let decoded = decode(
++                    &reference,
++                    &DecodeOptions {
++                        mode: DecodeMode::Components,
++                        target_layout: ComponentLayout::Interleaved,
++                        ..Default::default()
++                    },
++                )
++                .unwrap();
++                assert_eq!(decoded.data, ImageData::Interleaved(packed.clone()));
++                for pool in &pools {
++                    for backend in [
++                        cs::Forward53Backend::Reference,
++                        cs::Forward53Backend::RowPanelScalar,
++                        cs::Forward53Backend::RowPanelParallel,
++                    ] {
++                        pool.install(|| {
++                            cs::with_forward53_diagnostic_policy(backend, 16, || {
++                                let (encoded, detail) =
++                                    cs::observe_lossless_encode(|| encode(limits));
++                                let encoded = encoded.unwrap();
++                                assert_eq!(encoded, reference); // Includes exponents, block/packet metadata and payload.
++                                let stepped: Vec<_> = (0..components)
++                                    .map(|c| cs::LosslessD2Plane {
++                                        samples: &packed[c * bytes..],
++                                        stride_bytes: width * components * bytes,
++                                        sample_step_bytes: components * bytes,
++                                    })
++                                    .collect();
++                                let interleaved = if bypass {
++                                    cs::encode_lossless_d2_bypass(
++                                        width as u32,
++                                        height as u32,
++                                        bits as u8,
++                                        &stepped,
++                                        limits,
++                                    )
++                                } else {
++                                    cs::encode_lossless_d2(
++                                        width as u32,
++                                        height as u32,
++                                        bits as u8,
++                                        &stepped,
++                                        limits,
++                                    )
++                                }
++                                .unwrap();
++                                assert_eq!(interleaved, reference);
++                                assert!(
++                                    detail.execution.max_batch_blocks
++                                        <= detail.execution.effective_workers
++                                );
++                                assert_eq!(
++                                    requirements(limits).unwrap().working_bytes,
++                                    serial.working_bytes
++                                        + (detail.execution.effective_workers as u64 - 1)
++                                            * (4 << 20)
++                                );
++                                if backend == cs::Forward53Backend::RowPanelScalar
++                                    || (backend == cs::Forward53Backend::RowPanelParallel
++                                        && detail.execution.effective_workers >= 2)
++                                {
++                                    assert!(detail.forward53.workspace_capacity_bytes > 0);
++                                    assert!(
++                                        detail.forward53.logical_slots
++                                            <= detail.execution.effective_workers
++                                    );
++                                }
++                            })
++                        });
++                    }
++                }
++                pools[3].install(|| {
++                    let tight = cs::LosslessEncodeLimits {
++                        max_working_bytes: serial.working_bytes,
++                        ..limits
++                    };
++                    let (encoded, detail) = cs::observe_lossless_encode(|| encode(tight));
++                    assert_eq!(encoded.unwrap(), reference);
++                    assert_eq!(detail.execution.effective_workers, 1);
++                    assert_eq!(detail.forward53.logical_slots, 0);
++                    assert_eq!(detail.forward53.workspace_capacity_bytes, 0);
++                    assert_eq!(detail.forward53_original_helper_calls, components);
++                    assert!(detail.forward53_original_scratch_capacity_bytes >= 12 * height);
++                    assert!(
++                        encode(cs::LosslessEncodeLimits {
++                            max_working_bytes: serial.working_bytes - 1,
++                            ..limits
++                        })
++                        .is_err()
++                    );
++                    if reference.len() > 128 {
++                        assert!(
++                            encode(cs::LosslessEncodeLimits {
++                                max_output_bytes: 128,
++                                ..limits
++                            })
++                            .is_err()
++                        );
++                    }
++                });
++            }
++        }
++    }
++}
++
++#[test]
++fn ordinary_dispatch_tracks_original_scratch_and_admitted_parallel_storage() {
++    // Sequential calls vary geometry and effective budgets in the same pools.
++    // Diagnostic observation adds no forcing; this exercises the ordinary rule.
++    for requested in [1, 2, 4, 8] {
++        let pool = rayon::ThreadPoolBuilder::new()
++            .num_threads(requested)
++            .build()
++            .unwrap();
++        pool.install(|| {
++            for (width, height) in [
++                (129usize, 131usize),
++                (16, 513),
++                (65, 67),
++                (7, 9),
++                (257, 259),
++            ] {
++                let samples: Vec<u8> = (0..width * height).map(|n| (n * 71) as u8).collect();
++                let planes = [cs::LosslessD2Plane {
++                    samples: &samples,
++                    stride_bytes: width,
++                    sample_step_bytes: 1,
++                }];
++                let limits = cs::LosslessEncodeLimits {
++                    max_working_bytes: 128 << 20,
++                    max_output_bytes: 4 << 20,
++                };
++                let requirement =
++                    cs::lossless_d2_requirements(width as u32, height as u32, 1, limits).unwrap();
++                let available = cs::parallel_worker_count()
++                    .unwrap_or(1)
++                    .min(requirement.code_blocks as usize);
++                let serial_bytes = requirement.working_bytes - (available as u64 - 1) * (4 << 20);
++                let encode = |limits| {
++                    cs::encode_lossless_d2(width as u32, height as u32, 8, &planes, limits)
++                };
++                let reference = cs::with_forward53_diagnostic_policy(
++                    cs::Forward53Backend::Reference,
++                    16,
++                    || encode(limits).unwrap(),
++                );
++                for admitted in [1usize, 2, 4, 8] {
++                    let tight = cs::LosslessEncodeLimits {
++                        max_working_bytes: serial_bytes + (admitted as u64 - 1) * (4 << 20),
++                        ..limits
++                    };
++                    let (result, detail) = cs::observe_lossless_encode(|| encode(tight));
++                    assert_eq!(result.unwrap(), reference);
++                    let effective = available.min(admitted);
++                    assert_eq!(detail.execution.effective_workers, effective);
++                    let panels = effective >= 2 && width > 16 && width * height >= 4096;
++                    if panels {
++                        assert_eq!(detail.forward53_original_helper_calls, 0);
++                        assert_eq!(detail.forward53_original_scratch_capacity_bytes, 0);
++                        assert_eq!(detail.forward53_panel_prepare_attempts, 1);
++                        assert_eq!(
++                            detail.forward53_panel_initialised_bytes,
++                            detail.forward53.workspace_capacity_bytes
++                        );
++                        assert!(detail.forward53.logical_slots >= 2);
++                        assert_eq!(
++                            detail.forward53.level_backends[0],
++                            Some(cs::Forward53Backend::RowPanelParallel)
++                        );
++                        let ll = if width.div_ceil(2) * height.div_ceil(2) >= 4096 {
++                            cs::Forward53Backend::RowPanelParallel
++                        } else {
++                            cs::Forward53Backend::Reference
++                        };
++                        assert_eq!(detail.forward53.level_backends[1], Some(ll));
++                    } else {
++                        assert_eq!(detail.forward53_original_helper_calls, 1);
++                        assert!(
++                            detail.forward53_original_scratch_capacity_bytes
++                                >= 12 * width.max(height)
++                        );
++                        assert_eq!(detail.forward53_panel_prepare_attempts, 0);
++                        assert_eq!(detail.forward53_panel_initialised_bytes, 0);
++                        assert_eq!(detail.forward53.workspace_capacity_bytes, 0);
++                        assert_eq!(detail.forward53.logical_slots, 0);
++                        assert_eq!(
++                            detail.forward53.level_backends,
++                            [Some(cs::Forward53Backend::Reference); 2]
++                        );
++                    }
++                }
++            }
++        });
++    }
++}
++
++#[test]
++fn eight_component_u8_remains_outside_the_profile() {
++    let samples = vec![0u8; 129 * 131];
++    let planes = [cs::LosslessD2Plane {
++        samples: &samples,
++        stride_bytes: 129,
++        sample_step_bytes: 1,
++    }; 8];
++    assert!(
++        cs::encode_lossless_d2(129, 131, 8, &planes, cs::LosslessEncodeLimits::default()).is_err()
++    );
++    assert!(
++        cs::encode_lossless_d2_bypass(129, 131, 8, &planes, cs::LosslessEncodeLimits::default())
++            .is_err()
++    );
++}
++
++#[test]
++fn invalid_diagnostic_width_fails_before_panel_preparation_and_policy_is_reusable() {
++    let samples = vec![127u8; 129 * 131];
++    let planes = [cs::LosslessD2Plane {
++        samples: &samples,
++        stride_bytes: 129,
++        sample_step_bytes: 1,
++    }];
++    let encode =
++        || cs::encode_lossless_d2(129, 131, 8, &planes, cs::LosslessEncodeLimits::default());
++    for backend in [
++        cs::Forward53Backend::Reference,
++        cs::Forward53Backend::RowPanelScalar,
++        cs::Forward53Backend::RowPanelParallel,
++    ] {
++        for width in [0, 33, usize::MAX] {
++            let (result, detail) = cs::observe_lossless_encode(|| {
++                cs::with_forward53_diagnostic_policy(backend, width, encode)
++            });
++            assert!(result.is_err());
++            assert_eq!(detail.forward53_panel_prepare_attempts, 0);
++            assert_eq!(detail.forward53_panel_initialised_bytes, 0);
++            assert_eq!(detail.forward53_original_helper_calls, 0);
++        }
++    }
++    assert!(encode().is_ok());
++}
+diff --git a/crates/emuella-j2k-transform/src/analysis53.rs b/crates/emuella-j2k-transform/src/analysis53.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..bac89871c41723f621ab2edcb4d559f736562087
+--- /dev/null
++++ b/crates/emuella-j2k-transform/src/analysis53.rs
+@@ -0,0 +1,841 @@
++//! Planned bounded forward 5/3 analysis for the classic two-level writer.
++//!
++//! Panels retain interleaved rows and adjacent columns. No column transform or
++//! extension occurs at a panel boundary. See `docs/forward53-parallel-dispatch.md` in the
++//! repository for the arithmetic and live-allocation proof.
++use alloc::vec::Vec;
++
++#[cfg(feature = "parallel")]
++use rayon::prelude::*;
++
++use super::{
++    Reversible53Config, TransformBand, TransformError, forward_reversible_5_3_bounded,
++    transform_line_forward_bounded, validate_axis_edges,
++};
++
++/// Implementation selected before any coefficient mutation.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Forward53Backend {
++    Reference,
++    RowPanelScalar,
++    RowPanelParallel,
++}
++
++/// A narrow, validated full-resolution-to-LL plan (at most two levels).
++/// Geometry and capacities are immutable after construction.
++#[derive(Debug, Clone)]
++pub struct Forward53Plan {
++    levels: [Option<Reversible53Config>; 2],
++    extent: usize,
++    axis: usize,
++    panel_width: usize,
++    panel_elements: usize,
++    slot_elements: usize,
++    slots: usize,
++    elements: usize,
++    backend: Forward53Backend,
++}
++
++impl Forward53Plan {
++    /// Bind explicit levels, original stride, panel width and logical slots.
++    /// High-first phases and small levels use the unchanged scalar reference.
++    pub fn new(
++        levels: &[Reversible53Config],
++        backend: Forward53Backend,
++        panel_width: usize,
++        slots: usize,
++    ) -> Result<Self, TransformError> {
++        if levels.is_empty()
++            || levels.len() > 2
++            || panel_width == 0
++            || panel_width > 32
++            || slots == 0
++            || slots > 8
++        {
++            return Err(TransformError::InvalidWindow);
++        }
++        let first = levels[0];
++        let mut previous: Option<Reversible53Config> = None;
++        for &level in levels {
++            if level.width == 0 || level.height == 0 {
++                return Err(TransformError::EmptyPlane);
++            }
++            if level.stride < level.width {
++                return Err(TransformError::StrideTooSmall);
++            }
++            if let Some(prior) = previous
++                && (level.width != prior.edges.horizontal_low_samples
++                    || level.height != prior.edges.vertical_low_samples
++                    || level.stride != first.stride)
++            {
++                return Err(TransformError::InvalidWindow);
++            }
++            validate_axis_edges(
++                level.width,
++                level.edges.horizontal_low_samples,
++                level.edges.horizontal_first,
++            )?;
++            validate_axis_edges(
++                level.height,
++                level.edges.vertical_low_samples,
++                level.edges.vertical_first,
++            )?;
++            // Validate sample precision even when execution takes the panel path.
++            level.sample_range.bounds()?;
++            if previous.is_some() && level.sample_range != super::ComponentSampleRange::signed(32) {
++                return Err(TransformError::InvalidSampleRange);
++            }
++            previous = Some(level);
++        }
++        let extent = (first.height - 1)
++            .checked_mul(first.stride)
++            .and_then(|n| n.checked_add(first.width))
++            .ok_or(TransformError::SizeOverflow)?;
++        let axis = first.width.max(first.height);
++        let slots = if backend == Forward53Backend::RowPanelParallel && cfg!(feature = "parallel") {
++            slots
++                .min(first.width.div_ceil(panel_width))
++                .min(first.height)
++        } else {
++            1
++        };
++        let backend = if backend == Forward53Backend::RowPanelParallel && slots == 1 {
++            Forward53Backend::Reference
++        } else {
++            backend
++        };
++        let backend = if !levels.iter().any(|level| {
++            level.edges.horizontal_first == TransformBand::Low
++                && level.edges.vertical_first == TransformBand::Low
++                && level.width.saturating_mul(level.height) >= 4096
++                && (backend == Forward53Backend::RowPanelScalar
++                    || (level.width.div_ceil(panel_width) >= 2 && level.height >= 2))
++        }) {
++            Forward53Backend::Reference
++        } else {
++            backend
++        };
++        let panel_elements = first
++            .height
++            .checked_mul(panel_width)
++            .ok_or(TransformError::SizeOverflow)?;
++        let slot_elements = panel_elements
++            .checked_add(axis)
++            .ok_or(TransformError::SizeOverflow)?;
++        let reference_elements = axis.checked_mul(3).ok_or(TransformError::SizeOverflow)?;
++        let elements = if backend == Forward53Backend::Reference {
++            reference_elements
++        } else {
++            slot_elements
++                .checked_mul(slots)
++                .ok_or(TransformError::SizeOverflow)?
++                .max(reference_elements)
++        };
++        elements
++            .checked_mul(core::mem::size_of::<i32>())
++            .filter(|&n| n <= isize::MAX as usize)
++            .ok_or(TransformError::SizeOverflow)?;
++        let mut bound = [None; 2];
++        for (destination, &level) in bound.iter_mut().zip(levels) {
++            *destination = Some(level);
++        }
++        Ok(Self {
++            levels: bound,
++            extent,
++            axis,
++            panel_width,
++            panel_elements,
++            slot_elements,
++            slots,
++            elements,
++            backend,
++        })
++    }
++
++    pub fn backend(&self) -> Forward53Backend {
++        self.backend
++    }
++    pub fn panel_width(&self) -> usize {
++        self.panel_width
++    }
++    pub fn slots(&self) -> usize {
++        self.slots
++    }
++    pub fn workspace_bytes(&self) -> usize {
++        self.elements * core::mem::size_of::<i32>()
++    }
++
++    fn uses_panels(&self, level: Reversible53Config) -> bool {
++        self.backend != Forward53Backend::Reference
++            && level.edges.horizontal_first == TransformBand::Low
++            && level.edges.vertical_first == TransformBand::Low
++            && level.width.saturating_mul(level.height) >= 4096
++            && (self.backend == Forward53Backend::RowPanelScalar
++                || (level.width.div_ceil(self.panel_width) >= 2 && level.height >= 2))
++    }
++}
++
++/// One flat allocation, explicitly divided into bounded logical slots.
++#[derive(Debug, Default)]
++pub struct Forward53Workspace {
++    samples: Vec<i32>,
++}
++
++impl Forward53Workspace {
++    pub fn new() -> Self {
++        Self::default()
++    }
++    pub fn capacity_bytes(&self) -> usize {
++        self.samples.capacity() * core::mem::size_of::<i32>()
++    }
++
++    /// Prepare before mutation. Retained storage is released before growth, so
++    /// old and new allocations never overlap. An allocation/capacity failure
++    /// leaves an empty workspace and is safe to retry with a smaller plan.
++    pub fn prepare(
++        &mut self,
++        plan: &Forward53Plan,
++        maximum_bytes: usize,
++    ) -> Result<(), TransformError> {
++        if plan.workspace_bytes() > maximum_bytes {
++            return Err(TransformError::ScratchTooSmall {
++                required: plan.workspace_bytes(),
++                actual: maximum_bytes,
++            });
++        }
++        if self.samples.capacity() < plan.elements || self.capacity_bytes() > maximum_bytes {
++            self.samples = Vec::new();
++            let mut samples = Vec::new();
++            samples
++                .try_reserve_exact(plan.elements)
++                .map_err(|_| TransformError::SizeOverflow)?;
++            if samples.capacity() != plan.elements {
++                return Err(TransformError::SizeOverflow);
++            }
++            self.samples = samples;
++        }
++        self.samples.resize(plan.elements, 0);
++        Ok(())
++    }
++}
++
++/// Execute a prepared bounded plan, reusing storage across components.
++///
++/// As with `forward_reversible_5_3_bounded`, the caller must prove arithmetic
++/// bounds. Classic unsigned U8/U16 (optionally RCT), at most two levels, meets
++/// this obligation; this is not an arbitrary-i32 transform. Geometry and every
++/// configured input range are validated before any plane mutation.
++pub fn forward_reversible_5_3_planned_bounded(
++    plane: &mut [i32],
++    plan: &Forward53Plan,
++    workspace: &mut Forward53Workspace,
++) -> Result<(), TransformError> {
++    if plane.len() < plan.extent {
++        return Err(TransformError::PlaneTooSmall);
++    }
++    if workspace.samples.len() < plan.elements {
++        return Err(TransformError::ScratchTooSmall {
++            required: plan.elements,
++            actual: workspace.samples.len(),
++        });
++    }
++    // The first level describes original samples. Later levels describe LL
++    // intermediates and must use signed(32), just as the existing writer does.
++    for config in plan.levels.iter().flatten() {
++        if config.sample_range != super::ComponentSampleRange::signed(32) {
++            super::validate_samples_in_range(plane, *config)?;
++        }
++    }
++    #[cfg(feature = "classic-execution-diagnostics")]
++    super::forward_diagnostics::update(|d| {
++        d.level_backends = plan.levels.map(|level| {
++            level.map(|c| {
++                if plan.uses_panels(c) {
++                    plan.backend
++                } else {
++                    Forward53Backend::Reference
++                }
++            })
++        });
++        d.panel_width = plan.panel_width;
++        d.logical_slots = plan.slots;
++        d.workspace_capacity_bytes = workspace.capacity_bytes();
++    });
++    for config in plan.levels.iter().flatten().copied() {
++        if plan.uses_panels(config) {
++            vertical(plane, config, plan, &mut workspace.samples);
++            horizontal(plane, config, plan, &mut workspace.samples);
++        } else {
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let jobs = super::forward_diagnostics::Jobs::new();
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let job = jobs.enter();
++            forward_reversible_5_3_bounded(plane, config, &mut workspace.samples[..3 * plan.axis])?;
++            #[cfg(feature = "classic-execution-diagnostics")]
++            {
++                drop(job);
++                jobs.finish();
++            }
++        }
++    }
++    Ok(())
++}
++
++fn gather_lift(
++    source: &[i32],
++    config: Reversible53Config,
++    x: usize,
++    lanes: usize,
++    panel_stride: usize,
++    panel: &mut [i32],
++) {
++    for y in 0..config.height {
++        panel[y * panel_stride..y * panel_stride + lanes]
++            .copy_from_slice(&source[y * config.stride + x..y * config.stride + x + lanes]);
++    }
++    lift_panel(panel, config.height, lanes, panel_stride);
++}
++
++fn lift_panel(panel: &mut [i32], height: usize, lanes: usize, stride: usize) {
++    if height == 1 {
++        return;
++    }
++    // Predict uses only original even rows. Row-major lanes are independent.
++    for y in (1..height).step_by(2) {
++        let above = (y - 1) * stride;
++        let below = if y + 1 < height {
++            (y + 1) * stride
++        } else {
++            above
++        };
++        for lane in 0..lanes {
++            panel[y * stride + lane] -= (panel[above + lane] + panel[below + lane]) >> 1;
++        }
++    }
++    // All odd rows are complete before any low row is updated.
++    for y in (0..height).step_by(2) {
++        let above = if y == 0 { stride } else { (y - 1) * stride };
++        let below = if y + 1 < height {
++            (y + 1) * stride
++        } else {
++            above
++        };
++        for lane in 0..lanes {
++            panel[y * stride + lane] += (panel[above + lane] + panel[below + lane] + 2) >> 2;
++        }
++    }
++}
++
++fn vertical(
++    plane: &mut [i32],
++    config: Reversible53Config,
++    plan: &Forward53Plan,
++    samples: &mut [i32],
++) {
++    vertical_with_hook(plane, config, plan, samples, |_| {});
++}
++
++// The no-op monomorphisation has no hook state or dispatch in ordinary builds.
++// Tests inject a deterministic panic while another job remains in flight.
++fn vertical_with_hook(
++    plane: &mut [i32],
++    config: Reversible53Config,
++    plan: &Forward53Plan,
++    samples: &mut [i32],
++    after_gather: impl Fn(usize) + Sync,
++) {
++    let extent = (config.height - 1) * config.stride + config.width;
++    for start_x in (0..config.width).step_by(plan.slots * plan.panel_width) {
++        let count = (config.width - start_x)
++            .div_ceil(plan.panel_width)
++            .min(plan.slots);
++        let slots = &mut samples[..count * plan.slot_elements];
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let phase = super::forward_diagnostics::Clock::start();
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let jobs = super::forward_diagnostics::Jobs::new();
++        let gather = |(slot, storage): (usize, &mut [i32])| {
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let _job = jobs.enter();
++            let x = start_x + slot * plan.panel_width;
++            gather_lift(
++                plane,
++                config,
++                x,
++                (config.width - x).min(plan.panel_width),
++                plan.panel_width,
++                &mut storage[..plan.panel_elements],
++            );
++            after_gather(slot);
++        };
++        #[cfg(feature = "parallel")]
++        if count > 1 {
++            slots
++                .par_chunks_mut(plan.slot_elements)
++                .enumerate()
++                .for_each(gather);
++        } else {
++            slots
++                .chunks_mut(plan.slot_elements)
++                .enumerate()
++                .for_each(gather);
++        }
++        #[cfg(not(feature = "parallel"))]
++        slots
++            .chunks_mut(plan.slot_elements)
++            .enumerate()
++            .for_each(gather);
++        #[cfg(feature = "classic-execution-diagnostics")]
++        {
++            phase.finish(|d| &mut d.gather_lift_join_ns);
++            jobs.finish();
++        }
++        // All immutable plane borrows end above. Parallel scatter owns disjoint
++        // destination row groups, including a potentially short final row.
++        let panels: &[i32] = slots;
++        let rows_per_group = config.height.div_ceil(plan.slots);
++        let group_elements = rows_per_group.checked_mul(config.stride).unwrap_or(extent);
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let phase = super::forward_diagnostics::Clock::start();
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let jobs = super::forward_diagnostics::Jobs::new();
++        let scatter = |(group, rows): (usize, &mut [i32])| {
++            #[cfg(feature = "classic-execution-diagnostics")]
++            let _job = jobs.enter();
++            for (local_y, row) in rows.chunks_mut(config.stride).enumerate() {
++                let y = group * rows_per_group + local_y;
++                let source_y = if y < config.edges.vertical_low_samples {
++                    2 * y
++                } else {
++                    2 * (y - config.edges.vertical_low_samples) + 1
++                };
++                for slot in 0..count {
++                    let x = start_x + slot * plan.panel_width;
++                    let lanes = (config.width - x).min(plan.panel_width);
++                    let offset = slot * plan.slot_elements + source_y * plan.panel_width;
++                    row[x..x + lanes].copy_from_slice(&panels[offset..offset + lanes]);
++                }
++            }
++        };
++        #[cfg(feature = "parallel")]
++        if plan.slots > 1 {
++            plane[..extent]
++                .par_chunks_mut(group_elements)
++                .enumerate()
++                .for_each(scatter);
++        } else {
++            plane[..extent]
++                .chunks_mut(group_elements)
++                .enumerate()
++                .for_each(scatter);
++        }
++        #[cfg(not(feature = "parallel"))]
++        plane[..extent]
++            .chunks_mut(group_elements)
++            .enumerate()
++            .for_each(scatter);
++        #[cfg(feature = "classic-execution-diagnostics")]
++        {
++            phase.finish(|d| &mut d.scatter_join_ns);
++            jobs.finish();
++        }
++    }
++}
++
++fn horizontal(
++    plane: &mut [i32],
++    config: Reversible53Config,
++    plan: &Forward53Plan,
++    samples: &mut [i32],
++) {
++    let extent = (config.height - 1) * config.stride + config.width;
++    let rows_per_group = config.height.div_ceil(plan.slots);
++    let group_elements = rows_per_group.checked_mul(config.stride).unwrap_or(extent);
++    let slots = &mut samples[..plan.slots * plan.slot_elements];
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let phase = super::forward_diagnostics::Clock::start();
++    #[cfg(feature = "classic-execution-diagnostics")]
++    let jobs = super::forward_diagnostics::Jobs::new();
++    let lift = |(rows, storage): (&mut [i32], &mut [i32])| {
++        #[cfg(feature = "classic-execution-diagnostics")]
++        let _job = jobs.enter();
++        let line = &mut storage[plan.panel_elements..plan.panel_elements + plan.axis];
++        for row in rows.chunks_mut(config.stride) {
++            transform_line_forward_bounded(
++                &mut row[..config.width],
++                config.edges.horizontal_low_samples,
++                config.edges.horizontal_first,
++                line,
++            );
++        }
++    };
++    #[cfg(feature = "parallel")]
++    if plan.slots > 1 {
++        plane[..extent]
++            .par_chunks_mut(group_elements)
++            .zip(slots.par_chunks_mut(plan.slot_elements))
++            .for_each(lift);
++    } else {
++        plane[..extent]
++            .chunks_mut(group_elements)
++            .zip(slots.chunks_mut(plan.slot_elements))
++            .for_each(lift);
++    }
++    #[cfg(not(feature = "parallel"))]
++    plane[..extent]
++        .chunks_mut(group_elements)
++        .zip(slots.chunks_mut(plan.slot_elements))
++        .for_each(lift);
++    #[cfg(feature = "classic-execution-diagnostics")]
++    {
++        phase.finish(|d| &mut d.horizontal_join_ns);
++        jobs.finish();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{ComponentSampleRange, Reversible53Edges};
++    use alloc::vec;
++
++    fn config(
++        width: usize,
++        height: usize,
++        stride: usize,
++        x: usize,
++        y: usize,
++    ) -> Reversible53Config {
++        Reversible53Config {
++            width,
++            height,
++            stride,
++            edges: Reversible53Edges::from_tile_origin(x, y, width, height),
++            sample_range: ComponentSampleRange::signed(32),
++        }
++    }
++
++    // Independently checked original line arithmetic; neither gather/scatter
++    // indexing nor panel lifting is shared with the implementation under test.
++    fn reference_axis(plane: &mut [i32], c: Reversible53Config, vertical_axis: bool) {
++        let mut line = vec![0; c.width.max(c.height)];
++        let mut read = line.clone();
++        let mut coefficients = line.clone();
++        if vertical_axis {
++            for x in 0..c.width {
++                for y in 0..c.height {
++                    line[y] = plane[y * c.stride + x];
++                }
++                crate::transform_line_forward(
++                    &mut line[..c.height],
++                    c.edges.vertical_low_samples,
++                    c.edges.vertical_first,
++                    &mut read,
++                    &mut coefficients,
++                )
++                .unwrap();
++                for y in 0..c.height {
++                    plane[y * c.stride + x] = line[y];
++                }
++            }
++        } else {
++            for y in 0..c.height {
++                crate::transform_line_forward(
++                    &mut plane[y * c.stride..y * c.stride + c.width],
++                    c.edges.horizontal_low_samples,
++                    c.edges.horizontal_first,
++                    &mut read,
++                    &mut coefficients,
++                )
++                .unwrap();
++            }
++        }
++    }
++
++    fn phase_cases() {
++        for (width, height) in [
++            (1, 1),
++            (1, 19),
++            (18, 1),
++            (2, 2),
++            (7, 9),
++            (32, 33),
++            (33, 32),
++            (65, 67),
++            (131, 129),
++        ] {
++            let first = config(width, height, width + 7, 0, 0);
++            let second = config(width.div_ceil(2), height.div_ceil(2), first.stride, 0, 0);
++            for panel_width in [8, 16, 32] {
++                for slots in [1, 2, 4, 8] {
++                    for pattern in 0..3 {
++                        // Exact extent deliberately omits the final row's padding.
++                        let mut source = vec![0x1234567; (height - 1) * first.stride + width];
++                        for y in 0..height {
++                            for x in 0..width {
++                                source[y * first.stride + x] = match pattern {
++                                    0 => {
++                                        if (x + y) % 2 == 0 {
++                                            -65535
++                                        } else {
++                                            65535
++                                        }
++                                    }
++                                    1 => ((x * 7919 + y * 3571) % 131071) as i32 - 65535,
++                                    _ => {
++                                        if x == width / 2 && y == height / 2 {
++                                            -65535
++                                        } else {
++                                            0
++                                        }
++                                    }
++                                };
++                            }
++                        }
++                        let mut plan = Forward53Plan::new(
++                            &[first, second],
++                            Forward53Backend::RowPanelParallel,
++                            panel_width,
++                            slots,
++                        )
++                        .unwrap();
++                        // Force mechanical storage only for the independent axis
++                        // oracle: policy assertions use unmodified plans below.
++                        plan.elements = (plan.slot_elements * plan.slots).max(3 * plan.axis);
++                        let mut workspace = Forward53Workspace::new();
++                        workspace.prepare(&plan, plan.workspace_bytes()).unwrap();
++                        let capacity = workspace.capacity_bytes();
++                        let address = workspace.samples.as_ptr();
++                        let mut candidate = source.clone();
++                        let mut expected = source.clone();
++                        for level in [first, second] {
++                            vertical(&mut candidate, level, &plan, &mut workspace.samples);
++                            reference_axis(&mut expected, level, true);
++                            assert_eq!(
++                                candidate, expected,
++                                "vertical {width}x{height}, b{panel_width}, q{slots}"
++                            );
++                            horizontal(&mut candidate, level, &plan, &mut workspace.samples);
++                            reference_axis(&mut expected, level, false);
++                            assert_eq!(
++                                candidate, expected,
++                                "horizontal {width}x{height}, b{panel_width}, q{slots}"
++                            );
++                        }
++                        // Reuse across components resets no capacity or pointer.
++                        workspace.prepare(&plan, capacity).unwrap();
++                        assert_eq!(address, workspace.samples.as_ptr());
++                        assert_eq!(capacity, workspace.capacity_bytes());
++                        let mut reused = source;
++                        forward_reversible_5_3_planned_bounded(&mut reused, &plan, &mut workspace)
++                            .unwrap();
++                        assert_eq!(reused, expected);
++                        assert_eq!(address, workspace.samples.as_ptr());
++                    }
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn phases_levels_padding_partial_panels_and_reuse_match_checked_reference() {
++        #[cfg(feature = "parallel")]
++        for workers in [1, 2, 4, 8] {
++            rayon::ThreadPoolBuilder::new()
++                .num_threads(workers)
++                .build()
++                .unwrap()
++                .install(phase_cases);
++        }
++        #[cfg(not(feature = "parallel"))]
++        phase_cases();
++    }
++
++    #[test]
++    fn high_phases_and_small_work_use_unchanged_reference() {
++        for (width, height) in [(1, 1), (1, 17), (18, 1), (65, 67)] {
++            for (x, y) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
++                let config = config(width, height, width + 3, x, y);
++                let plan = Forward53Plan::new(&[config], Forward53Backend::RowPanelParallel, 16, 8)
++                    .unwrap();
++                assert_eq!(
++                    plan.uses_panels(config),
++                    cfg!(feature = "parallel") && width * height >= 4096 && x == 0 && y == 0
++                );
++                if !plan.uses_panels(config) {
++                    assert_eq!(plan.backend(), Forward53Backend::Reference);
++                    assert_eq!(plan.workspace_bytes(), 12 * width.max(height));
++                }
++                let source: Vec<i32> = (0..(height - 1) * config.stride + width)
++                    .map(|n| (n % 131071) as i32 - 65535)
++                    .collect();
++                let mut reference = source.clone();
++                let mut candidate = source;
++                crate::forward_reversible_5_3(
++                    &mut reference,
++                    config,
++                    &mut vec![0; config.scratch_len()],
++                )
++                .unwrap();
++                let mut workspace = Forward53Workspace::new();
++                workspace.prepare(&plan, plan.workspace_bytes()).unwrap();
++                forward_reversible_5_3_planned_bounded(&mut candidate, &plan, &mut workspace)
++                    .unwrap();
++                assert_eq!(candidate, reference);
++            }
++        }
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn mixed_level_keeps_storage_but_rejects_one_slot_ll() {
++        let first = config(17, 1024, 20, 0, 0);
++        let second = config(9, 512, 20, 0, 0);
++        let plan = Forward53Plan::new(&[first, second], Forward53Backend::RowPanelParallel, 16, 8)
++            .unwrap();
++        assert_eq!(plan.slots(), 2);
++        assert!(plan.uses_panels(first));
++        assert!(!plan.uses_panels(second));
++        let mut workspace = Forward53Workspace::new();
++        workspace.prepare(&plan, plan.workspace_bytes()).unwrap();
++        let address = workspace.samples.as_ptr();
++        let mut plane: Vec<i32> = (0..(first.height - 1) * first.stride + first.width)
++            .map(|n| ((n * 71) % 131071) as i32 - 65535)
++            .collect();
++        let mut expected = plane.clone();
++        for level in [first, second] {
++            reference_axis(&mut expected, level, true);
++            reference_axis(&mut expected, level, false);
++        }
++        forward_reversible_5_3_planned_bounded(&mut plane, &plan, &mut workspace).unwrap();
++        assert_eq!(plane, expected);
++        assert_eq!(workspace.samples.as_ptr(), address);
++        assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
++    }
++
++    #[cfg(feature = "parallel")]
++    #[test]
++    fn panic_joins_every_gather_before_return_and_workspace_can_be_reused() {
++        use std::sync::{
++            Barrier,
++            atomic::{AtomicUsize, Ordering},
++        };
++        let pool = rayon::ThreadPoolBuilder::new()
++            .num_threads(2)
++            .build()
++            .unwrap();
++        let c = config(65, 67, 70, 0, 0);
++        let p = Forward53Plan::new(&[c], Forward53Backend::RowPanelParallel, 16, 2).unwrap();
++        let mut w = Forward53Workspace::new();
++        w.prepare(&p, p.workspace_bytes()).unwrap();
++        let address = w.samples.as_ptr();
++        let mut plane = vec![17; (c.height - 1) * c.stride + c.width];
++        let original = plane.clone();
++        let barrier = Barrier::new(2);
++        let completed = AtomicUsize::new(0);
++        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            pool.install(|| {
++                vertical_with_hook(&mut plane, c, &p, &mut w.samples, |slot| {
++                    barrier.wait();
++                    if slot == 0 {
++                        panic!("authored gather fault");
++                    }
++                    completed.fetch_add(1, Ordering::SeqCst);
++                });
++            })
++        }));
++        assert!(failed.is_err());
++        assert_eq!(completed.load(Ordering::SeqCst), 1);
++        assert_eq!(plane, original); // No scatter can run before a successful join.
++        assert_eq!(w.samples.as_ptr(), address);
++        pool.install(|| forward_reversible_5_3_planned_bounded(&mut plane, &p, &mut w))
++            .unwrap();
++        let mut expected = original;
++        crate::forward_reversible_5_3(&mut expected, c, &mut vec![0; c.scratch_len()]).unwrap();
++        assert_eq!(plane, expected);
++    }
++
++    #[test]
++    fn malformed_plan_and_workspace_fail_before_mutation() {
++        let c = config(65, 67, 70, 0, 0);
++        assert!(Forward53Plan::new(&[], Forward53Backend::Reference, 16, 1).is_err());
++        for bad in [
++            Reversible53Config { width: 0, ..c },
++            Reversible53Config { stride: 64, ..c },
++            Reversible53Config {
++                sample_range: ComponentSampleRange::signed(0),
++                ..c
++            },
++            Reversible53Config {
++                edges: Reversible53Edges {
++                    vertical_low_samples: 1,
++                    ..c.edges
++                },
++                ..c
++            },
++        ] {
++            assert!(Forward53Plan::new(&[bad], Forward53Backend::RowPanelScalar, 16, 1).is_err());
++        }
++        assert!(Forward53Plan::new(&[c, c], Forward53Backend::Reference, 16, 1).is_err());
++        let p = Forward53Plan::new(&[c], Forward53Backend::RowPanelParallel, 16, 8).unwrap();
++        let mut w = Forward53Workspace::new();
++        assert!(w.prepare(&p, p.workspace_bytes() - 1).is_err());
++        assert_eq!(w.capacity_bytes(), 0);
++        let mut plane = vec![123; (c.height - 1) * c.stride + c.width];
++        let source = plane.clone();
++        assert!(forward_reversible_5_3_planned_bounded(&mut plane, &p, &mut w).is_err());
++        assert_eq!(plane, source);
++        w.prepare(&p, p.workspace_bytes()).unwrap();
++        assert!(
++            forward_reversible_5_3_planned_bounded(&mut plane[..source.len() - 1], &p, &mut w)
++                .is_err()
++        );
++        assert_eq!(plane, source);
++        // Growth releases the earlier allocation before requesting a replacement.
++        let larger = Forward53Plan::new(
++            &[config(129, 131, 129, 0, 0)],
++            Forward53Backend::RowPanelParallel,
++            32,
++            8,
++        )
++        .unwrap();
++        w.prepare(&larger, larger.workspace_bytes()).unwrap();
++        assert_eq!(w.capacity_bytes(), larger.workspace_bytes());
++        let scalar = Forward53Plan::new(&[c], Forward53Backend::Reference, 1, 1).unwrap();
++        w.prepare(&scalar, scalar.workspace_bytes()).unwrap();
++        assert_eq!(w.capacity_bytes(), scalar.workspace_bytes());
++    }
++
++    #[cfg(feature = "classic-execution-diagnostics")]
++    #[test]
++    fn diagnostic_wall_intervals_and_actual_concurrency_are_separate() {
++        let run = || {
++            let c = config(257, 259, 260, 0, 0);
++            let p = Forward53Plan::new(&[c], Forward53Backend::RowPanelParallel, 16, 4).unwrap();
++            let mut w = Forward53Workspace::new();
++            w.prepare(&p, p.workspace_bytes()).unwrap();
++            let mut plane = vec![0; (c.height - 1) * c.stride + c.width];
++            let start = std::time::Instant::now();
++            let (result, d) = crate::observe_forward_transform(|| {
++                forward_reversible_5_3_planned_bounded(&mut plane, &p, &mut w)
++            });
++            result.unwrap();
++            assert!(
++                d.gather_lift_join_ns + d.scatter_join_ns + d.horizontal_join_ns
++                    <= start.elapsed().as_nanos()
++            );
++            assert_eq!(d.workspace_capacity_bytes, p.workspace_bytes());
++            assert!((1..=p.slots).contains(&d.peak_active_slots));
++            assert!(d.participating_workers.unwrap() >= d.peak_active_slots);
++            assert_eq!(d.level_backends[0], Some(p.backend));
++        };
++        #[cfg(feature = "parallel")]
++        rayon::ThreadPoolBuilder::new()
++            .num_threads(4)
++            .build()
++            .unwrap()
++            .install(run);
++        #[cfg(not(feature = "parallel"))]
++        run();
++    }
++}
+diff --git a/crates/emuella-j2k-transform/src/forward_diagnostics.rs b/crates/emuella-j2k-transform/src/forward_diagnostics.rs
+index ca67c79521852ef40ea7b1e24995b076e7b272a8..b16c22d8519e3481d20256caebbc79760c9cf4da 100644
+--- a/crates/emuella-j2k-transform/src/forward_diagnostics.rs
++++ b/crates/emuella-j2k-transform/src/forward_diagnostics.rs
+@@ -5,6 +5,18 @@ use std::{cell::RefCell, time::Instant};
+ /// diagnostic observations, not ordinary throughput measurements.
+ #[derive(Debug, Clone, Default)]
+ pub struct ForwardTransformDiagnostic {
++    pub level_backends: [Option<crate::Forward53Backend>; 2],
++    pub panel_width: usize,
++    pub logical_slots: usize,
++    pub workspace_capacity_bytes: usize,
++    /// Wall intervals include dispatch and joins, not summed worker durations.
++    pub gather_lift_join_ns: u128,
++    pub scatter_join_ns: u128,
++    pub horizontal_join_ns: u128,
++    pub peak_active_slots: usize,
++    /// None indicates that the fixed 64-identity observer overflowed.
++    pub participating_workers: Option<usize>,
++    participants: Participants,
+     pub validation_ns: u128,
+     pub vertical_gather_ns: u128,
+     pub vertical_lifting_ns: u128,
+@@ -109,3 +121,126 @@ mod tests {
+         assert_eq!(detail.validation_ns, 0);
+     }
+ }
++
++thread_local! {
++    static POLICY: core::cell::Cell<Option<(crate::Forward53Backend, usize)>> = const { core::cell::Cell::new(None) };
++}
++
++/// Force a development policy only in the separate diagnostic build. Scoped
++/// state is restored on normal return and unwind and never enters ordinary code.
++pub fn with_forward53_diagnostic_policy<T>(
++    backend: crate::Forward53Backend,
++    width: usize,
++    call: impl FnOnce() -> T,
++) -> T {
++    struct Reset(Option<(crate::Forward53Backend, usize)>);
++    impl Drop for Reset {
++        fn drop(&mut self) {
++            POLICY.with(|p| p.set(self.0));
++        }
++    }
++    let prior = POLICY.with(|p| p.replace(Some((backend, width))));
++    let _reset = Reset(prior);
++    call()
++}
++
++#[doc(hidden)]
++pub fn forward53_diagnostic_policy(
++    backend: crate::Forward53Backend,
++    width: usize,
++) -> (crate::Forward53Backend, usize) {
++    POLICY.with(|p| p.get().unwrap_or((backend, width)))
++}
++
++pub(super) fn update(call: impl FnOnce(&mut ForwardTransformDiagnostic)) {
++    CURRENT.with(|c| {
++        if let Some(d) = c.borrow_mut().as_mut() {
++            call(d);
++        }
++    });
++}
++
++/// Fixed-size diagnostic bookkeeping; overflow is explicit, never a fabricated
++/// exact participant count. No allocation occurs on Rayon jobs.
++#[derive(Debug, Clone)]
++struct Participants {
++    ids: [Option<std::thread::ThreadId>; 64],
++    len: usize,
++    complete: bool,
++}
++impl Default for Participants {
++    fn default() -> Self {
++        Self {
++            ids: [None; 64],
++            len: 0,
++            complete: true,
++        }
++    }
++}
++impl Participants {
++    fn add(&mut self, id: std::thread::ThreadId) {
++        if self.ids[..self.len].contains(&Some(id)) {
++            return;
++        }
++        if self.len == self.ids.len() {
++            self.complete = false;
++            return;
++        }
++        self.ids[self.len] = Some(id);
++        self.len += 1;
++    }
++}
++
++pub(super) struct Jobs {
++    enabled: bool,
++    active: std::sync::atomic::AtomicUsize,
++    peak: std::sync::atomic::AtomicUsize,
++    participants: std::sync::Mutex<Participants>,
++}
++impl Jobs {
++    pub(super) fn new() -> Self {
++        Self {
++            enabled: CURRENT.with(|c| c.borrow().is_some()),
++            active: 0.into(),
++            peak: 0.into(),
++            participants: std::sync::Mutex::new(Participants::default()),
++        }
++    }
++    pub(super) fn enter(&self) -> Job<'_> {
++        use std::sync::atomic::Ordering::SeqCst;
++        if self.enabled {
++            let active = self.active.fetch_add(1, SeqCst) + 1;
++            self.peak.fetch_max(active, SeqCst);
++            self.participants
++                .lock()
++                .unwrap()
++                .add(std::thread::current().id());
++        }
++        Job(self)
++    }
++    pub(super) fn finish(self) {
++        if !self.enabled {
++            return;
++        }
++        let peak = self.peak.load(std::sync::atomic::Ordering::SeqCst);
++        let participants = self.participants.into_inner().unwrap();
++        update(|d| {
++            d.peak_active_slots = d.peak_active_slots.max(peak);
++            for id in participants.ids[..participants.len].iter().flatten() {
++                d.participants.add(*id);
++            }
++            d.participants.complete &= participants.complete;
++            d.participating_workers = d.participants.complete.then_some(d.participants.len);
++        });
++    }
++}
++pub(super) struct Job<'a>(&'a Jobs);
++impl Drop for Job<'_> {
++    fn drop(&mut self) {
++        if self.0.enabled {
++            self.0
++                .active
++                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
++        }
++    }
++}
+diff --git a/crates/emuella-j2k-transform/src/lib.rs b/crates/emuella-j2k-transform/src/lib.rs
+index 98d987e982eb1eb3a547b955e07f69d1e5fdbc08..78e5d88e5bb3a0a5881229fc19feade48774ec43 100644
+--- a/crates/emuella-j2k-transform/src/lib.rs
++++ b/crates/emuella-j2k-transform/src/lib.rs
+@@ -12,7 +12,15 @@ use core::fmt;
+ #[cfg(feature = "classic-execution-diagnostics")]
+ mod forward_diagnostics;
+ #[cfg(feature = "classic-execution-diagnostics")]
+-pub use forward_diagnostics::{ForwardTransformDiagnostic, observe_forward_transform};
++pub use forward_diagnostics::{
++    ForwardTransformDiagnostic, forward53_diagnostic_policy, observe_forward_transform,
++    with_forward53_diagnostic_policy,
++};
++
++mod analysis53;
++pub use analysis53::{
++    Forward53Backend, Forward53Plan, Forward53Workspace, forward_reversible_5_3_planned_bounded,
++};
+ 
+ mod full;
+ mod window;
+diff --git a/docs/forward53-parallel-dispatch.md b/docs/forward53-parallel-dispatch.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e725b1bb3910096ddc0507119c62c07d6390f849
+--- /dev/null
++++ b/docs/forward53-parallel-dispatch.md
+@@ -0,0 +1,217 @@
++# Classic forward 5/3 parallel dispatch v1 (qualification pending)
++
++This source treatment restores the archived panel engine with a new dispatch and
++scratch-lifetime policy for the bounded classic lossless D2 encoder. Production
++selection requires fresh independent confirmation. Source-route equality and
++correctness checks supply no speed guarantee. Historical serial-panel RGB8 gains
++are deliberately foregone; no claim attributes historical RGB16 cost to allocation.
++The closed original experiment remains in [the archive](performance-candidates.md).
++No decoding, input conversion, level shift, RCT, exponent scan, header, Tier-1, MQ,
++packet or W-batch algorithm changes.
++
++## Plan and execution
++
++`analysis53.rs` owns an immutable plan with one or two explicit active geometries,
++validated edge counts, the original plane stride, checked true allocation extent,
++full-resolution-to-LL order, panel width and at most eight logical slots. The
++bounded transform API retains the caller's arithmetic-proof obligation; use the existing
++checked transform for arbitrary input. Following levels must describe exactly
++the previous LL dimensions and signed-32 intermediate storage.
++
++The frozen ordinary policy uses width 16. Before panel planning, allocation or
++zero initialisation, the encoder selects the original multi-level scalar helper
++and its original reusable `Vec` scratch lifecycle whenever effective admission
++is one worker, first-level geometry has fewer than two useful panel slots, or
++all work is small. Effective admission already incorporates the existing pool
++and unchanged Tier-1 memory budget; this dispatch creates and probes no pool.
++No-parallel, no-std and ordinary WASM builds therefore use the original helper.
++
++Logical slots are bounded by admitted W, eight, first-level panel count and row
++count. Plans are tried at the existing halving sequence, but stop before one
++slot. A memory-ineligible plan requests no storage. Failed optional multi-slot
++reservations are dropped before retry or original-helper fallback, all before
++coefficient mutation. A scalar-panel backend is never an ordinary fallback.
++A level with fewer than 4096 active samples, a high-first axis or fewer than two
++useful panel slots uses the original scalar level transform. A mixed plan retains
++its admitted storage and reference region through both levels. Partial-window
++tails retain the donor execution. The encoder's admitted phases are low-first;
++transform tests independently exercise high-first fallback.
++
++Widths 8/16/32 and explicitly forced scalar panels remain available only to the
++separate diagnostic feature and authored tests. Ordinary timing builds contain
++no policy state, route counters or instrumentation. There is no new facade
++option, profile or bit-depth exception.
++
++Each slot contains a complete-height row-major panel and one reusable horizontal
++line. A window of at most q panels first gathers contiguous row segments and
++lifts them from an immutable source plane. Prediction leaves original even rows
++available; update starts only after all odd rows in that panel are complete.
++Adjacent columns form the inner loop. Rows remain interleaved in scratch.
++After all jobs join, disjoint destination row groups copy contiguous segments
++into the existing low-first vertical layout. A second join ends every scratch
++borrow before reuse. Panel boundaries never extend signals or split horizontal
++wavelet lines. After the final vertical window, disjoint complete-width row
++groups use explicitly assigned line scratch and join before LL recursion.
++
++Components are sequential and share the same workspace. There is no nested
++component pool, per-column line lifting in a panel, full transpose, per-job
++scratch allocation or `map_init`. One-slot work schedules no Rayon jobs. Partial
++panels use only their valid lanes. Destination ownership ends at
++`(height - 1) * stride + width`, including a short final row; neither padding nor
++coefficients outside the active LL region are changed.
++
++## Bounded arithmetic
++
++This proof applies to the existing admitted unsigned U8/U16 sample models and
++two levels, not arbitrary i32 values. Level shift bounds unsigned 16-bit samples
++by absolute value 32768. The unchanged RCT keeps luminance in that interval and
++bounds each difference by 65535. Its sums also fit i32. Eight native components
++have no RCT, so the same conservative initial bound M=65535 covers all admitted
++components and both precisions.
++
++Given input absolute bound M, prediction has absolute bound at most 2M. The
++update's two predicted neighbours and rounding bias have absolute sum at most
++4M+2; the updated low sample is bounded by 2M+1. Replacing M by 2M+1 after each
++axis therefore bounds all coefficients after four axes by 1048575. Every
++intermediate neighbour sum, bias, subtraction and addition fits i32. A singleton
++axis is unchanged. Repeated end neighbours preserve those bounds. Arithmetic
++right shifts match the reference's floor rounding for negative values. The
++panel implementation independently implements the vertical arithmetic; the
++unchanged checked line routine supplies the test oracle after each axis.
++
++## Whole-operation live-allocation proof
++
++Let S be all component samples, B the existing total block count, A the larger
++original axis, O the output capacity allowance and W the unchanged admitted
++Tier-1 worker count. Existing queries remain byte-for-byte unchanged:
++
++```text
++Q = 4*S + 4096*B + 12*A + 2*O + (4 MiB)*W
++```
++
++Selective bypass additionally retains its existing 512*B term. No descriptor,
++output or bypass allowance is treated as spare transform capacity.
++
++For panel width b, full height H and logical slots q, the sole workspace request
++is exactly:
++
++```text
++D = 4 * max(3*A, q*(b*H + A))
++```
++
++The 3*A minimum allows any level to use the original scalar routine in place.
++Reference-only transform plans request exactly 12*A; ordinary wholly serial
++encoding bypasses such plans and uses the original helper's scratch instead. Each retained slot's panel has b*H
++elements and its horizontal line has A elements, even at later smaller levels.
++Plan/config metadata is fixed stack storage: two optional configurations, scalar
++capacity fields and no allocated level/job arrays. Iterators borrow slices;
++the existing caller-owned Rayon pool supplies scheduling infrastructure and
++stacks. This does not create a second pool or charge an assumed OS-thread count.
++
++Preparation checks `D <= 12*A + (4 MiB)*min(W, 8) - 4096`. Capping the
++optional allowance before usize arithmetic keeps unusually wide admitted pools
++safe on 32-bit hosts; it uses a conservative subset of the existing W term and
++does not cap Tier-1 workers. The 4096-byte reserve keeps
++fixed allocation bookkeeping within the original local allowance; the outer
++coefficient vector holds at most eight Vec descriptors (192 bytes on 64-bit
++hosts), with no transform job metadata allocation. The new plan and workspace
++headers and diagnostic identity tables themselves live on the stack. During
++conversion/RCT, only the original exact-capacity coefficient vectors and their
++outer descriptor vector exist. During transform, those same vectors coexist
++with D. There is no codestream output, packet descriptor/tag-tree/header
++allocation or Tier-1 worker storage yet. Thus this phase fits the unchanged
++coefficient plus local/DWT terms. D is explicitly dropped before exponent/spec
++vectors, output construction, serial Tier-1 scratch or parallel slots are
++constructed. Every subsequent phase retains the original allocation proof and
++worker admission. This is a maximum across disjoint lifetimes, not a sum that
++counts the same allowance twice.
++
++Panel `try_reserve_exact` is followed by an actual capacity check. Zero
++initialisation is part of successful optional preparation. Workspace growth
++discards the old allocation before requesting a larger one; old/new requests
++never overlap. Reuse of the same panel plan requires no allocation or
++initialisation. On optional failure, no panel allocation survives entry to the
++original helper. That helper's existing `Vec::resize` lifecycle and allocation
++behaviour remain unchanged, including reuse across components and resizing for
++successive LL levels. Its original allocation semantics are not converted into
++a new recoverable-allocation guarantee. No panel workspace is requested or
++initialised for ordinary single-worker calls.
++
++Conversion/RCT, serial transformation and panel transformation all precede
++entropy and output construction. Both optional panel storage and original scalar
++scratch are dropped before exponent/spec vectors, packet state, output growth
++and Tier-1 worker slots. Thus the earlier Q proof remains a maximum over disjoint
++phases. Returned queries, the serial minimum, Tier-1 admission and output bounds
++are unchanged. There is no restart after partial mutation. Panic unwinding joins
++started Rayon jobs before borrowed planes/workspace can be released.
++
++The proof concerns requested allocations, not allocator implementation overhead,
++process RSS, thread stacks or CPU time. The existing allocation-only example
++measures fresh whole-operation peaks, including output/growth, against the
++unchanged query; those observations belong with the benchmark record.
++
++## Diagnostics and reproducible tests
++
++The separate `classic-execution-diagnostics` build adds scoped
++`with_forward53_diagnostic_policy` forcing. Ordinary code has no forcing state,
++clock, atomic or participant bookkeeping. Existing `observe_lossless_encode`
++returns a `forward53` record with per-level backend, width, logical slots,
++workspace capacity, gather/lift/join wall time, scatter/join wall time and
++horizontal/join wall time. These are elapsed stage times including barriers,
++not useful-lifting durations or sums of worker time. Existing scalar fields keep
++their original meanings. The encode observer separately reports actual original-helper calls and retained
++original scratch capacity, plus panel preparation attempts and initialised bytes.
++Wholly serial calls record two reference levels and zero panel storage/attempts.
++The ordinary total DWT interval includes preparation,
++zero initialisation and workspace destruction. Stage fields nest inside it.
++
++Actual overlapping jobs and distinct thread participants are separate fields.
++The fixed 64-identity observer reports `None` on overflow instead of inventing
++an exact count. Jobs can migrate across windows and participant count can exceed
++logical slots. Instrumentation perturbs execution and supplies no headline
++speed measurement.
++
++Focused tests compare entire arrays after each axis and level, including
++padding and untouched subbands, to independent checked scalar line arithmetic.
++They cover singleton/thin, odd/even, both phases, widths 8/16/32, partial
++panels/windows, high-range alternating/dense/sparse samples, short final rows,
++workspace reuse and malformed geometry. A barrier-driven injected gather panic
++proves every started job has completed, no scatter occurred, and the workspace
++can be reused. No sleeps or scheduling-dependent allocation counts are asserted.
++
++The authored encode matrix compares full streams for every backend with
++1/2/4/8 workers, both styles, full-range U8/U16, colour extremes, zero coefficients,
++one/three U8/U16 components and eight U16 components, padded planar input and
++stepped interleaved input. Eight U8 components remain rejected. Equal full bytes include exponent,
++block and packet metadata. Native decoding checks original packed samples.
++Tight budgets preserve serial admission and output exhaustion returns no stream.
++Separate preparation tests exercise slot reduction, memory rejection before
++allocation, and injected failure after optional reservation, with release before
++retry/fallback. Ordinary-policy tests assert backend and scratch paths at
++1/2/4/8 workers, reduced effective budgets, one-slot geometry, small and mixed
++LL levels, and changing geometries/budgets. Independent transform tests retain
++high-first phases, partial windows and joined panic/reuse. None of these tests
++uses a corpus input or establishes performance. Canonical checks run these tests explicitly.
++
++```sh
++cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
++cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::forward53_tests
++cargo test --release -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --test forward53_panels
++cargo check -p emuella-j2k --no-default-features --target wasm32-unknown-unknown
++```
++
++Independent OpenJPEG reconstruction, fresh allocation observations, ordinary
++end-to-end exploration and the qualification disposition remain external evidence
++requirements. This candidate does not claim they passed merely because authored
++checks or compilation pass.
++
++The codec-owned aggregate diagnostic driver uses the same feature observer:
++
++```sh
++cargo build --profile perf -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --example forward53_diagnostics
++# Arguments: authorised packed RAW, width, height, components, bits, workers,
++# style (0/1), reference|scalar|parallel, and panel width (8/16/32).
++```
++
++It emits hashes and counters only; it does not persist source samples,
++coefficients or codestream payloads. File access supplies no new corpus rights.
+diff --git a/docs/scalable-lossless.md b/docs/scalable-lossless.md
+index bff404b80f8b698b41ca405a092423f50f662657..cb33f17eeb8c30273c23eb5fbf515c7f81889263 100644
+--- a/docs/scalable-lossless.md
++++ b/docs/scalable-lossless.md
+@@ -1,5 +1,10 @@
+ # Scalable classic lossless encoding
+ 
++This development candidate adds [parallel dispatch for the forward 5/3 panel engine](forward53-parallel-dispatch.md).
++Its correctness, phase memory proof and diagnostic identities are described there;
++production performance qualification remains pending. The source branch enables
++the candidate for bounded evaluation and is not a promoted production revision.
++
+ The public owned `encode` route admits raw, single-tile Part 1 lossless D2
+ images with unsigned U8 or U16_LE greyscale/RGB samples, LRCP and reversible
+ 5/3. Both planar and interleaved input are supported, including row padding.
+@@ -99,8 +104,10 @@ actual allocation lifetimes:
+ 
+ - Exact-capacity i32 coefficient vectors use 4*S bytes. Input components are
+   read directly at their byte stride/step; planar RGB has no packed input copy.
+-- One reusable DWT vector contains three i32 lines, at most 12*A bytes. It is
+-  released before entropy coding.
++- The scalar DWT vector contains three i32 lines, at most 12*A bytes. The
++  planned panel candidate uses an explicitly bounded alternative workspace
++  within the non-overlapping DWT/Tier-1 local terms; see the linked whole-operation
++  proof. Every transform allocation is released before entropy coding.
+ - Descriptors for one packet, two encoding tag trees for one subband and the
+   packet header are bounded by 4096*B. A descriptor is below 64 bytes. Each
+   tree has fewer than three times its leaf count in nodes (including thin
+@@ -491,8 +498,9 @@ transfers. Resize includes allocation and zero initialisation when needed.
+ These intervals are nested within the existing combined conversion/RCT and
+ forward-DWT stages, so they must not be added to those totals. Their remainder
+ contains configuration, loops and diagnostic clock/accounting overhead. The
+-scalable writer's conversion, RCT and DWT component/axis loops are serial even
+-in parallel builds; its later Tier-1 batches retain the admitted W policy.
++scalable writer's conversion, RCT and DWT component loops remain serial. The
++panel candidate parallelises bounded axis work and records separate joined wall
++intervals; its later Tier-1 batches retain the admitted W policy.
+ Per-line clock reads perturb the diagnostic build, particularly short axes.
+ The ordinary feature-disabled build contains no added clocks or observer state.
+ 
+diff --git a/scripts/check.sh b/scripts/check.sh
+index 52d6140b1f85c8ec2cdf58a59058aaf698f3774b..a0fd4d370e0f7f10bafbcf8a5f2a712f3e794193 100644
+--- a/scripts/check.sh
++++ b/scripts/check.sh
+@@ -33,6 +33,10 @@ sh scripts/check-lossy-ht-public-matrix.sh
+ cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
+ cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
+ cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::parallel
++cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::forward53_tests
++cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
++cargo test --release -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --test forward53_panels
++cargo test --release -p emuella-j2k-test-support --features classic-execution-diagnostics --test forward53_panels ordinary_dispatch
+ cargo test -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics
+ cargo test -p emuella-j2k-test-support --example lossless_parallel
+ cargo test -p emuella-j2k-test-support --example lossless_bypass_batch

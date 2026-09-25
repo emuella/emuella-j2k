@@ -1,13 +1,72 @@
-# Classic forward 5/3 parallel dispatch v1 (qualification pending)
+# Classic forward 5/3 parallel dispatch v1 — source archive
 
-This source treatment restores the archived panel engine with a new dispatch and
-scratch-lifetime policy for the bounded classic lossless D2 encoder. Production
-selection requires fresh independent confirmation. Source-route equality and
-correctness checks supply no speed guarantee. Historical serial-panel RGB8 gains
-are deliberately foregone; no claim attributes historical RGB16 cost to allocation.
-The closed original experiment remains in [the archive](performance-candidates.md).
-No decoding, input conversion, level shift, RCT, exponent scan, header, Tier-1, MQ,
-packet or W-batch algorithm changes.
+The one bounded `classic-forward53-parallel-dispatch/v1` confirmation is closed
+as **NOT QUALIFIED WITHIN BUDGET**. Production retains its original scalar
+forward traversal, MQ and W execution. No panel implementation, dispatch policy,
+tests, diagnostic feature changes or check-engine changes from this candidate
+are compiled or enabled by the archive. No retest is authorised by this record.
+The earlier finite-confirmation v1/v2 outcomes remain unchanged.
+
+The primary passed, but the serial Boca RGB8 style-zero endpoint's complete
+40-pair 99% interval did not resolve its required upper bound of +1%. Its lower
+bound also stayed below +1%, so this does not demonstrate a regression greater
+than 1%. The fixed stopping rule ended acquisition, leaving 25 endpoints
+unstarted. A passing primary does not qualify the candidate without the remaining
+mandatory evidence.
+
+| Endpoint in acquisition order | Baseline mean ms | Candidate mean ms | 99% relative-time interval | Fixed-count result |
+|---|---:|---:|---|---|
+| 00, Boca RGB8 bypass, eight workers (primary) | 736.660720 | 462.905230 | [-37.740466%, -36.575975%] | Pass; mean saving 273.755490 ms |
+| 02, Boca RGB8 style zero, eight workers | 788.585147 | 524.972122 | [-33.984733%, -32.867877%] | Pass |
+| 01, Boca RGB8 style zero, one worker | 2434.577962 | 2457.712319 | [+0.769086%, +1.131692%] | Required +1% upper bound unresolved |
+
+The retained report accounts for 278 starts: 240 ordinary calls, six preflights
+and 32 allocation observations, over 745.527180032 seconds. Its source-correctness,
+independent-decode, resource, output-failure, identity/environment, reservation
+and restoration checks are all true, with no reported issues. These checks apply
+to the acquired evidence; they do not fill the 25 unstarted endpoints. Independent
+restoration was verified. The exact report SHA-256 is
+`e3ffa775cf723379a449e2a8a07086a7f32333dea193137096e2be277f3f9211`.
+The benchmark component owns the [complete protocol and factual result](https://github.com/emuella/emuella-benchmark/pull/31).
+
+Historical serial-panel RGB8 gains were deliberately excluded from this new
+source treatment. Source-route equality supplies no speed guarantee; this record
+makes no universal claim that the original serial transform is faster and no
+claim that allocation caused historical RGB16 cost.
+
+## Exact recovery
+
+| Identity | Value |
+|---|---|
+| Reachable production base / tree | `a7576ad03486e097ac923b8e49cac39a1cbef5d2` / `5e7dfa48280c6d1d0abfe376d69af243e879359f` |
+| Frozen candidate / recovered tree | `4f5bfb39f02e043c9a1f594a8159d3cf86d52c3f` / `259066112bda675e67a8d3eab3dbf9088d18fe91` |
+| Complete source patch | [classic-forward53-parallel-dispatch.patch.txt](performance-candidates/classic-forward53-parallel-dispatch.patch.txt) |
+| Patch SHA-256 | `ad5333e4e5ea285e3ed1123a65e449cfab6066e74f98a10abe68790b336b4c3c` |
+
+The full-index patch preserves all thirteen candidate source, test, build and
+documentation changes. Applying it to the base in an isolated Git index
+reproduces the exact candidate tree without building or executing the candidate.
+Use the [inventory's isolated-index procedure](performance-candidates.md#exact-source-and-recovery)
+with this base, patch and expected tree. Recovery does not depend on retaining
+the original task branch. Future reuse requires a separately authorised objective,
+a contemporary base and fresh review; it must preserve newer independent tests.
+
+## Archived dispatch and proof scope
+
+The remaining description, proof and commands describe only the frozen archived
+candidate. Its source restored the earlier panel engine with a new selection and
+scratch-lifetime policy for the bounded classic lossless D2 encoder. No decoding,
+input conversion, level shift, RCT, exponent scan, header, Tier-1, MQ, packet or
+W-batch algorithm was changed.
+
+| Candidate condition | Backend and scratch path |
+|---|---|
+| Effective worker count one, including no-parallel/no-std/ordinary WASM | Original multi-level helper and original reusable `Vec` lifecycle; no panel plan, request or initialisation |
+| At least two useful admitted slots | Parallel panels with existing geometry and memory caps |
+| One-slot geometry or insufficient multi-slot memory | Original helper before mutation; memory eligibility may use checked stack-only plan sizing, with no buffer request |
+| Optional multi-slot allocation failure | Drop the reservation before smaller multi-slot retry or original-helper fallback; no scalar-panel substitution |
+| Mixed eligible and scalar levels | Retain admitted workspace and use its reference region for the original scalar level routine |
+| Explicit diagnostic forcing | Separate feature only; no forcing or route counters in ordinary timing builds |
 
 ## Plan and execution
 
@@ -191,7 +250,10 @@ retry/fallback. Ordinary-policy tests assert backend and scratch paths at
 1/2/4/8 workers, reduced effective budgets, one-slot geometry, small and mixed
 LL levels, and changing geometries/budgets. Independent transform tests retain
 high-first phases, partial windows and joined panic/reuse. None of these tests
-uses a corpus input or establishes performance. Canonical checks run these tests explicitly.
+uses a corpus input or establishes performance. The frozen candidate's canonical
+checks ran these tests explicitly and passed on its exact commit/tree. The
+commands below apply only after recovering the candidate; the production check
+engine remains unchanged.
 
 ```sh
 cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
@@ -200,10 +262,15 @@ cargo test --release -p emuella-j2k-test-support --features parallel,classic-exe
 cargo check -p emuella-j2k --no-default-features --target wasm32-unknown-unknown
 ```
 
-Independent OpenJPEG reconstruction, fresh allocation observations, ordinary
-end-to-end exploration and the qualification disposition remain external evidence
-requirements. This candidate does not claim they passed merely because authored
-checks or compilation pass.
+Frozen-candidate native and explicit WASM compilation passed. A separate
+scratch-only authored wrapper also ran 30 no-default-feature codec encodes
+natively and in Node/WASM, with complete-stream SHA-256 equality. That runtime
+check exercised supported U8/U16 component counts, both styles and padded planar
+input at three geometries. It contained no route counters; routing and scratch
+selection were established by the source guard and instrumented native tests.
+These engineering observations remain scoped to the frozen candidate. The
+confirmation disposition above closes the remaining qualification requirement
+without treating unstarted endpoints as passed.
 
 The codec-owned aggregate diagnostic driver uses the same feature observer:
 
