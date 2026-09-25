@@ -1,0 +1,322 @@
+Disassembly of section .text:
+
+00000000001b8520 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>>:
+  1b8520:	55                                              	push   %rbp
+  1b8521:	41 57                                           	push   %r15
+  1b8523:	41 56                                           	push   %r14
+  1b8525:	41 55                                           	push   %r13
+  1b8527:	41 54                                           	push   %r12
+  1b8529:	53                                              	push   %rbx
+  1b852a:	48 81 ec 98 00 00 00                            	sub    $0x98,%rsp
+  1b8531:	48 8b 47 40                                     	mov    0x40(%rdi),%rax
+  1b8535:	48 89 44 24 18                                  	mov    %rax,0x18(%rsp)
+  1b853a:	48 85 c0                                        	test   %rax,%rax
+  1b853d:	0f 84 6c 04 00 00                               	je     1b89af <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x48f>
+  1b8543:	48 8b 47 30                                     	mov    0x30(%rdi),%rax
+  1b8547:	48 89 44 24 60                                  	mov    %rax,0x60(%rsp)
+  1b854c:	48 85 c0                                        	test   %rax,%rax
+  1b854f:	0f 84 5a 04 00 00                               	je     1b89af <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x48f>
+  1b8555:	48 89 f3                                        	mov    %rsi,%rbx
+  1b8558:	0f b6 47 48                                     	movzbl 0x48(%rdi),%eax
+  1b855c:	83 e0 1f                                        	and    $0x1f,%eax
+  1b855f:	89 44 24 14                                     	mov    %eax,0x14(%rsp)
+  1b8563:	4c 8b 67 38                                     	mov    0x38(%rdi),%r12
+  1b8567:	48 8b 17                                        	mov    (%rdi),%rdx
+  1b856a:	4c 8b 5f 08                                     	mov    0x8(%rdi),%r11
+  1b856e:	48 8b 47 28                                     	mov    0x28(%rdi),%rax
+  1b8572:	48 89 44 24 20                                  	mov    %rax,0x20(%rsp)
+  1b8577:	48 8b 47 20                                     	mov    0x20(%rdi),%rax
+  1b857b:	48 89 44 24 78                                  	mov    %rax,0x78(%rsp)
+  1b8580:	4c 8b 4e 08                                     	mov    0x8(%rsi),%r9
+  1b8584:	44 8b 46 18                                     	mov    0x18(%rsi),%r8d
+  1b8588:	44 8b 56 10                                     	mov    0x10(%rsi),%r10d
+  1b858c:	8b 6e 14                                        	mov    0x14(%rsi),%ebp
+  1b858f:	48 8b 4c 24 18                                  	mov    0x18(%rsp),%rcx
+  1b8594:	48 89 ce                                        	mov    %rcx,%rsi
+  1b8597:	48 c1 ee 02                                     	shr    $0x2,%rsi
+  1b859b:	89 c8                                           	mov    %ecx,%eax
+  1b859d:	83 e0 03                                        	and    $0x3,%eax
+  1b85a0:	48 83 f8 01                                     	cmp    $0x1,%rax
+  1b85a4:	48 89 d0                                        	mov    %rdx,%rax
+  1b85a7:	48 83 de ff                                     	sbb    $0xffffffffffffffff,%rsi
+  1b85ab:	31 d2                                           	xor    %edx,%edx
+  1b85ad:	4c 89 4c 24 08                                  	mov    %r9,0x8(%rsp)
+  1b85b2:	4c 89 5c 24 38                                  	mov    %r11,0x38(%rsp)
+  1b85b7:	4c 89 64 24 30                                  	mov    %r12,0x30(%rsp)
+  1b85bc:	48 89 44 24 28                                  	mov    %rax,0x28(%rsp)
+  1b85c1:	eb 36                                           	jmp    1b85f9 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0xd9>
+  1b85c3:	66 66 66 66 2e 0f 1f 84 00 00 00 00 00          	data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+  1b85d0:	4c 89 de                                        	mov    %r11,%rsi
+  1b85d3:	49 89 f3                                        	mov    %rsi,%r11
+  1b85d6:	48 8b 54 24 50                                  	mov    0x50(%rsp),%rdx
+  1b85db:	48 83 c2 04                                     	add    $0x4,%rdx
+  1b85df:	48 8b 74 24 58                                  	mov    0x58(%rsp),%rsi
+  1b85e4:	48 ff ce                                        	dec    %rsi
+  1b85e7:	48 8b 4c 24 48                                  	mov    0x48(%rsp),%rcx
+  1b85ec:	48 83 c1 fc                                     	add    $0xfffffffffffffffc,%rcx
+  1b85f0:	48 85 f6                                        	test   %rsi,%rsi
+  1b85f3:	0f 84 b6 03 00 00                               	je     1b89af <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x48f>
+  1b85f9:	48 89 74 24 58                                  	mov    %rsi,0x58(%rsp)
+  1b85fe:	48 83 f9 01                                     	cmp    $0x1,%rcx
+  1b8602:	48 89 4c 24 48                                  	mov    %rcx,0x48(%rsp)
+  1b8607:	48 89 ce                                        	mov    %rcx,%rsi
+  1b860a:	48 83 d6 00                                     	adc    $0x0,%rsi
+  1b860e:	48 83 fe 04                                     	cmp    $0x4,%rsi
+  1b8612:	b9 04 00 00 00                                  	mov    $0x4,%ecx
+  1b8617:	48 0f 43 f1                                     	cmovae %rcx,%rsi
+  1b861b:	48 89 b4 24 90 00 00 00                         	mov    %rsi,0x90(%rsp)
+  1b8623:	48 39 54 24 18                                  	cmp    %rdx,0x18(%rsp)
+  1b8628:	48 89 54 24 50                                  	mov    %rdx,0x50(%rsp)
+  1b862d:	74 a1                                           	je     1b85d0 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0xb0>
+  1b862f:	48 83 ca 01                                     	or     $0x1,%rdx
+  1b8633:	49 0f af d4                                     	imul   %r12,%rdx
+  1b8637:	48 ff c2                                        	inc    %rdx
+  1b863a:	48 89 54 24 68                                  	mov    %rdx,0x68(%rsp)
+  1b863f:	41 89 ed                                        	mov    %ebp,%r13d
+  1b8642:	31 d2                                           	xor    %edx,%edx
+  1b8644:	4c 89 de                                        	mov    %r11,%rsi
+  1b8647:	eb 1a                                           	jmp    1b8663 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x143>
+  1b8649:	0f 1f 80 00 00 00 00                            	nopl   0x0(%rax)
+  1b8650:	49 89 cc                                        	mov    %rcx,%r12
+  1b8653:	48 8b 54 24 70                                  	mov    0x70(%rsp),%rdx
+  1b8658:	48 3b 54 24 60                                  	cmp    0x60(%rsp),%rdx
+  1b865d:	0f 84 70 ff ff ff                               	je     1b85d3 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0xb3>
+  1b8663:	48 8b 4c 24 68                                  	mov    0x68(%rsp),%rcx
+  1b8668:	4c 8d 34 11                                     	lea    (%rcx,%rdx,1),%r14
+  1b866c:	48 ff c2                                        	inc    %rdx
+  1b866f:	48 89 54 24 70                                  	mov    %rdx,0x70(%rsp)
+  1b8674:	45 89 ef                                        	mov    %r13d,%r15d
+  1b8677:	45 31 db                                        	xor    %r11d,%r11d
+  1b867a:	4c 89 e1                                        	mov    %r12,%rcx
+  1b867d:	eb 3b                                           	jmp    1b86ba <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x19a>
+  1b867f:	45 89 e2                                        	mov    %r12d,%r10d
+  1b8682:	48 8b 84 24 80 00 00 00                         	mov    0x80(%rsp),%rax
+  1b868a:	c6 40 02 01                                     	movb   $0x1,0x2(%rax)
+  1b868e:	48 8b 74 24 38                                  	mov    0x38(%rsp),%rsi
+  1b8693:	48 8b 4c 24 30                                  	mov    0x30(%rsp),%rcx
+  1b8698:	48 8b 44 24 28                                  	mov    0x28(%rsp),%rax
+  1b869d:	4c 8b 74 24 40                                  	mov    0x40(%rsp),%r14
+  1b86a2:	4c 8b 9c 24 88 00 00 00                         	mov    0x88(%rsp),%r11
+  1b86aa:	49 ff c3                                        	inc    %r11
+  1b86ad:	49 01 ce                                        	add    %rcx,%r14
+  1b86b0:	4c 3b 9c 24 90 00 00 00                         	cmp    0x90(%rsp),%r11
+  1b86b8:	74 96                                           	je     1b8650 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x130>
+  1b86ba:	49 39 f6                                        	cmp    %rsi,%r14
+  1b86bd:	0f 83 fe 02 00 00                               	jae    1b89c1 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x4a1>
+  1b86c3:	4f 8d 24 76                                     	lea    (%r14,%r14,2),%r12
+  1b86c7:	42 80 3c 20 01                                  	cmpb   $0x1,(%rax,%r12,1)
+  1b86cc:	75 dc                                           	jne    1b86aa <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x18a>
+  1b86ce:	49 01 c4                                        	add    %rax,%r12
+  1b86d1:	41 80 7c 24 01 00                               	cmpb   $0x0,0x1(%r12)
+  1b86d7:	75 d1                                           	jne    1b86aa <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x18a>
+  1b86d9:	b8 10 00 00 00                                  	mov    $0x10,%eax
+  1b86de:	41 80 7c 24 02 00                               	cmpb   $0x0,0x2(%r12)
+  1b86e4:	4c 89 74 24 40                                  	mov    %r14,0x40(%rsp)
+  1b86e9:	4c 89 9c 24 88 00 00 00                         	mov    %r11,0x88(%rsp)
+  1b86f1:	4c 89 a4 24 80 00 00 00                         	mov    %r12,0x80(%rsp)
+  1b86f9:	75 79                                           	jne    1b8774 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x254>
+  1b86fb:	48 8b 7c 24 28                                  	mov    0x28(%rsp),%rdi
+  1b8700:	48 8b 74 24 38                                  	mov    0x38(%rsp),%rsi
+  1b8705:	4c 89 f2                                        	mov    %r14,%rdx
+  1b8708:	48 8b 4c 24 30                                  	mov    0x30(%rsp),%rcx
+  1b870d:	45 89 d6                                        	mov    %r10d,%r14d
+  1b8710:	45 89 c4                                        	mov    %r8d,%r12d
+  1b8713:	e8 b8 85 ff ff                                  	call   1b0cd0 <emuella_j2k_tier1::neighborhood_at::<false>>
+  1b8718:	45 89 e0                                        	mov    %r12d,%r8d
+  1b871b:	45 89 f2                                        	mov    %r14d,%r10d
+  1b871e:	4c 8b 74 24 40                                  	mov    0x40(%rsp),%r14
+  1b8723:	4c 8b 4c 24 08                                  	mov    0x8(%rsp),%r9
+  1b8728:	89 c1                                           	mov    %eax,%ecx
+  1b872a:	c1 e9 18                                        	shr    $0x18,%ecx
+  1b872d:	80 e1 01                                        	and    $0x1,%cl
+  1b8730:	48 89 c2                                        	mov    %rax,%rdx
+  1b8733:	48 c1 ea 20                                     	shr    $0x20,%rdx
+  1b8737:	80 e2 01                                        	and    $0x1,%dl
+  1b873a:	48 0f ba e0 30                                  	bt     $0x30,%rax
+  1b873f:	10 ca                                           	adc    %cl,%dl
+  1b8741:	0f ba e0 08                                     	bt     $0x8,%eax
+  1b8745:	80 d2 00                                        	adc    $0x0,%dl
+  1b8748:	48 89 c1                                        	mov    %rax,%rcx
+  1b874b:	48 c1 e9 38                                     	shr    $0x38,%rcx
+  1b874f:	89 c6                                           	mov    %eax,%esi
+  1b8751:	40 80 e6 01                                     	and    $0x1,%sil
+  1b8755:	89 c7                                           	mov    %eax,%edi
+  1b8757:	c1 ef 10                                        	shr    $0x10,%edi
+  1b875a:	40 80 e7 01                                     	and    $0x1,%dil
+  1b875e:	40 00 f1                                        	add    %sil,%cl
+  1b8761:	48 0f ba e0 28                                  	bt     $0x28,%rax
+  1b8766:	40 10 f9                                        	adc    %dil,%cl
+  1b8769:	31 c0                                           	xor    %eax,%eax
+  1b876b:	08 d1                                           	or     %dl,%cl
+  1b876d:	0f 94 c0                                        	sete   %al
+  1b8770:	48 83 f0 0f                                     	xor    $0xf,%rax
+  1b8774:	4c 3b 74 24 20                                  	cmp    0x20(%rsp),%r14
+  1b8779:	0f 83 52 02 00 00                               	jae    1b89d1 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x4b1>
+  1b877f:	0f b6 7c 43 1c                                  	movzbl 0x1c(%rbx,%rax,2),%edi
+  1b8784:	48 83 ff 2e                                     	cmp    $0x2e,%rdi
+  1b8788:	0f 87 58 02 00 00                               	ja     1b89e6 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x4c6>
+  1b878e:	45 89 c3                                        	mov    %r8d,%r11d
+  1b8791:	48 8b 4c 24 78                                  	mov    0x78(%rsp),%rcx
+  1b8796:	42 8b 0c b1                                     	mov    (%rcx,%r14,4),%ecx
+  1b879a:	45 31 c0                                        	xor    %r8d,%r8d
+  1b879d:	8b 54 24 14                                     	mov    0x14(%rsp),%edx
+  1b87a1:	0f a3 d1                                        	bt     %edx,%ecx
+  1b87a4:	41 0f 92 c0                                     	setb   %r8b
+  1b87a8:	0f b6 4c 43 1d                                  	movzbl 0x1d(%rbx,%rax,2),%ecx
+  1b87ad:	48 8d 15 dc a1 e6 ff                            	lea    -0x195e24(%rip),%rdx        # 22990 <anon.36ada1a7bb6c1d545348b8e8a90a5caf.101.llvm.17933956792295344108+0x31>
+  1b87b4:	45 89 d6                                        	mov    %r10d,%r14d
+  1b87b7:	49 89 d2                                        	mov    %rdx,%r10
+  1b87ba:	44 8b 24 fa                                     	mov    (%rdx,%rdi,8),%r12d
+  1b87be:	0f b6 54 fa 04                                  	movzbl 0x4(%rdx,%rdi,8),%edx
+  1b87c3:	41 0f b6 74 fa 05                               	movzbl 0x5(%r10,%rdi,8),%esi
+  1b87c9:	41 0f b6 7c fa 06                               	movzbl 0x6(%r10,%rdi,8),%edi
+  1b87cf:	45 89 f2                                        	mov    %r14d,%r10d
+  1b87d2:	45 29 e2                                        	sub    %r12d,%r10d
+  1b87d5:	44 89 53 10                                     	mov    %r10d,0x10(%rbx)
+  1b87d9:	41 39 c8                                        	cmp    %ecx,%r8d
+  1b87dc:	75 17                                           	jne    1b87f5 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x2d5>
+  1b87de:	66 45 85 d2                                     	test   %r10w,%r10w
+  1b87e2:	45 89 d8                                        	mov    %r11d,%r8d
+  1b87e5:	78 35                                           	js     1b881c <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x2fc>
+  1b87e7:	45 39 e2                                        	cmp    %r12d,%r10d
+  1b87ea:	73 66                                           	jae    1b8852 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x332>
+  1b87ec:	44 89 63 10                                     	mov    %r12d,0x10(%rbx)
+  1b87f0:	45 89 e2                                        	mov    %r12d,%r10d
+  1b87f3:	eb 6d                                           	jmp    1b8862 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x342>
+  1b87f5:	45 39 e2                                        	cmp    %r12d,%r10d
+  1b87f8:	45 89 d8                                        	mov    %r11d,%r8d
+  1b87fb:	73 34                                           	jae    1b8831 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x311>
+  1b87fd:	45 01 fc                                        	add    %r15d,%r12d
+  1b8800:	44 89 63 14                                     	mov    %r12d,0x14(%rbx)
+  1b8804:	44 89 e5                                        	mov    %r12d,%ebp
+  1b8807:	45 89 e5                                        	mov    %r12d,%r13d
+  1b880a:	45 89 e7                                        	mov    %r12d,%r15d
+  1b880d:	45 89 d4                                        	mov    %r10d,%r12d
+  1b8810:	40 88 74 43 1c                                  	mov    %sil,0x1c(%rbx,%rax,2)
+  1b8815:	40 84 ff                                        	test   %dil,%dil
+  1b8818:	75 25                                           	jne    1b883f <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x31f>
+  1b881a:	eb 2a                                           	jmp    1b8846 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x326>
+  1b881c:	45 01 fc                                        	add    %r15d,%r12d
+  1b881f:	44 89 63 14                                     	mov    %r12d,0x14(%rbx)
+  1b8823:	44 89 e5                                        	mov    %r12d,%ebp
+  1b8826:	45 89 e5                                        	mov    %r12d,%r13d
+  1b8829:	45 89 e7                                        	mov    %r12d,%r15d
+  1b882c:	e9 51 fe ff ff                                  	jmp    1b8682 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x162>
+  1b8831:	44 89 63 10                                     	mov    %r12d,0x10(%rbx)
+  1b8835:	40 88 74 43 1c                                  	mov    %sil,0x1c(%rbx,%rax,2)
+  1b883a:	40 84 ff                                        	test   %dil,%dil
+  1b883d:	74 07                                           	je     1b8846 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x326>
+  1b883f:	80 f1 01                                        	xor    $0x1,%cl
+  1b8842:	88 4c 43 1d                                     	mov    %cl,0x1d(%rbx,%rax,2)
+  1b8846:	66 45 85 e4                                     	test   %r12w,%r12w
+  1b884a:	0f 88 2f fe ff ff                               	js     1b867f <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x15f>
+  1b8850:	eb 21                                           	jmp    1b8873 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x353>
+  1b8852:	45 01 fc                                        	add    %r15d,%r12d
+  1b8855:	44 89 63 14                                     	mov    %r12d,0x14(%rbx)
+  1b8859:	44 89 e5                                        	mov    %r12d,%ebp
+  1b885c:	45 89 e5                                        	mov    %r12d,%r13d
+  1b885f:	45 89 e7                                        	mov    %r12d,%r15d
+  1b8862:	88 54 43 1c                                     	mov    %dl,0x1c(%rbx,%rax,2)
+  1b8866:	45 89 d4                                        	mov    %r10d,%r12d
+  1b8869:	66 45 85 e4                                     	test   %r12w,%r12w
+  1b886d:	0f 88 0c fe ff ff                               	js     1b867f <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x15f>
+  1b8873:	0f b6 43 45                                     	movzbl 0x45(%rbx),%eax
+  1b8877:	44 0f b6 73 46                                  	movzbl 0x46(%rbx),%r14d
+  1b887c:	44 89 fd                                        	mov    %r15d,%ebp
+  1b887f:	eb 4a                                           	jmp    1b88cb <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x3ab>
+  1b8881:	49 8b 41 08                                     	mov    0x8(%r9),%rax
+  1b8885:	46 88 34 38                                     	mov    %r14b,(%rax,%r15,1)
+  1b8889:	49 ff c7                                        	inc    %r15
+  1b888c:	4d 89 79 10                                     	mov    %r15,0x10(%r9)
+  1b8890:	41 89 ee                                        	mov    %ebp,%r14d
+  1b8893:	41 c1 ee 13                                     	shr    $0x13,%r14d
+  1b8897:	41 b8 08 00 00 00                               	mov    $0x8,%r8d
+  1b889d:	b8 fe ff 07 00                                  	mov    $0x7fffe,%eax
+  1b88a2:	c6 43 45 01                                     	movb   $0x1,0x45(%rbx)
+  1b88a6:	44 88 73 46                                     	mov    %r14b,0x46(%rbx)
+  1b88aa:	21 c5                                           	and    %eax,%ebp
+  1b88ac:	89 6b 14                                        	mov    %ebp,0x14(%rbx)
+  1b88af:	44 89 43 18                                     	mov    %r8d,0x18(%rbx)
+  1b88b3:	b0 01                                           	mov    $0x1,%al
+  1b88b5:	41 89 ed                                        	mov    %ebp,%r13d
+  1b88b8:	41 89 ef                                        	mov    %ebp,%r15d
+  1b88bb:	41 f7 c4 00 40 00 00                            	test   $0x4000,%r12d
+  1b88c2:	45 89 d4                                        	mov    %r10d,%r12d
+  1b88c5:	0f 85 b7 fd ff ff                               	jne    1b8682 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x162>
+  1b88cb:	47 8d 14 24                                     	lea    (%r12,%r12,1),%r10d
+  1b88cf:	44 89 53 10                                     	mov    %r10d,0x10(%rbx)
+  1b88d3:	01 ed                                           	add    %ebp,%ebp
+  1b88d5:	89 6b 14                                        	mov    %ebp,0x14(%rbx)
+  1b88d8:	41 ff c8                                        	dec    %r8d
+  1b88db:	44 89 43 18                                     	mov    %r8d,0x18(%rbx)
+  1b88df:	75 d4                                           	jne    1b88b5 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x395>
+  1b88e1:	c6 43 45 00                                     	movb   $0x0,0x45(%rbx)
+  1b88e5:	3c 01                                           	cmp    $0x1,%al
+  1b88e7:	75 a7                                           	jne    1b8890 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x370>
+  1b88e9:	41 80 fe ff                                     	cmp    $0xff,%r14b
+  1b88ed:	74 56                                           	je     1b8945 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x425>
+  1b88ef:	81 fd ff ff ff 07                               	cmp    $0x7ffffff,%ebp
+  1b88f5:	0f 86 8e 00 00 00                               	jbe    1b8989 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x469>
+  1b88fb:	41 fe c6                                        	inc    %r14b
+  1b88fe:	4d 8b 79 10                                     	mov    0x10(%r9),%r15
+  1b8902:	41 80 fe ff                                     	cmp    $0xff,%r14b
+  1b8906:	0f 85 81 00 00 00                               	jne    1b898d <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x46d>
+  1b890c:	41 89 ee                                        	mov    %ebp,%r14d
+  1b890f:	41 81 e6 fe ff ff 07                            	and    $0x7fffffe,%r14d
+  1b8916:	44 89 73 14                                     	mov    %r14d,0x14(%rbx)
+  1b891a:	4d 3b 39                                        	cmp    (%r9),%r15
+  1b891d:	75 14                                           	jne    1b8933 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x413>
+  1b891f:	4c 89 cf                                        	mov    %r9,%rdi
+  1b8922:	45 89 d5                                        	mov    %r10d,%r13d
+  1b8925:	ff 15 15 c5 0b 00                               	call   *0xbc515(%rip)        # 274e40 <_DYNAMIC+0x290>
+  1b892b:	45 89 ea                                        	mov    %r13d,%r10d
+  1b892e:	4c 8b 4c 24 08                                  	mov    0x8(%rsp),%r9
+  1b8933:	49 8b 41 08                                     	mov    0x8(%r9),%rax
+  1b8937:	42 c6 04 38 ff                                  	movb   $0xff,(%rax,%r15,1)
+  1b893c:	49 ff c7                                        	inc    %r15
+  1b893f:	4d 89 79 10                                     	mov    %r15,0x10(%r9)
+  1b8943:	eb 30                                           	jmp    1b8975 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x455>
+  1b8945:	4d 8b 71 10                                     	mov    0x10(%r9),%r14
+  1b8949:	4d 3b 31                                        	cmp    (%r9),%r14
+  1b894c:	75 14                                           	jne    1b8962 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x442>
+  1b894e:	4c 89 cf                                        	mov    %r9,%rdi
+  1b8951:	45 89 d7                                        	mov    %r10d,%r15d
+  1b8954:	ff 15 e6 c4 0b 00                               	call   *0xbc4e6(%rip)        # 274e40 <_DYNAMIC+0x290>
+  1b895a:	45 89 fa                                        	mov    %r15d,%r10d
+  1b895d:	4c 8b 4c 24 08                                  	mov    0x8(%rsp),%r9
+  1b8962:	49 8b 41 08                                     	mov    0x8(%r9),%rax
+  1b8966:	42 c6 04 30 ff                                  	movb   $0xff,(%rax,%r14,1)
+  1b896b:	49 ff c6                                        	inc    %r14
+  1b896e:	4d 89 71 10                                     	mov    %r14,0x10(%r9)
+  1b8972:	41 89 ee                                        	mov    %ebp,%r14d
+  1b8975:	41 c1 ee 14                                     	shr    $0x14,%r14d
+  1b8979:	41 b8 07 00 00 00                               	mov    $0x7,%r8d
+  1b897f:	b8 fe ff 0f 00                                  	mov    $0xffffe,%eax
+  1b8984:	e9 19 ff ff ff                                  	jmp    1b88a2 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x382>
+  1b8989:	4d 8b 79 10                                     	mov    0x10(%r9),%r15
+  1b898d:	4d 3b 39                                        	cmp    (%r9),%r15
+  1b8990:	0f 85 eb fe ff ff                               	jne    1b8881 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x361>
+  1b8996:	4c 89 cf                                        	mov    %r9,%rdi
+  1b8999:	45 89 d5                                        	mov    %r10d,%r13d
+  1b899c:	ff 15 9e c4 0b 00                               	call   *0xbc49e(%rip)        # 274e40 <_DYNAMIC+0x290>
+  1b89a2:	45 89 ea                                        	mov    %r13d,%r10d
+  1b89a5:	4c 8b 4c 24 08                                  	mov    0x8(%rsp),%r9
+  1b89aa:	e9 d2 fe ff ff                                  	jmp    1b8881 <emuella_j2k_tier1::magnitude_refinement_pass_encode::<false>+0x361>
+  1b89af:	48 81 c4 98 00 00 00                            	add    $0x98,%rsp
+  1b89b6:	5b                                              	pop    %rbx
+  1b89b7:	41 5c                                           	pop    %r12
+  1b89b9:	41 5d                                           	pop    %r13
+  1b89bb:	41 5e                                           	pop    %r14
+  1b89bd:	41 5f                                           	pop    %r15
+  1b89bf:	5d                                              	pop    %rbp
+  1b89c0:	c3                                              	ret
+  1b89c1:	48 8d 15 38 7b 0b 00                            	lea    0xb7b38(%rip),%rdx        # 270500 <anon.0090a85a018fa7201b9c60ffeb615359.8.llvm.14346473256741260712+0x2888>
+  1b89c8:	4c 89 f7                                        	mov    %r14,%rdi
+  1b89cb:	ff 15 3f c4 0b 00                               	call   *0xbc43f(%rip)        # 274e10 <_DYNAMIC+0x260>
+  1b89d1:	48 8d 15 b0 7a 0b 00                            	lea    0xb7ab0(%rip),%rdx        # 270488 <anon.0090a85a018fa7201b9c60ffeb615359.8.llvm.14346473256741260712+0x2810>
+  1b89d8:	4c 89 f7                                        	mov    %r14,%rdi
+  1b89db:	48 8b 74 24 20                                  	mov    0x20(%rsp),%rsi
+  1b89e0:	ff 15 2a c4 0b 00                               	call   *0xbc42a(%rip)        # 274e10 <_DYNAMIC+0x260>
+  1b89e6:	48 8d 15 db 82 0b 00                            	lea    0xb82db(%rip),%rdx        # 270cc8 <anon.0090a85a018fa7201b9c60ffeb615359.8.llvm.14346473256741260712+0x3050>
+  1b89ed:	be 2f 00 00 00                                  	mov    $0x2f,%esi
+  1b89f2:	ff 15 18 c4 0b 00                               	call   *0xbc418(%rip)        # 274e10 <_DYNAMIC+0x260>
