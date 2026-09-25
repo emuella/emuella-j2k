@@ -12,6 +12,113 @@ pub use bypass::encode_lossless_d2_bypass_test_fixture;
 
 const WORKER_BYTES: u64 = 4 * 1024 * 1024;
 
+// Source-bound development policy. Promotion requires independent confirmation.
+const FORWARD53_BACKEND: transform::Forward53Backend =
+    transform::Forward53Backend::RowPanelParallel;
+const FORWARD53_PANEL_WIDTH: usize = 16;
+
+type PreparedForward53 = (transform::Forward53Plan, transform::Forward53Workspace);
+
+fn prepare_forward53(
+    width: usize,
+    height: usize,
+    workers: usize,
+) -> Result<Option<PreparedForward53>> {
+    let backend = FORWARD53_BACKEND;
+    let panel_width = FORWARD53_PANEL_WIDTH;
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let (backend, panel_width) = transform::forward53_diagnostic_policy(backend, panel_width);
+    // Admission already reflects the existing pool and Tier-1 memory budget.
+    // Do not construct a plan or initialise panel storage for serial calls.
+    if backend == transform::Forward53Backend::Reference
+        || width.saturating_mul(height) < 4096
+        || (backend == transform::Forward53Backend::RowPanelParallel
+            && (workers < 2 || width.div_ceil(panel_width) < 2 || height < 2))
+    {
+        return Ok(None);
+    }
+    // Only the DWT and Tier-1 local terms are reused. Descriptors, output and
+    // coefficient allowances remain untouched; 4 KiB preserves fixed metadata.
+    let maximum = workers
+        .min(8)
+        .checked_mul(WORKER_BYTES as usize)
+        .and_then(|n| n.checked_add(width.max(height).checked_mul(12)?))
+        .and_then(|n| n.checked_sub(4096))
+        .ok_or(CodestreamError::SizeOverflow)?;
+    prepare_forward53_with_maximum(
+        width,
+        height,
+        workers,
+        maximum,
+        backend,
+        panel_width,
+        |workspace, plan, maximum| {
+            #[cfg(feature = "classic-execution-diagnostics")]
+            diagnostics::update(|d| d.forward53_panel_prepare_attempts += 1);
+            let result = workspace.prepare(plan, maximum);
+            #[cfg(feature = "classic-execution-diagnostics")]
+            if result.is_ok() {
+                diagnostics::update(|d| {
+                    d.forward53_panel_initialised_bytes += plan.workspace_bytes()
+                });
+            }
+            result
+        },
+    )
+}
+
+fn prepare_forward53_with_maximum(
+    width: usize,
+    height: usize,
+    workers: usize,
+    maximum: usize,
+    backend: transform::Forward53Backend,
+    panel_width: usize,
+    mut prepare: impl FnMut(
+        &mut transform::Forward53Workspace,
+        &transform::Forward53Plan,
+        usize,
+    ) -> core::result::Result<(), transform::TransformError>,
+) -> Result<Option<PreparedForward53>> {
+    let config = |w, h| transform::Reversible53Config {
+        width: w,
+        height: h,
+        stride: width,
+        edges: transform::Reversible53Edges::from_tile_origin(0, 0, w, h),
+        sample_range: transform::ComponentSampleRange::signed(32),
+    };
+    let levels = [
+        config(width, height),
+        config(width.div_ceil(2), height.div_ceil(2)),
+    ];
+    let minimum_slots = if backend == transform::Forward53Backend::RowPanelScalar {
+        1
+    } else {
+        2
+    };
+    let mut slots = workers.min(8);
+    while slots >= minimum_slots {
+        let plan = transform::Forward53Plan::new(&levels, backend, panel_width, slots)
+            .map_err(|_| CodestreamError::SizeOverflow)?;
+        if plan.backend() == transform::Forward53Backend::Reference {
+            return Ok(None);
+        }
+        // A capacity-ineligible plan never requests or initialises storage.
+        if plan.workspace_bytes() <= maximum {
+            let mut workspace = transform::Forward53Workspace::new();
+            if prepare(&mut workspace, &plan, maximum).is_ok() {
+                return Ok(Some((plan, workspace)));
+            }
+            // Drop every failed optional reservation before retry or fallback.
+        }
+        if slots == minimum_slots {
+            break;
+        }
+        slots = slots.div_ceil(2);
+    }
+    Ok(None)
+}
+
 /// Byte limits for owned raw classic lossless D2 encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LosslessEncodeLimits {
@@ -513,17 +620,37 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
         timings.rct_pixels = if planes.len() == 3 { count as u64 } else { 0 };
     }
     let start = EncodeClock::start::<PROFILE>();
+    #[cfg(feature = "classic-execution-diagnostics")]
+    let preparation = EncodeClock::start::<PROFILE>();
+    let mut prepared_transform = prepare_forward53(width_usize, height as usize, workers)?;
     let mut transform_scratch = Vec::new();
+    #[cfg(feature = "classic-execution-diagnostics")]
+    if PROFILE {
+        diagnostics::update(|d| d.dwt_scratch_resize_ns += preparation.ns());
+    }
     let mut transform_components = || -> Result<()> {
         for plane in &mut coefficients {
-            forward_reversible_5_3_levels_with_scratch(
-                width,
-                height,
-                plane,
-                2,
-                "lossless D2 transform failed",
-                &mut transform_scratch,
-            )?;
+            if let Some((plan, workspace)) = prepared_transform.as_mut() {
+                transform::forward_reversible_5_3_planned_bounded(plane, plan, workspace)
+                    .map_err(|_| CodestreamError::SizeOverflow)?;
+            } else {
+                forward_reversible_5_3_levels_with_scratch(
+                    width,
+                    height,
+                    plane,
+                    2,
+                    "lossless D2 transform failed",
+                    &mut transform_scratch,
+                )?;
+                #[cfg(feature = "classic-execution-diagnostics")]
+                if PROFILE {
+                    diagnostics::update(|d| {
+                        d.forward53_original_helper_calls += 1;
+                        d.forward53_original_scratch_capacity_bytes =
+                            transform_scratch.capacity() * 4;
+                    });
+                }
+            }
         }
         Ok(())
     };
@@ -538,6 +665,10 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
             d.dwt_vertical_store_ns = detail.vertical_store_ns;
             d.dwt_horizontal_lifting_ns = detail.horizontal_lifting_ns;
             d.dwt_horizontal_copy_ns = detail.horizontal_copy_ns;
+            d.forward53 = detail;
+            if prepared_transform.is_none() {
+                d.forward53.level_backends = [Some(transform::Forward53Backend::Reference); 2];
+            }
         });
     } else {
         transform_components()?;
@@ -546,6 +677,7 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
     transform_components()?;
     #[cfg(feature = "classic-execution-diagnostics")]
     let dropping = EncodeClock::start::<PROFILE>();
+    drop(prepared_transform);
     drop(transform_scratch);
     #[cfg(feature = "classic-execution-diagnostics")]
     if PROFILE {
@@ -717,4 +849,92 @@ fn encode_lossless_d2_impl<const PROFILE: bool, const BYPASS: bool>(
         timings.assembly_ns += start.ns();
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod forward53_tests {
+    use super::*;
+
+    #[test]
+    fn optional_workspace_shrinks_or_falls_back_before_allocation() {
+        for (width, height) in [
+            (4, 32768),
+            (32768, 4),
+            (129, 131),
+            (32768, 2048),
+            (2048, 32768),
+        ] {
+            for workers in [1, 2, 4, 8] {
+                let prepared = prepare_forward53(width, height, workers).unwrap();
+                if workers == 1 || width <= 16 || !cfg!(feature = "parallel") {
+                    assert!(prepared.is_none());
+                }
+                if let Some((plan, workspace)) = prepared {
+                    assert!(plan.slots() >= 2 && plan.slots() <= workers);
+                    assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
+                    assert!(
+                        workspace.capacity_bytes()
+                            <= 12 * width.max(height) + WORKER_BYTES as usize * workers - 4096
+                    );
+                }
+            }
+        }
+        let mut attempts = 0;
+        let mut prepare =
+            |w: &mut transform::Forward53Workspace, p: &transform::Forward53Plan, m| {
+                attempts += 1;
+                w.prepare(p, m)
+            };
+        let absent = prepare_forward53_with_maximum(
+            513,
+            515,
+            8,
+            12 * 515,
+            FORWARD53_BACKEND,
+            16,
+            &mut prepare,
+        )
+        .unwrap();
+        assert!(absent.is_none());
+        assert_eq!(attempts, 0);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn failed_optional_reservations_are_released_and_never_become_scalar_panels() {
+        let mut attempts = Vec::new();
+        let absent = prepare_forward53_with_maximum(
+            513,
+            515,
+            8,
+            32 << 20,
+            FORWARD53_BACKEND,
+            16,
+            |workspace, plan, maximum| {
+                assert_eq!(workspace.capacity_bytes(), 0);
+                attempts.push(plan.slots());
+                workspace.prepare(plan, maximum)?;
+                Err(transform::TransformError::SizeOverflow)
+            },
+        )
+        .unwrap();
+        assert!(absent.is_none());
+        assert_eq!(attempts, [8, 4, 2]);
+        let (plan, workspace) = prepare_forward53_with_maximum(
+            513,
+            515,
+            8,
+            2 * 4 * (16 * 515 + 515),
+            FORWARD53_BACKEND,
+            16,
+            |w, p, m| w.prepare(p, m),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plan.slots(), 2);
+        assert_eq!(workspace.capacity_bytes(), plan.workspace_bytes());
+        let (wide, _) = prepare_forward53(513, 515, usize::MAX).unwrap().unwrap();
+        let (eight, _) = prepare_forward53(513, 515, 8).unwrap().unwrap();
+        assert_eq!(wide.workspace_bytes(), eight.workspace_bytes());
+    }
 }
