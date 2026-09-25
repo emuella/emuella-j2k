@@ -1,0 +1,70 @@
+Disassembly of section .text:
+
+00000000001d9980 <<emuella_j2k_tier1::mq::Encoder>::write_bit>:
+  1d9980:	53                                              	push   %rbx
+  1d9981:	48 89 fb                                        	mov    %rdi,%rbx
+  1d9984:	40 0f b6 fe                                     	movzbl %sil,%edi
+  1d9988:	40 80 ff 12                                     	cmp    $0x12,%dil
+  1d998c:	0f 87 ad 00 00 00                               	ja     1d9a3f <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xbf>
+  1d9992:	0f b6 44 7b 1c                                  	movzbl 0x1c(%rbx,%rdi,2),%eax
+  1d9997:	48 83 f8 2f                                     	cmp    $0x2f,%rax
+  1d999b:	0f 83 b0 00 00 00                               	jae    1d9a51 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xd1>
+  1d99a1:	0f b6 74 7b 1d                                  	movzbl 0x1d(%rbx,%rdi,2),%esi
+  1d99a6:	4c 8d 15 03 8b e4 ff                            	lea    -0x1b74fd(%rip),%r10        # 224b0 <anon.6bdefeffedae5a12209303a0b42d5542.101.llvm.1931137957506344548+0x31>
+  1d99ad:	41 8b 0c c2                                     	mov    (%r10,%rax,8),%ecx
+  1d99b1:	45 0f b6 44 c2 04                               	movzbl 0x4(%r10,%rax,8),%r8d
+  1d99b7:	45 0f b6 4c c2 05                               	movzbl 0x5(%r10,%rax,8),%r9d
+  1d99bd:	45 0f b6 54 c2 06                               	movzbl 0x6(%r10,%rax,8),%r10d
+  1d99c3:	8b 43 10                                        	mov    0x10(%rbx),%eax
+  1d99c6:	29 c8                                           	sub    %ecx,%eax
+  1d99c8:	89 43 10                                        	mov    %eax,0x10(%rbx)
+  1d99cb:	39 f2                                           	cmp    %esi,%edx
+  1d99cd:	75 13                                           	jne    1d99e2 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0x62>
+  1d99cf:	66 85 c0                                        	test   %ax,%ax
+  1d99d2:	78 23                                           	js     1d99f7 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0x77>
+  1d99d4:	39 c8                                           	cmp    %ecx,%eax
+  1d99d6:	73 3c                                           	jae    1d9a14 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0x94>
+  1d99d8:	89 4b 10                                        	mov    %ecx,0x10(%rbx)
+  1d99db:	44 88 44 7b 1c                                  	mov    %r8b,0x1c(%rbx,%rdi,2)
+  1d99e0:	eb 56                                           	jmp    1d9a38 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xb8>
+  1d99e2:	39 c8                                           	cmp    %ecx,%eax
+  1d99e4:	73 16                                           	jae    1d99fc <<emuella_j2k_tier1::mq::Encoder>::write_bit+0x7c>
+  1d99e6:	01 4b 14                                        	add    %ecx,0x14(%rbx)
+  1d99e9:	89 c1                                           	mov    %eax,%ecx
+  1d99eb:	44 88 4c 7b 1c                                  	mov    %r9b,0x1c(%rbx,%rdi,2)
+  1d99f0:	45 84 d2                                        	test   %r10b,%r10b
+  1d99f3:	74 43                                           	je     1d9a38 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xb8>
+  1d99f5:	eb 12                                           	jmp    1d9a09 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0x89>
+  1d99f7:	01 4b 14                                        	add    %ecx,0x14(%rbx)
+  1d99fa:	5b                                              	pop    %rbx
+  1d99fb:	c3                                              	ret
+  1d99fc:	89 4b 10                                        	mov    %ecx,0x10(%rbx)
+  1d99ff:	44 88 4c 7b 1c                                  	mov    %r9b,0x1c(%rbx,%rdi,2)
+  1d9a04:	45 84 d2                                        	test   %r10b,%r10b
+  1d9a07:	74 2f                                           	je     1d9a38 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xb8>
+  1d9a09:	40 80 f6 01                                     	xor    $0x1,%sil
+  1d9a0d:	40 88 74 7b 1d                                  	mov    %sil,0x1d(%rbx,%rdi,2)
+  1d9a12:	eb 24                                           	jmp    1d9a38 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xb8>
+  1d9a14:	01 4b 14                                        	add    %ecx,0x14(%rbx)
+  1d9a17:	44 88 44 7b 1c                                  	mov    %r8b,0x1c(%rbx,%rdi,2)
+  1d9a1c:	89 c1                                           	mov    %eax,%ecx
+  1d9a1e:	eb 18                                           	jmp    1d9a38 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xb8>
+  1d9a20:	01 c9                                           	add    %ecx,%ecx
+  1d9a22:	89 4b 10                                        	mov    %ecx,0x10(%rbx)
+  1d9a25:	d1 63 14                                        	shll   $1,0x14(%rbx)
+  1d9a28:	ff 4b 18                                        	decl   0x18(%rbx)
+  1d9a2b:	75 0b                                           	jne    1d9a38 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xb8>
+  1d9a2d:	48 89 df                                        	mov    %rbx,%rdi
+  1d9a30:	e8 1b fe ff ff                                  	call   1d9850 <<emuella_j2k_tier1::mq::Encoder>::byte_out>
+  1d9a35:	8b 4b 10                                        	mov    0x10(%rbx),%ecx
+  1d9a38:	66 85 c9                                        	test   %cx,%cx
+  1d9a3b:	79 e3                                           	jns    1d9a20 <<emuella_j2k_tier1::mq::Encoder>::write_bit+0xa0>
+  1d9a3d:	5b                                              	pop    %rbx
+  1d9a3e:	c3                                              	ret
+  1d9a3f:	48 8d 15 1a 03 09 00                            	lea    0x9031a(%rip),%rdx        # 269d60 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x3038>
+  1d9a46:	be 13 00 00 00                                  	mov    $0x13,%esi
+  1d9a4b:	ff 15 0f 41 09 00                               	call   *0x9410f(%rip)        # 26db60 <_DYNAMIC+0x260>
+  1d9a51:	48 8d 15 20 03 09 00                            	lea    0x90320(%rip),%rdx        # 269d78 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x3050>
+  1d9a58:	be 2f 00 00 00                                  	mov    $0x2f,%esi
+  1d9a5d:	48 89 c7                                        	mov    %rax,%rdi
+  1d9a60:	ff 15 fa 40 09 00                               	call   *0x940fa(%rip)        # 26db60 <_DYNAMIC+0x260>

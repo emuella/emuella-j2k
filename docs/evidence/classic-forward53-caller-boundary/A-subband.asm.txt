@@ -1,0 +1,520 @@
+Disassembly of section .text:
+
+0000000000085160 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>>:
+   85160:	55                                              	push   %rbp
+   85161:	41 57                                           	push   %r15
+   85163:	41 56                                           	push   %r14
+   85165:	41 55                                           	push   %r13
+   85167:	41 54                                           	push   %r12
+   85169:	53                                              	push   %rbx
+   8516a:	48 81 ec 78 01 00 00                            	sub    $0x178,%rsp
+   85171:	4d 89 c6                                        	mov    %r8,%r14
+   85174:	4d 8b 00                                        	mov    (%r8),%r8
+   85177:	45 8b 56 18                                     	mov    0x18(%r14),%r10d
+   8517b:	4c 89 c3                                        	mov    %r8,%rbx
+   8517e:	4c 01 d3                                        	add    %r10,%rbx
+   85181:	0f 82 96 00 00 00                               	jb     8521d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xbd>
+   85187:	89 f5                                           	mov    %esi,%ebp
+   85189:	4d 8b 5e 08                                     	mov    0x8(%r14),%r11
+   8518d:	41 8b 76 1c                                     	mov    0x1c(%r14),%esi
+   85191:	4d 89 dc                                        	mov    %r11,%r12
+   85194:	49 01 f4                                        	add    %rsi,%r12
+   85197:	0f 82 80 00 00 00                               	jb     8521d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xbd>
+   8519d:	4d 89 c5                                        	mov    %r8,%r13
+   851a0:	49 c1 ed 06                                     	shr    $0x6,%r13
+   851a4:	49 89 df                                        	mov    %rbx,%r15
+   851a7:	49 c1 ef 06                                     	shr    $0x6,%r15
+   851ab:	89 d8                                           	mov    %ebx,%eax
+   851ad:	83 e0 3f                                        	and    $0x3f,%eax
+   851b0:	48 83 f8 01                                     	cmp    $0x1,%rax
+   851b4:	49 83 df ff                                     	sbb    $0xffffffffffffffff,%r15
+   851b8:	4c 89 f8                                        	mov    %r15,%rax
+   851bb:	4c 29 e8                                        	sub    %r13,%rax
+   851be:	72 5d                                           	jb     8521d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xbd>
+   851c0:	48 3d ff ff 00 00                               	cmp    $0xffff,%rax
+   851c6:	77 55                                           	ja     8521d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xbd>
+   851c8:	48 89 94 24 68 01 00 00                         	mov    %rdx,0x168(%rsp)
+   851d0:	48 89 8c 24 70 01 00 00                         	mov    %rcx,0x170(%rsp)
+   851d8:	48 89 44 24 30                                  	mov    %rax,0x30(%rsp)
+   851dd:	44 89 4c 24 24                                  	mov    %r9d,0x24(%rsp)
+   851e2:	4c 89 44 24 18                                  	mov    %r8,0x18(%rsp)
+   851e7:	4c 89 9c 24 b8 00 00 00                         	mov    %r11,0xb8(%rsp)
+   851ef:	49 c1 eb 06                                     	shr    $0x6,%r11
+   851f3:	4c 89 e0                                        	mov    %r12,%rax
+   851f6:	49 c1 ec 06                                     	shr    $0x6,%r12
+   851fa:	48 89 84 24 60 01 00 00                         	mov    %rax,0x160(%rsp)
+   85202:	83 e0 3f                                        	and    $0x3f,%eax
+   85205:	48 83 f8 01                                     	cmp    $0x1,%rax
+   85209:	49 83 dc ff                                     	sbb    $0xffffffffffffffff,%r12
+   8520d:	4c 89 e0                                        	mov    %r12,%rax
+   85210:	4c 29 d8                                        	sub    %r11,%rax
+   85213:	72 08                                           	jb     8521d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xbd>
+   85215:	48 3d ff ff 00 00                               	cmp    $0xffff,%rax
+   8521b:	76 27                                           	jbe    85244 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xe4>
+   8521d:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   85227:	48 89 47 08                                     	mov    %rax,0x8(%rdi)
+   8522b:	48 c7 07 01 00 00 00                            	movq   $0x1,(%rdi)
+   85232:	48 81 c4 78 01 00 00                            	add    $0x178,%rsp
+   85239:	5b                                              	pop    %rbx
+   8523a:	41 5c                                           	pop    %r12
+   8523c:	41 5d                                           	pop    %r13
+   8523e:	41 5e                                           	pop    %r14
+   85240:	41 5f                                           	pop    %r15
+   85242:	5d                                              	pop    %rbp
+   85243:	c3                                              	ret
+   85244:	48 89 c2                                        	mov    %rax,%rdx
+   85247:	48 0f af 54 24 30                               	imul   0x30(%rsp),%rdx
+   8524d:	48 85 d2                                        	test   %rdx,%rdx
+   85250:	48 89 7c 24 10                                  	mov    %rdi,0x10(%rsp)
+   85255:	4c 89 9c 24 a8 00 00 00                         	mov    %r11,0xa8(%rsp)
+   8525d:	4c 89 94 24 40 01 00 00                         	mov    %r10,0x140(%rsp)
+   85265:	48 89 b4 24 38 01 00 00                         	mov    %rsi,0x138(%rsp)
+   8526d:	48 89 84 24 90 00 00 00                         	mov    %rax,0x90(%rsp)
+   85275:	74 32                                           	je     852a9 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x149>
+   85277:	48 89 54 24 50                                  	mov    %rdx,0x50(%rsp)
+   8527c:	48 89 d7                                        	mov    %rdx,%rdi
+   8527f:	48 c1 e7 05                                     	shl    $0x5,%rdi
+   85283:	48 89 7c 24 48                                  	mov    %rdi,0x48(%rsp)
+   85288:	ff 15 7a 88 1e 00                               	call   *0x1e887a(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+   8528e:	48 85 c0                                        	test   %rax,%rax
+   85291:	0f 84 a6 08 00 00                               	je     85b3d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x9dd>
+   85297:	48 89 c1                                        	mov    %rax,%rcx
+   8529a:	4c 8b 9c 24 a8 00 00 00                         	mov    0xa8(%rsp),%r11
+   852a2:	48 8b 54 24 50                                  	mov    0x50(%rsp),%rdx
+   852a7:	eb 05                                           	jmp    852ae <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x14e>
+   852a9:	b9 08 00 00 00                                  	mov    $0x8,%ecx
+   852ae:	48 89 54 24 70                                  	mov    %rdx,0x70(%rsp)
+   852b3:	48 89 4c 24 78                                  	mov    %rcx,0x78(%rsp)
+   852b8:	48 c7 84 24 80 00 00 00 00 00 00 00             	movq   $0x0,0x80(%rsp)
+   852c4:	41 8b 46 10                                     	mov    0x10(%r14),%eax
+   852c8:	48 89 44 24 48                                  	mov    %rax,0x48(%rsp)
+   852cd:	41 8b 46 14                                     	mov    0x14(%r14),%eax
+   852d1:	48 89 84 24 a0 00 00 00                         	mov    %rax,0xa0(%rsp)
+   852d9:	48 c7 44 24 58 00 00 00 00                      	movq   $0x0,0x58(%rsp)
+   852e2:	48 c7 44 24 60 01 00 00 00                      	movq   $0x1,0x60(%rsp)
+   852eb:	48 c7 44 24 68 00 00 00 00                      	movq   $0x0,0x68(%rsp)
+   852f4:	4d 39 dc                                        	cmp    %r11,%r12
+   852f7:	75 0d                                           	jne    85306 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x1a6>
+   852f9:	45 0f b6 4e 22                                  	movzbl 0x22(%r14),%r9d
+   852fe:	b0 01                                           	mov    $0x1,%al
+   85300:	8b 7c 24 24                                     	mov    0x24(%rsp),%edi
+   85304:	eb 33                                           	jmp    85339 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x1d9>
+   85306:	48 83 bc 24 c0 01 00 00 00                      	cmpq   $0x0,0x1c0(%rsp)
+   8530f:	48 8d 44 24 58                                  	lea    0x58(%rsp),%rax
+   85314:	48 0f 44 84 24 b0 01 00 00                      	cmove  0x1b0(%rsp),%rax
+   8531d:	48 89 84 24 30 01 00 00                         	mov    %rax,0x130(%rsp)
+   85325:	45 0f b6 4e 22                                  	movzbl 0x22(%r14),%r9d
+   8532a:	b0 01                                           	mov    $0x1,%al
+   8532c:	4d 39 ef                                        	cmp    %r13,%r15
+   8532f:	8b 7c 24 24                                     	mov    0x24(%rsp),%edi
+   85333:	0f 85 83 00 00 00                               	jne    853bc <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x25c>
+   85339:	4c 8b 44 24 30                                  	mov    0x30(%rsp),%r8
+   8533e:	41 0f b7 4e 20                                  	movzwl 0x20(%r14),%ecx
+   85343:	0f 10 44 24 70                                  	movups 0x70(%rsp),%xmm0
+   85348:	48 8b 74 24 10                                  	mov    0x10(%rsp),%rsi
+   8534d:	0f 11 46 08                                     	movups %xmm0,0x8(%rsi)
+   85351:	48 8b 94 24 80 00 00 00                         	mov    0x80(%rsp),%rdx
+   85359:	48 89 56 18                                     	mov    %rdx,0x18(%rsi)
+   8535d:	48 8b 54 24 48                                  	mov    0x48(%rsp),%rdx
+   85362:	89 56 20                                        	mov    %edx,0x20(%rsi)
+   85365:	48 8b 94 24 a0 00 00 00                         	mov    0xa0(%rsp),%rdx
+   8536d:	89 56 24                                        	mov    %edx,0x24(%rsi)
+   85370:	48 8b 94 24 40 01 00 00                         	mov    0x140(%rsp),%rdx
+   85378:	89 56 28                                        	mov    %edx,0x28(%rsi)
+   8537b:	48 8b 94 24 38 01 00 00                         	mov    0x138(%rsp),%rdx
+   85383:	89 56 2c                                        	mov    %edx,0x2c(%rsi)
+   85386:	66 44 89 46 30                                  	mov    %r8w,0x30(%rsi)
+   8538b:	48 8b 94 24 90 00 00 00                         	mov    0x90(%rsp),%rdx
+   85393:	66 89 56 32                                     	mov    %dx,0x32(%rsi)
+   85397:	44 88 4e 34                                     	mov    %r9b,0x34(%rsi)
+   8539b:	66 89 4e 35                                     	mov    %cx,0x35(%rsi)
+   8539f:	40 88 7e 37                                     	mov    %dil,0x37(%rsi)
+   853a3:	48 c7 06 00 00 00 00                            	movq   $0x0,(%rsi)
+   853aa:	84 c0                                           	test   %al,%al
+   853ac:	0f 85 80 fe ff ff                               	jne    85232 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xd2>
+   853b2:	48 8b 7c 24 60                                  	mov    0x60(%rsp),%rdi
+   853b7:	e9 6b 07 00 00                                  	jmp    85b27 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x9c7>
+   853bc:	48 89 8c 24 98 00 00 00                         	mov    %rcx,0x98(%rsp)
+   853c4:	41 89 e8                                        	mov    %ebp,%r8d
+   853c7:	40 0f b6 c7                                     	movzbl %dil,%eax
+   853cb:	48 c1 e0 20                                     	shl    $0x20,%rax
+   853cf:	48 89 84 24 e8 00 00 00                         	mov    %rax,0xe8(%rsp)
+   853d7:	44 88 4c 24 0f                                  	mov    %r9b,0xf(%rsp)
+   853dc:	41 0f b6 c1                                     	movzbl %r9b,%eax
+   853e0:	48 89 84 24 08 01 00 00                         	mov    %rax,0x108(%rsp)
+   853e8:	49 ba 00 00 00 00 00 00 00 04                   	movabs $0x400000000000000,%r10
+   853f2:	4c 89 d0                                        	mov    %r10,%rax
+   853f5:	4c 29 e8                                        	sub    %r13,%rax
+   853f8:	48 89 84 24 28 01 00 00                         	mov    %rax,0x128(%rsp)
+   85400:	48 8b 44 24 18                                  	mov    0x18(%rsp),%rax
+   85405:	48 f7 d0                                        	not    %rax
+   85408:	48 c1 e8 06                                     	shr    $0x6,%rax
+   8540c:	48 89 84 24 20 01 00 00                         	mov    %rax,0x120(%rsp)
+   85414:	4d 29 da                                        	sub    %r11,%r10
+   85417:	48 8b 84 24 b8 00 00 00                         	mov    0xb8(%rsp),%rax
+   8541f:	48 89 c1                                        	mov    %rax,%rcx
+   85422:	48 f7 d1                                        	not    %rcx
+   85425:	48 c1 e9 06                                     	shr    $0x6,%rcx
+   85429:	48 89 8c 24 f0 00 00 00                         	mov    %rcx,0xf0(%rsp)
+   85431:	49 c1 e5 06                                     	shl    $0x6,%r13
+   85435:	45 31 ff                                        	xor    %r15d,%r15d
+   85438:	48 c7 44 24 40 00 00 00 00                      	movq   $0x0,0x40(%rsp)
+   85441:	4c 89 84 24 88 00 00 00                         	mov    %r8,0x88(%rsp)
+   85449:	4c 89 94 24 d8 00 00 00                         	mov    %r10,0xd8(%rsp)
+   85451:	4f 8d 0c 3b                                     	lea    (%r11,%r15,1),%r9
+   85455:	49 c1 e1 06                                     	shl    $0x6,%r9
+   85459:	4c 39 c8                                        	cmp    %r9,%rax
+   8545c:	4c 89 ce                                        	mov    %r9,%rsi
+   8545f:	48 0f 47 f0                                     	cmova  %rax,%rsi
+   85463:	49 83 c1 40                                     	add    $0x40,%r9
+   85467:	48 8b 8c 24 60 01 00 00                         	mov    0x160(%rsp),%rcx
+   8546f:	4c 39 c9                                        	cmp    %r9,%rcx
+   85472:	4c 0f 42 c9                                     	cmovb  %rcx,%r9
+   85476:	48 89 f1                                        	mov    %rsi,%rcx
+   85479:	48 29 c1                                        	sub    %rax,%rcx
+   8547c:	48 8b bc 24 a0 00 00 00                         	mov    0xa0(%rsp),%rdi
+   85484:	48 01 f9                                        	add    %rdi,%rcx
+   85487:	48 89 c8                                        	mov    %rcx,%rax
+   8548a:	49 f7 e0                                        	mul    %r8
+   8548d:	48 89 84 24 18 01 00 00                         	mov    %rax,0x118(%rsp)
+   85495:	0f 90 c0                                        	seto   %al
+   85498:	4d 39 d7                                        	cmp    %r10,%r15
+   8549b:	0f 84 32 05 00 00                               	je     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   854a1:	4c 3b bc 24 f0 00 00 00                         	cmp    0xf0(%rsp),%r15
+   854a9:	0f 84 83 06 00 00                               	je     85b32 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x9d2>
+   854af:	49 39 f1                                        	cmp    %rsi,%r9
+   854b2:	0f 82 eb 04 00 00                               	jb     859a3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x843>
+   854b8:	49 29 f1                                        	sub    %rsi,%r9
+   854bb:	49 81 f9 ff ff 00 00                            	cmp    $0xffff,%r9
+   854c2:	0f 87 db 04 00 00                               	ja     859a3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x843>
+   854c8:	48 39 f9                                        	cmp    %rdi,%rcx
+   854cb:	4c 89 4c 24 38                                  	mov    %r9,0x38(%rsp)
+   854d0:	0f 82 8a 05 00 00                               	jb     85a60 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x900>
+   854d6:	84 c0                                           	test   %al,%al
+   854d8:	0f 85 82 05 00 00                               	jne    85a60 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x900>
+   854de:	4c 89 bc 24 00 01 00 00                         	mov    %r15,0x100(%rsp)
+   854e6:	49 8d 47 01                                     	lea    0x1(%r15),%rax
+   854ea:	48 89 84 24 e0 00 00 00                         	mov    %rax,0xe0(%rsp)
+   854f2:	49 c1 e1 10                                     	shl    $0x10,%r9
+   854f6:	4c 03 8c 24 e8 00 00 00                         	add    0xe8(%rsp),%r9
+   854fe:	4c 89 8c 24 10 01 00 00                         	mov    %r9,0x110(%rsp)
+   85506:	4c 8b 64 24 40                                  	mov    0x40(%rsp),%r12
+   8550b:	49 c1 e4 05                                     	shl    $0x5,%r12
+   8550f:	4c 89 ee                                        	mov    %r13,%rsi
+   85512:	31 d2                                           	xor    %edx,%edx
+   85514:	e9 9e 00 00 00                                  	jmp    855b7 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x457>
+   85519:	4c 8b 44 24 50                                  	mov    0x50(%rsp),%r8
+   8551e:	49 8d 40 01                                     	lea    0x1(%r8),%rax
+   85522:	44 89 e1                                        	mov    %r12d,%ecx
+   85525:	41 c1 ec 18                                     	shr    $0x18,%r12d
+   85529:	41 80 e4 01                                     	and    $0x1,%r12b
+   8552d:	48 8b 94 24 98 00 00 00                         	mov    0x98(%rsp),%rdx
+   85535:	48 8b b4 24 50 01 00 00                         	mov    0x150(%rsp),%rsi
+   8553d:	48 89 34 3a                                     	mov    %rsi,(%rdx,%rdi,1)
+   85541:	48 8b b4 24 48 01 00 00                         	mov    0x148(%rsp),%rsi
+   85549:	48 89 74 3a 08                                  	mov    %rsi,0x8(%rdx,%rdi,1)
+   8554e:	66 44 89 44 3a 10                               	mov    %r8w,0x10(%rdx,%rdi,1)
+   85554:	48 8b b4 24 00 01 00 00                         	mov    0x100(%rsp),%rsi
+   8555c:	66 89 74 3a 12                                  	mov    %si,0x12(%rdx,%rdi,1)
+   85561:	66 89 6c 3a 14                                  	mov    %bp,0x14(%rdx,%rdi,1)
+   85566:	48 8b 74 24 38                                  	mov    0x38(%rsp),%rsi
+   8556b:	66 89 74 3a 16                                  	mov    %si,0x16(%rdx,%rdi,1)
+   85570:	66 89 4c 3a 18                                  	mov    %cx,0x18(%rdx,%rdi,1)
+   85575:	44 88 7c 3a 1a                                  	mov    %r15b,0x1a(%rdx,%rdi,1)
+   8557a:	44 88 64 3a 1b                                  	mov    %r12b,0x1b(%rdx,%rdi,1)
+   8557f:	48 8b 4c 24 40                                  	mov    0x40(%rsp),%rcx
+   85584:	4c 01 c1                                        	add    %r8,%rcx
+   85587:	48 ff c1                                        	inc    %rcx
+   8558a:	48 89 8c 24 80 00 00 00                         	mov    %rcx,0x80(%rsp)
+   85592:	48 83 c7 20                                     	add    $0x20,%rdi
+   85596:	48 89 c2                                        	mov    %rax,%rdx
+   85599:	48 39 44 24 30                                  	cmp    %rax,0x30(%rsp)
+   8559e:	4c 8b 9c 24 a8 00 00 00                         	mov    0xa8(%rsp),%r11
+   855a6:	49 89 fc                                        	mov    %rdi,%r12
+   855a9:	48 8b b4 24 58 01 00 00                         	mov    0x158(%rsp),%rsi
+   855b1:	0f 84 23 03 00 00                               	je     858da <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x77a>
+   855b7:	48 39 94 24 28 01 00 00                         	cmp    %rdx,0x128(%rsp)
+   855bf:	0f 84 0e 04 00 00                               	je     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   855c5:	48 8b 4c 24 18                                  	mov    0x18(%rsp),%rcx
+   855ca:	48 39 f1                                        	cmp    %rsi,%rcx
+   855cd:	48 89 f0                                        	mov    %rsi,%rax
+   855d0:	48 0f 47 c1                                     	cmova  %rcx,%rax
+   855d4:	48 89 54 24 50                                  	mov    %rdx,0x50(%rsp)
+   855d9:	48 39 94 24 20 01 00 00                         	cmp    %rdx,0x120(%rsp)
+   855e1:	4c 8b 8c 24 88 00 00 00                         	mov    0x88(%rsp),%r9
+   855e9:	0f 84 e4 03 00 00                               	je     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   855ef:	48 83 c6 40                                     	add    $0x40,%rsi
+   855f3:	48 39 f3                                        	cmp    %rsi,%rbx
+   855f6:	48 89 f5                                        	mov    %rsi,%rbp
+   855f9:	48 0f 42 eb                                     	cmovb  %rbx,%rbp
+   855fd:	48 29 c5                                        	sub    %rax,%rbp
+   85600:	0f 82 cd 03 00 00                               	jb     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   85606:	48 81 fd ff ff 00 00                            	cmp    $0xffff,%rbp
+   8560d:	0f 87 c0 03 00 00                               	ja     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   85613:	48 89 e9                                        	mov    %rbp,%rcx
+   85616:	48 0f af 4c 24 38                               	imul   0x38(%rsp),%rcx
+   8561c:	48 81 c1 ff ef ff ff                            	add    $0xffffffffffffefff,%rcx
+   85623:	48 81 f9 00 f0 ff ff                            	cmp    $0xfffffffffffff000,%rcx
+   8562a:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   8562f:	0f 82 81 04 00 00                               	jb     85ab6 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x956>
+   85635:	48 2b 44 24 18                                  	sub    0x18(%rsp),%rax
+   8563a:	48 03 44 24 48                                  	add    0x48(%rsp),%rax
+   8563f:	0f 82 a9 04 00 00                               	jb     85aee <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x98e>
+   85645:	48 03 84 24 18 01 00 00                         	add    0x118(%rsp),%rax
+   8564d:	0f 82 9b 04 00 00                               	jb     85aee <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x98e>
+   85653:	4c 89 a4 24 b0 00 00 00                         	mov    %r12,0xb0(%rsp)
+   8565b:	48 8b 94 24 70 01 00 00                         	mov    0x170(%rsp),%rdx
+   85663:	48 29 c2                                        	sub    %rax,%rdx
+   85666:	0f 82 82 04 00 00                               	jb     85aee <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x98e>
+   8566c:	48 89 b4 24 58 01 00 00                         	mov    %rsi,0x158(%rsp)
+   85674:	48 8b 8c 24 68 01 00 00                         	mov    0x168(%rsp),%rcx
+   8567c:	48 8d 34 81                                     	lea    (%rcx,%rax,4),%rsi
+   85680:	48 8b 84 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rax
+   85688:	48 8b 40 10                                     	mov    0x10(%rax),%rax
+   8568c:	48 89 84 24 50 01 00 00                         	mov    %rax,0x150(%rsp)
+   85694:	48 c7 44 24 68 00 00 00 00                      	movq   $0x0,0x68(%rsp)
+   8569d:	48 8b 84 24 08 01 00 00                         	mov    0x108(%rsp),%rax
+   856a5:	48 8d 0d 14 be f8 ff                            	lea    -0x741ec(%rip),%rcx        # 114c0 <anon.02ffda8f51e6076a26652e0a4fd6fa8d.1589.llvm.5406940975955002095+0x20>
+   856ac:	4c 8b 04 c1                                     	mov    (%rcx,%rax,8),%r8
+   856b0:	4c 0b 84 24 10 01 00 00                         	or     0x110(%rsp),%r8
+   856b8:	49 09 e8                                        	or     %rbp,%r8
+   856bb:	48 8b 84 24 b8 01 00 00                         	mov    0x1b8(%rsp),%rax
+   856c3:	48 89 04 24                                     	mov    %rax,(%rsp)
+   856c7:	48 8d bc 24 c0 00 00 00                         	lea    0xc0(%rsp),%rdi
+   856cf:	4c 89 c9                                        	mov    %r9,%rcx
+   856d2:	4c 8b 8c 24 30 01 00 00                         	mov    0x130(%rsp),%r9
+   856da:	ff 15 f8 88 1e 00                               	call   *0x1e88f8(%rip)        # 26dfd8 <_DYNAMIC+0x6d8>
+   856e0:	0f b6 84 24 c0 00 00 00                         	movzbl 0xc0(%rsp),%eax
+   856e8:	4c 8b bc 24 d0 00 00 00                         	mov    0xd0(%rsp),%r15
+   856f0:	3c ff                                           	cmp    $0xff,%al
+   856f2:	0f 85 35 02 00 00                               	jne    8592d <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x7cd>
+   856f8:	48 8b 84 24 c8 00 00 00                         	mov    0xc8(%rsp),%rax
+   85700:	48 89 84 24 48 01 00 00                         	mov    %rax,0x148(%rsp)
+   85708:	48 8b 84 24 c0 01 00 00                         	mov    0x1c0(%rsp),%rax
+   85710:	a8 01                                           	test   $0x1,%al
+   85712:	0f 84 d4 00 00 00                               	je     857ec <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x68c>
+   85718:	48 8b 54 24 68                                  	mov    0x68(%rsp),%rdx
+   8571d:	48 8b 8c 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rcx
+   85725:	4c 8b 61 10                                     	mov    0x10(%rcx),%r12
+   85729:	49 8d 04 14                                     	lea    (%r12,%rdx,1),%rax
+   8572d:	48 3b 84 24 c8 01 00 00                         	cmp    0x1c8(%rsp),%rax
+   85735:	0f 87 5a 02 00 00                               	ja     85995 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x835>
+   8573b:	48 8b 31                                        	mov    (%rcx),%rsi
+   8573e:	48 39 f0                                        	cmp    %rsi,%rax
+   85741:	76 50                                           	jbe    85793 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x633>
+   85743:	4c 8d 14 36                                     	lea    (%rsi,%rsi,1),%r10
+   85747:	48 8b 8c 24 c8 01 00 00                         	mov    0x1c8(%rsp),%rcx
+   8574f:	4c 39 d1                                        	cmp    %r10,%rcx
+   85752:	4c 0f 42 d1                                     	cmovb  %rcx,%r10
+   85756:	49 39 c2                                        	cmp    %rax,%r10
+   85759:	4c 0f 46 d0                                     	cmovbe %rax,%r10
+   8575d:	4c 89 d0                                        	mov    %r10,%rax
+   85760:	4c 29 e0                                        	sub    %r12,%rax
+   85763:	48 89 f1                                        	mov    %rsi,%rcx
+   85766:	4c 29 e1                                        	sub    %r12,%rcx
+   85769:	48 39 c8                                        	cmp    %rcx,%rax
+   8576c:	0f 87 cf 00 00 00                               	ja     85841 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x6e1>
+   85772:	48 8b bc 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rdi
+   8577a:	48 3b b4 24 c8 01 00 00                         	cmp    0x1c8(%rsp),%rsi
+   85782:	0f 87 5f 02 00 00                               	ja     859e7 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x887>
+   85788:	48 8b 54 24 68                                  	mov    0x68(%rsp),%rdx
+   8578d:	4c 8b 67 10                                     	mov    0x10(%rdi),%r12
+   85791:	eb 08                                           	jmp    8579b <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x63b>
+   85793:	48 8b bc 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rdi
+   8579b:	48 8b 44 24 60                                  	mov    0x60(%rsp),%rax
+   857a0:	48 89 84 24 f8 00 00 00                         	mov    %rax,0xf8(%rsp)
+   857a8:	4c 29 e6                                        	sub    %r12,%rsi
+   857ab:	48 39 f2                                        	cmp    %rsi,%rdx
+   857ae:	0f 87 f8 00 00 00                               	ja     858ac <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x74c>
+   857b4:	48 85 d2                                        	test   %rdx,%rdx
+   857b7:	74 2c                                           	je     857e5 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x685>
+   857b9:	48 89 54 24 28                                  	mov    %rdx,0x28(%rsp)
+   857be:	48 8b 7f 08                                     	mov    0x8(%rdi),%rdi
+   857c2:	4c 01 e7                                        	add    %r12,%rdi
+   857c5:	48 8b b4 24 f8 00 00 00                         	mov    0xf8(%rsp),%rsi
+   857cd:	48 8b 54 24 28                                  	mov    0x28(%rsp),%rdx
+   857d2:	ff 15 50 83 1e 00                               	call   *0x1e8350(%rip)        # 26db28 <memcpy@GLIBC_2.14>
+   857d8:	48 8b 54 24 28                                  	mov    0x28(%rsp),%rdx
+   857dd:	48 8b bc 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rdi
+   857e5:	49 01 d4                                        	add    %rdx,%r12
+   857e8:	4c 89 67 10                                     	mov    %r12,0x10(%rdi)
+   857ec:	4d 89 fc                                        	mov    %r15,%r12
+   857ef:	41 c1 ef 10                                     	shr    $0x10,%r15d
+   857f3:	41 fe c7                                        	inc    %r15b
+   857f6:	0f 84 2f 02 00 00                               	je     85a2b <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x8cb>
+   857fc:	48 8b 44 24 40                                  	mov    0x40(%rsp),%rax
+   85801:	48 8b 4c 24 50                                  	mov    0x50(%rsp),%rcx
+   85806:	48 01 c8                                        	add    %rcx,%rax
+   85809:	48 3b 44 24 70                                  	cmp    0x70(%rsp),%rax
+   8580e:	48 8b bc 24 b0 00 00 00                         	mov    0xb0(%rsp),%rdi
+   85816:	0f 85 fd fc ff ff                               	jne    85519 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x3b9>
+   8581c:	48 8d 7c 24 70                                  	lea    0x70(%rsp),%rdi
+   85821:	ff 15 b9 87 1e 00                               	call   *0x1e87b9(%rip)        # 26dfe0 <_DYNAMIC+0x6e0>
+   85827:	48 8b 44 24 78                                  	mov    0x78(%rsp),%rax
+   8582c:	48 89 84 24 98 00 00 00                         	mov    %rax,0x98(%rsp)
+   85834:	48 8b bc 24 b0 00 00 00                         	mov    0xb0(%rsp),%rdi
+   8583c:	e9 d8 fc ff ff                                  	jmp    85519 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x3b9>
+   85841:	4c 89 7c 24 28                                  	mov    %r15,0x28(%rsp)
+   85846:	4c 8b bc 24 b0 01 00 00                         	mov    0x1b0(%rsp),%r15
+   8584e:	49 8b 57 08                                     	mov    0x8(%r15),%rdx
+   85852:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   85858:	41 b9 01 00 00 00                               	mov    $0x1,%r9d
+   8585e:	48 8d bc 24 c0 00 00 00                         	lea    0xc0(%rsp),%rdi
+   85866:	4c 89 d1                                        	mov    %r10,%rcx
+   85869:	4d 89 d4                                        	mov    %r10,%r12
+   8586c:	e8 af 3e 0c 00                                  	call   149720 <<alloc::raw_vec::RawVecInner>::finish_grow>
+   85871:	80 bc 24 c0 00 00 00 00                         	cmpb   $0x0,0xc0(%rsp)
+   85879:	0f 85 d5 01 00 00                               	jne    85a54 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x8f4>
+   8587f:	48 8b 84 24 c8 00 00 00                         	mov    0xc8(%rsp),%rax
+   85887:	49 89 47 08                                     	mov    %rax,0x8(%r15)
+   8588b:	4d 89 27                                        	mov    %r12,(%r15)
+   8588e:	4c 89 ff                                        	mov    %r15,%rdi
+   85891:	4c 8b 7c 24 28                                  	mov    0x28(%rsp),%r15
+   85896:	4c 89 e6                                        	mov    %r12,%rsi
+   85899:	48 3b b4 24 c8 01 00 00                         	cmp    0x1c8(%rsp),%rsi
+   858a1:	0f 86 e1 fe ff ff                               	jbe    85788 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x628>
+   858a7:	e9 3b 01 00 00                                  	jmp    859e7 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x887>
+   858ac:	b9 01 00 00 00                                  	mov    $0x1,%ecx
+   858b1:	41 b8 01 00 00 00                               	mov    $0x1,%r8d
+   858b7:	4c 89 e6                                        	mov    %r12,%rsi
+   858ba:	48 89 54 24 28                                  	mov    %rdx,0x28(%rsp)
+   858bf:	e8 ac 49 02 00                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+   858c4:	48 8b bc 24 b0 01 00 00                         	mov    0x1b0(%rsp),%rdi
+   858cc:	4c 8b 67 10                                     	mov    0x10(%rdi),%r12
+   858d0:	48 8b 54 24 28                                  	mov    0x28(%rsp),%rdx
+   858d5:	e9 df fe ff ff                                  	jmp    857b9 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x659>
+   858da:	48 01 44 24 40                                  	add    %rax,0x40(%rsp)
+   858df:	48 8b 84 24 e0 00 00 00                         	mov    0xe0(%rsp),%rax
+   858e7:	49 89 c7                                        	mov    %rax,%r15
+   858ea:	48 3b 84 24 90 00 00 00                         	cmp    0x90(%rsp),%rax
+   858f2:	48 8b 84 24 b8 00 00 00                         	mov    0xb8(%rsp),%rax
+   858fa:	4c 8b 84 24 88 00 00 00                         	mov    0x88(%rsp),%r8
+   85902:	4c 8b 94 24 d8 00 00 00                         	mov    0xd8(%rsp),%r10
+   8590a:	0f 85 41 fb ff ff                               	jne    85451 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x2f1>
+   85910:	48 83 7c 24 58 00                               	cmpq   $0x0,0x58(%rsp)
+   85916:	0f 94 c0                                        	sete   %al
+   85919:	8b 7c 24 24                                     	mov    0x24(%rsp),%edi
+   8591d:	4c 8b 44 24 30                                  	mov    0x30(%rsp),%r8
+   85922:	44 0f b6 4c 24 0f                               	movzbl 0xf(%rsp),%r9d
+   85928:	e9 11 fa ff ff                                  	jmp    8533e <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x1de>
+   8592d:	48 b9 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rcx
+   85937:	48 8d 51 fe                                     	lea    -0x2(%rcx),%rdx
+   8593b:	48 ff c9                                        	dec    %rcx
+   8593e:	3c 03                                           	cmp    $0x3,%al
+   85940:	48 0f 44 ca                                     	cmove  %rdx,%rcx
+   85944:	48 8d 05 53 db f8 ff                            	lea    -0x724ad(%rip),%rax        # 1349e <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xc1e>
+   8594b:	48 0f 44 84 24 c8 00 00 00                      	cmove  0xc8(%rsp),%rax
+   85954:	ba 43 00 00 00                                  	mov    $0x43,%edx
+   85959:	49 0f 44 d7                                     	cmove  %r15,%rdx
+   8595d:	48 8b 74 24 10                                  	mov    0x10(%rsp),%rsi
+   85962:	48 89 4e 08                                     	mov    %rcx,0x8(%rsi)
+   85966:	48 89 f1                                        	mov    %rsi,%rcx
+   85969:	48 c7 46 10 00 00 00 00                         	movq   $0x0,0x10(%rsi)
+   85971:	66 c7 46 1a 00 00                               	movw   $0x0,0x1a(%rsi)
+   85977:	c7 46 1c 00 00 00 00                            	movl   $0x0,0x1c(%rsi)
+   8597e:	48 89 46 20                                     	mov    %rax,0x20(%rsi)
+   85982:	48 89 56 28                                     	mov    %rdx,0x28(%rsi)
+   85986:	66 c7 46 30 ff ff                               	movw   $0xffff,0x30(%rsi)
+   8598c:	c6 46 34 0b                                     	movb   $0xb,0x34(%rsi)
+   85990:	e9 67 01 00 00                                  	jmp    85afc <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x99c>
+   85995:	b8 32 00 00 00                                  	mov    $0x32,%eax
+   8599a:	48 8d 35 9b 82 f9 ff                            	lea    -0x67d65(%rip),%rsi        # 1dc3c <anon.19845961c3694082bd3c1864c0b9dd4a.1255.llvm.17788009695388792836+0x45c>
+   859a1:	eb 50                                           	jmp    859f3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x893>
+   859a3:	48 83 7c 24 18 bf                               	cmpq   $0xffffffffffffffbf,0x18(%rsp)
+   859a9:	77 28                                           	ja     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   859ab:	48 8b 4c 24 18                                  	mov    0x18(%rsp),%rcx
+   859b0:	48 89 c8                                        	mov    %rcx,%rax
+   859b3:	48 83 e0 c0                                     	and    $0xffffffffffffffc0,%rax
+   859b7:	48 83 c0 40                                     	add    $0x40,%rax
+   859bb:	48 39 c3                                        	cmp    %rax,%rbx
+   859be:	48 0f 42 c3                                     	cmovb  %rbx,%rax
+   859c2:	48 29 c8                                        	sub    %rcx,%rax
+   859c5:	0f 92 c1                                        	setb   %cl
+   859c8:	48 3d 00 00 01 00                               	cmp    $0x10000,%rax
+   859ce:	0f 93 c0                                        	setae  %al
+   859d1:	08 c8                                           	or     %cl,%al
+   859d3:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   859dd:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   859e2:	e9 11 01 00 00                                  	jmp    85af8 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x998>
+   859e7:	b8 35 00 00 00                                  	mov    $0x35,%eax
+   859ec:	48 8d 35 14 82 f9 ff                            	lea    -0x67dec(%rip),%rsi        # 1dc07 <anon.19845961c3694082bd3c1864c0b9dd4a.1255.llvm.17788009695388792836+0x427>
+   859f3:	48 b9 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rcx
+   859fd:	48 ff c9                                        	dec    %rcx
+   85a00:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+   85a05:	48 89 4a 08                                     	mov    %rcx,0x8(%rdx)
+   85a09:	48 89 d1                                        	mov    %rdx,%rcx
+   85a0c:	48 c7 42 10 00 00 00 00                         	movq   $0x0,0x10(%rdx)
+   85a14:	48 89 72 20                                     	mov    %rsi,0x20(%rdx)
+   85a18:	48 89 42 28                                     	mov    %rax,0x28(%rdx)
+   85a1c:	66 c7 42 30 04 00                               	movw   $0x4,0x30(%rdx)
+   85a22:	c6 42 34 0a                                     	movb   $0xa,0x34(%rdx)
+   85a26:	e9 d1 00 00 00                                  	jmp    85afc <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x99c>
+   85a2b:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   85a35:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   85a3a:	48 89 41 08                                     	mov    %rax,0x8(%rcx)
+   85a3e:	c6 41 17 00                                     	movb   $0x0,0x17(%rcx)
+   85a42:	66 c7 41 15 00 00                               	movw   $0x0,0x15(%rcx)
+   85a48:	c7 41 11 00 00 00 00                            	movl   $0x0,0x11(%rcx)
+   85a4f:	e9 a8 00 00 00                                  	jmp    85afc <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x99c>
+   85a54:	48 b9 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rcx
+   85a5e:	eb a0                                           	jmp    85a00 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x8a0>
+   85a60:	48 83 7c 24 18 bf                               	cmpq   $0xffffffffffffffbf,0x18(%rsp)
+   85a66:	0f 87 67 ff ff ff                               	ja     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   85a6c:	48 8b 4c 24 18                                  	mov    0x18(%rsp),%rcx
+   85a71:	48 89 c8                                        	mov    %rcx,%rax
+   85a74:	48 83 e0 c0                                     	and    $0xffffffffffffffc0,%rax
+   85a78:	48 83 c0 40                                     	add    $0x40,%rax
+   85a7c:	48 39 c3                                        	cmp    %rax,%rbx
+   85a7f:	48 0f 42 c3                                     	cmovb  %rbx,%rax
+   85a83:	48 29 c8                                        	sub    %rcx,%rax
+   85a86:	0f 82 47 ff ff ff                               	jb     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   85a8c:	48 3d ff ff 00 00                               	cmp    $0xffff,%rax
+   85a92:	0f 87 3b ff ff ff                               	ja     859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   85a98:	48 8b 4c 24 38                                  	mov    0x38(%rsp),%rcx
+   85a9d:	48 0f af c8                                     	imul   %rax,%rcx
+   85aa1:	48 81 c1 ff ef ff ff                            	add    $0xffffffffffffefff,%rcx
+   85aa8:	48 81 f9 00 f0 ff ff                            	cmp    $0xfffffffffffff000,%rcx
+   85aaf:	48 8b 4c 24 10                                  	mov    0x10(%rsp),%rcx
+   85ab4:	73 38                                           	jae    85aee <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x98e>
+   85ab6:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   85ac0:	48 ff c8                                        	dec    %rax
+   85ac3:	48 89 41 08                                     	mov    %rax,0x8(%rcx)
+   85ac7:	48 c7 41 10 00 00 00 00                         	movq   $0x0,0x10(%rcx)
+   85acf:	48 8d 05 c8 d9 f8 ff                            	lea    -0x72638(%rip),%rax        # 1349e <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xc1e>
+   85ad6:	48 89 41 20                                     	mov    %rax,0x20(%rcx)
+   85ada:	48 c7 41 28 43 00 00 00                         	movq   $0x43,0x28(%rcx)
+   85ae2:	66 c7 41 30 ff ff                               	movw   $0xffff,0x30(%rcx)
+   85ae8:	c6 41 34 0b                                     	movb   $0xb,0x34(%rcx)
+   85aec:	eb 0e                                           	jmp    85afc <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x99c>
+   85aee:	48 b8 03 00 00 00 00 00 00 80                   	movabs $0x8000000000000003,%rax
+   85af8:	48 89 41 08                                     	mov    %rax,0x8(%rcx)
+   85afc:	48 c7 01 01 00 00 00                            	movq   $0x1,(%rcx)
+   85b03:	48 83 7c 24 58 00                               	cmpq   $0x0,0x58(%rsp)
+   85b09:	74 0b                                           	je     85b16 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x9b6>
+   85b0b:	48 8b 7c 24 60                                  	mov    0x60(%rsp),%rdi
+   85b10:	ff 15 02 80 1e 00                               	call   *0x1e8002(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   85b16:	48 83 7c 24 70 00                               	cmpq   $0x0,0x70(%rsp)
+   85b1c:	0f 84 10 f7 ff ff                               	je     85232 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xd2>
+   85b22:	48 8b 7c 24 78                                  	mov    0x78(%rsp),%rdi
+   85b27:	ff 15 eb 7f 1e 00                               	call   *0x1e7feb(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   85b2d:	e9 00 f7 ff ff                                  	jmp    85232 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xd2>
+   85b32:	48 83 7c 24 18 bf                               	cmpq   $0xffffffffffffffbf,0x18(%rsp)
+   85b38:	e9 96 fe ff ff                                  	jmp    859d3 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0x873>
+   85b3d:	bf 08 00 00 00                                  	mov    $0x8,%edi
+   85b42:	48 8b 74 24 48                                  	mov    0x48(%rsp),%rsi
+   85b47:	ff 15 03 80 1e 00                               	call   *0x1e8003(%rip)        # 26db50 <_DYNAMIC+0x250>
+   85b4d:	48 89 c3                                        	mov    %rax,%rbx
+   85b50:	48 83 7c 24 58 00                               	cmpq   $0x0,0x58(%rsp)
+   85b56:	75 10                                           	jne    85b68 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xa08>
+   85b58:	48 83 7c 24 70 00                               	cmpq   $0x0,0x70(%rsp)
+   85b5e:	75 1b                                           	jne    85b7b <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xa1b>
+   85b60:	48 89 df                                        	mov    %rbx,%rdi
+   85b63:	e8 e8 f6 1d 00                                  	call   265250 <_Unwind_Resume@plt>
+   85b68:	48 8b 7c 24 60                                  	mov    0x60(%rsp),%rdi
+   85b6d:	ff 15 a5 7f 1e 00                               	call   *0x1e7fa5(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   85b73:	48 83 7c 24 70 00                               	cmpq   $0x0,0x70(%rsp)
+   85b79:	74 e5                                           	je     85b60 <emuella_j2k_codestream::encode_decomp_subband_with_output_limit::<false>+0xa00>
+   85b7b:	48 8b 7c 24 78                                  	mov    0x78(%rsp),%rdi
+   85b80:	ff 15 92 7f 1e 00                               	call   *0x1e7f92(%rip)        # 26db18 <free@GLIBC_2.2.5>
+   85b86:	48 89 df                                        	mov    %rbx,%rdi
+   85b89:	e8 c2 f6 1d 00                                  	call   265250 <_Unwind_Resume@plt>

@@ -1,0 +1,241 @@
+Disassembly of section .text:
+
+00000000001146c0 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch>:
+  1146c0:	55                                              	push   %rbp
+  1146c1:	41 57                                           	push   %r15
+  1146c3:	41 56                                           	push   %r14
+  1146c5:	41 55                                           	push   %r13
+  1146c7:	41 54                                           	push   %r12
+  1146c9:	53                                              	push   %rbx
+  1146ca:	48 81 ec 88 00 00 00                            	sub    $0x88,%rsp
+  1146d1:	45 89 cf                                        	mov    %r9d,%r15d
+  1146d4:	48 89 4c 24 20                                  	mov    %rcx,0x20(%rsp)
+  1146d9:	41 8d 47 ff                                     	lea    -0x1(%r15),%eax
+  1146dd:	3c 04                                           	cmp    $0x4,%al
+  1146df:	0f 87 da 00 00 00                               	ja     1147bf <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0xff>
+  1146e5:	4c 89 c5                                        	mov    %r8,%rbp
+  1146e8:	48 89 3c 24                                     	mov    %rdi,(%rsp)
+  1146ec:	4c 8b 8c 24 d0 00 00 00                         	mov    0xd0(%rsp),%r9
+  1146f4:	41 89 f0                                        	mov    %esi,%r8d
+  1146f7:	89 d0                                           	mov    %edx,%eax
+  1146f9:	89 74 24 18                                     	mov    %esi,0x18(%rsp)
+  1146fd:	89 f1                                           	mov    %esi,%ecx
+  1146ff:	d1 e9                                           	shr    $1,%ecx
+  114701:	4c 89 c7                                        	mov    %r8,%rdi
+  114704:	48 29 cf                                        	sub    %rcx,%rdi
+  114707:	89 54 24 1c                                     	mov    %edx,0x1c(%rsp)
+  11470b:	89 d1                                           	mov    %edx,%ecx
+  11470d:	d1 e9                                           	shr    $1,%ecx
+  11470f:	48 89 c6                                        	mov    %rax,%rsi
+  114712:	48 29 ce                                        	sub    %rcx,%rsi
+  114715:	4c 89 44 24 28                                  	mov    %r8,0x28(%rsp)
+  11471a:	48 89 44 24 30                                  	mov    %rax,0x30(%rsp)
+  11471f:	4c 89 44 24 38                                  	mov    %r8,0x38(%rsp)
+  114724:	48 89 7c 24 40                                  	mov    %rdi,0x40(%rsp)
+  114729:	48 89 74 24 48                                  	mov    %rsi,0x48(%rsp)
+  11472e:	66 c7 44 24 50 00 00                            	movw   $0x0,0x50(%rsp)
+  114735:	66 c7 44 24 58 01 20                            	movw   $0x2001,0x58(%rsp)
+  11473c:	49 39 c0                                        	cmp    %rax,%r8
+  11473f:	4c 89 44 24 68                                  	mov    %r8,0x68(%rsp)
+  114744:	49 0f 47 c0                                     	cmova  %r8,%rax
+  114748:	48 8d 1c 40                                     	lea    (%rax,%rax,2),%rbx
+  11474c:	4d 8b 61 10                                     	mov    0x10(%r9),%r12
+  114750:	49 89 dd                                        	mov    %rbx,%r13
+  114753:	4d 29 e5                                        	sub    %r12,%r13
+  114756:	0f 86 97 00 00 00                               	jbe    1147f3 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x133>
+  11475c:	49 8b 01                                        	mov    (%r9),%rax
+  11475f:	4c 29 e0                                        	sub    %r12,%rax
+  114762:	4d 89 e6                                        	mov    %r12,%r14
+  114765:	49 39 c5                                        	cmp    %rax,%r13
+  114768:	0f 87 eb 02 00 00                               	ja     114a59 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x399>
+  11476e:	4d 8b 41 08                                     	mov    0x8(%r9),%r8
+  114772:	4b 8d 3c b0                                     	lea    (%r8,%r14,4),%rdi
+  114776:	49 83 fd 02                                     	cmp    $0x2,%r13
+  11477a:	72 35                                           	jb     1147b1 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0xf1>
+  11477c:	49 f7 d4                                        	not    %r12
+  11477f:	4c 01 e3                                        	add    %r12,%rbx
+  114782:	48 c1 e3 02                                     	shl    $0x2,%rbx
+  114786:	31 f6                                           	xor    %esi,%esi
+  114788:	48 89 da                                        	mov    %rbx,%rdx
+  11478b:	4c 89 c3                                        	mov    %r8,%rbx
+  11478e:	ff 15 a4 93 15 00                               	call   *0x1593a4(%rip)        # 26db38 <memset@GLIBC_2.2.5>
+  114794:	49 89 d8                                        	mov    %rbx,%r8
+  114797:	4c 8b 8c 24 d0 00 00 00                         	mov    0xd0(%rsp),%r9
+  11479f:	4b 8d 04 2e                                     	lea    (%r14,%r13,1),%rax
+  1147a3:	48 8d 3c 83                                     	lea    (%rbx,%rax,4),%rdi
+  1147a7:	48 83 c7 fc                                     	add    $0xfffffffffffffffc,%rdi
+  1147ab:	4d 01 ee                                        	add    %r13,%r14
+  1147ae:	49 ff ce                                        	dec    %r14
+  1147b1:	c7 07 00 00 00 00                               	movl   $0x0,(%rdi)
+  1147b7:	49 ff c6                                        	inc    %r14
+  1147ba:	4c 89 f3                                        	mov    %r14,%rbx
+  1147bd:	eb 38                                           	jmp    1147f7 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x137>
+  1147bf:	48 b8 02 00 00 00 00 00 00 80                   	movabs $0x8000000000000002,%rax
+  1147c9:	48 89 07                                        	mov    %rax,(%rdi)
+  1147cc:	48 c7 47 08 00 00 00 00                         	movq   $0x0,0x8(%rdi)
+  1147d4:	48 8d 05 f2 47 f0 ff                            	lea    -0xfb80e(%rip),%rax        # 18fcd <crossbeam_epoch::guard::unprotected::UNPROTECTED+0x674d>
+  1147db:	48 89 47 18                                     	mov    %rax,0x18(%rdi)
+  1147df:	48 c7 47 20 46 00 00 00                         	movq   $0x46,0x20(%rdi)
+  1147e7:	66 c7 47 28 05 00                               	movw   $0x5,0x28(%rdi)
+  1147ed:	c6 47 2c 0c                                     	movb   $0xc,0x2c(%rdi)
+  1147f1:	eb 7d                                           	jmp    114870 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x1b0>
+  1147f3:	4d 8b 41 08                                     	mov    0x8(%r9),%r8
+  1147f7:	49 89 59 10                                     	mov    %rbx,0x10(%r9)
+  1147fb:	48 8d 7c 24 70                                  	lea    0x70(%rsp),%rdi
+  114800:	48 8d 4c 24 28                                  	lea    0x28(%rsp),%rcx
+  114805:	48 8b 74 24 20                                  	mov    0x20(%rsp),%rsi
+  11480a:	48 89 ea                                        	mov    %rbp,%rdx
+  11480d:	4c 89 44 24 08                                  	mov    %r8,0x8(%rsp)
+  114812:	49 89 d9                                        	mov    %rbx,%r9
+  114815:	ff 15 7d 9a 15 00                               	call   *0x159a7d(%rip)        # 26e298 <_DYNAMIC+0x998>
+  11481b:	83 7c 24 70 ff                                  	cmpl   $0xffffffff,0x70(%rsp)
+  114820:	74 3d                                           	je     11485f <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x19f>
+  114822:	48 8b 84 24 c8 00 00 00                         	mov    0xc8(%rsp),%rax
+  11482a:	48 8b 8c 24 c0 00 00 00                         	mov    0xc0(%rsp),%rcx
+  114832:	48 ba 02 00 00 00 00 00 00 80                   	movabs $0x8000000000000002,%rdx
+  11483c:	48 8b 34 24                                     	mov    (%rsp),%rsi
+  114840:	48 89 16                                        	mov    %rdx,(%rsi)
+  114843:	48 c7 46 08 00 00 00 00                         	movq   $0x0,0x8(%rsi)
+  11484b:	48 89 4e 18                                     	mov    %rcx,0x18(%rsi)
+  11484f:	48 89 46 20                                     	mov    %rax,0x20(%rsi)
+  114853:	66 c7 46 28 05 00                               	movw   $0x5,0x28(%rsi)
+  114859:	c6 46 2c 0c                                     	movb   $0xc,0x2c(%rsi)
+  11485d:	eb 11                                           	jmp    114870 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x1b0>
+  11485f:	41 80 ff 01                                     	cmp    $0x1,%r15b
+  114863:	75 1d                                           	jne    114882 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x1c2>
+  114865:	48 8b 04 24                                     	mov    (%rsp),%rax
+  114869:	48 c7 00 ff ff ff ff                            	movq   $0xffffffffffffffff,(%rax)
+  114870:	48 81 c4 88 00 00 00                            	add    $0x88,%rsp
+  114877:	5b                                              	pop    %rbx
+  114878:	41 5c                                           	pop    %r12
+  11487a:	41 5d                                           	pop    %r13
+  11487c:	41 5e                                           	pop    %r14
+  11487e:	41 5f                                           	pop    %r15
+  114880:	5d                                              	pop    %rbp
+  114881:	c3                                              	ret
+  114882:	41 0f b6 c7                                     	movzbl %r15b,%eax
+  114886:	83 c0 fe                                        	add    $0xfffffffe,%eax
+  114889:	89 44 24 14                                     	mov    %eax,0x14(%rsp)
+  11488d:	45 31 e4                                        	xor    %r12d,%r12d
+  114890:	48 89 6c 24 60                                  	mov    %rbp,0x60(%rsp)
+  114895:	66 66 2e 0f 1f 84 00 00 00 00 00                	data16 cs nopw 0x0(%rax,%rax,1)
+  1148a0:	41 8d 4c 24 01                                  	lea    0x1(%r12),%ecx
+  1148a5:	8b 44 24 18                                     	mov    0x18(%rsp),%eax
+  1148a9:	41 89 c6                                        	mov    %eax,%r14d
+  1148ac:	41 d3 ee                                        	shr    %cl,%r14d
+  1148af:	ba ff ff ff ff                                  	mov    $0xffffffff,%edx
+  1148b4:	d3 e2                                           	shl    %cl,%edx
+  1148b6:	f7 d2                                           	not    %edx
+  1148b8:	21 d0                                           	and    %edx,%eax
+  1148ba:	83 f8 01                                        	cmp    $0x1,%eax
+  1148bd:	41 83 de ff                                     	sbb    $0xffffffff,%r14d
+  1148c1:	8b 74 24 1c                                     	mov    0x1c(%rsp),%esi
+  1148c5:	89 f0                                           	mov    %esi,%eax
+  1148c7:	d3 e8                                           	shr    %cl,%eax
+  1148c9:	21 f2                                           	and    %esi,%edx
+  1148cb:	83 fa 01                                        	cmp    $0x1,%edx
+  1148ce:	83 d8 ff                                        	sbb    $0xffffffff,%eax
+  1148d1:	44 89 f1                                        	mov    %r14d,%ecx
+  1148d4:	d1 e9                                           	shr    $1,%ecx
+  1148d6:	4c 89 f2                                        	mov    %r14,%rdx
+  1148d9:	48 29 ca                                        	sub    %rcx,%rdx
+  1148dc:	89 c1                                           	mov    %eax,%ecx
+  1148de:	d1 e9                                           	shr    $1,%ecx
+  1148e0:	48 89 c6                                        	mov    %rax,%rsi
+  1148e3:	48 29 ce                                        	sub    %rcx,%rsi
+  1148e6:	4c 89 74 24 28                                  	mov    %r14,0x28(%rsp)
+  1148eb:	48 89 44 24 30                                  	mov    %rax,0x30(%rsp)
+  1148f0:	48 8b 4c 24 68                                  	mov    0x68(%rsp),%rcx
+  1148f5:	48 89 4c 24 38                                  	mov    %rcx,0x38(%rsp)
+  1148fa:	48 89 54 24 40                                  	mov    %rdx,0x40(%rsp)
+  1148ff:	48 89 74 24 48                                  	mov    %rsi,0x48(%rsp)
+  114904:	66 c7 44 24 50 00 00                            	movw   $0x0,0x50(%rsp)
+  11490b:	49 39 c6                                        	cmp    %rax,%r14
+  11490e:	49 0f 47 c6                                     	cmova  %r14,%rax
+  114912:	66 c7 44 24 58 01 20                            	movw   $0x2001,0x58(%rsp)
+  114919:	4c 8d 2c 40                                     	lea    (%rax,%rax,2),%r13
+  11491d:	4d 89 ef                                        	mov    %r13,%r15
+  114920:	49 29 df                                        	sub    %rbx,%r15
+  114923:	76 7b                                           	jbe    1149a0 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x2e0>
+  114925:	48 8b 94 24 d0 00 00 00                         	mov    0xd0(%rsp),%rdx
+  11492d:	48 8b 02                                        	mov    (%rdx),%rax
+  114930:	48 29 d8                                        	sub    %rbx,%rax
+  114933:	48 89 dd                                        	mov    %rbx,%rbp
+  114936:	49 39 c7                                        	cmp    %rax,%r15
+  114939:	48 8b 44 24 08                                  	mov    0x8(%rsp),%rax
+  11493e:	0f 87 b5 00 00 00                               	ja     1149f9 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x339>
+  114944:	48 8d 3c a8                                     	lea    (%rax,%rbp,4),%rdi
+  114948:	49 83 ff 02                                     	cmp    $0x2,%r15
+  11494c:	72 32                                           	jb     114980 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x2c0>
+  11494e:	48 f7 d3                                        	not    %rbx
+  114951:	49 01 dd                                        	add    %rbx,%r13
+  114954:	49 c1 e5 02                                     	shl    $0x2,%r13
+  114958:	31 f6                                           	xor    %esi,%esi
+  11495a:	4c 89 ea                                        	mov    %r13,%rdx
+  11495d:	48 89 c3                                        	mov    %rax,%rbx
+  114960:	ff 15 d2 91 15 00                               	call   *0x1591d2(%rip)        # 26db38 <memset@GLIBC_2.2.5>
+  114966:	48 8b 94 24 d0 00 00 00                         	mov    0xd0(%rsp),%rdx
+  11496e:	49 8d 04 2f                                     	lea    (%r15,%rbp,1),%rax
+  114972:	48 8d 3c 83                                     	lea    (%rbx,%rax,4),%rdi
+  114976:	48 83 c7 fc                                     	add    $0xfffffffffffffffc,%rdi
+  11497a:	4c 01 fd                                        	add    %r15,%rbp
+  11497d:	48 ff cd                                        	dec    %rbp
+  114980:	c7 07 00 00 00 00                               	movl   $0x0,(%rdi)
+  114986:	48 ff c5                                        	inc    %rbp
+  114989:	4c 8b 42 08                                     	mov    0x8(%rdx),%r8
+  11498d:	48 89 eb                                        	mov    %rbp,%rbx
+  114990:	48 8b 6c 24 60                                  	mov    0x60(%rsp),%rbp
+  114995:	eb 19                                           	jmp    1149b0 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x2f0>
+  114997:	66 0f 1f 84 00 00 00 00 00                      	nopw   0x0(%rax,%rax,1)
+  1149a0:	4c 89 eb                                        	mov    %r13,%rbx
+  1149a3:	48 8b 94 24 d0 00 00 00                         	mov    0xd0(%rsp),%rdx
+  1149ab:	4c 8b 44 24 08                                  	mov    0x8(%rsp),%r8
+  1149b0:	48 89 5a 10                                     	mov    %rbx,0x10(%rdx)
+  1149b4:	48 8d 7c 24 70                                  	lea    0x70(%rsp),%rdi
+  1149b9:	48 8b 74 24 20                                  	mov    0x20(%rsp),%rsi
+  1149be:	48 89 ea                                        	mov    %rbp,%rdx
+  1149c1:	48 8d 4c 24 28                                  	lea    0x28(%rsp),%rcx
+  1149c6:	4c 89 44 24 08                                  	mov    %r8,0x8(%rsp)
+  1149cb:	49 89 d9                                        	mov    %rbx,%r9
+  1149ce:	ff 15 c4 98 15 00                               	call   *0x1598c4(%rip)        # 26e298 <_DYNAMIC+0x998>
+  1149d4:	83 7c 24 70 ff                                  	cmpl   $0xffffffff,0x70(%rsp)
+  1149d9:	0f 85 43 fe ff ff                               	jne    114822 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x162>
+  1149df:	44 39 64 24 14                                  	cmp    %r12d,0x14(%rsp)
+  1149e4:	0f 84 7b fe ff ff                               	je     114865 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x1a5>
+  1149ea:	41 ff c4                                        	inc    %r12d
+  1149ed:	41 83 fc 1f                                     	cmp    $0x1f,%r12d
+  1149f1:	0f 85 a9 fe ff ff                               	jne    1148a0 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x1e0>
+  1149f7:	eb 3c                                           	jmp    114a35 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x375>
+  1149f9:	b9 04 00 00 00                                  	mov    $0x4,%ecx
+  1149fe:	41 b8 04 00 00 00                               	mov    $0x4,%r8d
+  114a04:	48 89 d7                                        	mov    %rdx,%rdi
+  114a07:	48 89 de                                        	mov    %rbx,%rsi
+  114a0a:	4c 89 fa                                        	mov    %r15,%rdx
+  114a0d:	e8 5e 58 f9 ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+  114a12:	48 8b 94 24 d0 00 00 00                         	mov    0xd0(%rsp),%rdx
+  114a1a:	48 8b 42 08                                     	mov    0x8(%rdx),%rax
+  114a1e:	48 8b 6a 10                                     	mov    0x10(%rdx),%rbp
+  114a22:	48 8d 3c a8                                     	lea    (%rax,%rbp,4),%rdi
+  114a26:	49 83 ff 02                                     	cmp    $0x2,%r15
+  114a2a:	0f 83 1e ff ff ff                               	jae    11494e <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x28e>
+  114a30:	e9 4b ff ff ff                                  	jmp    114980 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x2c0>
+  114a35:	48 b8 02 00 00 00 00 00 00 80                   	movabs $0x8000000000000002,%rax
+  114a3f:	48 ff c0                                        	inc    %rax
+  114a42:	48 8b 0c 24                                     	mov    (%rsp),%rcx
+  114a46:	48 89 01                                        	mov    %rax,(%rcx)
+  114a49:	44 89 71 08                                     	mov    %r14d,0x8(%rcx)
+  114a4d:	c7 41 0c 00 00 00 00                            	movl   $0x0,0xc(%rcx)
+  114a54:	e9 17 fe ff ff                                  	jmp    114870 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0x1b0>
+  114a59:	b9 04 00 00 00                                  	mov    $0x4,%ecx
+  114a5e:	41 b8 04 00 00 00                               	mov    $0x4,%r8d
+  114a64:	4c 89 cf                                        	mov    %r9,%rdi
+  114a67:	4c 89 e6                                        	mov    %r12,%rsi
+  114a6a:	4c 89 ea                                        	mov    %r13,%rdx
+  114a6d:	e8 fe 57 f9 ff                                  	call   aa270 <<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>>
+  114a72:	4c 8b 8c 24 d0 00 00 00                         	mov    0xd0(%rsp),%r9
+  114a7a:	4d 8b 71 10                                     	mov    0x10(%r9),%r14
+  114a7e:	4d 8b 41 08                                     	mov    0x8(%r9),%r8
+  114a82:	4b 8d 3c b0                                     	lea    (%r8,%r14,4),%rdi
+  114a86:	49 83 fd 02                                     	cmp    $0x2,%r13
+  114a8a:	0f 83 ec fc ff ff                               	jae    11477c <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0xbc>
+  114a90:	e9 1c fd ff ff                                  	jmp    1147b1 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch+0xf1>

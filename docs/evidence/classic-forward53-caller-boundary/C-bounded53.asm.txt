@@ -1,0 +1,348 @@
+Disassembly of section .text:
+
+00000000002057f0 <emuella_j2k_transform::forward_reversible_5_3_bounded>:
+  2057f0:	55                                              	push   %rbp
+  2057f1:	41 57                                           	push   %r15
+  2057f3:	41 56                                           	push   %r14
+  2057f5:	41 55                                           	push   %r13
+  2057f7:	41 54                                           	push   %r12
+  2057f9:	53                                              	push   %rbx
+  2057fa:	48 83 ec 68                                     	sub    $0x68,%rsp
+  2057fe:	4c 8b 39                                        	mov    (%rcx),%r15
+  205801:	45 31 d2                                        	xor    %r10d,%r10d
+  205804:	4d 85 ff                                        	test   %r15,%r15
+  205807:	74 18                                           	je     205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  205809:	4c 8b 71 08                                     	mov    0x8(%rcx),%r14
+  20580d:	4d 85 f6                                        	test   %r14,%r14
+  205810:	74 0f                                           	je     205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  205812:	48 8b 59 10                                     	mov    0x10(%rcx),%rbx
+  205816:	4c 39 fb                                        	cmp    %r15,%rbx
+  205819:	73 23                                           	jae    20583e <emuella_j2k_transform::forward_reversible_5_3_bounded+0x4e>
+  20581b:	41 ba 01 00 00 00                               	mov    $0x1,%r10d
+  205821:	44 89 17                                        	mov    %r10d,(%rdi)
+  205824:	48 89 47 08                                     	mov    %rax,0x8(%rdi)
+  205828:	4c 89 4f 10                                     	mov    %r9,0x10(%rdi)
+  20582c:	48 89 f8                                        	mov    %rdi,%rax
+  20582f:	48 83 c4 68                                     	add    $0x68,%rsp
+  205833:	5b                                              	pop    %rbx
+  205834:	41 5c                                           	pop    %r12
+  205836:	41 5d                                           	pop    %r13
+  205838:	41 5e                                           	pop    %r14
+  20583a:	41 5f                                           	pop    %r15
+  20583c:	5d                                              	pop    %rbp
+  20583d:	c3                                              	ret
+  20583e:	48 89 54 24 10                                  	mov    %rdx,0x10(%rsp)
+  205843:	49 8d 46 ff                                     	lea    -0x1(%r14),%rax
+  205847:	48 f7 e3                                        	mul    %rbx
+  20584a:	41 ba 02 00 00 00                               	mov    $0x2,%r10d
+  205850:	70 cf                                           	jo     205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  205852:	4c 01 f8                                        	add    %r15,%rax
+  205855:	41 0f 92 c3                                     	setb   %r11b
+  205859:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  20585e:	48 39 c2                                        	cmp    %rax,%rdx
+  205861:	0f 92 c0                                        	setb   %al
+  205864:	44 08 d8                                        	or     %r11b,%al
+  205867:	75 b8                                           	jne    205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  205869:	4d 39 f7                                        	cmp    %r14,%r15
+  20586c:	4d 89 f4                                        	mov    %r14,%r12
+  20586f:	4d 0f 47 e7                                     	cmova  %r15,%r12
+  205873:	4b 8d 04 64                                     	lea    (%r12,%r12,2),%rax
+  205877:	41 ba 03 00 00 00                               	mov    $0x3,%r10d
+  20587d:	49 39 c1                                        	cmp    %rax,%r9
+  205880:	72 9f                                           	jb     205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  205882:	4c 8b 69 18                                     	mov    0x18(%rcx),%r13
+  205886:	0f b6 69 28                                     	movzbl 0x28(%rcx),%ebp
+  20588a:	4c 89 f8                                        	mov    %r15,%rax
+  20588d:	48 d1 e8                                        	shr    $1,%rax
+  205890:	4d 89 fb                                        	mov    %r15,%r11
+  205893:	49 29 c3                                        	sub    %rax,%r11
+  205896:	40 84 ed                                        	test   %bpl,%bpl
+  205899:	4c 0f 45 d8                                     	cmovne %rax,%r11
+  20589d:	41 ba 04 00 00 00                               	mov    $0x4,%r10d
+  2058a3:	4d 39 dd                                        	cmp    %r11,%r13
+  2058a6:	0f 85 75 ff ff ff                               	jne    205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  2058ac:	40 88 6c 24 0f                                  	mov    %bpl,0xf(%rsp)
+  2058b1:	4c 89 6c 24 48                                  	mov    %r13,0x48(%rsp)
+  2058b6:	4c 8b 69 20                                     	mov    0x20(%rcx),%r13
+  2058ba:	0f b6 69 29                                     	movzbl 0x29(%rcx),%ebp
+  2058be:	4c 89 f0                                        	mov    %r14,%rax
+  2058c1:	48 d1 e8                                        	shr    $1,%rax
+  2058c4:	4d 89 f3                                        	mov    %r14,%r11
+  2058c7:	49 29 c3                                        	sub    %rax,%r11
+  2058ca:	40 88 6c 24 28                                  	mov    %bpl,0x28(%rsp)
+  2058cf:	40 84 ed                                        	test   %bpl,%bpl
+  2058d2:	4c 0f 45 d8                                     	cmovne %rax,%r11
+  2058d6:	4c 89 6c 24 18                                  	mov    %r13,0x18(%rsp)
+  2058db:	4d 39 dd                                        	cmp    %r11,%r13
+  2058de:	0f 85 3d ff ff ff                               	jne    205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  2058e4:	0f b6 41 31                                     	movzbl 0x31(%rcx),%eax
+  2058e8:	80 79 30 00                                     	cmpb   $0x0,0x30(%rcx)
+  2058ec:	74 11                                           	je     2058ff <emuella_j2k_transform::forward_reversible_5_3_bounded+0x10f>
+  2058ee:	04 df                                           	add    $0xdf,%al
+  2058f0:	3c df                                           	cmp    $0xdf,%al
+  2058f2:	77 11                                           	ja     205905 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x115>
+  2058f4:	41 ba 05 00 00 00                               	mov    $0x5,%r10d
+  2058fa:	e9 22 ff ff ff                                  	jmp    205821 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x31>
+  2058ff:	04 e0                                           	add    $0xe0,%al
+  205901:	3c e1                                           	cmp    $0xe1,%al
+  205903:	72 ef                                           	jb     2058f4 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x104>
+  205905:	4d 89 c5                                        	mov    %r8,%r13
+  205908:	4c 89 cd                                        	mov    %r9,%rbp
+  20590b:	48 89 7c 24 20                                  	mov    %rdi,0x20(%rsp)
+  205910:	48 8d 7c 24 50                                  	lea    0x50(%rsp),%rdi
+  205915:	48 89 74 24 30                                  	mov    %rsi,0x30(%rsp)
+  20591a:	e8 41 fd ff ff                                  	call   205660 <emuella_j2k_transform::validate_samples_in_range>
+  20591f:	83 7c 24 50 ff                                  	cmpl   $0xffffffff,0x50(%rsp)
+  205924:	74 1b                                           	je     205941 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x151>
+  205926:	48 8b 44 24 60                                  	mov    0x60(%rsp),%rax
+  20592b:	48 8b 7c 24 20                                  	mov    0x20(%rsp),%rdi
+  205930:	48 89 47 10                                     	mov    %rax,0x10(%rdi)
+  205934:	0f 10 44 24 50                                  	movups 0x50(%rsp),%xmm0
+  205939:	0f 11 07                                        	movups %xmm0,(%rdi)
+  20593c:	e9 eb fe ff ff                                  	jmp    20582c <emuella_j2k_transform::forward_reversible_5_3_bounded+0x3c>
+  205941:	48 89 e9                                        	mov    %rbp,%rcx
+  205944:	4c 29 e1                                        	sub    %r12,%rcx
+  205947:	48 8b 7c 24 20                                  	mov    0x20(%rsp),%rdi
+  20594c:	0f 82 50 03 00 00                               	jb     205ca2 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x4b2>
+  205952:	4c 29 e1                                        	sub    %r12,%rcx
+  205955:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  20595a:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  20595f:	0f 82 56 03 00 00                               	jb     205cbb <emuella_j2k_transform::forward_reversible_5_3_bounded+0x4cb>
+  205965:	4a 8d 2c a5 00 00 00 00                         	lea    0x0(,%r12,4),%rbp
+  20596d:	4c 01 ed                                        	add    %r13,%rbp
+  205970:	4e 8d 2c b5 00 00 00 00                         	lea    0x0(,%r14,4),%r13
+  205978:	49 39 ce                                        	cmp    %rcx,%r14
+  20597b:	48 89 4c 24 38                                  	mov    %rcx,0x38(%rsp)
+  205980:	0f 87 4e 03 00 00                               	ja     205cd4 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x4e4>
+  205986:	4e 8d 04 a5 00 00 00 00                         	lea    0x0(,%r12,4),%r8
+  20598e:	49 01 e8                                        	add    %rbp,%r8
+  205991:	49 83 fe 01                                     	cmp    $0x1,%r14
+  205995:	4c 89 44 24 40                                  	mov    %r8,0x40(%rsp)
+  20599a:	75 1c                                           	jne    2059b8 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x1c8>
+  20599c:	49 8d 77 ff                                     	lea    -0x1(%r15),%rsi
+  2059a0:	48 39 f2                                        	cmp    %rsi,%rdx
+  2059a3:	48 0f 42 f2                                     	cmovb  %rdx,%rsi
+  2059a7:	48 83 fe 08                                     	cmp    $0x8,%rsi
+  2059ab:	0f 83 b2 00 00 00                               	jae    205a63 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x273>
+  2059b1:	31 f6                                           	xor    %esi,%esi
+  2059b3:	e9 da 00 00 00                                  	jmp    205a92 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x2a2>
+  2059b8:	80 7c 24 28 00                                  	cmpb   $0x0,0x28(%rsp)
+  2059bd:	0f 84 ed 00 00 00                               	je     205ab0 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x2c0>
+  2059c3:	45 31 e4                                        	xor    %r12d,%r12d
+  2059c6:	4d 8d 4c 24 01                                  	lea    0x1(%r12),%r9
+  2059cb:	31 c9                                           	xor    %ecx,%ecx
+  2059cd:	4c 89 e7                                        	mov    %r12,%rdi
+  2059d0:	48 39 d7                                        	cmp    %rdx,%rdi
+  2059d3:	0f 83 4e 03 00 00                               	jae    205d27 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x537>
+  2059d9:	8b 34 b8                                        	mov    (%rax,%rdi,4),%esi
+  2059dc:	89 74 0d 00                                     	mov    %esi,0x0(%rbp,%rcx,1)
+  2059e0:	48 01 df                                        	add    %rbx,%rdi
+  2059e3:	48 83 c1 04                                     	add    $0x4,%rcx
+  2059e7:	49 39 cd                                        	cmp    %rcx,%r13
+  2059ea:	75 e4                                           	jne    2059d0 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x1e0>
+  2059ec:	4c 89 4c 24 28                                  	mov    %r9,0x28(%rsp)
+  2059f1:	4c 89 f7                                        	mov    %r14,%rdi
+  2059f4:	48 8b 74 24 18                                  	mov    0x18(%rsp),%rsi
+  2059f9:	48 89 ea                                        	mov    %rbp,%rdx
+  2059fc:	4c 89 f1                                        	mov    %r14,%rcx
+  2059ff:	4d 89 f1                                        	mov    %r14,%r9
+  205a02:	e8 79 17 00 00                                  	call   207180 <emuella_j2k_transform::transform_line_forward_first_high_bounded>
+  205a07:	4c 8b 44 24 40                                  	mov    0x40(%rsp),%r8
+  205a0c:	48 8b 4c 24 38                                  	mov    0x38(%rsp),%rcx
+  205a11:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  205a16:	48 8b 7c 24 20                                  	mov    0x20(%rsp),%rdi
+  205a1b:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  205a20:	31 f6                                           	xor    %esi,%esi
+  205a22:	66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+  205a30:	49 39 d4                                        	cmp    %rdx,%r12
+  205a33:	0f 83 d6 02 00 00                               	jae    205d0f <emuella_j2k_transform::forward_reversible_5_3_bounded+0x51f>
+  205a39:	45 8b 0c 30                                     	mov    (%r8,%rsi,1),%r9d
+  205a3d:	46 89 0c a0                                     	mov    %r9d,(%rax,%r12,4)
+  205a41:	49 01 dc                                        	add    %rbx,%r12
+  205a44:	48 83 c6 04                                     	add    $0x4,%rsi
+  205a48:	49 39 f5                                        	cmp    %rsi,%r13
+  205a4b:	75 e3                                           	jne    205a30 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x240>
+  205a4d:	48 8b 74 24 28                                  	mov    0x28(%rsp),%rsi
+  205a52:	49 89 f4                                        	mov    %rsi,%r12
+  205a55:	4c 39 fe                                        	cmp    %r15,%rsi
+  205a58:	0f 85 68 ff ff ff                               	jne    2059c6 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x1d6>
+  205a5e:	e9 eb 00 00 00                                  	jmp    205b4e <emuella_j2k_transform::forward_reversible_5_3_bounded+0x35e>
+  205a63:	48 ff c6                                        	inc    %rsi
+  205a66:	41 89 f0                                        	mov    %esi,%r8d
+  205a69:	41 83 e0 07                                     	and    $0x7,%r8d
+  205a6d:	41 b9 08 00 00 00                               	mov    $0x8,%r9d
+  205a73:	4d 0f 45 c8                                     	cmovne %r8,%r9
+  205a77:	4c 29 ce                                        	sub    %r9,%rsi
+  205a7a:	45 31 c0                                        	xor    %r8d,%r8d
+  205a7d:	4d 89 c1                                        	mov    %r8,%r9
+  205a80:	49 83 c0 08                                     	add    $0x8,%r8
+  205a84:	4c 39 c6                                        	cmp    %r8,%rsi
+  205a87:	75 f4                                           	jne    205a7d <emuella_j2k_transform::forward_reversible_5_3_bounded+0x28d>
+  205a89:	46 8b 44 88 1c                                  	mov    0x1c(%rax,%r9,4),%r8d
+  205a8e:	44 89 45 00                                     	mov    %r8d,0x0(%rbp)
+  205a92:	48 39 f2                                        	cmp    %rsi,%rdx
+  205a95:	0f 84 89 02 00 00                               	je     205d24 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x534>
+  205a9b:	44 8b 04 b0                                     	mov    (%rax,%rsi,4),%r8d
+  205a9f:	48 ff c6                                        	inc    %rsi
+  205aa2:	44 89 45 00                                     	mov    %r8d,0x0(%rbp)
+  205aa6:	49 39 f7                                        	cmp    %rsi,%r15
+  205aa9:	75 e7                                           	jne    205a92 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x2a2>
+  205aab:	e9 9e 00 00 00                                  	jmp    205b4e <emuella_j2k_transform::forward_reversible_5_3_bounded+0x35e>
+  205ab0:	45 31 e4                                        	xor    %r12d,%r12d
+  205ab3:	4d 8d 4c 24 01                                  	lea    0x1(%r12),%r9
+  205ab8:	31 c9                                           	xor    %ecx,%ecx
+  205aba:	4c 89 e7                                        	mov    %r12,%rdi
+  205abd:	0f 1f 00                                        	nopl   (%rax)
+  205ac0:	48 39 d7                                        	cmp    %rdx,%rdi
+  205ac3:	0f 83 5e 02 00 00                               	jae    205d27 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x537>
+  205ac9:	8b 34 b8                                        	mov    (%rax,%rdi,4),%esi
+  205acc:	89 74 0d 00                                     	mov    %esi,0x0(%rbp,%rcx,1)
+  205ad0:	48 01 df                                        	add    %rbx,%rdi
+  205ad3:	48 83 c1 04                                     	add    $0x4,%rcx
+  205ad7:	49 39 cd                                        	cmp    %rcx,%r13
+  205ada:	75 e4                                           	jne    205ac0 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x2d0>
+  205adc:	4c 89 4c 24 28                                  	mov    %r9,0x28(%rsp)
+  205ae1:	4c 89 f7                                        	mov    %r14,%rdi
+  205ae4:	48 8b 74 24 18                                  	mov    0x18(%rsp),%rsi
+  205ae9:	48 89 ea                                        	mov    %rbp,%rdx
+  205aec:	4c 89 f1                                        	mov    %r14,%rcx
+  205aef:	4d 89 f1                                        	mov    %r14,%r9
+  205af2:	e8 09 0b 00 00                                  	call   206600 <emuella_j2k_transform::transform_line_forward_first_low_bounded>
+  205af7:	4c 8b 44 24 40                                  	mov    0x40(%rsp),%r8
+  205afc:	48 8b 4c 24 38                                  	mov    0x38(%rsp),%rcx
+  205b01:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  205b06:	48 8b 7c 24 20                                  	mov    0x20(%rsp),%rdi
+  205b0b:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  205b10:	31 f6                                           	xor    %esi,%esi
+  205b12:	66 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+  205b20:	49 39 d4                                        	cmp    %rdx,%r12
+  205b23:	0f 83 e6 01 00 00                               	jae    205d0f <emuella_j2k_transform::forward_reversible_5_3_bounded+0x51f>
+  205b29:	45 8b 0c 30                                     	mov    (%r8,%rsi,1),%r9d
+  205b2d:	46 89 0c a0                                     	mov    %r9d,(%rax,%r12,4)
+  205b31:	49 01 dc                                        	add    %rbx,%r12
+  205b34:	48 83 c6 04                                     	add    $0x4,%rsi
+  205b38:	49 39 f5                                        	cmp    %rsi,%r13
+  205b3b:	75 e3                                           	jne    205b20 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x330>
+  205b3d:	48 8b 74 24 28                                  	mov    0x28(%rsp),%rsi
+  205b42:	49 89 f4                                        	mov    %rsi,%r12
+  205b45:	4c 39 fe                                        	cmp    %r15,%rsi
+  205b48:	0f 85 65 ff ff ff                               	jne    205ab3 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x2c3>
+  205b4e:	49 39 cf                                        	cmp    %rcx,%r15
+  205b51:	0f 87 2b 01 00 00                               	ja     205c82 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x492>
+  205b57:	49 83 ff 01                                     	cmp    $0x1,%r15
+  205b5b:	0f b6 44 24 0f                                  	movzbl 0xf(%rsp),%eax
+  205b60:	75 1f                                           	jne    205b81 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x391>
+  205b62:	be 01 00 00 00                                  	mov    $0x1,%esi
+  205b67:	4c 8d 66 ff                                     	lea    -0x1(%rsi),%r12
+  205b6b:	49 39 d4                                        	cmp    %rdx,%r12
+  205b6e:	0f 83 d0 01 00 00                               	jae    205d44 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x554>
+  205b74:	48 01 de                                        	add    %rbx,%rsi
+  205b77:	49 ff ce                                        	dec    %r14
+  205b7a:	75 eb                                           	jne    205b67 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x377>
+  205b7c:	e9 f6 00 00 00                                  	jmp    205c77 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x487>
+  205b81:	45 31 e4                                        	xor    %r12d,%r12d
+  205b84:	45 31 ed                                        	xor    %r13d,%r13d
+  205b87:	84 c0                                           	test   %al,%al
+  205b89:	74 77                                           	je     205c02 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x412>
+  205b8b:	48 8b 6c 24 40                                  	mov    0x40(%rsp),%rbp
+  205b90:	4c 89 fe                                        	mov    %r15,%rsi
+  205b93:	4c 01 e6                                        	add    %r12,%rsi
+  205b96:	0f 82 a8 01 00 00                               	jb     205d44 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x554>
+  205b9c:	48 39 d6                                        	cmp    %rdx,%rsi
+  205b9f:	0f 87 9f 01 00 00                               	ja     205d44 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x554>
+  205ba5:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  205baa:	4a 8d 0c a0                                     	lea    (%rax,%r12,4),%rcx
+  205bae:	48 89 4c 24 18                                  	mov    %rcx,0x18(%rsp)
+  205bb3:	4a 8d 14 28                                     	lea    (%rax,%r13,1),%rdx
+  205bb7:	4c 89 ff                                        	mov    %r15,%rdi
+  205bba:	48 8b 74 24 48                                  	mov    0x48(%rsp),%rsi
+  205bbf:	4c 89 f9                                        	mov    %r15,%rcx
+  205bc2:	49 89 e8                                        	mov    %rbp,%r8
+  205bc5:	4d 89 f9                                        	mov    %r15,%r9
+  205bc8:	e8 b3 15 00 00                                  	call   207180 <emuella_j2k_transform::transform_line_forward_first_high_bounded>
+  205bcd:	48 8b 7c 24 18                                  	mov    0x18(%rsp),%rdi
+  205bd2:	48 89 ee                                        	mov    %rbp,%rsi
+  205bd5:	4a 8d 14 bd 00 00 00 00                         	lea    0x0(,%r15,4),%rdx
+  205bdd:	ff 15 f5 f1 06 00                               	call   *0x6f1f5(%rip)        # 274dd8 <memcpy@GLIBC_2.14>
+  205be3:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  205be8:	49 01 dc                                        	add    %rbx,%r12
+  205beb:	48 8d 04 9d 00 00 00 00                         	lea    0x0(,%rbx,4),%rax
+  205bf3:	49 01 c5                                        	add    %rax,%r13
+  205bf6:	49 ff ce                                        	dec    %r14
+  205bf9:	48 8b 7c 24 20                                  	mov    0x20(%rsp),%rdi
+  205bfe:	75 90                                           	jne    205b90 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x3a0>
+  205c00:	eb 75                                           	jmp    205c77 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x487>
+  205c02:	48 8b 6c 24 40                                  	mov    0x40(%rsp),%rbp
+  205c07:	4c 89 fe                                        	mov    %r15,%rsi
+  205c0a:	4c 01 e6                                        	add    %r12,%rsi
+  205c0d:	0f 82 31 01 00 00                               	jb     205d44 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x554>
+  205c13:	48 39 d6                                        	cmp    %rdx,%rsi
+  205c16:	0f 87 28 01 00 00                               	ja     205d44 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x554>
+  205c1c:	48 8b 44 24 30                                  	mov    0x30(%rsp),%rax
+  205c21:	4a 8d 0c a0                                     	lea    (%rax,%r12,4),%rcx
+  205c25:	48 89 4c 24 18                                  	mov    %rcx,0x18(%rsp)
+  205c2a:	4a 8d 14 28                                     	lea    (%rax,%r13,1),%rdx
+  205c2e:	4c 89 ff                                        	mov    %r15,%rdi
+  205c31:	48 8b 74 24 48                                  	mov    0x48(%rsp),%rsi
+  205c36:	4c 89 f9                                        	mov    %r15,%rcx
+  205c39:	49 89 e8                                        	mov    %rbp,%r8
+  205c3c:	4d 89 f9                                        	mov    %r15,%r9
+  205c3f:	e8 bc 09 00 00                                  	call   206600 <emuella_j2k_transform::transform_line_forward_first_low_bounded>
+  205c44:	48 8b 7c 24 18                                  	mov    0x18(%rsp),%rdi
+  205c49:	48 89 ee                                        	mov    %rbp,%rsi
+  205c4c:	4a 8d 14 bd 00 00 00 00                         	lea    0x0(,%r15,4),%rdx
+  205c54:	ff 15 7e f1 06 00                               	call   *0x6f17e(%rip)        # 274dd8 <memcpy@GLIBC_2.14>
+  205c5a:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  205c5f:	49 01 dc                                        	add    %rbx,%r12
+  205c62:	48 8d 04 9d 00 00 00 00                         	lea    0x0(,%rbx,4),%rax
+  205c6a:	49 01 c5                                        	add    %rax,%r13
+  205c6d:	49 ff ce                                        	dec    %r14
+  205c70:	48 8b 7c 24 20                                  	mov    0x20(%rsp),%rdi
+  205c75:	75 90                                           	jne    205c07 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x417>
+  205c77:	c7 07 ff ff ff ff                               	movl   $0xffffffff,(%rdi)
+  205c7d:	e9 aa fb ff ff                                  	jmp    20582c <emuella_j2k_transform::forward_reversible_5_3_bounded+0x3c>
+  205c82:	49 39 d7                                        	cmp    %rdx,%r15
+  205c85:	0f 87 ae 00 00 00                               	ja     205d39 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x549>
+  205c8b:	48 8d 0d 9e bd 06 00                            	lea    0x6bd9e(%rip),%rcx        # 271a30 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3db8>
+  205c92:	31 ff                                           	xor    %edi,%edi
+  205c94:	4c 89 fe                                        	mov    %r15,%rsi
+  205c97:	48 8b 54 24 38                                  	mov    0x38(%rsp),%rdx
+  205c9c:	ff 15 7e f3 06 00                               	call   *0x6f37e(%rip)        # 275020 <_DYNAMIC+0x470>
+  205ca2:	48 8d 3d 73 ce e1 ff                            	lea    -0x1e318d(%rip),%rdi        # 22b1c <anon.ca3e0f73b60eb26f33fd4548088ed9d4.142.llvm.15497307120650775935+0xb9>
+  205ca9:	48 8d 15 50 bd 06 00                            	lea    0x6bd50(%rip),%rdx        # 271a00 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3d88>
+  205cb0:	be 13 00 00 00                                  	mov    $0x13,%esi
+  205cb5:	ff 15 b5 f1 06 00                               	call   *0x6f1b5(%rip)        # 274e70 <_DYNAMIC+0x2c0>
+  205cbb:	48 8d 3d 5a ce e1 ff                            	lea    -0x1e31a6(%rip),%rdi        # 22b1c <anon.ca3e0f73b60eb26f33fd4548088ed9d4.142.llvm.15497307120650775935+0xb9>
+  205cc2:	48 8d 15 4f bd 06 00                            	lea    0x6bd4f(%rip),%rdx        # 271a18 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3da0>
+  205cc9:	be 13 00 00 00                                  	mov    $0x13,%esi
+  205cce:	ff 15 9c f1 06 00                               	call   *0x6f19c(%rip)        # 274e70 <_DYNAMIC+0x2c0>
+  205cd4:	31 ff                                           	xor    %edi,%edi
+  205cd6:	31 c9                                           	xor    %ecx,%ecx
+  205cd8:	0f 1f 84 00 00 00 00 00                         	nopl   0x0(%rax,%rax,1)
+  205ce0:	48 39 d7                                        	cmp    %rdx,%rdi
+  205ce3:	73 42                                           	jae    205d27 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x537>
+  205ce5:	8b 34 b8                                        	mov    (%rax,%rdi,4),%esi
+  205ce8:	89 74 0d 00                                     	mov    %esi,0x0(%rbp,%rcx,1)
+  205cec:	48 01 df                                        	add    %rbx,%rdi
+  205cef:	48 83 c1 04                                     	add    $0x4,%rcx
+  205cf3:	49 39 cd                                        	cmp    %rcx,%r13
+  205cf6:	75 e8                                           	jne    205ce0 <emuella_j2k_transform::forward_reversible_5_3_bounded+0x4f0>
+  205cf8:	48 8d 0d 61 bd 06 00                            	lea    0x6bd61(%rip),%rcx        # 271a60 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3de8>
+  205cff:	31 ff                                           	xor    %edi,%edi
+  205d01:	4c 89 f6                                        	mov    %r14,%rsi
+  205d04:	48 8b 54 24 38                                  	mov    0x38(%rsp),%rdx
+  205d09:	ff 15 11 f3 06 00                               	call   *0x6f311(%rip)        # 275020 <_DYNAMIC+0x470>
+  205d0f:	48 8d 15 ba bc 06 00                            	lea    0x6bcba(%rip),%rdx        # 2719d0 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3d58>
+  205d16:	4c 89 e7                                        	mov    %r12,%rdi
+  205d19:	48 8b 74 24 10                                  	mov    0x10(%rsp),%rsi
+  205d1e:	ff 15 ec f0 06 00                               	call   *0x6f0ec(%rip)        # 274e10 <_DYNAMIC+0x260>
+  205d24:	48 89 d7                                        	mov    %rdx,%rdi
+  205d27:	48 8d 15 8a bc 06 00                            	lea    0x6bc8a(%rip),%rdx        # 2719b8 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3d40>
+  205d2e:	48 8b 74 24 10                                  	mov    0x10(%rsp),%rsi
+  205d33:	ff 15 d7 f0 06 00                               	call   *0x6f0d7(%rip)        # 274e10 <_DYNAMIC+0x260>
+  205d39:	45 31 e4                                        	xor    %r12d,%r12d
+  205d3c:	4c 89 fe                                        	mov    %r15,%rsi
+  205d3f:	48 8b 54 24 10                                  	mov    0x10(%rsp),%rdx
+  205d44:	48 8d 0d fd bc 06 00                            	lea    0x6bcfd(%rip),%rcx        # 271a48 <anon.e5a8fce3d3e0a0338e7f690a62fac667.8.llvm.15088749749279910961+0x3dd0>
+  205d4b:	4c 89 e7                                        	mov    %r12,%rdi
+  205d4e:	ff 15 cc f2 06 00                               	call   *0x6f2cc(%rip)        # 275020 <_DYNAMIC+0x470>

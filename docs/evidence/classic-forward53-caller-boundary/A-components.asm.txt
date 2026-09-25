@@ -1,0 +1,59 @@
+Disassembly of section .text:
+
+00000000000cecd0 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}>:
+   cecd0:	55                                              	push   %rbp
+   cecd1:	41 57                                           	push   %r15
+   cecd3:	41 56                                           	push   %r14
+   cecd5:	41 55                                           	push   %r13
+   cecd7:	41 54                                           	push   %r12
+   cecd9:	53                                              	push   %rbx
+   cecda:	48 83 ec 38                                     	sub    $0x38,%rsp
+   cecde:	48 89 3c 24                                     	mov    %rdi,(%rsp)
+   cece2:	48 8b 0e                                        	mov    (%rsi),%rcx
+   cece5:	48 8b 41 10                                     	mov    0x10(%rcx),%rax
+   cece9:	48 85 c0                                        	test   %rax,%rax
+   cecec:	74 67                                           	je     ced55 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}+0x85>
+   cecee:	4c 8b 79 08                                     	mov    0x8(%rcx),%r15
+   cecf2:	48 c1 e0 03                                     	shl    $0x3,%rax
+   cecf6:	4c 8d 24 40                                     	lea    (%rax,%rax,2),%r12
+   cecfa:	4c 8b 6e 08                                     	mov    0x8(%rsi),%r13
+   cecfe:	48 8b 6e 10                                     	mov    0x10(%rsi),%rbp
+   ced02:	48 8b 5e 18                                     	mov    0x18(%rsi),%rbx
+   ced06:	45 31 f6                                        	xor    %r14d,%r14d
+   ced09:	0f 1f 80 00 00 00 00                            	nopl   0x0(%rax)
+   ced10:	41 8b 75 00                                     	mov    0x0(%r13),%esi
+   ced14:	8b 55 00                                        	mov    0x0(%rbp),%edx
+   ced17:	4b 8b 4c 37 08                                  	mov    0x8(%r15,%r14,1),%rcx
+   ced1c:	4f 8b 44 37 10                                  	mov    0x10(%r15,%r14,1),%r8
+   ced21:	48 83 ec 08                                     	sub    $0x8,%rsp
+   ced25:	48 8d 7c 24 10                                  	lea    0x10(%rsp),%rdi
+   ced2a:	41 b9 02 00 00 00                               	mov    $0x2,%r9d
+   ced30:	53                                              	push   %rbx
+   ced31:	6a 1c                                           	push   $0x1c
+   ced33:	48 8d 05 03 4b f4 ff                            	lea    -0xbb4fd(%rip),%rax        # 1383d <crossbeam_epoch::guard::unprotected::UNPROTECTED+0xfbd>
+   ced3a:	50                                              	push   %rax
+   ced3b:	e8 80 59 04 00                                  	call   1146c0 <emuella_j2k_codestream::forward_reversible_5_3_levels_with_scratch>
+   ced40:	48 83 c4 20                                     	add    $0x20,%rsp
+   ced44:	48 83 7c 24 08 ff                               	cmpq   $0xffffffffffffffff,0x8(%rsp)
+   ced4a:	75 16                                           	jne    ced62 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}+0x92>
+   ced4c:	49 83 c6 18                                     	add    $0x18,%r14
+   ced50:	4d 39 f4                                        	cmp    %r14,%r12
+   ced53:	75 bb                                           	jne    ced10 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}+0x40>
+   ced55:	48 8b 04 24                                     	mov    (%rsp),%rax
+   ced59:	48 c7 00 ff ff ff ff                            	movq   $0xffffffffffffffff,(%rax)
+   ced60:	eb 1e                                           	jmp    ced80 <emuella_j2k_codestream::scalable_lossless::encode_lossless_d2_impl::<false, false>::{closure#5}+0xb0>
+   ced62:	0f 10 44 24 08                                  	movups 0x8(%rsp),%xmm0
+   ced67:	0f 10 4c 24 18                                  	movups 0x18(%rsp),%xmm1
+   ced6c:	0f 10 54 24 28                                  	movups 0x28(%rsp),%xmm2
+   ced71:	48 8b 04 24                                     	mov    (%rsp),%rax
+   ced75:	0f 11 50 20                                     	movups %xmm2,0x20(%rax)
+   ced79:	0f 11 48 10                                     	movups %xmm1,0x10(%rax)
+   ced7d:	0f 11 00                                        	movups %xmm0,(%rax)
+   ced80:	48 83 c4 38                                     	add    $0x38,%rsp
+   ced84:	5b                                              	pop    %rbx
+   ced85:	41 5c                                           	pop    %r12
+   ced87:	41 5d                                           	pop    %r13
+   ced89:	41 5e                                           	pop    %r14
+   ced8b:	41 5f                                           	pop    %r15
+   ced8d:	5d                                              	pop    %rbp
+   ced8e:	c3                                              	ret

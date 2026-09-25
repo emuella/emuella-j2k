@@ -1,0 +1,373 @@
+Disassembly of section .text:
+
+000000000018cf90 <emuella_j2k_core::scalable_lossless::encode_with_limits>:
+  18cf90:	55                                              	push   %rbp
+  18cf91:	41 57                                           	push   %r15
+  18cf93:	41 56                                           	push   %r14
+  18cf95:	41 55                                           	push   %r13
+  18cf97:	41 54                                           	push   %r12
+  18cf99:	53                                              	push   %rbx
+  18cf9a:	48 81 ec 38 01 00 00                            	sub    $0x138,%rsp
+  18cfa1:	49 89 f4                                        	mov    %rsi,%r12
+  18cfa4:	48 89 fb                                        	mov    %rdi,%rbx
+  18cfa7:	4c 8b 31                                        	mov    (%rcx),%r14
+  18cfaa:	4c 8b 79 08                                     	mov    0x8(%rcx),%r15
+  18cfae:	48 8b 2e                                        	mov    (%rsi),%rbp
+  18cfb1:	4c 8b 6e 08                                     	mov    0x8(%rsi),%r13
+  18cfb5:	48 85 ed                                        	test   %rbp,%rbp
+  18cfb8:	48 89 ee                                        	mov    %rbp,%rsi
+  18cfbb:	49 0f 44 f5                                     	cmove  %r13,%rsi
+  18cfbf:	48 8d 7c 24 08                                  	lea    0x8(%rsp),%rdi
+  18cfc4:	4c 89 f1                                        	mov    %r14,%rcx
+  18cfc7:	4d 89 f8                                        	mov    %r15,%r8
+  18cfca:	e8 d1 ec fe ff                                  	call   17bca0 <emuella_j2k_core::scalable_lossless::requirements::<false>>
+  18cfcf:	48 8b 44 24 08                                  	mov    0x8(%rsp),%rax
+  18cfd4:	48 83 f8 ff                                     	cmp    $0xffffffffffffffff,%rax
+  18cfd8:	74 23                                           	je     18cffd <emuella_j2k_core::scalable_lossless::encode_with_limits+0x6d>
+  18cfda:	48 8b 4c 24 30                                  	mov    0x30(%rsp),%rcx
+  18cfdf:	0f 10 44 24 10                                  	movups 0x10(%rsp),%xmm0
+  18cfe4:	0f 10 4c 24 20                                  	movups 0x20(%rsp),%xmm1
+  18cfe9:	48 89 03                                        	mov    %rax,(%rbx)
+  18cfec:	0f 11 43 08                                     	movups %xmm0,0x8(%rbx)
+  18cff0:	0f 11 4b 18                                     	movups %xmm1,0x18(%rbx)
+  18cff4:	48 89 4b 28                                     	mov    %rcx,0x28(%rbx)
+  18cff8:	e9 d6 05 00 00                                  	jmp    18d5d3 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x643>
+  18cffd:	48 8d 7c 24 08                                  	lea    0x8(%rsp),%rdi
+  18d002:	4c 89 e6                                        	mov    %r12,%rsi
+  18d005:	e8 a6 10 ff ff                                  	call   17e0b0 <emuella_j2k_core::validate_image_view>
+  18d00a:	48 83 7c 24 08 ff                               	cmpq   $0xffffffffffffffff,0x8(%rsp)
+  18d010:	74 1f                                           	je     18d031 <emuella_j2k_core::scalable_lossless::encode_with_limits+0xa1>
+  18d012:	0f 10 44 24 08                                  	movups 0x8(%rsp),%xmm0
+  18d017:	0f 10 4c 24 18                                  	movups 0x18(%rsp),%xmm1
+  18d01c:	0f 10 54 24 28                                  	movups 0x28(%rsp),%xmm2
+  18d021:	0f 11 53 20                                     	movups %xmm2,0x20(%rbx)
+  18d025:	0f 11 4b 10                                     	movups %xmm1,0x10(%rbx)
+  18d029:	0f 11 03                                        	movups %xmm0,(%rbx)
+  18d02c:	e9 a2 05 00 00                                  	jmp    18d5d3 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x643>
+  18d031:	48 89 e8                                        	mov    %rbp,%rax
+  18d034:	48 85 ed                                        	test   %rbp,%rbp
+  18d037:	0f 84 b7 02 00 00                               	je     18d2f4 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x364>
+  18d03d:	0f b6 78 0d                                     	movzbl 0xd(%rax),%edi
+  18d041:	c1 ef 03                                        	shr    $0x3,%edi
+  18d044:	48 c7 44 24 08 01 00 00 00                      	movq   $0x1,0x8(%rsp)
+  18d04d:	0f 57 c0                                        	xorps  %xmm0,%xmm0
+  18d050:	0f 11 44 24 10                                  	movups %xmm0,0x10(%rsp)
+  18d055:	48 89 7c 24 20                                  	mov    %rdi,0x20(%rsp)
+  18d05a:	48 c7 44 24 28 01 00 00 00                      	movq   $0x1,0x28(%rsp)
+  18d063:	0f 11 44 24 30                                  	movups %xmm0,0x30(%rsp)
+  18d068:	48 89 7c 24 40                                  	mov    %rdi,0x40(%rsp)
+  18d06d:	48 c7 44 24 48 01 00 00 00                      	movq   $0x1,0x48(%rsp)
+  18d076:	0f 11 44 24 50                                  	movups %xmm0,0x50(%rsp)
+  18d07b:	48 89 7c 24 60                                  	mov    %rdi,0x60(%rsp)
+  18d080:	48 c7 44 24 68 01 00 00 00                      	movq   $0x1,0x68(%rsp)
+  18d089:	0f 11 44 24 70                                  	movups %xmm0,0x70(%rsp)
+  18d08e:	48 89 bc 24 80 00 00 00                         	mov    %rdi,0x80(%rsp)
+  18d096:	48 c7 84 24 88 00 00 00 01 00 00 00             	movq   $0x1,0x88(%rsp)
+  18d0a2:	0f 11 84 24 90 00 00 00                         	movups %xmm0,0x90(%rsp)
+  18d0aa:	48 89 bc 24 a0 00 00 00                         	mov    %rdi,0xa0(%rsp)
+  18d0b2:	48 c7 84 24 a8 00 00 00 01 00 00 00             	movq   $0x1,0xa8(%rsp)
+  18d0be:	0f 11 84 24 b0 00 00 00                         	movups %xmm0,0xb0(%rsp)
+  18d0c6:	48 89 bc 24 c0 00 00 00                         	mov    %rdi,0xc0(%rsp)
+  18d0ce:	48 c7 84 24 c8 00 00 00 01 00 00 00             	movq   $0x1,0xc8(%rsp)
+  18d0da:	0f 11 84 24 d0 00 00 00                         	movups %xmm0,0xd0(%rsp)
+  18d0e2:	48 89 bc 24 e0 00 00 00                         	mov    %rdi,0xe0(%rsp)
+  18d0ea:	48 c7 84 24 e8 00 00 00 01 00 00 00             	movq   $0x1,0xe8(%rsp)
+  18d0f6:	0f 11 84 24 f0 00 00 00                         	movups %xmm0,0xf0(%rsp)
+  18d0fe:	48 89 bc 24 00 01 00 00                         	mov    %rdi,0x100(%rsp)
+  18d106:	0f b7 48 08                                     	movzwl 0x8(%rax),%ecx
+  18d10a:	48 85 c9                                        	test   %rcx,%rcx
+  18d10d:	0f 84 be 02 00 00                               	je     18d3d1 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x441>
+  18d113:	49 8b 54 24 10                                  	mov    0x10(%r12),%rdx
+  18d118:	49 8b 74 24 18                                  	mov    0x18(%r12),%rsi
+  18d11d:	48 85 ed                                        	test   %rbp,%rbp
+  18d120:	0f 84 b3 02 00 00                               	je     18d3d9 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x449>
+  18d126:	49 89 c8                                        	mov    %rcx,%r8
+  18d129:	4c 0f af c7                                     	imul   %rdi,%r8
+  18d12d:	4c 89 6c 24 08                                  	mov    %r13,0x8(%rsp)
+  18d132:	48 89 54 24 10                                  	mov    %rdx,0x10(%rsp)
+  18d137:	48 89 74 24 18                                  	mov    %rsi,0x18(%rsp)
+  18d13c:	4c 89 44 24 20                                  	mov    %r8,0x20(%rsp)
+  18d141:	48 83 f9 01                                     	cmp    $0x1,%rcx
+  18d145:	0f 84 1c 04 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d14b:	49 89 d0                                        	mov    %rdx,%r8
+  18d14e:	49 29 f8                                        	sub    %rdi,%r8
+  18d151:	0f 82 b3 04 00 00                               	jb     18d60a <emuella_j2k_core::scalable_lossless::encode_with_limits+0x67a>
+  18d157:	4e 8d 0c 2f                                     	lea    (%rdi,%r13,1),%r9
+  18d15b:	44 0f b7 50 08                                  	movzwl 0x8(%rax),%r10d
+  18d160:	4c 0f af d7                                     	imul   %rdi,%r10
+  18d164:	4c 89 4c 24 28                                  	mov    %r9,0x28(%rsp)
+  18d169:	4c 89 44 24 30                                  	mov    %r8,0x30(%rsp)
+  18d16e:	48 89 74 24 38                                  	mov    %rsi,0x38(%rsp)
+  18d173:	4c 89 54 24 40                                  	mov    %r10,0x40(%rsp)
+  18d178:	83 f9 02                                        	cmp    $0x2,%ecx
+  18d17b:	0f 84 e6 03 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d181:	44 8d 04 3f                                     	lea    (%rdi,%rdi,1),%r8d
+  18d185:	49 89 d1                                        	mov    %rdx,%r9
+  18d188:	4d 29 c1                                        	sub    %r8,%r9
+  18d18b:	0f 82 76 04 00 00                               	jb     18d607 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x677>
+  18d191:	4d 01 e8                                        	add    %r13,%r8
+  18d194:	44 0f b7 50 08                                  	movzwl 0x8(%rax),%r10d
+  18d199:	4c 0f af d7                                     	imul   %rdi,%r10
+  18d19d:	4c 89 44 24 48                                  	mov    %r8,0x48(%rsp)
+  18d1a2:	4c 89 4c 24 50                                  	mov    %r9,0x50(%rsp)
+  18d1a7:	48 89 74 24 58                                  	mov    %rsi,0x58(%rsp)
+  18d1ac:	4c 89 54 24 60                                  	mov    %r10,0x60(%rsp)
+  18d1b1:	83 f9 03                                        	cmp    $0x3,%ecx
+  18d1b4:	0f 84 ad 03 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d1ba:	4c 8d 04 7f                                     	lea    (%rdi,%rdi,2),%r8
+  18d1be:	49 89 d1                                        	mov    %rdx,%r9
+  18d1c1:	4d 29 c1                                        	sub    %r8,%r9
+  18d1c4:	0f 82 3d 04 00 00                               	jb     18d607 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x677>
+  18d1ca:	4d 01 e8                                        	add    %r13,%r8
+  18d1cd:	44 0f b7 50 08                                  	movzwl 0x8(%rax),%r10d
+  18d1d2:	4c 0f af d7                                     	imul   %rdi,%r10
+  18d1d6:	4c 89 44 24 68                                  	mov    %r8,0x68(%rsp)
+  18d1db:	4c 89 4c 24 70                                  	mov    %r9,0x70(%rsp)
+  18d1e0:	48 89 74 24 78                                  	mov    %rsi,0x78(%rsp)
+  18d1e5:	4c 89 94 24 80 00 00 00                         	mov    %r10,0x80(%rsp)
+  18d1ed:	83 f9 04                                        	cmp    $0x4,%ecx
+  18d1f0:	0f 84 71 03 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d1f6:	44 8d 04 bd 00 00 00 00                         	lea    0x0(,%rdi,4),%r8d
+  18d1fe:	49 89 d1                                        	mov    %rdx,%r9
+  18d201:	4d 29 c1                                        	sub    %r8,%r9
+  18d204:	0f 82 fd 03 00 00                               	jb     18d607 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x677>
+  18d20a:	4d 01 e8                                        	add    %r13,%r8
+  18d20d:	44 0f b7 50 08                                  	movzwl 0x8(%rax),%r10d
+  18d212:	4c 0f af d7                                     	imul   %rdi,%r10
+  18d216:	4c 89 84 24 88 00 00 00                         	mov    %r8,0x88(%rsp)
+  18d21e:	4c 89 8c 24 90 00 00 00                         	mov    %r9,0x90(%rsp)
+  18d226:	48 89 b4 24 98 00 00 00                         	mov    %rsi,0x98(%rsp)
+  18d22e:	4c 89 94 24 a0 00 00 00                         	mov    %r10,0xa0(%rsp)
+  18d236:	83 f9 05                                        	cmp    $0x5,%ecx
+  18d239:	0f 84 28 03 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d23f:	4c 8d 04 bf                                     	lea    (%rdi,%rdi,4),%r8
+  18d243:	49 89 d1                                        	mov    %rdx,%r9
+  18d246:	4d 29 c1                                        	sub    %r8,%r9
+  18d249:	0f 82 b8 03 00 00                               	jb     18d607 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x677>
+  18d24f:	4d 01 e8                                        	add    %r13,%r8
+  18d252:	44 0f b7 50 08                                  	movzwl 0x8(%rax),%r10d
+  18d257:	4c 0f af d7                                     	imul   %rdi,%r10
+  18d25b:	4c 89 84 24 a8 00 00 00                         	mov    %r8,0xa8(%rsp)
+  18d263:	4c 89 8c 24 b0 00 00 00                         	mov    %r9,0xb0(%rsp)
+  18d26b:	48 89 b4 24 b8 00 00 00                         	mov    %rsi,0xb8(%rsp)
+  18d273:	4c 89 94 24 c0 00 00 00                         	mov    %r10,0xc0(%rsp)
+  18d27b:	83 f9 06                                        	cmp    $0x6,%ecx
+  18d27e:	0f 84 e3 02 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d284:	44 8d 04 3f                                     	lea    (%rdi,%rdi,1),%r8d
+  18d288:	4f 8d 04 40                                     	lea    (%r8,%r8,2),%r8
+  18d28c:	49 89 d1                                        	mov    %rdx,%r9
+  18d28f:	4d 29 c1                                        	sub    %r8,%r9
+  18d292:	0f 82 6f 03 00 00                               	jb     18d607 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x677>
+  18d298:	4d 01 e8                                        	add    %r13,%r8
+  18d29b:	44 0f b7 50 08                                  	movzwl 0x8(%rax),%r10d
+  18d2a0:	4c 0f af d7                                     	imul   %rdi,%r10
+  18d2a4:	4c 89 84 24 c8 00 00 00                         	mov    %r8,0xc8(%rsp)
+  18d2ac:	4c 89 8c 24 d0 00 00 00                         	mov    %r9,0xd0(%rsp)
+  18d2b4:	48 89 b4 24 d8 00 00 00                         	mov    %rsi,0xd8(%rsp)
+  18d2bc:	4c 89 94 24 e0 00 00 00                         	mov    %r10,0xe0(%rsp)
+  18d2c4:	83 f9 07                                        	cmp    $0x7,%ecx
+  18d2c7:	0f 84 9a 02 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d2cd:	4c 8d 04 fd 00 00 00 00                         	lea    0x0(,%rdi,8),%r8
+  18d2d5:	49 29 f8                                        	sub    %rdi,%r8
+  18d2d8:	48 89 d1                                        	mov    %rdx,%rcx
+  18d2db:	4c 29 c1                                        	sub    %r8,%rcx
+  18d2de:	0f 82 23 03 00 00                               	jb     18d607 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x677>
+  18d2e4:	4d 01 c5                                        	add    %r8,%r13
+  18d2e7:	0f b7 50 08                                     	movzwl 0x8(%rax),%edx
+  18d2eb:	48 0f af fa                                     	imul   %rdx,%rdi
+  18d2ef:	e9 53 02 00 00                                  	jmp    18d547 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5b7>
+  18d2f4:	49 8b 4c 24 18                                  	mov    0x18(%r12),%rcx
+  18d2f9:	4c 89 e8                                        	mov    %r13,%rax
+  18d2fc:	48 85 c9                                        	test   %rcx,%rcx
+  18d2ff:	0f 84 38 fd ff ff                               	je     18d03d <emuella_j2k_core::scalable_lossless::encode_with_limits+0xad>
+  18d305:	49 8b 44 24 10                                  	mov    0x10(%r12),%rax
+  18d30a:	48 c1 e1 03                                     	shl    $0x3,%rcx
+  18d30e:	48 8d 0c 89                                     	lea    (%rcx,%rcx,4),%rcx
+  18d312:	41 8b 55 00                                     	mov    0x0(%r13),%edx
+  18d316:	31 f6                                           	xor    %esi,%esi
+  18d318:	eb 13                                           	jmp    18d32d <emuella_j2k_core::scalable_lossless::encode_with_limits+0x39d>
+  18d31a:	41 80 f8 02                                     	cmp    $0x2,%r8b
+  18d31e:	75 48                                           	jne    18d368 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x3d8>
+  18d320:	48 83 c6 28                                     	add    $0x28,%rsi
+  18d324:	48 39 f1                                        	cmp    %rsi,%rcx
+  18d327:	0f 84 bb 02 00 00                               	je     18d5e8 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x658>
+  18d32d:	39 54 30 18                                     	cmp    %edx,0x18(%rax,%rsi,1)
+  18d331:	75 35                                           	jne    18d368 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x3d8>
+  18d333:	8b 7c 30 1c                                     	mov    0x1c(%rax,%rsi,1),%edi
+  18d337:	41 3b 7d 04                                     	cmp    0x4(%r13),%edi
+  18d33b:	75 2b                                           	jne    18d368 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x3d8>
+  18d33d:	0f b6 7c 30 22                                  	movzbl 0x22(%rax,%rsi,1),%edi
+  18d342:	41 3a 7d 0d                                     	cmp    0xd(%r13),%dil
+  18d346:	75 20                                           	jne    18d368 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x3d8>
+  18d348:	0f b6 7c 30 20                                  	movzbl 0x20(%rax,%rsi,1),%edi
+  18d34d:	41 3a 7d 0b                                     	cmp    0xb(%r13),%dil
+  18d351:	75 15                                           	jne    18d368 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x3d8>
+  18d353:	0f b6 7c 30 21                                  	movzbl 0x21(%rax,%rsi,1),%edi
+  18d358:	45 0f b6 45 0c                                  	movzbl 0xc(%r13),%r8d
+  18d35d:	40 80 ff 02                                     	cmp    $0x2,%dil
+  18d361:	74 b7                                           	je     18d31a <emuella_j2k_core::scalable_lossless::encode_with_limits+0x38a>
+  18d363:	44 38 c7                                        	cmp    %r8b,%dil
+  18d366:	74 b8                                           	je     18d320 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x390>
+  18d368:	bf 39 00 00 00                                  	mov    $0x39,%edi
+  18d36d:	ff 15 95 07 0e 00                               	call   *0xe0795(%rip)        # 26db08 <malloc@GLIBC_2.2.5>
+  18d373:	48 85 c0                                        	test   %rax,%rax
+  18d376:	0f 84 9e 02 00 00                               	je     18d61a <emuella_j2k_core::scalable_lossless::encode_with_limits+0x68a>
+  18d37c:	0f 10 05 56 20 e9 ff                            	movups -0x16dfaa(%rip),%xmm0        # 1f3d9 <anon.19845961c3694082bd3c1864c0b9dd4a.1255.llvm.17788009695388792836+0x1bf9>
+  18d383:	0f 11 40 29                                     	movups %xmm0,0x29(%rax)
+  18d387:	0f 10 05 42 20 e9 ff                            	movups -0x16dfbe(%rip),%xmm0        # 1f3d0 <anon.19845961c3694082bd3c1864c0b9dd4a.1255.llvm.17788009695388792836+0x1bf0>
+  18d38e:	0f 11 40 20                                     	movups %xmm0,0x20(%rax)
+  18d392:	0f 10 05 27 20 e9 ff                            	movups -0x16dfd9(%rip),%xmm0        # 1f3c0 <anon.19845961c3694082bd3c1864c0b9dd4a.1255.llvm.17788009695388792836+0x1be0>
+  18d399:	0f 11 40 10                                     	movups %xmm0,0x10(%rax)
+  18d39d:	0f 10 05 0c 20 e9 ff                            	movups -0x16dff4(%rip),%xmm0        # 1f3b0 <anon.19845961c3694082bd3c1864c0b9dd4a.1255.llvm.17788009695388792836+0x1bd0>
+  18d3a4:	0f 11 00                                        	movups %xmm0,(%rax)
+  18d3a7:	48 b9 04 00 00 00 00 00 00 80                   	movabs $0x8000000000000004,%rcx
+  18d3b1:	48 89 0b                                        	mov    %rcx,(%rbx)
+  18d3b4:	48 c7 43 08 39 00 00 00                         	movq   $0x39,0x8(%rbx)
+  18d3bc:	48 89 43 10                                     	mov    %rax,0x10(%rbx)
+  18d3c0:	48 c7 43 18 39 00 00 00                         	movq   $0x39,0x18(%rbx)
+  18d3c8:	c6 43 20 08                                     	movb   $0x8,0x20(%rbx)
+  18d3cc:	e9 02 02 00 00                                  	jmp    18d5d3 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x643>
+  18d3d1:	45 31 c9                                        	xor    %r9d,%r9d
+  18d3d4:	e9 99 01 00 00                                  	jmp    18d572 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5e2>
+  18d3d9:	48 85 f6                                        	test   %rsi,%rsi
+  18d3dc:	0f 84 48 02 00 00                               	je     18d62a <emuella_j2k_core::scalable_lossless::encode_with_limits+0x69a>
+  18d3e2:	4c 8b 02                                        	mov    (%rdx),%r8
+  18d3e5:	4c 89 44 24 08                                  	mov    %r8,0x8(%rsp)
+  18d3ea:	0f 10 42 08                                     	movups 0x8(%rdx),%xmm0
+  18d3ee:	0f 11 44 24 10                                  	movups %xmm0,0x10(%rsp)
+  18d3f3:	48 89 7c 24 20                                  	mov    %rdi,0x20(%rsp)
+  18d3f8:	83 f9 01                                        	cmp    $0x1,%ecx
+  18d3fb:	0f 84 66 01 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d401:	48 83 fe 01                                     	cmp    $0x1,%rsi
+  18d405:	0f 84 2e 02 00 00                               	je     18d639 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x6a9>
+  18d40b:	4c 8b 42 28                                     	mov    0x28(%rdx),%r8
+  18d40f:	4c 89 44 24 28                                  	mov    %r8,0x28(%rsp)
+  18d414:	0f 10 42 30                                     	movups 0x30(%rdx),%xmm0
+  18d418:	0f 11 44 24 30                                  	movups %xmm0,0x30(%rsp)
+  18d41d:	48 89 7c 24 40                                  	mov    %rdi,0x40(%rsp)
+  18d422:	83 f9 02                                        	cmp    $0x2,%ecx
+  18d425:	0f 84 3c 01 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d42b:	48 83 fe 02                                     	cmp    $0x2,%rsi
+  18d42f:	0f 84 16 02 00 00                               	je     18d64b <emuella_j2k_core::scalable_lossless::encode_with_limits+0x6bb>
+  18d435:	4c 8b 42 50                                     	mov    0x50(%rdx),%r8
+  18d439:	4c 89 44 24 48                                  	mov    %r8,0x48(%rsp)
+  18d43e:	0f 10 42 58                                     	movups 0x58(%rdx),%xmm0
+  18d442:	0f 11 44 24 50                                  	movups %xmm0,0x50(%rsp)
+  18d447:	48 89 7c 24 60                                  	mov    %rdi,0x60(%rsp)
+  18d44c:	83 f9 03                                        	cmp    $0x3,%ecx
+  18d44f:	0f 84 12 01 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d455:	48 83 fe 03                                     	cmp    $0x3,%rsi
+  18d459:	0f 84 fe 01 00 00                               	je     18d65d <emuella_j2k_core::scalable_lossless::encode_with_limits+0x6cd>
+  18d45f:	4c 8b 42 78                                     	mov    0x78(%rdx),%r8
+  18d463:	4c 89 44 24 68                                  	mov    %r8,0x68(%rsp)
+  18d468:	0f 10 82 80 00 00 00                            	movups 0x80(%rdx),%xmm0
+  18d46f:	0f 11 44 24 70                                  	movups %xmm0,0x70(%rsp)
+  18d474:	48 89 bc 24 80 00 00 00                         	mov    %rdi,0x80(%rsp)
+  18d47c:	83 f9 04                                        	cmp    $0x4,%ecx
+  18d47f:	0f 84 e2 00 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d485:	48 83 fe 04                                     	cmp    $0x4,%rsi
+  18d489:	0f 84 e0 01 00 00                               	je     18d66f <emuella_j2k_core::scalable_lossless::encode_with_limits+0x6df>
+  18d48f:	4c 8b 82 a0 00 00 00                            	mov    0xa0(%rdx),%r8
+  18d496:	4c 89 84 24 88 00 00 00                         	mov    %r8,0x88(%rsp)
+  18d49e:	0f 10 82 a8 00 00 00                            	movups 0xa8(%rdx),%xmm0
+  18d4a5:	0f 11 84 24 90 00 00 00                         	movups %xmm0,0x90(%rsp)
+  18d4ad:	48 89 bc 24 a0 00 00 00                         	mov    %rdi,0xa0(%rsp)
+  18d4b5:	83 f9 05                                        	cmp    $0x5,%ecx
+  18d4b8:	0f 84 a9 00 00 00                               	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d4be:	48 83 fe 05                                     	cmp    $0x5,%rsi
+  18d4c2:	0f 84 b9 01 00 00                               	je     18d681 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x6f1>
+  18d4c8:	4c 8b 82 c8 00 00 00                            	mov    0xc8(%rdx),%r8
+  18d4cf:	4c 89 84 24 a8 00 00 00                         	mov    %r8,0xa8(%rsp)
+  18d4d7:	0f 10 82 d0 00 00 00                            	movups 0xd0(%rdx),%xmm0
+  18d4de:	0f 11 84 24 b0 00 00 00                         	movups %xmm0,0xb0(%rsp)
+  18d4e6:	48 89 bc 24 c0 00 00 00                         	mov    %rdi,0xc0(%rsp)
+  18d4ee:	83 f9 06                                        	cmp    $0x6,%ecx
+  18d4f1:	74 74                                           	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d4f3:	48 83 fe 06                                     	cmp    $0x6,%rsi
+  18d4f7:	0f 84 96 01 00 00                               	je     18d693 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x703>
+  18d4fd:	4c 8b 82 f0 00 00 00                            	mov    0xf0(%rdx),%r8
+  18d504:	4c 89 84 24 c8 00 00 00                         	mov    %r8,0xc8(%rsp)
+  18d50c:	0f 10 82 f8 00 00 00                            	movups 0xf8(%rdx),%xmm0
+  18d513:	0f 11 84 24 d0 00 00 00                         	movups %xmm0,0xd0(%rsp)
+  18d51b:	48 89 bc 24 e0 00 00 00                         	mov    %rdi,0xe0(%rsp)
+  18d523:	83 f9 07                                        	cmp    $0x7,%ecx
+  18d526:	74 3f                                           	je     18d567 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x5d7>
+  18d528:	48 83 fe 07                                     	cmp    $0x7,%rsi
+  18d52c:	0f 84 73 01 00 00                               	je     18d6a5 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x715>
+  18d532:	4c 8b aa 18 01 00 00                            	mov    0x118(%rdx),%r13
+  18d539:	48 8b 8a 20 01 00 00                            	mov    0x120(%rdx),%rcx
+  18d540:	48 8b b2 28 01 00 00                            	mov    0x128(%rdx),%rsi
+  18d547:	4c 89 ac 24 e8 00 00 00                         	mov    %r13,0xe8(%rsp)
+  18d54f:	48 89 8c 24 f0 00 00 00                         	mov    %rcx,0xf0(%rsp)
+  18d557:	48 89 b4 24 f8 00 00 00                         	mov    %rsi,0xf8(%rsp)
+  18d55f:	48 89 bc 24 00 01 00 00                         	mov    %rdi,0x100(%rsp)
+  18d567:	44 0f b7 48 08                                  	movzwl 0x8(%rax),%r9d
+  18d56c:	49 83 f9 09                                     	cmp    $0x9,%r9
+  18d570:	73 7e                                           	jae    18d5f0 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x660>
+  18d572:	8b 30                                           	mov    (%rax),%esi
+  18d574:	8b 50 04                                        	mov    0x4(%rax),%edx
+  18d577:	0f b6 48 0d                                     	movzbl 0xd(%rax),%ecx
+  18d57b:	48 8d bc 24 08 01 00 00                         	lea    0x108(%rsp),%rdi
+  18d583:	4c 8d 44 24 08                                  	lea    0x8(%rsp),%r8
+  18d588:	41 57                                           	push   %r15
+  18d58a:	41 56                                           	push   %r14
+  18d58c:	ff 15 ce 0d 0e 00                               	call   *0xe0dce(%rip)        # 26e360 <_DYNAMIC+0xa60>
+  18d592:	48 83 c4 10                                     	add    $0x10,%rsp
+  18d596:	48 83 bc 24 08 01 00 00 ff                      	cmpq   $0xffffffffffffffff,0x108(%rsp)
+  18d59f:	74 13                                           	je     18d5b4 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x624>
+  18d5a1:	48 8d b4 24 08 01 00 00                         	lea    0x108(%rsp),%rsi
+  18d5a9:	48 89 df                                        	mov    %rbx,%rdi
+  18d5ac:	ff 15 3e 0e 0e 00                               	call   *0xe0e3e(%rip)        # 26e3f0 <_DYNAMIC+0xaf0>
+  18d5b2:	eb 1f                                           	jmp    18d5d3 <emuella_j2k_core::scalable_lossless::encode_with_limits+0x643>
+  18d5b4:	48 8b 84 24 20 01 00 00                         	mov    0x120(%rsp),%rax
+  18d5bc:	48 89 43 18                                     	mov    %rax,0x18(%rbx)
+  18d5c0:	0f 10 84 24 10 01 00 00                         	movups 0x110(%rsp),%xmm0
+  18d5c8:	0f 11 43 08                                     	movups %xmm0,0x8(%rbx)
+  18d5cc:	48 c7 03 ff ff ff ff                            	movq   $0xffffffffffffffff,(%rbx)
+  18d5d3:	48 89 d8                                        	mov    %rbx,%rax
+  18d5d6:	48 81 c4 38 01 00 00                            	add    $0x138,%rsp
+  18d5dd:	5b                                              	pop    %rbx
+  18d5de:	41 5c                                           	pop    %r12
+  18d5e0:	41 5d                                           	pop    %r13
+  18d5e2:	41 5e                                           	pop    %r14
+  18d5e4:	41 5f                                           	pop    %r15
+  18d5e6:	5d                                              	pop    %rbp
+  18d5e7:	c3                                              	ret
+  18d5e8:	4c 89 e8                                        	mov    %r13,%rax
+  18d5eb:	e9 4d fa ff ff                                  	jmp    18d03d <emuella_j2k_core::scalable_lossless::encode_with_limits+0xad>
+  18d5f0:	48 8d 0d c9 b8 0d 00                            	lea    0xdb8c9(%rip),%rcx        # 268ec0 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x2198>
+  18d5f7:	ba 08 00 00 00                                  	mov    $0x8,%edx
+  18d5fc:	31 ff                                           	xor    %edi,%edi
+  18d5fe:	4c 89 ce                                        	mov    %r9,%rsi
+  18d601:	ff 15 69 07 0e 00                               	call   *0xe0769(%rip)        # 26dd70 <_DYNAMIC+0x470>
+  18d607:	4c 89 c7                                        	mov    %r8,%rdi
+  18d60a:	48 8d 0d df b8 0d 00                            	lea    0xdb8df(%rip),%rcx        # 268ef0 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21c8>
+  18d611:	48 89 d6                                        	mov    %rdx,%rsi
+  18d614:	ff 15 56 07 0e 00                               	call   *0xe0756(%rip)        # 26dd70 <_DYNAMIC+0x470>
+  18d61a:	bf 01 00 00 00                                  	mov    $0x1,%edi
+  18d61f:	be 39 00 00 00                                  	mov    $0x39,%esi
+  18d624:	ff 15 26 05 0e 00                               	call   *0xe0526(%rip)        # 26db50 <_DYNAMIC+0x250>
+  18d62a:	31 ff                                           	xor    %edi,%edi
+  18d62c:	48 8d 15 a5 b8 0d 00                            	lea    0xdb8a5(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d633:	ff 15 27 05 0e 00                               	call   *0xe0527(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d639:	bf 01 00 00 00                                  	mov    $0x1,%edi
+  18d63e:	48 8d 15 93 b8 0d 00                            	lea    0xdb893(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d645:	ff 15 15 05 0e 00                               	call   *0xe0515(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d64b:	bf 02 00 00 00                                  	mov    $0x2,%edi
+  18d650:	48 8d 15 81 b8 0d 00                            	lea    0xdb881(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d657:	ff 15 03 05 0e 00                               	call   *0xe0503(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d65d:	bf 03 00 00 00                                  	mov    $0x3,%edi
+  18d662:	48 8d 15 6f b8 0d 00                            	lea    0xdb86f(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d669:	ff 15 f1 04 0e 00                               	call   *0xe04f1(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d66f:	bf 04 00 00 00                                  	mov    $0x4,%edi
+  18d674:	48 8d 15 5d b8 0d 00                            	lea    0xdb85d(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d67b:	ff 15 df 04 0e 00                               	call   *0xe04df(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d681:	bf 05 00 00 00                                  	mov    $0x5,%edi
+  18d686:	48 8d 15 4b b8 0d 00                            	lea    0xdb84b(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d68d:	ff 15 cd 04 0e 00                               	call   *0xe04cd(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d693:	bf 06 00 00 00                                  	mov    $0x6,%edi
+  18d698:	48 8d 15 39 b8 0d 00                            	lea    0xdb839(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d69f:	ff 15 bb 04 0e 00                               	call   *0xe04bb(%rip)        # 26db60 <_DYNAMIC+0x260>
+  18d6a5:	bf 07 00 00 00                                  	mov    $0x7,%edi
+  18d6aa:	48 8d 15 27 b8 0d 00                            	lea    0xdb827(%rip),%rdx        # 268ed8 <anon.5bbc3e6d97737fc0000d9759de3ab1e4.8.llvm.3082122464316610755+0x21b0>
+  18d6b1:	ff 15 a9 04 0e 00                               	call   *0xe04a9(%rip)        # 26db60 <_DYNAMIC+0x260>
