@@ -12,7 +12,15 @@ use core::fmt;
 #[cfg(feature = "classic-execution-diagnostics")]
 mod forward_diagnostics;
 #[cfg(feature = "classic-execution-diagnostics")]
-pub use forward_diagnostics::{ForwardTransformDiagnostic, observe_forward_transform};
+pub use forward_diagnostics::{
+    ForwardTransformDiagnostic, forward53_diagnostic_policy, observe_forward_transform,
+    with_forward53_diagnostic_policy,
+};
+
+mod analysis53;
+pub use analysis53::{
+    Forward53Backend, Forward53Plan, Forward53Workspace, forward_reversible_5_3_planned_bounded,
+};
 
 mod full;
 mod window;

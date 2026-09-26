@@ -1,5 +1,15 @@
 # Classic forward 5/3 parallel dispatch v1 — source archive
 
+## Contemporary restoration candidate
+
+The current development branch restores the archived B dispatch source, authored
+tests and check commands on the later production base. The implementation and
+proof below describe the restored source; the historical measurement and
+qualification result remain specific to the original frozen candidate. This
+restoration has no performance qualification or production selection yet. The
+original archive patch and its recorded base still reproduce the exact frozen
+tree; the historical source and results are retained below without revision.
+
 The one bounded `classic-forward53-parallel-dispatch/v1` confirmation is closed
 as **NOT QUALIFIED WITHIN BUDGET**. Production retains its original scalar
 forward traversal, MQ and W execution. No panel implementation, dispatch policy,
