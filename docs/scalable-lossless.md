@@ -1,9 +1,12 @@
 # Scalable classic lossless encoding
 
-This development branch restores [parallel dispatch for the forward 5/3 panel engine](forward53-parallel-dispatch.md).
-Its correctness, phase memory proof and diagnostic identities are described there.
-The restored source has no contemporary performance qualification or production
-selection yet.
+The ordinary eligible parallel route uses [B's forward 5/3 panel dispatch](forward53-parallel-dispatch.md).
+Its correctness, phase memory proof, bounded fallback and diagnostic identities
+are described there. The original one-worker transform helper remains the
+ordinary route when fewer than two useful panel slots are admitted. B was
+selected after the separate `classic-forward53-integration-assessment/v1`;
+its measured benefit and serial costs are scoped to that assessment's host,
+build and fixed workload profile.
 
 The public owned `encode` route admits raw, single-tile Part 1 lossless D2
 images with unsigned U8 or U16_LE greyscale/RGB samples, LRCP and reversible
