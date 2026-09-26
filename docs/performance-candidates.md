@@ -346,11 +346,14 @@ and its finite confirmation record for complete observations and unstarted gates
 
 ## Classic forward 5/3 parallel dispatch v1
 
-The separate `classic-forward53-parallel-dispatch/v1` treatment is **NOT QUALIFIED
-WITHIN BUDGET** and remains source-only. Its bounded confirmation is closed;
-there is no authorised retest or production promotion. Earlier finite-confirmation
-v1/v2 outcomes and their evidence are unchanged. Production source, tests,
-dependencies and checks retain the exact pre-treatment base.
+The separate historical `classic-forward53-parallel-dispatch/v1` treatment is
+**NOT QUALIFIED WITHIN BUDGET**. At its closure it remained source-only, with no
+authorised retest or production promotion under that protocol. Earlier
+finite-confirmation v1/v2 outcomes and their evidence are unchanged. The later
+`classic-forward53-integration-assessment/v1` separately selected a
+byte-congruent B implementation for the ordinary eligible parallel route;
+[its current source and proof](forward53-parallel-dispatch.md) retain the
+original one-worker helper and bounded fallback.
 
 | Recovery identity | Value |
 |---|---|
@@ -362,8 +365,9 @@ dependencies and checks retain the exact pre-treatment base.
 The thirteen-file full-index patch reconstructs the exact frozen tree from its
 base in an isolated Git index. It includes the panel engine, independent authored
 arithmetic/stream tests, backend/scratch routing tests, diagnostics, build checks
-and proof. None is a production build input. The [terminal source record](forward53-parallel-dispatch.md)
-retains the dispatch truth table and phase-aware allocation proof.
+and proof. None was a production build input at the historical archive closure.
+The [source record](forward53-parallel-dispatch.md) retains the dispatch truth
+table and phase-aware allocation proof for the later byte-congruent integration.
 
 Ordinary single-worker execution kept the original multi-level helper and original
 scratch lifecycle, with no panel allocation or initialisation. Panels required at
@@ -386,7 +390,7 @@ explicit objective and contemporary qualification, not a continuation of this ru
 ## Classic forward 5/3 caller boundary v1
 
 The prospective [caller-boundary experiment](forward53-caller-boundary.md)
-compares production reference A, the archived parallel-dispatch B, and B plus
+compared the then-production reference A, the archived parallel-dispatch B, and B plus
 one owning-helper refactoring C. Its additional full-index patch applies after
 recovering B and retains the exact C source and authored tests. The helper owns
 panel preparation, component execution and destruction; the effective

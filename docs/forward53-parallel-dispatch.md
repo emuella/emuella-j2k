@@ -1,10 +1,31 @@
-# Classic forward 5/3 parallel dispatch v1 — source archive
+# Classic forward 5/3 parallel dispatch B — integration and archive
+
+## Selected contemporary integration
+
+The ordinary eligible parallel backend uses the archived B dispatch source,
+authored tests and check commands mechanically restored on the later production
+base. The separate `classic-forward53-integration-assessment/v1` completed its
+fixed 28-endpoint matrix and three independent repeat checks. All registered
+numerical and hard gates passed; independent engineering review accepted the
+substantial eligible-parallel benefit with disclosed serial slowdowns within
+the prospectively approved secondary allowance. This is a scoped selection for
+the measured host, ordinary build and fixed workload profile, not a universal
+speed claim. The original one-worker helper and bounded fallback remain.
+
+The implementation and proof below apply to this byte-congruent B source. The
+historical measurement and qualification result remain specific to the original
+frozen candidate and its earlier +1% secondary policy. The original archive
+patch and recorded base still reproduce the exact frozen tree; those historical
+source and result records are retained below without retrospective revision.
+
+## Historical parallel-dispatch result
 
 The one bounded `classic-forward53-parallel-dispatch/v1` confirmation is closed
-as **NOT QUALIFIED WITHIN BUDGET**. Production retains its original scalar
-forward traversal, MQ and W execution. No panel implementation, dispatch policy,
-tests, diagnostic feature changes or check-engine changes from this candidate
-are compiled or enabled by the archive. No retest is authorised by this record.
+as **NOT QUALIFIED WITHIN BUDGET**. At that time production retained its original
+scalar forward traversal, MQ and W execution. The archive did not compile or
+enable its panel implementation, dispatch policy, tests, diagnostic feature or
+check-engine changes. That closed result did not authorise a retest; the later
+integration assessment was a separate prospective objective.
 The earlier finite-confirmation v1/v2 outcomes remain unchanged.
 
 The primary passed, but the serial Boca RGB8 style-zero endpoint's complete
@@ -53,8 +74,10 @@ a contemporary base and fresh review; it must preserve newer independent tests.
 
 ## Archived dispatch and proof scope
 
-The remaining description, proof and commands describe only the frozen archived
-candidate. Its source restored the earlier panel engine with a new selection and
+The remaining description and proof originated with the frozen archived
+candidate and apply to the byte-congruent contemporary integration. The
+historical commands and results remain scoped to the archive. Its source
+restored the earlier panel engine with a new selection and
 scratch-lifetime policy for the bounded classic lossless D2 encoder. No decoding,
 input conversion, level shift, RCT, exponent scan, header, Tier-1, MQ, packet or
 W-batch algorithm was changed.
@@ -252,8 +275,8 @@ LL levels, and changing geometries/budgets. Independent transform tests retain
 high-first phases, partial windows and joined panic/reuse. None of these tests
 uses a corpus input or establishes performance. The frozen candidate's canonical
 checks ran these tests explicitly and passed on its exact commit/tree. The
-commands below apply only after recovering the candidate; the production check
-engine remains unchanged.
+commands below were the archive's checks; contemporary canonical checks also
+cover the restored implementation. The production check engine is unchanged.
 
 ```sh
 cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
@@ -268,9 +291,10 @@ natively and in Node/WASM, with complete-stream SHA-256 equality. That runtime
 check exercised supported U8/U16 component counts, both styles and padded planar
 input at three geometries. It contained no route counters; routing and scratch
 selection were established by the source guard and instrumented native tests.
-These engineering observations remain scoped to the frozen candidate. The
-confirmation disposition above closes the remaining qualification requirement
-without treating unstarted endpoints as passed.
+These historical engineering observations remain scoped to the frozen
+candidate. The historical confirmation disposition left its 25 unstarted
+endpoints unqualified; the separate contemporary assessment supplied its own
+complete matrix and decision.
 
 The codec-owned aggregate diagnostic driver uses the same feature observer:
 

@@ -10,6 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
+classic-execution-diagnostics = ["emuella-j2k-codestream/classic-execution-diagnostics"]
 parallel = ["emuella-j2k-core/parallel"]
 simd = ["emuella-j2k-core/simd"]
 

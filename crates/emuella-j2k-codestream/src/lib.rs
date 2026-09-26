@@ -109,6 +109,8 @@ const fn parallel_decode_dispatch_available() -> bool {
 
 mod scalable_lossless;
 #[cfg(feature = "classic-execution-diagnostics")]
+pub use emuella_j2k_transform::{Forward53Backend, with_forward53_diagnostic_policy};
+#[cfg(feature = "classic-execution-diagnostics")]
 pub use scalable_lossless::diagnostics::{LosslessExecutionDiagnostic, observe_lossless_encode};
 #[cfg(all(feature = "std", feature = "test-fixtures"))]
 pub use scalable_lossless::encode_lossless_d2_bypass_execution_profiled;
