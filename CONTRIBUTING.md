@@ -75,6 +75,25 @@ point; ordinary workspace tests retain a representative smoke case without
 repeating that complete matrix in unoptimised mode. See
 [`docs/testing.md`](docs/testing.md#canonical-local-gate) for the focused command.
 
+### Hosted CI build cache
+
+The hosted `test` job restores one disposable Rust cache after selecting the
+pinned compiler. It covers the root workspace's debug and release `target`
+profiles, the separate codestream fuzz workspace's `target`, and their shared
+Cargo registry. The C API check keeps its own temporary target so each run
+builds and checks its generated header and native consumers from a clean target.
+The local committed-tree gate also keeps its disposable build directory.
+
+Only a successful `main` job saves the cache; pull requests can restore the
+main cache but do not publish one. The action keys compiler, platform, Cargo
+environment, member manifests, lockfiles and Cargo configuration; the workflow
+also keys the virtual root manifest. Bump the workflow's cache prefix when the
+set of build commands or cached paths changes materially. Exact hits are
+immutable, and Cargo still checks source freshness and runs every verification
+command. A cache miss or service warning means a normal uncached build; inspect
+the restore key, saved archive and Cargo compilation lines before treating a
+reported hit as effective reuse.
+
 ## Standards and implementation provenance
 
 The ISO/IEC standards are normative authorities, not sources of publishable
