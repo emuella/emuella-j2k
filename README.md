@@ -5,6 +5,10 @@ encoding selected image profiles, and decoding pixels through an
 application-facing Rust API. It includes a small command-line inspection tool.
 Use it when you need to examine a codestream or container, work with native
 component samples, or encode and decode within the documented profiles.
+Structural inspection and pixel reconstruction have different admission rules:
+an image may have readable metadata while a particular decode request remains
+unsupported. Native component output also preserves codestream sample meaning
+instead of applying a display colour interpretation.
 
 **Development status:** The project is preparing its first public release.
 Version `0.1.0` is present in the source tree but is not published on crates.io.

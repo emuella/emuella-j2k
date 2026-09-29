@@ -24,9 +24,10 @@ parallel and SIMD paths retain deterministic scalar fallbacks.
 The experimental [`emuella-j2k-capi`](c-abi-safety-contract.md) adapter sits
 above the safe public facade in a separate crate. It contains the only
 project-authored unsafe boundary and is limited to positioned raw Part 1
-inspection and one-component region decode. The facade owns source parsing,
-admission, metadata and source-error provenance; the adapter owns only C
-representation, handle lifetimes, panic containment and failure translation.
+inspection and selected one- to four-component region decode. The facade owns
+source parsing, admission, metadata and source-error provenance; the adapter
+owns only C representation, handle lifetimes, panic containment and failure
+translation.
 
 Classic block coding in `emuella-j2k-tier1` uses a project-authored Annex C MQ
 coder and Annex D coefficient-context model. Its standards basis, design
