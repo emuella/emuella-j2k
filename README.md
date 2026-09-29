@@ -1,357 +1,106 @@
 # emuella-j2k
 
-`emuella-j2k` is a pure-Rust JPEG 2000 and HTJ2K codec workspace. It provides
-native Rust libraries for JP2/JPH containers, JPEG 2000 and HTJ2K codestreams,
-wavelet transforms, classic Tier-1 and HT block coding, a small command-line
-adapter, and an experimental Python binding.
+`emuella-j2k` is a pure-Rust JPEG 2000 and HTJ2K library for inspecting images,
+encoding selected image profiles, and decoding pixels through an
+application-facing Rust API. It includes a small command-line inspection tool.
+Use it when you need to examine a codestream or container, work with native
+component samples, or encode and decode within the documented profiles.
+Structural inspection and pixel reconstruction have different admission rules:
+an image may have readable metadata while a particular decode request remains
+unsupported. Native component output also preserves codestream sample meaning
+instead of applying a display colour interpretation.
 
-The project is preparing for its first public release. APIs and the supported
-profile boundaries may still change.
+**Development status:** The project is preparing its first public release.
+Version `0.1.0` is present in the source tree but is not published on crates.io.
+The public facade is the intended entry point for applications; its APIs and
+supported profiles may still change. Support is deliberately bounded and does
+not imply general JPEG 2000, HTJ2K or JP2 conformance. Start with the
+[supported-profile guide](https://github.com/emuella/emuella-j2k/blob/main/docs/supported-profiles.md)
+when deciding whether a particular input and output request is covered.
 
-## Build and test
+## What you can do
 
-The repository pins Rust 1.97.1:
+- Inspect raw J2K and HTJ2K codestreams or JP2 and JPH containers, including
+  metadata and a decode-support classification.
+- Decode selected classic Part 1 and HTONLY profiles as rendered pixels or
+  native components, according to the input and request. Selected JP2 palettes,
+  channel mappings and straight alpha produce rendered U8 output.
+- Encode selected lossless and target-rate Part 1 or HTJ2K profiles. Available
+  raw codestream and JP2/JPH outputs depend on the encoder profile.
+- Request component, reduced-resolution or regional output for selected
+  profiles. These routes have distinct input, geometry and output limits; see
+  the [decoder contracts](https://github.com/emuella/emuella-j2k/blob/main/docs/decoding-profiles.md).
 
-```sh
-cargo check --workspace --all-targets
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+## Get started
+
+Install Git and the repository's pinned Rust toolchain (currently Rust 1.97.1).
+Until a crate is published, add the facade to your application's `Cargo.toml`
+from source:
+
+```toml
+[dependencies]
+emuella-j2k = { git = "https://github.com/emuella/emuella-j2k", branch = "main" }
 ```
 
-These commands are useful while editing. After committing the candidate, run
-`sh scripts/check.sh` for the canonical gate: it verifies the exact clean Git
-tree in a disposable export, including the focused parallel native-plane and
-JP2-presentation regressions. See [contributor instructions](CONTRIBUTING.md#canonical-verification)
-for prerequisites, scratch placement and the clean-checkout contract.
-
-The ordinary test suite is self-contained. It generates its inputs
-algorithmically and does not download or invoke OpenJPEG, OpenJPH, Kakadu, or
-standards conformance material.
-
-Native component decode includes independent one-through-four-plane unsigned
-8-bit Part 1 inputs without MCT. The bounded zero-decomposition profile in
-[`docs/native-planes.md`](docs/native-planes.md) preserves caller buffers on
-failure in full-image decode, including parallel builds. Native output remains
-separate from the bounded
-[JP2 mapped presentation](docs/jp2-presentation.md) route, which expands U8
-grey/RGB palettes, direct/palette/mixed mappings and channel-defined order into
-greyscale, RGB or straight RGBA. Full shape, owned and padded caller decode
-agree in both layouts; alpha preserves colour samples even when zero.
-
-The positioned-source regional route also admits reversible MCT within the
-classic Part 1 envelope: three matching unsigned 8–16-bit
-unit-sampled components, reversible 5/3, default-precinct LRCP packets with optional EPH and no SOP, and
-exactly one `TPsot=0` part per SIZ tile. `TNsot` may declare one part or leave
-the count unspecified; complete sequence validation must still prove the
-single part and reconcile SOT, any TLM, `Psot` and terminal EOC. Regional
-reconstruction retains all three RCT dependencies but publishes only requested
-native RGB components. Other tile-part counts, interleaving, reductions, layer
-limits and MCT shapes remain unsupported.
-
-Raw single-tile classic lossless D2 encode supports U8/U16_LE greyscale and
-RGB up to 64 Mi pixels, including full 6650 × 7054 inputs. The additive
-`encode_with_limits` and `lossless_encode_requirements` APIs expose checked
-working-memory and output-capacity admission. See the
-[scalable lossless contract](docs/scalable-lossless.md) for the exact profile,
-allocation model and opt-in authored probes. The additive
-`encode_lossless_bypass_with_limits` entry selects D2 selective arithmetic
-bypass while the existing encode entry points retain style zero. Its separate
-`lossless_bypass_encode_requirements` query includes bounded segment metadata.
-Exactly eight positional native
-U16_LE components also support this raw D2 route without MCT, with both layouts
-and at most 32 Mi pixels. Use `ColorModel::Unknown` and decode in component mode;
-the [native eight-component contract](docs/native-eight-components.md) defines
-band order, limits and failure-atomic caller output.
-
-Lossless Part 1 greyscale encode also accepts genuine 9–15-bit unsigned
-precision in little-endian two-byte storage, with zero through two reversible
-levels and optional two-level tiling. Input words must fit the declared
-precision. RGB and target-rate encode at these intermediate precisions remain
-outside this additive route. The [precision qualification](docs/part1-precision.md)
-records authored regional oracles, C ABI coverage and an in-place satellite probe.
-
-Applications should normally depend on the facade package and import its
-underscore-form Rust crate name:
-
-```sh
-cargo add emuella-j2k
-```
+The package name uses a hyphen; Rust imports use `emuella_j2k`. This example
+inspects a JPEG 2000 or HTJ2K file you supply and prints its declared image
+size, component count and current decode-support classification. Inspection
+does not reconstruct pixels, and a reported input may still be outside a
+particular decode request.
 
 ```rust
-use emuella_j2k::{DecodeOptions, decode};
+use emuella_j2k::{inspect, InspectOptions};
+use std::{env, fs, io};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let path = env::args().nth(1).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "usage: inspect-image IMAGE.jp2")
+    })?;
+    let bytes = fs::read(path)?;
+    let metadata = inspect(&bytes, &InspectOptions::default())?;
+    if let Some(image) = &metadata.image {
+        println!("{} × {}; components: {}", image.width, image.height, image.components);
+    }
+    println!("format: {:?}; decode support: {:?}", metadata.format, metadata.support);
+    Ok(())
+}
 ```
 
-Experimental native C and C++ consumers can use the separately packaged
-`emuella-j2k-capi` crate and its generated
-[`emuella_j2k.h`](crates/emuella-j2k-capi/include/emuella_j2k.h). The major-zero
-ABI exposes positioned raw Part 1 source inspection and single- or
-multi-component region decode into Rust-owned immutable planar images. Linux x86-64 C11 and C++17 consumers
-exercise both shared and static libraries in the canonical check. This
-qualifies the current experiment, not a cross-platform or ABI-major-one
-compatibility promise; the remaining gates and safety rules are recorded in the
-[C ABI safety contract](docs/c-abi-safety-contract.md).
-
-Lossless HTJ2K callers can choose raw codestream bytes with `encode_htj2k` or
-a deterministic JPH container with `encode_htj2k_jph`. Both entry points use
-`Htj2kEncodeOptions` and the same bounded greyscale/RGB, `U8`/`U16_LE`,
-planar/interleaved, zero-or-one-decomposition profile; the JPH payload is the
-unchanged raw encoder output.
-
-Lossy callers use the additive `Htj2kLossyEncodeOptions { bits_per_pixel }`,
-`encode_htj2k_lossy` and `encode_htj2k_lossy_jph`. They accept explicit greyscale
-or RGB, unsigned `U8`/`U16_LE`, planar or interleaved input and exactly two
-irreversible 9/7 levels with no MCT. Rate counts complete raw-codestream bits
-per reference pixel, excluding the 85-byte JPH wrapper. Successful output fits
-the floored byte budget within `max(32 bytes, ceil(budget / 500))`; invalid or
-unattainable rates fail, without padding or truncating a stream. Each axis is
-4–8192 samples and the image has at most 1,048,576 pixels. See the
-[public lossy HT contract and qualification](docs/ht-lossy-public-api.md) for
-resource bounds, exact error metrics, measured limits and the export recipe.
-
-Native HTJ2K decode has a separate staged HTONLY boundary. Structural Part 15
-parsing and packet-signalling validity run before support admission. A broader
-`Ccap^15` permission does not by itself make a codestream unsupported when the
-effective codestream still uses the implemented single-set, ROI-free,
-homogeneous, reversible HT path. Actual multiple HT sets, ROI, heterogeneous
-state, HTMIX and cleanup magnitude bounds above 18 remain unsupported in
-that full-image path. A separate [irreversible HT foundation](docs/ht-lossy-foundations.md)
-admits the selected two-level, no-MCT, unsigned grey/RGB U8/U16_LE profile
-for full native component output from raw HT and JPH, including the additive
-lossy encoder outputs. Use `DecodeMode::Components`, all components, full
-resolution and either output layout; the default rendered mode is excluded.
-Other irreversible full-image profiles remain unsupported, as does rendered
-projection of the new irreversible profile. Supported full inputs continue
-through the existing HT packet, entropy, reconstruction and public image path;
-this is not general Part 15 or JPEG 2000 conformance.
-
-[HTMIX is deliberately unsupported](docs/htmix-disposition.md), independently
-of MULTIHT permission and the HTONLY envelopes below. Legal mixed signalling
-remains inspectable; packet-dependent mixed classic/HT block interpretation
-does not fall back to either homogeneous decoder. Locked HTMIX points are not
-applicable to the HTONLY qualification claim, not decoded-pixel passes.
-
-The [bounded DS0 qualification summary](docs/testing.md#bounded-ds0-result)
-records all sixteen selected HTONLY points and their distinct output routes.
-Those points do not imply general full-image, rendered or JPH decode support.
-Structural inspection also does not prove complete packet validity: the
-bounded SINGLEHT validator skips every CAP Mixed declaration, including
-homogeneous-effective HT neighbours.
-
-A separate raw native ROI window route admits one unit-sampled component with
-1–16-bit signed or unsigned precision, zero origins, one reversible 5/3 level,
-32/64-sample block axes, 128×128/256×256 precincts and one through eight layers.
-Main POC must resolve the PCRL COD to one complete LRCP volume. One tile-zero,
-component-zero Maxshift assignment of 1–15 is restored before synthesis;
-effective QCD/QCC must be reversible and the ROI-extended magnitude width must
-fit 30 bits. Tiles have 32/64/128-sample axes, at most 64 tiles, and one payload
-part followed by at most three empty parts. TLM and informational CRG are
-validated; inline SOP/EPH is supported. Explicitly select planar component zero
-with a full-resolution region inside tile zero. All tiles' packets are checked,
-but only tile zero is reconstructed and cropped without resampling. This
-qualifies both locked P0.03 and P0.15 full-resolution window alternatives.
-Full-image decode, reduced alternatives, other ROI assignments, functional
-tile-header overrides, packet relocation, HTMIX and JPH/rendered output remain
-outside this route.
-
-A separate native-grid full decode route admits one unsigned 8-bit subsampled
-component, one tile/part, three effective reversible 5/3 levels, one through
-six LRCP layers and one effective precinct per resolution. Main COC/QCC
-overrides resolve before reconstruction; component origins must be aligned to
-eight native samples. Use component mode, planar output and all components or
-component zero. `ImageInfo` and `decode_shape` retain reference-image dimensions;
-`Image::component_info` describes the actual native plane and its origin and
-sampling. No resampling is performed. JPH, rendered/interleaved output, MCT,
-other transform phases, regions, reductions and layer limits are outside this
-route.
-
-The same native-grid preparation also admits three matching unsigned 8-bit
-sampled components with reversible MCT across one to 64 tiles, one part per
-tile. Each native tile-component origin must be aligned to eight samples;
-the three-level, one-to-six-layer LRCP and single-precinct limits above still
-apply. Explicitly select component zero in planar component mode to obtain
-the transformed codestream component before inverse RCT. All-component output,
-other selections, RGB presentation and JPH remain unsupported for this branch.
-Native tile bounds are assembled without resampling. The aggregate native
-component sample count is limited to 16 Mi samples before packet preparation.
-
-Native partial component output adds bounded HTONLY reconstruction branches
-behind one request shape. A raw origin-aligned single-tile codestream with five
-decomposition levels and one-layer LRCP packets on the existing
-single-effective-precinct inline-header route may select transformed component
-0 at two discarded resolution levels. The reversible 5/3 branch requires three
-matching unsigned 8-bit unit-sampled components, MCT and the existing
-no-quantisation QCD contract. The irreversible 9/7 branch instead requires
-exactly one unsigned 8-bit unit-sampled component, no MCT, exactly one
-main-header scalar-expounded QCD and no component or tile overrides. The
-planar output is reconstructed at its exact reduced geometry before inverse
-colour transformation. JPH, rendered output, other selections or reductions,
-regions, tile requests, quality-layer limits, heterogeneous coding or
-quantisation, ROI, HTMIX and other irreversible HT shapes remain unsupported by
-this route.
-
-The lossy encoder's raw unsigned greyscale `U16_LE` output has an independent
-partial component-zero route. A no-region request admits exactly one or two
-discarded resolution levels. A spatial request must provide one contained,
-non-empty, image-relative half-open full-resolution region and may select full,
-discard-one or discard-two output. Each half-open endpoint is projected
-independently with ceiling division; `decode_partial_component_info` reports
-that projected origin and shape. The route validates the complete packet
-stream, entropy-decodes selected whole blocks only and reconstructs bounded
-coefficient and 9/7 synthesis windows without an application-visible halo,
-full decode/crop, resampling or a full-resolution output plane for small
-requests. Owned, reusable-workspace and padded caller output are byte-exact;
-caller bytes and padding remain unchanged on every failure. JPH, RGB, U8,
-signed, rendered or interleaved output, other component selections, tiles,
-layer limits and discard above two remain unsupported.
-
-A separate reduction-three request selects transformed component zero from a
-raw zero-origin single tile/part with three matching unsigned 8-bit unit-sampled
-components, MCT, six 9/7 levels, twenty RLCP layers, 64×64 HTONLY blocks and
-explicit 128×128 precincts at every resolution. Main QCD and optional QCC
-resolve to scalar-expounded quantisation for every component. The shared packet
-walker validates all layers, components and precincts; reconstruction retains
-component zero through resolution three, before inverse ICT. The reference
-image is bounded to 16 Mi samples per component before packet preparation.
-Only planar component-zero output without a region, tile or layer limit is
-admitted. JPH, rendered output, other reductions, COC, tile-header overrides,
-ROI, packed/inline packet markers and HTMIX remain outside this branch.
-
-A heterogeneous reversible reduction-five route selects raw component zero
-from one zero-origin tile/part with three unit-sampled components. Each may
-have its own signedness, 8–16-bit precision, effective main COD/COC coding and
-QCD/QCC no-quantisation exponents. Component zero has six decomposition levels;
-the others have six through eight. CPRL uses one through thirty layers,
-32/64-sample block axes and explicit 128×128 or 256×256 precincts. Inline
-SOP/EPH is supported. All packets and quantisers are validated; only component
-zero through resolution one is reconstructed, retaining its native precision
-and signedness. The 16 Mi-sample reference-plane bound applies before packet
-preparation. Only planar component-zero output without region, tile or layer
-limits is admitted; MCT, sampling, tile overrides, ROI, HTMIX, JPH and rendered
-output remain outside this route. This qualifies the locked P0.08 HTONLY point.
-
-A separate scalar-derived reduction-three route selects raw component zero
-from one zero-origin tile/part with four unsigned 8-bit components sampled
-1×1, 1×1, 2×2 and 2×2. Effective main COD/COC resolves 6/3/6/6 levels,
-9/7 for the first three components and 5/3 for the fourth, no MCT, one through
-seven PCRL layers, 32×32 blocks and explicit square 128/256 precincts.
-QCD/QCC resolves scalar-derived component zero, scalar-expounded components
-one/two and reversible component three; every resolved exponent is positive
-and its guard-adjusted magnitude width is at most 30 bits. All components and
-packets are validated, but only component zero through resolution three is
-reconstructed. The 16 Mi-sample reference-plane limit applies before packet
-preparation. This qualifies the locked P0.05 HTONLY point with planar
-component-zero output; other selections, reductions, regions, tile/layer
-requests, inline packet markers, tile overrides, ROI, HTMIX, JPH and rendered
-resampling remain outside this route.
-
-JPH inspection enforces the bounded Annex D signature, `jph ` file type and
-`jph ` compatibility membership,
-inherited `jp2h` structure including optional-box dependencies, complete HTJ2K
-`jp2c`, and first-codestream header-consistency boundary before decode
-admission. The JPH unknown-colour/no-`colr` form is structurally accepted but
-remains unsupported for rendered colour interpretation. Unknown legal boxes
-are preserved, while optional presentation, alpha, multiple-codestream
-composition, HTMIX and codec profiles outside the documented subset remain
-unsupported.
-
-A separate heterogeneous reduced ROI route qualifies locked P0.06 HTONLY.
-It selects planar native component zero at reduction three, from a zero-origin
-single tile/part with four independently signed or unsigned 8–16-bit components
-sampled 1×1, 2×1, 1×2 and 2×2. Effective main COD/COC has six levels, 9/7
-for components zero through two and 5/3 for three, 64×64 HTONLY blocks, one
-through four RPCL layers, no MCT or inline SOP/EPH, and explicit square
-128/256 precincts. Main QCD/QCC resolves scalar-expounded zero through two
-and reversible three, with positive exponents and at most 30 ROI-extended
-magnitude bits. Exactly one component-zero main RGN and one tile RGN have
-shifts 1–15; the tile overrides the main and its effective shift must be 1–9.
-Every component's packets are validated; only zero through resolution three
-is reconstructed. ROI magnitudes are restored before dequantisation and 9/7
-synthesis, preserving the native precision and signedness. The 16 Mi-sample
-reference-plane preflight applies before packet preparation. Full-image decode,
-other selections/reductions, region/tile/layer requests, additional tile
-overrides, POC, relocation, HTMIX and JPH/rendered output remain unsupported.
-
-A separate high-component native route qualifies locked P0.13 HTONLY. It
-accepts four through 257 unit-sampled 8–16-bit components in one zero-origin
-tile/part of at most 64×64 samples. Every effective main COD/COC has one
-reversible 5/3 level, one RLCP layer, MCT, 32/64-sample block axes and explicit
-128×128/256×256 precincts without SOP/EPH. Main POC partitions all components
-into two adjacent complete volumes, first RLCP then CPRL; resolution bounds
-are clipped to actual resolutions. Main QCD/QCC resolves reversible quantisers
-for every component, with positive exponents and at most 30 ROI-extended
-magnitude bits. One main Maxshift assignment of 1–15 must name an unselected
-component. The first three MCT component formats match; later native formats
-may differ. Every packet is validated, but only component zero is reconstructed
-before inverse RCT. Use full `decode` or `decode_htj2k_with_workspace` with
-explicit planar component zero in component mode; `decode_shape` shares the
-admission. All-component support inspection remains unsupported. Other
-selections, partial requests, layer limits, tile overrides, packet relocation,
-HTMIX and JPH/rendered output remain outside this route.
-
-A separate tile-progression native window route qualifies locked P0.07 HTONLY.
-It admits three independently signed or unsigned 8–16-bit unit-sampled
-components, zero origins, three reversible 5/3 levels, one through eight RLCP
-layers, 32/64-sample block axes, explicit 128×128/256×256 precincts and optional
-SOP/EPH. Tiles have 32/64/128-sample axes and the grid has at most 256 tiles.
-Tile zero has two parts with successive LRCP POC volumes: a prefix of the
-resolutions, then a complete volume whose already-seen packets are skipped.
-All other tiles have one part and inherit RLCP. Main QCD supplies bounded
-reversible quantisation; no component or tile coding/quantisation override,
-ROI, MCT, main POC or packet relocation is admitted. The input is bounded to
-64 MiB before packet work. Every tile/component packet is validated, using
-tile-local header scopes; only component zero of tile zero is reconstructed.
-Explicitly select a full-resolution planar component-zero region inside tile
-zero. Native precision and signedness are preserved without resampling.
-Full-image decode, other requests, HTMIX and JPH/rendered output remain outside
-this route. This bounded qualification is not general Part 15 conformance.
-
-The command-line adapter installs the `emuella-j2k` executable:
+Run it as `cargo run -- path/to/image.jp2` in your application. The repository
+also contains the `emuella-j2k-cli` package. From a source checkout, run its
+inspection command against your own file:
 
 ```sh
-emuella-j2k inspect image.jp2
+git clone https://github.com/emuella/emuella-j2k.git
+cd emuella-j2k
+cargo run --release -p emuella-j2k-cli -- inspect path/to/image.jp2
 ```
 
-Its dedicated rendered conformance worker compares one bounded full-frame JP2
-rendered decode with one bounded baseline RGB TIFF entirely in memory:
+Both examples accept a local input supplied by you; no private corpus or test
+fixture is required. For pixel decoding and encoding, choose options from the
+[profile guide](https://github.com/emuella/emuella-j2k/blob/main/docs/supported-profiles.md)
+and the public Rust API before assuming an input is admitted.
 
-```sh
-emuella-j2k compare-rendered-tiff-rgb image.jp2 reference.tif \
-  --width 480 --height 640 --components 3 --peak-error-limit 4
-```
+## Documentation and help
 
-This low-level worker is intended for the verified opt-in Layer 2 runner. It
-prints aggregate fields only and does not acquire, copy or persist pixels.
+The [documentation index](https://github.com/emuella/emuella-j2k/blob/main/docs/README.md)
+leads to user and integrator contracts, qualification evidence, architecture
+and testing. In particular, see [native components](https://github.com/emuella/emuella-j2k/blob/main/docs/native-planes.md),
+[JP2 presentation](https://github.com/emuella/emuella-j2k/blob/main/docs/jp2-presentation.md),
+[lossless encoding](https://github.com/emuella/emuella-j2k/blob/main/docs/scalable-lossless.md),
+[lossy HTJ2K](https://github.com/emuella/emuella-j2k/blob/main/docs/ht-lossy-public-api.md)
+and the [experimental C ABI](https://github.com/emuella/emuella-j2k/blob/main/docs/c-abi-safety-contract.md).
+Use [GitHub issues](https://github.com/emuella/emuella-j2k/issues) for a
+reproducible problem or support question, with the input profile and requested
+output mode where possible.
 
-## Workspace
+## Contributing and licence
 
-- `emuella-j2k`: stable public facade for application users.
-- `emuella-j2k-core`: implementation of the high-level inspect, decode, and
-  encode API.
-- `emuella-j2k-container`: JP2 and JPH container parsing.
-- `emuella-j2k-codestream`: J2K and HTJ2K codestream parsing and coding.
-- `emuella-j2k-tier1`: classic JPEG 2000 Tier-1 block coding.
-- `emuella-j2k-ht`: HTJ2K block coding.
-- `emuella-j2k-transform`: wavelet and component transforms.
-- `emuella-j2k-accel`: safe architecture-acceleration boundary.
-- `emuella-j2k-cli`: package for the `emuella-j2k` command-line inspection
-  adapter.
-- `emuella-j2k-python`: experimental PyO3 binding.
-- `emuella-j2k-test-support`: deterministic public test and fixture generator.
-
-See `docs/architecture.md` and `docs/testing.md` for the public development
-boundary.
-
-## Test data
-
-Large, third-party, conformance, interoperability, and benchmark corpora do not
-belong in this repository. They are catalogued separately by
-`emuella-testdata`, with stable pack identities and per-pack licensing.
-Runtime support is classified from parsed codec structure, not by matching or
-replaying corpus payloads.
-
-## Licensing
-
-Project-authored material is licensed under Apache-2.0. Small, isolated HTJ2K
-modules contain OpenJPH-derived code or table data under BSD-2-Clause. Read
-`NOTICE`, `THIRD_PARTY.md`, and `LICENSES/OpenJPH-BSD-2-Clause.txt` before
-redistribution.
+[CONTRIBUTING.md](https://github.com/emuella/emuella-j2k/blob/main/CONTRIBUTING.md)
+covers source provenance, local verification and documentation updates.
+Project-authored material is Apache-2.0. Isolated HTJ2K modules contain
+OpenJPH-derived code or table data under BSD-2-Clause; consult
+[NOTICE](https://github.com/emuella/emuella-j2k/blob/main/NOTICE),
+[THIRD_PARTY.md](https://github.com/emuella/emuella-j2k/blob/main/THIRD_PARTY.md)
+and the [BSD licence text](https://github.com/emuella/emuella-j2k/blob/main/LICENSES/OpenJPH-BSD-2-Clause.txt)
+before redistribution.

@@ -1,7 +1,7 @@
 //! Primary public Rust API for the Emuella JPEG 2000 and HTJ2K codec.
 //!
-//! This facade keeps the stable package and crate names independent from the
-//! workspace's internal layering. The API is implemented by
+//! This facade keeps the application-facing package and crate names independent
+//! from the workspace's internal layering. The pre-release API is implemented by
 //! `emuella-j2k-core` and re-exported here.
 
 #![cfg_attr(not(feature = "std"), no_std)]

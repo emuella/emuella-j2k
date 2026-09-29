@@ -16,6 +16,19 @@ Before submitting a change:
 Unless explicitly stated otherwise, intentionally submitted contributions are
 provided under Apache-2.0 as described by section 5 of the licence.
 
+## Documentation roles
+
+The root README is the user-facing landing page. Keep it focused on purpose,
+maturity, high-level capabilities, getting started and navigation. Detailed
+API, compatibility, supported-profile and resource contracts belong in the
+relevant public product documentation; qualification evidence and historical
+decisions belong in their designated records.
+
+Update the README when a change affects its claims, onboarding or project
+status. A concise summary and link are enough when the detailed contract is
+documented elsewhere. Do not append implementation or qualification detail
+merely to show that a task was completed.
+
 ## Canonical verification
 
 Use focused Cargo or Python tests while editing. The complete local gate,
