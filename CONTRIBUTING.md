@@ -77,8 +77,9 @@ repeating that complete matrix in unoptimised mode. See
 
 ### Hosted CI build cache
 
-The hosted `test` job restores one disposable Rust cache after selecting the
-pinned compiler. It covers the root workspace's debug and release `target`
+The hosted `test` job restores one disposable Rust cache after the public-tree
+audit and before compilation, using the pinned compiler. It covers the root
+workspace's debug and release `target`
 profiles, the separate codestream fuzz workspace's `target`, and their shared
 Cargo registry. The C API check keeps its own temporary target so each run
 builds and checks its generated header and native consumers from a clean target.
