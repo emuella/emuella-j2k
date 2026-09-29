@@ -14,7 +14,7 @@ emuella-j2k-capi
                           └── emuella-j2k-accel
 ```
 
-`emuella-j2k` is the stable public facade and re-exports the application API
+`emuella-j2k` is the application-facing public facade and re-exports the API
 implemented by `emuella-j2k-core`. The core crate owns caller-visible images,
 parameters, errors, support classification, and high-level
 inspect/decode/encode entry points. Lower-level crates parse boxes and markers,
@@ -141,7 +141,7 @@ still validity errors before unsupported-mechanism admission.
 
 The native full-resolution partial API also has an independent tile-progression
 window route. It admits only the bounded three-level, three-component,
-ROI-free reversible envelope documented in the README, with two tile-zero
+ROI-free reversible [envelope](decoding-profiles.md#tile-progression-native-window), with two tile-zero
 LRCP POC volumes and inherited RLCP elsewhere. Main coding and quantisation
 are uniform; this does not grant heterogeneous COD/COC/QCD/QCC or MCT.
 Resource preflight precedes packet work. One linear partition creates small
@@ -204,7 +204,8 @@ payload.
 
 ### High-component native output
 
-The independently granted HT high-component permission checks the README's
+The independently granted HT high-component permission checks the
+[decoder contract's](decoding-profiles.md#high-component-native-output)
 component, geometry, coding and header envelope before packet topology. Its
 structural envelope allows up to two layers so SINGLEHT contradictions can be
 reported before the one-layer native decline. It resolves the two complete
@@ -238,8 +239,9 @@ pixels or standards expression enters the public tree.
 ### Native ROI window
 
 The HT-owned prepared ROI plan is independent of the Part 1 selective planner.
-It validates the one-component, one-level, unit-grid envelope documented in the
-README, resolves main QCC over QCD and the tile-zero Maxshift, and checks one
+It validates the one-component, one-level, unit-grid
+[envelope](decoding-profiles.md#maxshift-native-window), resolves main QCC over
+QCD and the tile-zero Maxshift, and checks one
 full-domain main POC LRCP schedule. TLM reconciliation remains structural;
 empty trailing parts do not become new packet sources. Every tile's complete
 packets are validated with first/latest-set retention before output geometry
@@ -365,7 +367,8 @@ expression, protected payload or decoded pixels enter public artefacts.
 ### Heterogeneous reduced ROI component
 
 The independent sampled-RPCL HT permission resolves the four native sampling
-grids and main coding/quantisation overrides documented in the README. A
+grids and main coding/quantisation overrides in the
+[decoder contract](decoding-profiles.md#heterogeneous-reduced-roi-component). A
 linear marker scan admits one main and one tile component-zero RGN; the tile
 assignment overrides the main without applying both shifts. No Part 1 profile
 permission is granted. Geometry, tile/component counts and six-level topology

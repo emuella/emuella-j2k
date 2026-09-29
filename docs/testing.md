@@ -245,7 +245,8 @@ derived-set claim, not general Part 15 or JPEG 2000 conformance.
 | P0.14 | Reversible component zero, reduction two, before inverse RCT |
 
 Each row retains the independently documented admission, resource, selection,
-precision and presentation limits below and in the README. Passing a selected
+precision and presentation limits below and in the
+[decoder profile contracts](decoding-profiles.md). Passing a selected
 component request does not make all-component inspection, full-image decode,
 rendered output or a JPH wrapper supported. The runner selects the locked
 variant and compares logical samples with the catalogue's normalisation and
@@ -710,6 +711,14 @@ python3 scripts/run-layer2-rendered-pixel.py \
   --testdata /path/to/emuella-testdata
 ```
 
+For an already authorised local JP2/TIFF pair, the underlying worker may be
+invoked directly from the codec checkout. This command does not acquire inputs:
+
+```sh
+cargo run --release -p emuella-j2k-cli -- compare-rendered-tiff-rgb image.jp2 reference.tif \
+  --width 480 --height 640 --components 3 --peak-error-limit 4
+```
+
 The runner applies the same exact catalogue lock, clean tracked checkout,
 complete inventory, archive, materialised-tree, canonical executable and
 private execution-snapshot checks as the inspection journey. It resolves and
@@ -1149,7 +1158,7 @@ A, A.9–A.9.1 and Table A.42, PDF pages 61–62, states that CRG has no effect 
 codestream decoding. The selected raw component samples therefore remain
 unchanged. Rendered registration, component placement and resampling remain
 unsupported except for the separately bounded full-frame sYCC policy in
-[`architecture.md`](architecture.md#bounded-full-frame-sycc-projection).
+[`architecture.md`](architecture.md#bounded-full-frame-and-partial-sycc-projection).
 
 Synthetic POC-plus-SOP regressions cover signed coefficient realignment,
 windowed and full selected output, unaffected tiles, exact reconstruction, and
