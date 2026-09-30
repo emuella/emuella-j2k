@@ -23,6 +23,13 @@ A release candidate must be built from one reviewed commit. Before publishing:
 6. Preserve artifact hashes, member manifests, binary-member hashes, and
    metadata evidence, then obtain explicit publication authority.
 
+The C API's fixture tests and `generate-native-fixture` example are workspace
+development targets backed by the unpublished test-support crate. Its path-only
+development dependency is omitted from the normalised C API archive manifest;
+Cargo verifies the packaged library, while source-checkout and native consumer
+checks exercise those fixtures. Keep that helper unpublished and unversioned in
+the C API dev-dependency unless its packaging contract deliberately changes.
+
 ## Cargo archive staging versus release qualification
 
 The current release process has only the verified route above. Neither the
