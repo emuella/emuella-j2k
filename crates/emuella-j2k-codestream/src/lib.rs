@@ -16008,7 +16008,7 @@ fn level_shift_grayscale_u16_le_plane_with_precision(
             .checked_mul(input.stride_bytes)
             .ok_or(CodestreamError::SizeOverflow)?;
         let row_samples = checked_slice(input.samples, src, row_bytes)?;
-        for sample in row_samples.chunks_exact(2) {
+        for sample in row_samples.as_chunks::<2>().0.iter() {
             let value = u16::from_le_bytes([sample[0], sample[1]]);
             if u32::from(value) > max_sample {
                 return Err(invalid(
@@ -16057,7 +16057,7 @@ fn level_shift_grayscale_u16_le_tile_plane(
             .and_then(|offset| offset.checked_add(x_byte_offset))
             .ok_or(CodestreamError::SizeOverflow)?;
         let row_samples = checked_slice(input.samples, src, row_bytes)?;
-        for sample in row_samples.chunks_exact(2) {
+        for sample in row_samples.as_chunks::<2>().0.iter() {
             let value = u16::from_le_bytes([sample[0], sample[1]]);
             coefficients.push(i32::from(value) - 32768);
         }
@@ -16121,7 +16121,11 @@ fn level_shift_rgb_u8_components(input: RgbU8Encode<'_>) -> Result<[NativeNoDeco
         let offset = row
             .checked_mul(input.stride_bytes)
             .ok_or(CodestreamError::SizeOverflow)?;
-        for pixel in checked_slice(input.samples, offset, row_bytes)?.chunks_exact(3) {
+        for pixel in checked_slice(input.samples, offset, row_bytes)?
+            .as_chunks::<3>()
+            .0
+            .iter()
+        {
             planes[0].push(i32::from(pixel[0]) - 128);
             planes[1].push(i32::from(pixel[1]) - 128);
             planes[2].push(i32::from(pixel[2]) - 128);
@@ -16250,7 +16254,11 @@ fn level_shift_rgb_u16_le_components_with_precision(
         let offset = row
             .checked_mul(input.stride_bytes)
             .ok_or(CodestreamError::SizeOverflow)?;
-        for pixel in checked_slice(input.samples, offset, row_bytes)?.chunks_exact(6) {
+        for pixel in checked_slice(input.samples, offset, row_bytes)?
+            .as_chunks::<6>()
+            .0
+            .iter()
+        {
             for (component, plane) in planes.iter_mut().enumerate() {
                 let byte = component * 2;
                 let value = u16::from_le_bytes([pixel[byte], pixel[byte + 1]]);
@@ -16334,7 +16342,7 @@ fn fill_forward_rct_u8_row(
         .iter_mut()
         .zip(db_plane)
         .zip(dr_plane)
-        .zip(row_samples.chunks_exact(3))
+        .zip(row_samples.as_chunks::<3>().0.iter())
     {
         let red = i32::from(pixel[0]) - 128;
         let green = i32::from(pixel[1]) - 128;
@@ -16355,7 +16363,7 @@ fn fill_forward_rct_u16_le_row(
         .iter_mut()
         .zip(db_plane)
         .zip(dr_plane)
-        .zip(row_samples.chunks_exact(6))
+        .zip(row_samples.as_chunks::<6>().0.iter())
     {
         let red = i32::from(u16::from_le_bytes([pixel[0], pixel[1]])) - 32768;
         let green = i32::from(u16::from_le_bytes([pixel[2], pixel[3]])) - 32768;
@@ -18109,7 +18117,7 @@ fn validate_bounded_informational_crg(input: &[u8], codestream: &Codestream) -> 
             "CRG must contain exactly one Xcrg/Ycrg pair per SIZ component",
         ));
     }
-    for pair in data.chunks_exact(4) {
+    for pair in data.as_chunks::<4>().0.iter() {
         read_u16(pair, 0)?;
         read_u16(pair, 2)?;
     }
@@ -40064,7 +40072,7 @@ mod heterogeneous_packet_order_tests {
             .unwrap();
         }
 
-        for (row, actual) in output.chunks_exact(8).enumerate() {
+        for (row, &actual) in output.as_chunks::<8>().0.iter().enumerate() {
             let expected = if row < 4 {
                 [1, 1, 1, 1, 2, 2, 2, 2]
             } else {
@@ -41985,7 +41993,7 @@ fn parse_quantization_marker_payload(
                     "scalar-expounded marker must contain one exponent/mantissa pair per subband",
                 ));
             }
-            for bytes in values.chunks_exact(2) {
+            for bytes in values.as_chunks::<2>().0.iter() {
                 let packed = u16::from_be_bytes([bytes[0], bytes[1]]);
                 steps.push(
                     transform::IrreversibleQuantizationStep::new(
@@ -46725,7 +46733,9 @@ fn place_ht_code_block_samples(
                 .take(height)
             {
                 for (sample_bytes, coefficient) in destination[..row_bytes]
-                    .chunks_exact_mut(2)
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
                     .zip(source.iter().copied())
                 {
                     let coefficient =
@@ -46745,7 +46755,9 @@ fn place_ht_code_block_samples(
                 .take(height)
             {
                 for (sample_bytes, coefficient) in destination[..row_bytes]
-                    .chunks_exact_mut(2)
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
                     .zip(source.iter().copied())
                 {
                     let sample = (coefficient + offset).clamp(0, max_value) as u16;
@@ -46873,7 +46885,9 @@ fn place_preflighted_signed_ht_code_block_samples(
                 .take(height)
             {
                 for (sample_bytes, coefficient) in destination[..row_bytes]
-                    .chunks_exact_mut(2)
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
                     .zip(source.iter().copied())
                 {
                     let coefficient =
@@ -46891,7 +46905,9 @@ fn place_preflighted_signed_ht_code_block_samples(
                 .take(height)
             {
                 for (sample_bytes, coefficient) in destination[..row_bytes]
-                    .chunks_exact_mut(2)
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
                     .zip(source.iter().copied())
                 {
                     let sample = coefficient.clamp(min_value, max_value) as u16;
@@ -47689,7 +47705,9 @@ fn unsigned_component_sample_slice_to_bytes(
             .ok_or(CodestreamError::SizeOverflow)?;
         let mut samples = alloc::vec![0_u8; sample_bytes];
         for (sample_bytes, coefficient) in samples
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
             .zip(coefficients.iter().copied())
         {
             let sample = (coefficient + 32768).clamp(0, 65535) as u16;
@@ -47708,7 +47726,9 @@ fn unsigned_component_sample_slice_to_bytes(
             .ok_or(CodestreamError::SizeOverflow)?;
         let mut samples = alloc::vec![0_u8; sample_bytes];
         for (sample_bytes, coefficient) in samples
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
             .zip(coefficients.iter().copied())
         {
             let sample = (coefficient + offset).clamp(0, max_value) as u16;
@@ -47761,7 +47781,9 @@ fn signed_component_sample_slice_to_bytes(
             .ok_or(CodestreamError::SizeOverflow)?;
         let mut samples = alloc::vec![0_u8; sample_bytes];
         for (sample_bytes, coefficient) in samples
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
             .zip(coefficients.iter().copied())
         {
             let sample = coefficient.clamp(-32768, 32767) as u16;
@@ -47778,7 +47800,9 @@ fn signed_component_sample_slice_to_bytes(
         .ok_or(CodestreamError::SizeOverflow)?;
     let mut samples = alloc::vec![0_u8; sample_bytes];
     for (sample_bytes, coefficient) in samples
-        .chunks_exact_mut(2)
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
         .zip(coefficients.iter().copied())
     {
         let sample = coefficient.clamp(min_value, max_value) as u16;
@@ -49680,7 +49704,7 @@ fn parse_prepared_payload_packets(
             Some(tile_part_order),
         ),
         PreparedTilePayload::Source(source_payload) => {
-            let retained_layers = max_layers.map_or(u16::MAX, |layers| layers);
+            let retained_layers = max_layers.unwrap_or(u16::MAX);
             let exact_packet_header_reads = codestream
                 .uniform_effective_coding_style()
                 .is_some_and(|style| retained_layers < style.layers);
@@ -54133,7 +54157,9 @@ mod htj2k_reduced_component_tests {
             .unwrap();
         let coefficients = signed.components[0]
             .samples
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| i32::from(i16::from_le_bytes([pair[0], pair[1]])))
             .collect::<Vec<_>>();
         for layers in [1, 7, 30] {

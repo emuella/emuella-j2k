@@ -220,11 +220,13 @@ fn independent_source_full_pixels_and_regions_agree() {
                     let mut squared = 0_u64;
                     let mut differing = 0;
                     for (actual, expected) in interleaved
-                        .chunks_exact(2)
-                        .zip(reference_ordered.chunks_exact(2))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .zip(reference_ordered.as_chunks::<2>().0.iter())
                     {
-                        let error = i32::from(u16::from_le_bytes(actual.try_into().unwrap()))
-                            - i32::from(u16::from_le_bytes(expected.try_into().unwrap()));
+                        let error = i32::from(u16::from_le_bytes(*actual))
+                            - i32::from(u16::from_le_bytes(*expected));
                         peak = peak.max(error.unsigned_abs());
                         squared += u64::from(error.unsigned_abs()).pow(2);
                         differing += usize::from(error != 0);

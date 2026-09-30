@@ -144,7 +144,7 @@ mod tests {
         };
         let mut caller = vec![0xa6; 40 * 19];
         write(&bytes, &request, &mut caller).unwrap();
-        for (row, pixels) in expected[0].chunks_exact(34).enumerate() {
+        for (row, pixels) in expected[0].as_chunks::<34>().0.iter().enumerate() {
             assert_eq!(&caller[row * 40..row * 40 + 34], pixels);
             assert!(
                 caller[row * 40 + 34..(row + 1) * 40]
@@ -386,7 +386,7 @@ mod tests {
             };
             decode_partial_into(&bytes, &mut target, &request).unwrap();
         }
-        for (row, pixels) in expected[0].chunks_exact(17).enumerate() {
+        for (row, pixels) in expected[0].as_chunks::<17>().0.iter().enumerate() {
             assert_eq!(&caller[row * 23..row * 23 + 17], pixels);
             assert!(
                 caller[row * 23 + 17..(row + 1) * 23]

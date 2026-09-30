@@ -1004,7 +1004,7 @@ fn magnitude_refinement_pass_dense_full<const SPARSE: bool, const VERTICAL_CAUSA
         .copied()
         .zip(context.stripe_visited.iter().copied())
         .zip(context.stripe_refined.iter_mut())
-        .zip(context.coefficients.chunks_exact_mut(64))
+        .zip(context.coefficients.as_chunks_mut::<64>().0.iter_mut())
         .enumerate()
     {
         let mut candidates = significant & !visited;

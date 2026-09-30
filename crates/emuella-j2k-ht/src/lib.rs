@@ -24477,8 +24477,10 @@ fn decode_vlc_cleanup_full_octet_line_pair<const INITIAL: bool>(
     let table = progression.standard_lookup_table();
 
     for (octet_index, (top_output, bottom_output)) in top_row
-        .chunks_exact_mut(4)
-        .zip(bottom_row.chunks_exact_mut(4))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(bottom_row.as_chunks_mut::<4>().0.iter_mut())
         .enumerate()
     {
         let quad_column = octet_index * 2;
@@ -24574,12 +24576,6 @@ fn decode_vlc_cleanup_full_octet_line_pair<const INITIAL: bool>(
         let predictors: &mut [u32; 3] = next_south_predictors
             .get_mut(quad_column..predictor_end)
             .ok_or(HtLayoutError::SizeOverflow)?
-            .try_into()
-            .map_err(|_| HtLayoutError::SizeOverflow)?;
-        let top_output: &mut [i32; 4] = top_output
-            .try_into()
-            .map_err(|_| HtLayoutError::SizeOverflow)?;
-        let bottom_output: &mut [i32; 4] = bottom_output
             .try_into()
             .map_err(|_| HtLayoutError::SizeOverflow)?;
         fast_cleanup::decode_full_octet(
@@ -25047,10 +25043,12 @@ const HT_FULL_REFINEMENT_PADDED_ROWS: usize = HT_FULL_REFINEMENT_SIDE + 2;
 fn pack_full_cleanup_significance_rows(output: &[i32]) -> [u64; HT_FULL_REFINEMENT_SIDE] {
     debug_assert!(output.len() >= HT_FULL_REFINEMENT_COEFFICIENTS);
     let mut rows = [0_u64; HT_FULL_REFINEMENT_SIDE];
-    for (row_bits, coefficients) in rows
-        .iter_mut()
-        .zip(output[..HT_FULL_REFINEMENT_COEFFICIENTS].chunks_exact(HT_FULL_REFINEMENT_SIDE))
-    {
+    for (row_bits, coefficients) in rows.iter_mut().zip(
+        output[..HT_FULL_REFINEMENT_COEFFICIENTS]
+            .as_chunks::<HT_FULL_REFINEMENT_SIDE>()
+            .0
+            .iter(),
+    ) {
         for (x, &coefficient) in coefficients.iter().enumerate() {
             *row_bits |= u64::from(coefficient != 0) << x;
         }

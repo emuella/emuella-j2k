@@ -137,7 +137,9 @@ pub(crate) fn prepare<'a>(
             ));
         }
         payload(input, record)?
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|entry| {
                 let source = word(entry);
                 let column = (entry[2] == 1).then_some(usize::from(entry[3]));
@@ -176,7 +178,7 @@ pub(crate) fn prepare<'a>(
     let mut colours = vec![None; colour_count];
     let mut alpha = None;
     if let Some(record) = definition_box {
-        for entry in payload(input, record)?[2..].chunks_exact(6) {
+        for entry in payload(input, record)?[2..].as_chunks::<6>().0.iter() {
             let channel = word(entry);
             match (word(&entry[2..]), word(&entry[4..])) {
                 (0, association) => {

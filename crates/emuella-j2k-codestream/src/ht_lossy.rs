@@ -510,7 +510,12 @@ fn envelope(input: &[u8], parsed: &Codestream) -> Result<bool> {
     let exponent = (base >> 11) as u8;
     let mantissa = base & 0x7ff;
     // Exactly the selected scalar-step family, including decoder-safe widths.
-    for (pair, gain) in data[1..].chunks_exact(2).zip([0, 1, 1, 2, 1, 1, 2]) {
+    for (pair, gain) in data[1..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip([0, 1, 1, 2, 1, 1, 2])
+    {
         let value = u16::from_be_bytes([pair[0], pair[1]]);
         let Some(expected) = exponent.checked_add(gain) else {
             return Ok(false);

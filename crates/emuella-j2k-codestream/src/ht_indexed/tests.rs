@@ -495,7 +495,7 @@ fn odd_boundary_tiles_and_empty_packets_preserve_native_samples() {
         },
         |_, planes| {
             for plane in planes {
-                for sample in plane.chunks_exact_mut(2) {
+                for sample in plane.as_chunks_mut::<2>().0.iter_mut() {
                     sample.copy_from_slice(&32768_u16.to_le_bytes());
                 }
             }
@@ -533,8 +533,10 @@ fn odd_boundary_tiles_and_empty_packets_preserve_native_samples() {
     assert_eq!(report.work.output_samples, 100);
     assert!(
         output[0]
-            .chunks_exact(2)
-            .all(|p| p == 32768_u16.to_le_bytes())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|&p| p == 32768_u16.to_le_bytes())
     );
 }
 
@@ -777,7 +779,9 @@ fn deep_sparse_descriptors_preserve_regions_precision_and_fail_closed() {
                     }
                     if bits == 11 {
                         assert!(
-                            a.chunks_exact(2)
+                            a.as_chunks::<2>()
+                                .0
+                                .iter()
                                 .all(|v| u16::from_le_bytes([v[0], v[1]]) < 2048)
                         );
                     }
@@ -901,7 +905,7 @@ fn imported_empty_packets_and_native_precision_bounds() {
         let index = encode_tiled(
             p,
             |_, planes| {
-                for value in planes[0].chunks_exact_mut(2) {
+                for value in planes[0].as_chunks_mut::<2>().0.iter_mut() {
                     value.copy_from_slice(&(1_u16 << (bits - 1)).to_le_bytes());
                 }
                 Ok(())
@@ -938,7 +942,9 @@ fn imported_empty_packets_and_native_precision_bounds() {
             .unwrap();
         assert!(
             samples[0]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .all(|v| u16::from_le_bytes([v[0], v[1]]) == 1 << (bits - 1))
         );
         if bits < 16 {
@@ -1131,7 +1137,7 @@ fn large_streaming_geometry_calibration() {
                     if bits == 8 {
                         p.fill(128);
                     } else {
-                        for v in p.chunks_exact_mut(2) {
+                        for v in p.as_chunks_mut::<2>().0.iter_mut() {
                             v.copy_from_slice(&1024_u16.to_le_bytes());
                         }
                     }
@@ -1206,7 +1212,7 @@ fn streaming_metadata_capacity_is_independent_of_tile_count() {
                 bits_per_pixel: 2.0,
             },
             |_, p| {
-                for v in p[0].chunks_exact_mut(2) {
+                for v in p[0].as_chunks_mut::<2>().0.iter_mut() {
                     v.copy_from_slice(&1024_u16.to_le_bytes());
                 }
                 Ok(())
@@ -1235,7 +1241,7 @@ fn odd_origin_large_reduced_cross_tile_window_matches_complete_tiles() {
             bits_per_pixel: 2.0,
         },
         |r, p| {
-            for (i, sample) in p[0].chunks_exact_mut(2).enumerate() {
+            for (i, sample) in p[0].as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let x = r.x + i as u32 % r.width;
                 let y = r.y + i as u32 / r.width;
                 let mut value = 65535 / 8 + ((x * 13 + y * 7) % 65535) / 2;

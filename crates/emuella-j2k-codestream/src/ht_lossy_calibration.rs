@@ -48,7 +48,9 @@ fn native(raw: &[u8]) -> Vec<Vec<u16>> {
                 c.samples.iter().map(|&v| u16::from(v)).collect()
             } else {
                 c.samples
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|v| u16::from_le_bytes([v[0], v[1]]))
                     .collect()
             }
