@@ -792,7 +792,12 @@ mod htj2k_native_component_grid_tests {
             planes: &mut planes,
         };
         decode_into(&bytes, &mut target, &options).unwrap();
-        for (actual, expected) in caller.chunks_exact(42).zip(expected.chunks_exact(35)) {
+        for (actual, expected) in caller
+            .as_chunks::<42>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<35>().0.iter())
+        {
             assert_eq!(&actual[..35], expected);
             assert!(actual[35..].iter().all(|byte| *byte == 0x93));
         }
@@ -950,7 +955,7 @@ mod htj2k_native_component_grid_tests {
             planes: &mut planes,
         };
         decode_into(&bytes, &mut target, &options).unwrap();
-        for (row, expected) in samples.chunks_exact(35).enumerate() {
+        for (row, expected) in samples.as_chunks::<35>().0.iter().enumerate() {
             assert_eq!(&caller[row * stride..row * stride + 35], expected);
             assert!(
                 caller[row * stride + 35..(row + 1) * stride]
@@ -1206,7 +1211,7 @@ mod htj2k_reduced_component_tests {
             };
             decode_partial_into(&input, &mut target, &request).unwrap();
         }
-        for (row, expected) in expected[0].chunks_exact(6).enumerate() {
+        for (row, expected) in expected[0].as_chunks::<6>().0.iter().enumerate() {
             assert_eq!(&caller[row * 10..row * 10 + 6], expected);
             assert!(
                 caller[row * 10 + 6..(row + 1) * 10]
@@ -1386,7 +1391,7 @@ mod htj2k_reduced_component_tests {
             };
             decode_partial_into(&input, &mut target, &admitted).unwrap();
         }
-        for (row, expected) in expected[0].chunks_exact(19).enumerate() {
+        for (row, expected) in expected[0].as_chunks::<19>().0.iter().enumerate() {
             assert_eq!(&caller[row * 23..row * 23 + 19], expected);
             assert!(
                 caller[row * 23 + 19..(row + 1) * 23]
@@ -1519,7 +1524,7 @@ mod htj2k_reduced_component_tests {
             };
             decode_partial_into(&input, &mut target, &request).unwrap();
         }
-        for (row, expected) in expected[0].chunks_exact(9).enumerate() {
+        for (row, expected) in expected[0].as_chunks::<9>().0.iter().enumerate() {
             assert_eq!(&caller[row * 12..row * 12 + 9], expected);
             assert!(
                 caller[row * 12 + 9..(row + 1) * 12]
@@ -1721,7 +1726,7 @@ mod htj2k_reduced_component_tests {
             )
             .unwrap();
         }
-        for (row, wanted) in expected[0].chunks_exact(18).enumerate() {
+        for (row, wanted) in expected[0].as_chunks::<18>().0.iter().enumerate() {
             assert_eq!(&caller[row * 24..row * 24 + 18], wanted);
             assert!(
                 caller[row * 24 + 18..(row + 1) * 24]
@@ -3497,7 +3502,9 @@ mod jp2_header_validation_tests {
                     .all(|component| component.source_component.is_none())
             );
             let logical = planar_bytes(&first_rendered)[0]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|sample| u16::from_le_bytes([sample[0], sample[1]]))
                 .collect::<Vec<_>>();
             assert_eq!(logical, expected_values);
@@ -13459,7 +13466,9 @@ fn interleave_planes(
         match bytes_per_sample {
             1 => {
                 for (((pixel, red), green), blue) in output
-                    .chunks_exact_mut(3)
+                    .as_chunks_mut::<3>()
+                    .0
+                    .iter_mut()
                     .zip(red.iter())
                     .zip(green.iter())
                     .zip(blue.iter())
@@ -13472,10 +13481,12 @@ fn interleave_planes(
             }
             2 => {
                 for (((pixel, red), green), blue) in output
-                    .chunks_exact_mut(6)
-                    .zip(red.chunks_exact(2))
-                    .zip(green.chunks_exact(2))
-                    .zip(blue.chunks_exact(2))
+                    .as_chunks_mut::<6>()
+                    .0
+                    .iter_mut()
+                    .zip(red.as_chunks::<2>().0.iter())
+                    .zip(green.as_chunks::<2>().0.iter())
+                    .zip(blue.as_chunks::<2>().0.iter())
                 {
                     pixel[0] = red[0];
                     pixel[1] = red[1];

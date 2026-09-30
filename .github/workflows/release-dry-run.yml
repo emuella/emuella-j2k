@@ -11,12 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: dtolnay/rust-toolchain@1.98.1
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: python3 scripts/test-public-tree-policy.py
       - run: python3 scripts/test-package-legal-policy.py
+      - run: python3 scripts/test-workspace-dependency-policy.py
       - run: python3 scripts/audit-public-tree.py
       - run: python3 scripts/generate-binary-dependency-notices.py --check
       - run: cargo test --workspace

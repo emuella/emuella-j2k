@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -31,6 +32,14 @@ def replace(files: dict[str, bytes], name: str, old: bytes, new: bytes) -> None:
 
 
 class PackageLegalPolicyTests(unittest.TestCase):
+    def test_policy_covers_every_workspace_package(self) -> None:
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        names = {
+            tomllib.loads((ROOT / member / "Cargo.toml").read_text())["package"]["name"]
+            for member in workspace["workspace"]["members"]
+        }
+        self.assertEqual(set(PACKAGE_POLICY), names)
+
     def test_checked_in_legal_files_match_canonical_policy(self) -> None:
         for package_name in PACKAGE_POLICY:
             with self.subTest(package=package_name):

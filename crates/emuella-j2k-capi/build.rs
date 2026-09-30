@@ -8,7 +8,9 @@ fn main() {
     let config = cbindgen::Config::from_file(crate_dir.join("cbindgen.toml"))
         .expect("valid cbindgen configuration");
     cbindgen::Builder::new()
-        .with_crate(crate_dir)
+        // The ABI is defined in one source file; avoid nested Cargo discovery
+        // when this library is verified from an unpacked package archive.
+        .with_src(crate_dir.join("src/lib.rs"))
         .with_config(config)
         .generate()
         .expect("generate C API header")

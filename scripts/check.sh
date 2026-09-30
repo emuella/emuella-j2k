@@ -13,6 +13,7 @@ fi
 python3 scripts/test-check-committed-tree.py
 python3 scripts/test-public-tree-policy.py
 python3 scripts/test-package-legal-policy.py
+python3 scripts/test-workspace-dependency-policy.py
 python3 scripts/test-layer2-conformance-inspection.py
 python3 scripts/test-layer2-decoded-pixel-canary.py
 python3 scripts/test-layer2-derived-set.py

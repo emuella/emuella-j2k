@@ -80,7 +80,13 @@ fn check_header(bytes: &[u8], w: u32, h: u32) {
     // SIZ: Lsiz62, Csiz8 and eight 16-bit unsigned/unit-sampled declarations.
     assert_eq!(&bytes[4..6], &62_u16.to_be_bytes());
     assert_eq!(&bytes[40..42], &8_u16.to_be_bytes());
-    assert!(bytes[42..66].chunks_exact(3).all(|c| c == [15, 1, 1]));
+    assert!(
+        bytes[42..66]
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|&c| c == [15, 1, 1])
+    );
 }
 fn check_target(bytes: &[u8], w: u32, h: u32, layout: ComponentLayout, fail: bool) {
     let metadata = info(w, h, layout);

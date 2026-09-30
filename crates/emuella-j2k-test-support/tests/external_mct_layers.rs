@@ -155,7 +155,7 @@ fn external_mct_layers_have_staggered_inclusion_continuation_and_exact_regions()
                 _ => unreachable!(),
             };
             assert!(
-                buffer.chunks_exact(68).all(|row| {
+                buffer.as_chunks::<68>().0.iter().all(|row| {
                     row[..61]
                         .iter()
                         .enumerate()

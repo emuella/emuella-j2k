@@ -33,7 +33,7 @@ when deciding whether a particular input and output request is covered.
 
 ## Get started
 
-Install Git and the repository's pinned Rust toolchain (currently Rust 1.97.1).
+Install Git and the repository's pinned Rust toolchain (currently Rust 1.98.1).
 Until a crate is published, add the facade to your application's `Cargo.toml`
 from source:
 

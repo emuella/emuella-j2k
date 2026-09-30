@@ -18,6 +18,7 @@ from public_tree_policy import (  # noqa: E402
     exception_configuration_errors,
     openjph_provenance_errors,
 )
+from workspace_dependency_policy import dependency_policy_errors  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -153,6 +154,7 @@ def main() -> int:
                 errors.append(f"external-codec name in public Rust API: {relative}")
 
     errors.extend(openjph_provenance_errors(rust_sources, third_party))
+    errors.extend(dependency_policy_errors(ROOT))
 
     cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace = cargo.get("workspace", {})

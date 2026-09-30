@@ -90,7 +90,7 @@ mod tests {
             };
             decode_into(&bytes, &mut target, &options).unwrap();
         }
-        for (r, row) in expected[0].chunks_exact(17).enumerate() {
+        for (r, row) in expected[0].as_chunks::<17>().0.iter().enumerate() {
             assert_eq!(&caller[r * 23..r * 23 + 17], row);
             assert!(caller[r * 23 + 17..(r + 1) * 23].iter().all(|b| *b == 0xa6));
         }

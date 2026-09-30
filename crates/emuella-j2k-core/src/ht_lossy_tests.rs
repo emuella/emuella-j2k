@@ -802,12 +802,16 @@ fn lossy_ht_u16_greyscale_discard_one_and_two_geometry_and_routes_agree() {
     };
     assert!(
         discard_one_planes[0]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|sample| sample[0] != sample[1])
     );
     assert!(
         discard_two_planes[0]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|sample| sample[0] != sample[1])
     );
 }

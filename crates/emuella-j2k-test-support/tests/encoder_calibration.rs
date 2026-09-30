@@ -136,11 +136,13 @@ fn squared_error(source: &[u8], decoded: &[u8], format: SampleFormat) -> Squared
             .map(|(&expected, &actual)| u128::from(expected.abs_diff(actual)).pow(2))
             .sum(),
         16 => source
-            .chunks_exact(2)
-            .zip(decoded.chunks_exact(2))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<2>().0.iter())
             .map(|(expected, actual)| {
-                let expected = u16::from_le_bytes(expected.try_into().expect("two bytes"));
-                let actual = u16::from_le_bytes(actual.try_into().expect("two bytes"));
+                let expected = u16::from_le_bytes(*expected);
+                let actual = u16::from_le_bytes(*actual);
                 u128::from(expected.abs_diff(actual)).pow(2)
             })
             .sum(),
@@ -556,12 +558,11 @@ fn peak_error(source: &[u8], decoded: &ImageData, format: SampleFormat) -> u16 {
             .max()
             .unwrap_or(0),
         16 => source
-            .chunks_exact(2)
-            .zip(decoded.chunks_exact(2))
-            .map(|(a, b)| {
-                u16::from_le_bytes(a.try_into().unwrap())
-                    .abs_diff(u16::from_le_bytes(b.try_into().unwrap()))
-            })
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<2>().0.iter())
+            .map(|(a, b)| u16::from_le_bytes(*a).abs_diff(u16::from_le_bytes(*b)))
             .max()
             .unwrap_or(0),
         _ => unreachable!(),

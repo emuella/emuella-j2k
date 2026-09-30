@@ -545,7 +545,9 @@ fn decode(raw: &[u8], ht: bool, discard: u8) -> Observation {
         .map(|(c, p)| {
             irreversible_component_samples_to_bytes(&parsed.siz.components[c], p)
                 .unwrap()
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| u16::from_le_bytes([b[0], b[1]]))
                 .collect()
         })
