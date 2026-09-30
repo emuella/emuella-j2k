@@ -29,6 +29,9 @@ development dependency is omitted from the normalised C API archive manifest;
 Cargo verifies the packaged library, while source-checkout and native consumer
 checks exercise those fixtures. Keep that helper unpublished and unversioned in
 the C API dev-dependency unless its packaging contract deliberately changes.
+The public-tree manifest audit constrains cargo-deny's path wildcard exception
+to this exact dependency and unpublished member; every other local dependency
+must retain its registered member and explicit version.
 
 ## Cargo archive staging versus release qualification
 

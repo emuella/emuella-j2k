@@ -18,6 +18,8 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The public-tree audit permits only the unpublished C API fixture dev-dependency.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
