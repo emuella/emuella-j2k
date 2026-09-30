@@ -127,6 +127,7 @@ PACKAGE_POLICY: Mapping[str, PackageLegalPolicy] = {
     "emuella-j2k-test-support": apache_only_policy(),
     "emuella-j2k-tier1": apache_only_policy(),
     "emuella-j2k-transform": apache_only_policy(),
+    "emuella-jpip": apache_only_policy(),
 }
 
 
