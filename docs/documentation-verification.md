@@ -27,7 +27,7 @@ fails. Each phase recomputes the original candidate/tree/base, policy/helper
 and event binding. The required job remains `test`; missing, skipped, failed
 or cancelled selected results fail.
 
-## Fixed documentation obligations
+## Explicit documentation obligations
 
 Docs and full run public-tree, package-legal and workspace-dependency policy
 tests, provenance/public-content audit, binary dependency notice checks,
@@ -43,18 +43,24 @@ with no ignored examples.
 | Facade `emuella-j2k` | At least one in-memory encode/inspect doctest executes |
 | Defining `emuella-j2k-core` | At least one inspection-error doctest executes; facade re-exports do not collect it |
 | Codestream/container re-exported boundaries | Documentation and doctest collection; currently zero authored doctests, explicitly reported |
-| README | Exactly one `rust,no_run` block compiles; it reads a caller-supplied external image |
-| Getting-started guide | Exactly one `rust` block executes project-authored facade assertions |
-| Three eligible files | Deterministic local destinations, heading anchors and explicit references; same-repository `blob/main` URLs use current source |
+| README | Exactly one `rust,no_run` block compiles; external runtime input makes it compile-only |
+| Getting-started, caller-output and error guides | Exactly one `rust` block each executes project-authored facade assertions: owned round trip, discovery/padded caller output, and structured failures |
+| Six inspected Markdown surfaces | README, documentation index, getting-started, Rust API map, caller-output and error guides: deterministic local destinations, heading anchors and explicit references; same-repository `blob/main` URLs use current source |
 | Eight inherited README package consumers | Locked Cargo source inventory and exact legal source bytes for facade/CLI/core/codestream/container/HT/tier1/transform |
 
-Explicit temporary Rustdoc consumers read the exact Markdown blocks. Unexpected
-counts/attributes fail. Eligible syntax is ATX headings, prose, simple inline
+Explicit temporary Rustdoc consumers read every selected Markdown block, each
+through a distinct include. The four consumers must all pass, with zero ignored,
+missing or unaccounted results. Unexpected counts/attributes fail; selected
+documents cannot silently acquire an unchecked extra example. Checked syntax is
+ATX headings, prose/tables, inline code, simple inline
 links, explicit reference definitions, and `rust`, `rust,no_run`, `toml` or `sh`
 fences. HTML/images/wiki/shortcut links, unsupported attributes, indented code,
 malformed references, local queries and escaping the source tree fail. Shell
 and TOML fences are never executed. Remote availability is outside the check.
 This is a bounded surface validator, not a general Markdown parser.
+Verification-consumer selection is separate from routing eligibility. The three
+new API/contract guides remain full-only; adding a consumer does not make its
+path eligible. Policy and wiring changes themselves require full verification.
 
 Source inventory does not qualify `.crate` archives. Actual archive/distribution
 qualification stays in [release preparation](releasing.md). JPIP/C API use their
@@ -92,12 +98,13 @@ policy/wrappers/workflow. Every update takes full verification and review.
 
 | Area | Foundation proof | Future explicit work |
 |---|---|---|
-| Facade/core | Builds and selected executed examples | Systematic entrypoint/options/errors/resource examples and completeness review |
+| Facade/core | Rendered API landing and selected field/variant contracts; owned, caller-output and structured-failure journeys | Advanced/source/workspace examples and broader API completeness review |
 | Codestream/container | Builds and explicit current zero-example counts | Parsing/metadata/regional/source/persistence examples |
 | Transform/tier1/HT/acceleration | Existing full gate and source/legal checks | Select public low-level guides and executable examples |
 | JPIP | Existing full gate | Separate protocol/request/cache integration guides |
 | CLI/C API/Python | Full gate and distribution contracts | Separate consumer guides and feature/target examples |
 | Profiles/contracts/evidence | Stay full and remain linked | Maintain bounded claims through separately authorised work |
 
-This proves routing and bounded examples, not complete API documentation,
+The [application API map](rust-api.md) records the selected consumer scope.
+This proves routing and bounded application examples, not complete API documentation,
 a speed benchmark or broader product qualification.

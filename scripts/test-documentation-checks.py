@@ -15,6 +15,8 @@ class DocumentationTests(unittest.TestCase):
         examples = docs.inspect_documents(docs.ROOT)
         self.assertEqual(examples["README.md"][0][0], "rust,no_run")
         self.assertEqual(examples["docs/getting-started.md"][0][0], "rust")
+        self.assertEqual(examples["docs/caller-owned-output.md"][0][0], "rust")
+        self.assertEqual(examples["docs/error-handling.md"][0][0], "rust")
 
     def test_missing_extra_ignored_or_compile_only_guide_examples_fail(self):
         original = (docs.ROOT / "docs/getting-started.md").read_text()
@@ -49,6 +51,43 @@ class DocumentationTests(unittest.TestCase):
         for text in ("```rust,ignore\n1\n```", "~~~rust\n1\n~~~", "    indented code", "<a href='x'>link</a>", "```rust\n1"):
             with self.subTest(text=text), self.assertRaises(docs.DocumentationError):
                 docs.prose_and_examples(text, strict=True)
+        docs.prose_and_examples("Use `Vec<u8>` and `Result<T>`.", strict=True)
+
+    def test_each_selected_surface_rejects_missing_extra_or_ignored_examples(self):
+        for name, kinds in docs.SURFACES.items():
+            original = (docs.ROOT / name).read_text()
+            mutations = [original + "\n```rust\nassert!(true);\n```\n"]
+            if kinds:
+                mutations.extend([original.replace("```" + kinds[0], "```rust,ignore", 1),
+                                  original[:original.index("```" + kinds[0])] + "\nEnd.\n"])
+            for text in mutations:
+                with self.subTest(surface=name), self.assertRaises(docs.DocumentationError):
+                    _, examples = docs.prose_and_examples(text, strict=True)
+                    docs.select_examples(name, examples)
+
+    def test_all_blocks_are_wired_to_distinct_consumers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory)
+            (harness / "src").mkdir()
+            documents = {"selected.md": [("rust", "assert!(true);"),
+                                         ("rust", "assert!(false);")],
+                         "external.md": [("rust,no_run", "let _ = std::fs::read(\"external\");")]}
+            self.assertEqual(docs.write_example_consumers(harness, documents), 3)
+            source = (harness / "src/lib.rs").read_text()
+            for index in range(3):
+                self.assertIn(f'include_str!("example{index}.md")', source)
+            self.assertIn("assert!(false);", (harness / "src/example1.md").read_text())
+
+    def test_markdown_results_reject_missing_failed_ignored_zero_or_unaccounted_tests(self):
+        valid = "test result: ok. 4 passed; 0 failed; 0 ignored"
+        docs.check_example_coverage(valid, 4)
+        for broken in ("", valid.replace("4 passed", "0 passed"),
+                       valid.replace("4 passed", "3 passed"),
+                       valid.replace("4 passed", "5 passed"),
+                       valid.replace("0 failed", "1 failed"),
+                       valid.replace("0 ignored", "1 ignored"), valid + "\n" + valid):
+            with self.subTest(output=broken), self.assertRaises(docs.DocumentationError):
+                docs.check_example_coverage(broken, 4)
 
     def test_each_required_doctest_consumer_has_coverage(self):
         output = "".join(f"Doc-tests {name.replace('-', '_')}\n"

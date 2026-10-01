@@ -6,8 +6,14 @@ requests remain bounded while the project prepares its first release.
 
 ## Choose an operation
 
+- [Rust application API](rust-api.md) maps entry points, options, outputs,
+  features and specialised layers, and gives local Rustdoc instructions.
 - [Getting started with the Rust facade](getting-started.md) demonstrates
-  a self-contained encode and inspection example.
+  a self-contained encode, inspection and owned native decode example.
+- [Caller-owned output](caller-owned-output.md) executes discovery, checked
+  sizing and padded buffer decoding alongside owned output.
+- [Structured errors](error-handling.md) executes malformed-input, unsupported
+  request and caller-storage failures and explains their different meanings.
 - [Supported profiles](supported-profiles.md) maps inspection, decoding and
   encoding to containers, component formats, output modes and important limits.
 - [Decoder profile contracts](decoding-profiles.md) gives exact admission and

@@ -83,6 +83,13 @@ and the public Rust API before assuming an input is admitted.
 
 ## Documentation and help
 
+Start with the [Rust application API map](https://github.com/emuella/emuella-j2k/blob/main/docs/rust-api.md)
+to choose operations, the [in-memory round trip](https://github.com/emuella/emuella-j2k/blob/main/docs/getting-started.md)
+to encode and decode, and [caller-owned output](https://github.com/emuella/emuella-j2k/blob/main/docs/caller-owned-output.md)
+and [structured errors](https://github.com/emuella/emuella-j2k/blob/main/docs/error-handling.md)
+for storage and failure handling. The API map also gives local Rustdoc generation
+and entry instructions.
+
 The [documentation index](https://github.com/emuella/emuella-j2k/blob/main/docs/README.md)
 leads to user and integrator contracts, qualification evidence, architecture
 and testing. In particular, see [native components](https://github.com/emuella/emuella-j2k/blob/main/docs/native-planes.md),
