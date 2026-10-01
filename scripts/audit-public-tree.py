@@ -97,9 +97,9 @@ def files() -> tuple[list[Path], list[Path], list[Path]]:
     return result, forbidden_directories, symbolic_link_directories
 
 
-def main() -> int:
+def documentation_payload_errors(root: Path) -> list[str]:
     errors: list[str] = []
-    helper = ROOT / "scripts/documentation-route"
+    helper = root / "scripts/documentation-route"
     try:
         record = json.loads((helper / ".documentation-route.json").read_text())
         names = {"LICENSE", "README.md", "VERSION", "adopt.py", "documentation_route.py",
@@ -118,6 +118,11 @@ def main() -> int:
                     errors.append(f"standalone documentation helper managed bytes differ: {name}")
     except (OSError, ValueError, TypeError, KeyError):
         errors.append("standalone documentation helper provenance is unavailable")
+    return errors
+
+
+def main() -> int:
+    errors = documentation_payload_errors(ROOT)
     rust_sources: dict[PurePosixPath, str] = {}
     third_party = ""
     paths, forbidden_directories, symbolic_link_directories = files()

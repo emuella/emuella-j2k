@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -240,6 +241,29 @@ class RoutingTests(unittest.TestCase):
         result = subprocess.run(["sh", "scripts/check.sh"], cwd=archive, env=env, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.report.read_text().splitlines(), ["docs", "full"])
+
+    def test_managed_helper_hashes_and_exact_version_exception(self):
+        spec = importlib.util.spec_from_file_location("routing_public_audit", ROOT / "scripts/audit-public-tree.py")
+        audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(audit)
+        from public_tree_policy import content_policy_errors
+        relative = "scripts/documentation-route/VERSION"
+        from pathlib import PurePosixPath
+        self.assertEqual(content_policy_errors(PurePosixPath(relative), b"1.0.0\n",
+                         hash_exceptions=audit.PUBLIC_TREE_HASH_EXCEPTIONS), [])
+        for bad in (b"invalid\n", b"2.0.0\n"):
+            self.assertTrue(content_policy_errors(PurePosixPath(relative), bad,
+                            hash_exceptions=audit.PUBLIC_TREE_HASH_EXCEPTIONS))
+        self.assertTrue(content_policy_errors(PurePosixPath("other/VERSION"), b"1.0.0\n"))
+        fixture = self.parent / "payload-fixture"
+        helper = fixture / "scripts/documentation-route"
+        shutil.copytree(ROOT / "scripts/documentation-route", helper)
+        self.assertEqual(audit.documentation_payload_errors(fixture), [])
+        (helper / "VERSION").write_text("invalid\n")
+        self.assertTrue(audit.documentation_payload_errors(fixture))
+        (helper / "VERSION").write_text("1.0.0\n")
+        (helper / "LICENSE").write_text("truncated\n")
+        self.assertTrue(audit.documentation_payload_errors(fixture))
 
 
 if __name__ == "__main__":
