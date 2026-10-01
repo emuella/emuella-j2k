@@ -6,7 +6,7 @@
 )]
 //! Public Rust API for `emuella-j2k`.
 //!
-//! This crate owns the stable, wrapper-ready surface for JPEG 2000 and HTJ2K
+//! This crate owns the pre-release, wrapper-ready surface for JPEG 2000 and HTJ2K
 //! callers. Entrypoints accept byte slices or caller-owned buffers, route the
 //! current profile-scoped Part 1 decode rows, structurally admitted
 //! encode-compatible rows, and native encode
@@ -4939,7 +4939,9 @@ pub enum OutputFormat {
 /// Byte order used by multi-byte samples in caller-owned buffers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SampleEndian {
+    /// Least-significant byte first.
     Little,
+    /// Most-significant byte first.
     Big,
 }
 
@@ -4949,8 +4951,12 @@ pub enum SampleEndian {
 /// multi-byte caller-owned sample buffers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SampleFormat {
+    /// Declared component precision, distinct from storage width. Constructors
+    /// accept 1–38 bits; codec profiles admit narrower subsets.
     pub bits_per_sample: u8,
+    /// Whether the component's numerical samples are signed.
     pub signed: bool,
+    /// Explicit storage order for multi-byte samples; `None` for one-byte samples.
     pub byte_order: Option<SampleEndian>,
 }
 
@@ -4985,6 +4991,12 @@ impl SampleFormat {
         byte_order: Some(SampleEndian::Big),
     };
 
+    /// Construct a one-byte sample descriptor (1–8 bits).
+    ///
+    /// # Errors
+    /// Returns [`J2kError::InvalidParameter`] for zero or multi-byte precision.
+    /// Use [`Self::with_byte_order`] for multi-byte storage. Valid descriptors
+    /// do not by themselves establish codec support.
     pub fn new(bits_per_sample: u8, signed: bool) -> Result<Self> {
         if bits_per_sample > 8 {
             return Err(J2kError::InvalidParameter {
@@ -4996,6 +5008,11 @@ impl SampleFormat {
         Self::with_byte_order(bits_per_sample, signed, None)
     }
 
+    /// Construct a 1–38-bit descriptor with explicit multi-byte storage order.
+    ///
+    /// # Errors
+    /// Returns [`J2kError::InvalidParameter`] for precision outside 1–38,
+    /// byte order on one-byte samples, or absent order on multi-byte samples.
     pub fn with_byte_order(
         bits_per_sample: u8,
         signed: bool,
@@ -5031,10 +5048,13 @@ impl SampleFormat {
 /// Color model declared or inferred for an image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorModel {
+    /// A single greyscale channel.
     Grayscale,
+    /// Red, green and blue channels.
     Rgb,
     /// Red, green, blue and straight (unassociated) alpha for bounded JP2 output.
     Rgba,
+    /// Luma and chroma interpretation; rendered projection is profile-bounded.
     YCbCr,
     /// No inferred colour interpretation. For native eight-component lossless
     /// encoding, positions are independent unsigned U16 bands; decode with
@@ -5067,11 +5087,17 @@ pub enum DecodeMode {
 /// Image geometry and sample model shared by metadata, decode, and encode APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageInfo {
+    /// Reference-image width. Native component widths may differ.
     pub width: u32,
+    /// Reference-image height. Native component heights may differ.
     pub height: u32,
+    /// Component/channel count for this image description.
     pub components: u16,
+    /// Packed-image sample description; see [`ComponentInfo`] for native grids.
     pub sample_format: SampleFormat,
+    /// Declared or inferred meaning, independent of storage layout.
     pub color_model: ColorModel,
+    /// Plane-separated or pixel-interleaved storage.
     pub layout: ComponentLayout,
 }
 
@@ -5085,12 +5111,19 @@ pub struct ComponentInfo {
     /// Source codestream component index, or `None` for a rendered channel
     /// produced by a transform or container projection.
     pub source_component: Option<u16>,
+    /// Actual native-plane or rendered-channel width.
     pub width: u32,
+    /// Actual native-plane or rendered-channel height.
     pub height: u32,
+    /// Horizontal origin on this component's grid.
     pub x_origin: u32,
+    /// Vertical origin on this component's grid.
     pub y_origin: u32,
+    /// Source sampling separation relative to the reference grid.
     pub horizontal_separation: u8,
+    /// Source sampling separation relative to the reference grid.
     pub vertical_separation: u8,
+    /// This component's precision, signedness and storage byte order.
     pub sample_format: SampleFormat,
 }
 
@@ -5103,6 +5136,13 @@ pub struct Part1SourceInspection {
 }
 
 impl ImageInfo {
+    /// Construct an image description with nonzero geometry and component count.
+    ///
+    /// This checks neither codec admission nor all sample/colour/layout
+    /// combinations; encode/decode operations perform their own validation.
+    ///
+    /// # Errors
+    /// Returns [`J2kError::InvalidParameter`] for zero width, height or components.
     pub fn new(
         width: u32,
         height: u32,
@@ -5142,16 +5182,33 @@ impl ImageInfo {
 }
 
 /// Caller-owned immutable component plane.
+///
+/// Stride is in bytes and may include row padding. [`Plane::new`] requires at
+/// least `stride_bytes * height` bytes, including the final row's padding.
+/// Operations validate their own input extent: the bounded
+/// [lossy HT encoder](https://github.com/emuella/emuella-j2k/blob/main/docs/ht-lossy-public-api.md)
+/// also accepts directly constructed planes ending at the final active sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Plane<'a> {
+    /// Borrowed byte storage, retained by its owner.
     pub samples: &'a [u8],
+    /// Native plane width in samples.
     pub width: u32,
+    /// Native plane height in rows.
     pub height: u32,
+    /// Byte distance between row starts, at least one active row.
     pub stride_bytes: usize,
+    /// Precision, signedness and byte order of stored samples.
     pub sample_format: SampleFormat,
 }
 
 impl<'a> Plane<'a> {
+    /// Validate declared geometry, sample format, byte stride and capacity.
+    ///
+    /// # Errors
+    /// Invalid declarations return [`J2kError::InvalidParameter`]; insufficient
+    /// byte storage returns [`J2kError::BufferTooSmall`]. This does not establish
+    /// admission of a complete encode request.
     pub fn new(
         samples: &'a [u8],
         width: u32,
@@ -5178,16 +5235,31 @@ impl<'a> Plane<'a> {
 }
 
 /// Caller-owned mutable component plane used by decode-into paths.
+///
+/// [`PlaneMut::new`] requires at least `stride_bytes * height` bytes; a consuming
+/// operation also validates its own target contract. Mutable borrows prevent
+/// access through the original buffer while the view remains in use.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PlaneMut<'a> {
+    /// Exclusively borrowed byte storage.
     pub samples: &'a mut [u8],
+    /// Native plane width in samples.
     pub width: u32,
+    /// Native plane height in rows.
     pub height: u32,
+    /// Byte distance between row starts, including any padding.
     pub stride_bytes: usize,
+    /// Must agree with the requested native component's discovered format.
     pub sample_format: SampleFormat,
 }
 
 impl<'a> PlaneMut<'a> {
+    /// Validate the plane's declared storage before using it in a target.
+    ///
+    /// # Errors
+    /// Invalid declarations return [`J2kError::InvalidParameter`]; insufficient
+    /// byte storage returns [`J2kError::BufferTooSmall`]. Whole-target agreement
+    /// with the decode request is checked by the operation.
     pub fn new(
         samples: &'a mut [u8],
         width: u32,
@@ -5216,27 +5288,46 @@ impl<'a> PlaneMut<'a> {
 /// Borrowed image view for caller-owned encode inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageView<'a> {
+    /// One borrowed plane per component; `info.layout` must be planar.
     Planar {
+        /// Whole-image description.
         info: &'a ImageInfo,
+        /// Ordered immutable component planes.
         planes: &'a [Plane<'a>],
     },
+    /// Pixel-interleaved borrowed samples; `info.layout` must be interleaved.
     Interleaved {
+        /// Whole-image description.
         info: &'a ImageInfo,
+        /// Sample bytes, with at least `stride_bytes * info.height` capacity.
         samples: &'a [u8],
+        /// Byte distance between row starts, at least one packed row.
         stride_bytes: usize,
     },
 }
 
 /// Mutable caller-owned decode target.
+///
+/// Its variant selects execution layout. Match shape discovery to that layout
+/// and use the resolved output description rather than inspection metadata.
+/// Publication on failure is profile-specific; [`decode_into`] is not generally
+/// transactional and may allocate private reconstruction storage.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ImageViewMut<'a> {
+    /// Ordered mutable component planes, which may have distinct native grids.
     Planar {
+        /// Resolved output description with planar layout.
         info: &'a ImageInfo,
+        /// One exclusive plane borrow per output component.
         planes: &'a mut [PlaneMut<'a>],
     },
+    /// Pixel-interleaved mutable bytes in resolved component/channel order.
     Interleaved {
+        /// Resolved output description with interleaved layout.
         info: &'a ImageInfo,
+        /// At least `stride_bytes * info.height` bytes, including final padding.
         samples: &'a mut [u8],
+        /// Byte distance between row starts, at least one active output row.
         stride_bytes: usize,
     },
 }
@@ -5244,11 +5335,13 @@ pub enum ImageViewMut<'a> {
 /// Owned image returned by convenience full-decode APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
+    /// Whole/reference-image description, distinct from unequal native grids.
     pub info: ImageInfo,
     /// Per-plane/component descriptors in the same order as the decoded
     /// output. For interleaved rendered output these describe the interleaved
     /// channels.
     pub component_info: Vec<ComponentInfo>,
+    /// Owned byte samples in the described output layout.
     pub data: ImageData,
 }
 
@@ -5492,33 +5585,52 @@ pub struct Htj2kCleanupVlcSignificantOutput {
 /// Owned sample buffers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageData {
+    /// Ordered tightly packed component planes; native size follows
+    /// [`Image::component_info`], which can differ from reference-image size.
     Planes(Vec<Vec<u8>>),
+    /// Tightly packed pixel-interleaved samples in output component order.
     Interleaved(Vec<u8>),
 }
 
 /// Container and codestream metadata available without image allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Metadata {
+    /// Detected container/codestream family.
     pub format: InputFormat,
+    /// Input image description when available, not resolved rendered output.
     pub image: Option<ImageInfo>,
+    /// Parsed coding properties when available.
     pub codestream: Option<CodestreamInfo>,
+    /// Container properties when the input is a container.
     pub container: Option<ContainerInfo>,
+    /// Inspection's bounded classification, not approval of every later request.
     pub support: SupportStatus,
+    /// Selected raw records when preservation is enabled.
     pub records: Vec<MetadataRecord>,
 }
 
 /// Resolved output shape for a full-image decode request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeShape {
+    /// Resolved reference/output image width; native grid widths may differ.
     pub width: u32,
+    /// Resolved reference/output image height; native grid heights may differ.
     pub height: u32,
+    /// Component count in the source codestream, before selection/presentation.
     pub codestream_components: u16,
+    /// Rendered channel count, or native component count before selection.
     pub colour_channels: u16,
+    /// Actual output component/channel count to use for uniform packed sizing.
     pub output_components: u16,
+    /// Resolved packed sample precision, signedness and storage order.
     pub sample_format: SampleFormat,
+    /// Requested output storage layout.
     pub layout: ComponentLayout,
+    /// Resolved sample byte order; agrees with `sample_format.byte_order`.
     pub byte_order: Option<SampleEndian>,
+    /// Resolved native or rendered colour interpretation.
     pub color_model: ColorModel,
+    /// Native component or rendered request that produced this shape.
     pub mode: DecodeMode,
 }
 
@@ -5599,16 +5711,24 @@ pub enum MetadataKind {
     UnknownMarker,
 }
 
-/// Whether the parsed input is in the implemented milestone subset.
+/// Inspection's classification of the parsed input against implemented profiles.
+///
+/// This is separate from whether a particular mode, component selection, layout
+/// or partial request is admitted, and from successful packet reconstruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupportStatus {
-    /// Algorithmic repo-owned decode path for the current milestone.
+    /// An implemented bounded decode path was recognised.
     Supported,
+    /// Structure was inspected but a feature lies outside the classification.
     Unsupported {
+        /// Broad unsupported-feature category.
         feature: UnsupportedFeature,
+        /// Human-readable explanation, not a stable parsing contract.
         detail: String,
     },
+    /// No supported/unsupported determination was made, including when disabled.
     Unknown {
+        /// Human-readable explanation.
         detail: String,
     },
 }
@@ -5623,20 +5743,35 @@ impl SupportStatus {
 /// Named unsupported features used by errors and metadata classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsupportedFeature {
+    /// Input container/codestream family or profile.
     InputFormat,
+    /// Requested encoded output family.
     OutputFormat,
+    /// Container box or presentation structure.
     ContainerBox,
+    /// Codestream marker construct.
     MarkerSegment,
+    /// Packet progression outside the selected route.
     ProgressionOrder,
+    /// Transform or decomposition request outside the selected route.
     WaveletTransform,
+    /// Entropy-coding mode outside the selected route.
     EntropyCoder,
+    /// Colour interpretation or projection outside the selected route.
     ColorModel,
+    /// Component/storage request combination outside the selected route.
     ComponentLayout,
+    /// Regional, tile or reduced request outside the selected route.
     PartialDecodeMode,
+    /// Incremental-input operation outside the selected route.
     IncrementalInput,
 }
 
 /// Full-image decode parameters.
+///
+/// Defaults select rendered, all-component, all-layer, planar output with no
+/// best-effort attempt. Component selection and positive quality-layer limits
+/// require component mode and their separately admitted profiles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeOptions {
     /// Permit legacy callers to request a native best-effort decode attempt
@@ -5648,7 +5783,9 @@ pub struct DecodeOptions {
     /// part of the supported decode matrix. JPH, raw HTJ2K, and unknown formats
     /// are not enabled by this option.
     pub allow_best_effort_backend_decode: bool,
+    /// Native sample meaning or bounded rendered presentation.
     pub mode: DecodeMode,
+    /// All source components, or a non-empty unique in-range ordered selection.
     pub requested_components: ComponentSelection,
     /// Maximum number of leading quality layers to reconstruct. `None`
     /// reconstructs every layer. Existing admitted one-layer profiles clamp
@@ -5656,6 +5793,7 @@ pub struct DecodeOptions {
     /// currently bounded to the raw, full-image, planar, single-component
     /// two-layer LRCP profile, where values at or above two clamp to complete.
     pub max_quality_layers: Option<u16>,
+    /// Owned output layout; [`decode_into`] instead derives layout from its target.
     pub target_layout: ComponentLayout,
 }
 
@@ -5815,7 +5953,11 @@ impl Htj2kDecodeWorkspace {
 /// Metadata parse parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectOptions {
+    /// Retain selected raw metadata records. Default `true`; disabling this
+    /// does not bypass structural validation or remove parsed image properties.
     pub preserve_raw_metadata: bool,
+    /// Compute the bounded decode classification. Default `true`; `false`
+    /// returns [`SupportStatus::Unknown`], not an approval.
     pub classify_support: bool,
 }
 
@@ -5828,15 +5970,27 @@ impl Default for InspectOptions {
     }
 }
 
-/// Encode parameters for the initial Part 1 encoder surface.
+/// Encode parameters for profile-bounded Part 1 output.
+///
+/// Defaults select JP2, LRCP, reversible 5/3, lossless, zero levels, no explicit
+/// tiling and no supplied metadata. Exposed enum values do not establish support
+/// for every combination. The target-rate profile requires irreversible 9/7,
+/// two levels and its maintained input/resource bounds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodeOptions {
+    /// JP2 container or raw Part 1 codestream.
     pub format: OutputFormat,
+    /// Requested packet progression; accepted orders depend on the encoder.
     pub progression_order: ProgressionOrder,
+    /// Requested transform; lossless and target-rate have different admission.
     pub transform: WaveletTransform,
+    /// Exact reversible coding or a bounded raw-codestream rate budget.
     pub quality: EncodeQuality,
+    /// Number of wavelet levels, restricted by the selected profile.
     pub decomposition_levels: u8,
+    /// Optional nominal tile dimensions; `None` selects a single image tile.
     pub tile_size: Option<TileSize>,
+    /// Supplied records; accepted kinds and container combinations are restricted.
     pub metadata: Vec<MetadataRecord>,
 }
 
@@ -5885,7 +6039,9 @@ pub struct Htj2kLossyEncodeOptions {
 /// Optional tile dimensions for the narrow native multi-tile encode surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileSize {
+    /// Nominal tile width in reference-grid samples.
     pub width: u32,
+    /// Nominal tile height in reference-grid samples.
     pub height: u32,
 }
 
@@ -5904,7 +6060,9 @@ pub enum EncodeQuality {
 /// Component selection shared by full and partial decode paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComponentSelection {
+    /// Every source component, subject to profile admission.
     All,
+    /// Non-empty, unique zero-based source indices. Output follows this order.
     Indices(Vec<u16>),
 }
 
@@ -5926,7 +6084,9 @@ pub struct PartialDecodeOptions {
     /// SIZ tile-grid coordinate resolved to the clipped image-relative tile
     /// rectangle. Mutually exclusive with [`Self::region`].
     pub tile: Option<TileSelection>,
+    /// Full resolution or discarded finest levels within the selected profile.
     pub resolution: ResolutionLevel,
+    /// Ordered native source selection, restricted by the selected profile.
     pub components: ComponentSelection,
     /// Maximum number of leading quality layers to reconstruct. Existing
     /// admitted one-layer profiles preserve their positive-limit behaviour.
@@ -5934,6 +6094,7 @@ pub struct PartialDecodeOptions {
     /// single-component two-layer LRCP profile; spatial selection and
     /// resolution reduction remain outside that two-layer profile.
     pub max_quality_layers: Option<u16>,
+    /// Requested storage layout; native unequal grids generally require planar.
     pub target_layout: ComponentLayout,
 }
 
@@ -5953,22 +6114,30 @@ impl Default for PartialDecodeOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Image-relative half-open rectangle expressed as origin plus extent.
 pub struct Region {
+    /// Horizontal origin relative to the full-resolution image.
     pub x: u32,
+    /// Vertical origin relative to the full-resolution image.
     pub y: u32,
+    /// Positive half-open horizontal extent.
     pub width: u32,
+    /// Positive half-open vertical extent.
     pub height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Zero-based horizontal and vertical coordinates in the SIZ tile grid.
 pub struct TileSelection {
+    /// Zero-based horizontal SIZ tile-grid coordinate.
     pub tile_x: u32,
+    /// Zero-based vertical SIZ tile-grid coordinate.
     pub tile_y: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionLevel {
+    /// Reconstruct the full-resolution grid.
     Full,
+    /// Discard this many finest levels; exact geometry/admission is route-specific.
     Reduced { discard_levels: u8 },
 }
 
@@ -6122,11 +6291,20 @@ pub use native_diagnostics::{NativeDecodeTimings, NativePackingRoute};
 
 /// Convenience full decode that owns the returned image buffers.
 ///
+/// The default request is rendered, planar and all-component. Use
+/// [`DecodeMode::Components`] for native meaning. [`Image::component_info`]
+/// describes actual native grids; [`Image::info`] can retain reference dimensions.
+///
 /// The bounded mapped JP2 route resolves palette, channel order and straight
 /// alpha after independent native reconstruction. Rendered descriptors carry
 /// no source component index; RGBA preserves colour samples beneath zero alpha.
 /// Bounded two-level irreversible HT supports full native component output in
 /// raw codestreams and JPH; it does not enable rendered projection.
+///
+/// # Errors
+/// Returns structured [`J2kError`] for invalid/truncated input, invalid options,
+/// unsupported input/request combinations or reconstruction failures. A prior
+/// inspection or successful [`decode_shape`] does not prove sample decode.
 pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<Image> {
     decode_impl(input, options, None)
 }
@@ -6277,6 +6455,12 @@ pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
 /// image samples. For mapped JP2 this reports the resolved rendered channel
 /// count (including alpha), not merely the native component count. Packet and
 /// palette-index sample failures can still occur during decode.
+/// For unequal native grids, this remains a reference-image description;
+/// consult component descriptors and the selected profile before sizing planes.
+///
+/// # Errors
+/// Invalid/truncated structure, invalid options and unsupported request profiles
+/// return [`J2kError`]. Discovery success is not a pixel-reconstruction pass.
 pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape> {
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
@@ -7990,6 +8174,23 @@ fn decoded_sample_format(decoded: &codestream::DecodedImage) -> Result<SampleFor
 /// The bounded independent U8 plane profile described in `docs/native-planes.md`
 /// and eight-component full decode always finish in private storage before
 /// publishing any caller samples. See `docs/native-eight-components.md`.
+///
+/// Target layout is taken from [`ImageViewMut`], overriding
+/// [`DecodeOptions::target_layout`] for execution. Target info must match the
+/// resolved output, and each buffer needs at least `stride_bytes * height`
+/// bytes. Strides are bytes; padding is outside the active sample rows.
+///
+/// No general zero-allocation, zero-copy or atomic-on-error guarantee applies.
+/// Publication behaviour depends on the selected profile; direct routes may
+/// publish before a later reconstruction failure. The
+/// [caller-output guide](https://github.com/emuella/emuella-j2k/blob/main/docs/caller-owned-output.md)
+/// executes a supported discovery/sizing/padded-output sequence.
+///
+/// # Errors
+/// Invalid target declarations/agreement return [`J2kError::InvalidParameter`];
+/// insufficient byte capacity returns [`J2kError::BufferTooSmall`]. Input,
+/// request admission and reconstruction failures retain their structured errors.
+/// Error precedence for multiple defects is not guaranteed.
 pub fn decode_into(
     input: &[u8],
     target: &mut ImageViewMut<'_>,
@@ -10140,6 +10341,13 @@ pub use scalable_lossless::{
 };
 
 /// Convenience encode that owns the returned codestream or container bytes.
+///
+/// Borrows [`ImageView`] only during the call. Defaults encode lossless JP2 with
+/// zero levels; other requests require their documented Part 1 profile.
+///
+/// # Errors
+/// Invalid input storage/options, unsupported combinations, checked resource
+/// limits and unattainable target rates return structured [`J2kError`].
 pub fn encode(image: ImageView<'_>, options: &EncodeOptions) -> Result<Vec<u8>> {
     #[cfg(feature = "std")]
     if scalable_lossless::is_scalable_lossless(image, options) {
@@ -10410,7 +10618,11 @@ pub fn encode_htj2k_lossy_jph(
     }
 }
 
-/// Encode into a caller-owned output buffer.
+/// Append encoded bytes to a caller-owned growable vector.
+///
+/// This is not a fixed-capacity slice API. A failure does not promise that an
+/// existing vector is unchanged; use [`encode`] when owned result publication
+/// is convenient. Input storage and profile admission are the same as [`encode`].
 pub fn encode_into(
     image: ImageView<'_>,
     output: &mut Vec<u8>,
@@ -11984,35 +12196,62 @@ fn fourcc_from_label(label: &str) -> Option<container::FourCc> {
     Some(container::FourCc::new(value))
 }
 
+/// Structured operation failures shared by the application API.
+///
+/// Match variants and structured fields rather than diagnostic strings. Multiple
+/// simultaneous defects have no stable precedence. Errors alone make no general
+/// unchanged-output guarantee; publication contracts are profile-specific.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum J2kError {
+    /// Invalid caller description or option.
     InvalidParameter {
+        /// Contextual parameter identifier.
         parameter: &'static str,
+        /// Human-readable explanation.
         message: &'static str,
     },
+    /// Malformed structure or reconstructed data.
     InvalidInput {
+        /// Byte position when the operation can attribute one.
         offset: Option<u64>,
+        /// Human-readable explanation.
         message: String,
     },
+    /// Positioned-source read failure with byte-range context.
     Source {
+        /// Requested source offset in bytes.
         offset: u64,
+        /// Requested byte count.
         requested: u64,
+        /// Available byte count reported at this failure.
         available: u64,
+        /// Human-readable explanation.
         message: String,
     },
+    /// Incomplete input for the attempted operation.
     TruncatedInput {
+        /// Additional bytes required at this failure, not a whole-file predictor.
         needed: usize,
+        /// Bytes remaining at this failure.
         remaining: usize,
     },
+    /// Input feature or request combination outside the implemented route.
     Unsupported {
+        /// Broad category, not a complete support matrix.
         feature: UnsupportedFeature,
+        /// Human-readable explanation.
         detail: String,
     },
+    /// Declared caller byte storage is insufficient.
     BufferTooSmall {
+        /// Minimum required bytes for the attempted operation.
         required: usize,
+        /// Bytes supplied by the caller.
         provided: usize,
     },
+    /// An internal consistency check failed; report a reproducible case.
     InternalInvariant {
+        /// Human-readable explanation.
         message: String,
     },
 }

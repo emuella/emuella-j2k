@@ -17,8 +17,11 @@ from urllib.parse import unquote, urlsplit
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parent.parent
+# These are explicit verification consumers, not reduced-route eligibility.
+# New contract guides remain full-only under documentation-policy.json.
 SURFACES = {"README.md": ["rust,no_run"], "docs/README.md": [],
-            "docs/getting-started.md": ["rust"]}
+            "docs/getting-started.md": ["rust"], "docs/rust-api.md": [],
+            "docs/caller-owned-output.md": ["rust"], "docs/error-handling.md": ["rust"]}
 PACKAGES = ("emuella-j2k", "emuella-j2k-core", "emuella-j2k-codestream",
             "emuella-j2k-container")
 SAME_REPO = "https://github.com/emuella/emuella-j2k/blob/main/"
@@ -49,7 +52,8 @@ def prose_and_examples(text: str, *, strict: bool) -> tuple[str, list[tuple[str,
         elif fence is not None:
             code.append(line)
         else:
-            if strict and (line.startswith("    ") or line.lstrip().startswith(("```", "~~~")) or "<" in line or ">" in line):
+            plain = re.sub(r"`[^`\n]*`", "", line)
+            if strict and (line.startswith("    ") or line.lstrip().startswith(("```", "~~~")) or "<" in plain or ">" in plain):
                 raise DocumentationError("unsupported indented fence/code or HTML in eligible prose")
             prose.append(line)
     if fence is not None:
@@ -94,7 +98,7 @@ def check_target(root: Path, source: str, target: str) -> None:
 
 
 def check_references(root: Path, source: str, prose: str) -> None:
-    # The three inspected surfaces use only simple inline and reference links.
+    # Inspected surfaces use only simple inline and explicit reference links.
     # Reject extra syntax rather than accepting an unverified extension.
     prose = re.sub(r"`[^`\n]*`", "", prose)
     if "![" in prose or re.search(r"\[\[|\]\[\]", prose):
@@ -164,6 +168,27 @@ def check_doctest_coverage(output: str) -> None:
         raise DocumentationError("selected doctests require nonzero facade and defining-crate coverage without ignored tests")
 
 
+def write_example_consumers(harness: Path, documents: dict[str, list[tuple[str, str]]]) -> int:
+    """Bind every explicitly selected block; never silently consume only the first."""
+    source = []
+    for name, examples in documents.items():
+        for block, (kind, code) in enumerate(examples, 1):
+            index = len(source)
+            markdown = f"```{kind}\n{code}\n```\n"
+            (harness / "src" / f"example{index}.md").write_text(markdown, encoding="utf-8")
+            source.append(f'#[doc = include_str!("example{index}.md")]\npub struct Example{index};\n')
+            print(f"Example consumer: {name} block {block}: {'compile only (external input)' if kind == 'rust,no_run' else 'execute'}", flush=True)
+    (harness / "src/lib.rs").write_text("".join(source), encoding="utf-8")
+    return len(source)
+
+
+def check_example_coverage(output: str, expected: int) -> None:
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    results = re.findall(r"test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored", output)
+    if expected < 1 or results != [(str(expected), "0", "0")]:
+        raise DocumentationError(f"expected all {expected} explicit Markdown example consumers to pass without ignored or unaccounted tests")
+
+
 def package_inventory(root: Path, env: dict[str, str]) -> None:
     # Apply the same legal/source member invariant to every actual inherited
     # README consumer, without claiming .crate qualification. Other members use
@@ -208,19 +233,10 @@ def run(root: Path, *, inventory: bool) -> None:
         (harness / "Cargo.toml").write_text(
             '[package]\nname = "emuella-documentation-examples"\nversion = "0.0.0"\nedition = "2024"\n'
             '[workspace]\n[dependencies]\nemuella-j2k = { path = ' + json.dumps(str(root / "crates/emuella-j2k")) + ' }\n', encoding="utf-8")
-        source = []
-        for index, (name, examples) in enumerate(documents.items()):
-            if examples:
-                kind, code = examples[0]
-                markdown = f"```{kind}\n{code}\n```\n"
-                (harness / "src" / f"example{index}.md").write_text(markdown, encoding="utf-8")
-                source.append(f'#[doc = include_str!("example{index}.md")]\npub struct Example{index};\n')
-                print(f"Example consumer: {name}: {'compile only (external input)' if kind == 'rust,no_run' else 'execute'}", flush=True)
-        (harness / "src/lib.rs").write_text("".join(source), encoding="utf-8")
+        expected = write_example_consumers(harness, documents)
         command(["cargo", "generate-lockfile", "--offline", "--manifest-path", str(harness / "Cargo.toml")], root, env)
         output = command(["cargo", "test", "--doc", "--locked", "--offline", "--target", "host-tuple", "--manifest-path", str(harness / "Cargo.toml")], root, env)
-        if not re.search(r"test result: ok\. 2 passed; 0 failed; 0 ignored", output):
-            raise DocumentationError("expected both explicit Markdown example consumers to pass")
+        check_example_coverage(output, expected)
     if inventory:
         package_inventory(root, env)
     print("Documentation authoring checks passed; no committed-tree/delivery pass is claimed.", flush=True)

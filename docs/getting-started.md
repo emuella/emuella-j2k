@@ -11,6 +11,8 @@ This complete example creates an 8 × 8 unsigned greyscale image in memory,
 encodes it as lossless JP2, inspects the declared geometry and decodes the
 stored component samples. It requires no external image or codec.
 Documentation verification executes the assertions.
+Paste the complete program into `src/main.rs` of the application configured by
+the source dependency in the README, then run `cargo run`.
 
 ```rust
 use emuella_j2k::{decode, encode, inspect, ColorModel, ComponentLayout,
@@ -54,3 +56,6 @@ Inspection and pixel decoding have different admission rules. Choose an input
 and output request from the [supported profiles](supported-profiles.md) and
 [decoder contracts](decoding-profiles.md) before assuming a decode is supported.
 The [documentation index](README.md) links to detailed integration contracts.
+Continue with [caller-owned output](caller-owned-output.md) for shape discovery
+and padded storage, [structured errors](error-handling.md) for failures, and the
+[API map](rust-api.md) for option defaults and supported-operation choices.
