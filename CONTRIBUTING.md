@@ -31,11 +31,18 @@ merely to show that a task was completed.
 
 ## Canonical verification
 
-Use focused Cargo or Python tests while editing. The complete local gate,
+Use focused Cargo or Python tests while editing. The canonical local gate,
 `sh scripts/check.sh`, verifies committed source: it refuses staged or unstaged
 tracked changes and non-ignored untracked files instead of silently checking an
 older revision. Ignored private overlays and build caches may remain in the
 checkout; they are not exported.
+
+Run `sh scripts/check-docs.sh` for documentation authoring feedback with dirty
+Rust doc comments; it claims no committed-tree/delivery pass. An explicit full
+comparison commit enables conservative routing: `sh scripts/check.sh --base
+FULL_SHA`. Omitted/unusable comparison evidence takes full. See
+[documentation verification](docs/documentation-verification.md) for the
+inspected path policy, fixed obligations and coverage boundaries.
 
 The entry point reports the full commit and tree identities, reads the complete
 tree directly from Git objects, and runs all checks in a disposable source
@@ -77,17 +84,17 @@ repeating that complete matrix in unoptimised mode. See
 
 ### Hosted CI build cache
 
-The hosted `test` job restores one disposable Rust cache after the public-tree
-audit and before compilation, using the pinned compiler. It covers the root
+The hosted `test` job restores one disposable Rust cache after the exported
+public-tree audit and before compilation, using the pinned compiler. It covers the root
 workspace's debug and release `target`
 profiles, the separate codestream fuzz workspace's `target`, and their shared
 Cargo registry. The C API check keeps its own temporary target so each run
 builds and checks its generated header and native consumers from a clean target.
 The local committed-tree gate also keeps its disposable build directory.
 
-Only a successful `main` job saves the cache; pull requests can restore the
-main cache but do not publish one. The action keys compiler, platform, Cargo
-environment, member manifests, lockfiles and Cargo configuration; the workflow
+Only a successful full-route `main` job saves the cache; pull requests and
+documentation routes can restore the main cache but do not publish one. The action keys compiler,
+platform, Cargo environment, member manifests, lockfiles and Cargo configuration; the workflow
 also keys the virtual root manifest. Bump the workflow's cache prefix when the
 set of build commands or cached paths changes materially. Exact hits are
 immutable, and Cargo still checks source freshness and runs every verification

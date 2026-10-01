@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path, PurePosixPath
@@ -43,7 +45,11 @@ FORBIDDEN_PATH_TERMS = (
 # A binary or otherwise unapproved public-tree file may be admitted only by an
 # exact repository-relative path and a reviewed SHA-256. Keep this mapping empty
 # unless a source-tree payload has been explicitly approved.
-PUBLIC_TREE_HASH_EXCEPTIONS: dict[PurePosixPath, str] = {}
+PUBLIC_TREE_HASH_EXCEPTIONS: dict[PurePosixPath, str] = {
+    # Reviewed standalone helper metadata; no extension-wide VERSION allowance.
+    PurePosixPath("scripts/documentation-route/VERSION"):
+        "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+}
 ABSOLUTE_PRIVATE_PATH = re.compile(r"/(?:home|nvme|opt)/(?:[^\s`\"']+/)+")
 OLD_PROJECT_IDENTIFIER = re.compile(
     r"(?<!emuella-)\bj2k(?:[-_.\s]?rs)\b", re.IGNORECASE
@@ -93,6 +99,25 @@ def files() -> tuple[list[Path], list[Path], list[Path]]:
 
 def main() -> int:
     errors: list[str] = []
+    helper = ROOT / "scripts/documentation-route"
+    try:
+        record = json.loads((helper / ".documentation-route.json").read_text())
+        names = {"LICENSE", "README.md", "VERSION", "adopt.py", "documentation_route.py",
+                 "test_adopt.py", "test_documentation_route.py"}
+        if (set(record) != {"schema_version", "source_commit", "version", "files"}
+                or record["schema_version"] != 1 or not isinstance(record["files"], dict)
+                or set(record["files"]) != names
+                or not isinstance(record["source_commit"], str)
+                or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", record["source_commit"]) is None
+                or not isinstance(record["version"], str)
+                or (helper / "VERSION").read_text() != record["version"] + "\n"):
+            errors.append("standalone documentation helper provenance record is invalid")
+        else:
+            for name, expected in record["files"].items():
+                if hashlib.sha256((helper / name).read_bytes()).hexdigest() != expected:
+                    errors.append(f"standalone documentation helper managed bytes differ: {name}")
+    except (OSError, ValueError, TypeError, KeyError):
+        errors.append("standalone documentation helper provenance is unavailable")
     rust_sources: dict[PurePosixPath, str] = {}
     third_party = ""
     paths, forbidden_directories, symbolic_link_directories = files()
@@ -312,37 +337,38 @@ def main() -> int:
         errors.append("codec environment-variable namespace is missing")
 
     ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    source_gate = (ROOT / "scripts/check-source.sh").read_text(encoding="utf-8")
+    full_gate = (ROOT / "scripts/check-full-runtime.sh").read_text(encoding="utf-8")
+    ci_contract = ci_workflow + source_gate + full_gate
     if not ci_workflow.startswith("name: emuella-j2k CI\n"):
         errors.append("CI workflow display name is not branded")
-    if "python3 scripts/test-public-tree-policy.py" not in ci_workflow:
+    if "python3 scripts/test-public-tree-policy.py" not in ci_contract:
         errors.append("hosted CI does not test the fail-closed public-file policy")
-    if "python3 scripts/test-package-legal-policy.py" not in ci_workflow:
+    if "python3 scripts/test-package-legal-policy.py" not in ci_contract:
         errors.append("hosted CI does not test canonical package legal files")
-    if "python3 scripts/test-layer2-decoded-pixel-canary.py" not in ci_workflow:
+    if "python3 scripts/test-layer2-decoded-pixel-canary.py" not in ci_contract:
         errors.append("hosted CI does not test the decoded-pixel Layer 2 runner")
-    if "python3 scripts/test-layer2-derived-set.py" not in ci_workflow:
+    if "python3 scripts/test-layer2-derived-set.py" not in ci_contract:
         errors.append("hosted CI does not test the derived-set Layer 2 runner")
     if "uses: EmbarkStudios/cargo-deny-action@v2" not in ci_workflow:
         errors.append("hosted CI does not enforce cargo-deny policy")
-    if "python3 scripts/generate-binary-dependency-notices.py --check" not in (
-        ci_workflow
-    ):
+    if "python3 scripts/generate-binary-dependency-notices.py --check" not in ci_contract:
         errors.append("hosted CI does not verify binary dependency notices")
     if (
-        "manifest-path: ./crates/emuella-j2k-codestream/fuzz/Cargo.toml"
+        "manifest-path: ./ci-verification/source/crates/emuella-j2k-codestream/fuzz/Cargo.toml"
         not in ci_workflow
     ):
         errors.append("hosted CI does not audit the fuzz dependency graph")
-    if "--config crates/emuella-j2k-codestream/fuzz/deny.toml" not in ci_workflow:
+    if "--config ci-verification/source/crates/emuella-j2k-codestream/fuzz/deny.toml" not in ci_workflow:
         errors.append("hosted CI does not apply the fuzz-specific dependency policy")
     if (
-        "cargo check --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml"
-        not in ci_workflow
+        "cargo check \\\n  --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml"
+        not in ci_contract
     ):
         errors.append("hosted CI does not compile the locked fuzz workspace")
     if (
-        "cargo clippy --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml"
-        not in ci_workflow
+        "cargo clippy \\\n  --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml"
+        not in ci_contract
     ):
         errors.append("hosted CI does not lint the locked fuzz workspace")
 
@@ -376,7 +402,7 @@ def main() -> int:
     if "--allow-dirty" in release_workflow or "--no-verify" in release_workflow:
         errors.append("release workflow weakens Cargo package verification")
 
-    local_check = (ROOT / "scripts/check.sh").read_text(encoding="utf-8")
+    local_check = (ROOT / "scripts/check.sh").read_text(encoding="utf-8") + source_gate + full_gate
     if "python3 scripts/test-public-tree-policy.py" not in local_check:
         errors.append("local checks do not test the fail-closed public-file policy")
     if "python3 scripts/test-package-legal-policy.py" not in local_check:

@@ -7,63 +7,16 @@ cd "$repository_root"
 # Only a checkout's own Git marker triggers export. Do not discover a parent
 # repository when these checks run in an unpacked source tree.
 if [ -e .git ] || [ -L .git ]; then
-  exec python3 scripts/check-committed-tree.py
+  exec python3 scripts/check-committed-tree.py "$@"
 fi
 
-python3 scripts/test-check-committed-tree.py
-python3 scripts/test-public-tree-policy.py
-python3 scripts/test-package-legal-policy.py
-python3 scripts/test-workspace-dependency-policy.py
-python3 scripts/test-layer2-conformance-inspection.py
-python3 scripts/test-layer2-decoded-pixel-canary.py
-python3 scripts/test-layer2-derived-set.py
-python3 scripts/test-layer2-rendered-pixel.py
-python3 scripts/audit-public-tree.py
-python3 scripts/generate-binary-dependency-notices.py --check
-cargo fmt --all --check
-cargo fmt \
-  --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \
-  --all \
-  -- \
-  --check
-cargo check --workspace --all-targets
-cargo check -p emuella-j2k-codestream --features parallel
-cargo test --workspace
-sh scripts/check-c-api.sh
-sh scripts/check-lossy-ht-public-matrix.sh
-cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
-cargo test --release -p emuella-j2k-test-support --features parallel --test lossless_parallel --test lossless_bypass
-cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::parallel
-cargo test -p emuella-j2k-codestream --features parallel scalable_lossless::forward53_tests
-cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
-cargo test --release -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --test forward53_panels
-cargo test --release -p emuella-j2k-test-support --features classic-execution-diagnostics --test forward53_panels ordinary_dispatch
-cargo test -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics
-cargo test -p emuella-j2k-test-support --example lossless_parallel
-cargo test -p emuella-j2k-test-support --example lossless_bypass_batch
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy \
-  --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \
-  --all-targets \
-  --locked \
-  -- \
-  -D warnings
+# An unpacked source tree has no binding and always takes the complete route.
+sh scripts/check-source.sh
+python3 scripts/documentation_checks.py --package-inventory
+sh scripts/check-full-runtime.sh
 cargo deny check
 cargo deny \
   --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \
   --config crates/emuella-j2k-codestream/fuzz/deny.toml \
   --locked \
   check
-cargo check \
-  -p emuella-j2k \
-  -p emuella-j2k-core \
-  -p emuella-j2k-codestream \
-  -p emuella-j2k-container \
-  -p emuella-j2k-ht \
-  -p emuella-j2k-tier1 \
-  -p emuella-j2k-transform \
-  --no-default-features
-cargo check \
-  --manifest-path crates/emuella-j2k-codestream/fuzz/Cargo.toml \
-  --all-targets \
-  --locked

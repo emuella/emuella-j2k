@@ -9,6 +9,7 @@ import io
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -360,7 +361,7 @@ class CommittedTreeTests(unittest.TestCase):
     def test_canonical_entrypoint_and_ci_retain_focused_parallel_gate(self) -> None:
         command = "cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components"
         for path in ("scripts/check.sh", ".github/workflows/ci.yml"):
-            text = (ROOT / path).read_text()
+            text = (ROOT / path).read_text() + (ROOT / "scripts/check-source.sh").read_text() + (ROOT / "scripts/check-full-runtime.sh").read_text()
             self.assertIn(command, text)
             self.assertIn("sh scripts/check-lossy-ht-public-matrix.sh", text)
             self.assertIn("sh scripts/check-c-api.sh", text)
@@ -399,10 +400,13 @@ class CommittedTreeTests(unittest.TestCase):
             "check.sh",
             "check-committed-tree.py",
             "check-lossy-ht-public-matrix.sh",
+            "check-source.sh",
+            "check-full-runtime.sh",
         ):
             (self.repo / "scripts" / name).write_bytes(
                 (ROOT / "scripts" / name).read_bytes()
             )
+        shutil.copytree(ROOT / "scripts/documentation-route", self.repo / "scripts/documentation-route")
         (self.repo / "scripts/check-c-api.sh").write_text("#!/bin/sh\nexit 0\n")
         self.commit()
         env = runner.environment()
@@ -443,6 +447,8 @@ class CommittedTreeTests(unittest.TestCase):
             (ROOT / "scripts/check-lossy-ht-public-matrix.sh").read_bytes()
         )
         (nested / "scripts/check-c-api.sh").write_text("#!/bin/sh\nexit 0\n")
+        for name in ("check-source.sh", "check-full-runtime.sh"):
+            (nested / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         result = subprocess.run(
             ["sh", "scripts/check.sh"],
             cwd=nested,

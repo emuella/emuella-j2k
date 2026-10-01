@@ -1,0 +1,14 @@
+{
+  "files": {
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "README.md": "5c26fa88a26a99fc82ca9fd76644897288e49e189d16f85cd5032dc46749f482",
+    "VERSION": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+    "adopt.py": "c90555ab79dbd6a26079b0dbcf49d36f1ab1caef01f3adfad916d036801b891b",
+    "documentation_route.py": "b48dfd0a5413d26d4a3340de2f66184b6cbb2a89ce175ab7b8159a43a5ec776f",
+    "test_adopt.py": "f6decc83e03a0647c1cd08ecfb40864b59a03e13394fe9486a1b0c3fc56cd6a1",
+    "test_documentation_route.py": "e045256c21a9ade64b760227b91c48602d35893cc55e075b04391f2f26b143f6"
+  },
+  "schema_version": 1,
+  "source_commit": "08a40cccae56c465bef7518009a83af5cf9d9d1c",
+  "version": "1.0.0"
+}

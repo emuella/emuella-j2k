@@ -48,7 +48,7 @@ size, component count and current decode-support classification. Inspection
 does not reconstruct pixels, and a reported input may still be outside a
 particular decode request.
 
-```rust
+```rust,no_run
 use emuella_j2k::{inspect, InspectOptions};
 use std::{env, fs, io};
 
