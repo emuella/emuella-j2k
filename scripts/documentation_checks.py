@@ -149,6 +149,9 @@ def command(arguments: list[str], root: Path, env: dict[str, str]) -> str:
 
 
 def check_doctest_coverage(output: str) -> None:
+    # Hosted Cargo output may retain ANSI colour even when redirected. Coverage
+    # depends on rustdoc's result text, not its terminal presentation.
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
     counts = {}
     for name, section in re.findall(r"Doc-tests (\w+)\n(.*?)(?=Doc-tests |\Z)", output, re.DOTALL):
         result = re.search(r"test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored", section)
@@ -191,6 +194,7 @@ def run(root: Path, *, inventory: bool) -> None:
     documents = inspect_documents(root)
     print(f"Local references passed: {', '.join(SURFACES)}", flush=True)
     env = os.environ.copy()
+    env["CARGO_TERM_COLOR"] = "never"
     env["RUSTDOCFLAGS"] = "-D rustdoc::broken_intra_doc_links"
     selected = [argument for name in PACKAGES for argument in ("-p", name)]
     command(["cargo", "doc", "--lib", "--no-deps", "--locked", "--target", "host-tuple", *selected], root, env)

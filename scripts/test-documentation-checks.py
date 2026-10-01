@@ -55,11 +55,18 @@ class DocumentationTests(unittest.TestCase):
                          f"test result: ok. {1 if name in docs.PACKAGES[:2] else 0} passed; 0 failed; 0 ignored\n"
                          for name in docs.PACKAGES)
         docs.check_doctest_coverage(output)
+        def colour(text):
+            return text.replace("Doc-tests ", "\x1b[1;32mDoc-tests\x1b[0m ").replace(
+                "\ntest result:", "\x1b[0m\n\x1b[1mtest result:")
+
+        docs.check_doctest_coverage(colour(output))
         for broken in (output.replace("1 passed", "0 passed", 1),
+                       output.replace("0 failed", "1 failed", 1),
                        output.replace("0 ignored", "1 ignored", 1),
                        output.replace("Doc-tests emuella_j2k\n", "Doc-tests unrelated\n")):
-            with self.assertRaises(docs.DocumentationError):
-                docs.check_doctest_coverage(broken)
+            for coloured in (False, True):
+                with self.subTest(colour=coloured), self.assertRaises(docs.DocumentationError):
+                    docs.check_doctest_coverage(colour(broken) if coloured else broken)
 
 
 if __name__ == "__main__":
