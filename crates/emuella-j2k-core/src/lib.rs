@@ -5183,8 +5183,11 @@ impl ImageInfo {
 
 /// Caller-owned immutable component plane.
 ///
-/// Stride is in bytes and may include row padding. Storage must contain at least
-/// `stride_bytes * height` bytes, including the final row's padding.
+/// Stride is in bytes and may include row padding. [`Plane::new`] requires at
+/// least `stride_bytes * height` bytes, including the final row's padding.
+/// Operations validate their own input extent: the bounded
+/// [lossy HT encoder](https://github.com/emuella/emuella-j2k/blob/main/docs/ht-lossy-public-api.md)
+/// also accepts directly constructed planes ending at the final active sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Plane<'a> {
     /// Borrowed byte storage, retained by its owner.
@@ -5233,7 +5236,8 @@ impl<'a> Plane<'a> {
 
 /// Caller-owned mutable component plane used by decode-into paths.
 ///
-/// Storage needs at least `stride_bytes * height` bytes. Mutable borrows prevent
+/// [`PlaneMut::new`] requires at least `stride_bytes * height` bytes; a consuming
+/// operation also validates its own target contract. Mutable borrows prevent
 /// access through the original buffer while the view remains in use.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PlaneMut<'a> {
