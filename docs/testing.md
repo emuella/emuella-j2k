@@ -13,6 +13,11 @@ describe its exact-commit/tree export, dirty-source refusal and disposable
 build-output contract. The source audit remains a staging-tree audit; local
 verification does not set a hosted-CI flag to bypass Git metadata.
 
+The [documentation route](documentation-verification.md) adds a fixed group to
+full verification and permits an inspected prose-only change with an explicit
+comparison base. `sh scripts/check-docs.sh` is focused authoring feedback and
+accepts dirty Rust documentation edits without a delivery claim.
+
 The gate runs the existing policy and runner tests, source and dependency
 notice audits, formatting, workspace and fuzz checks, workspace tests, strict
 clippy, dependency policy and no-default-features checks. It also runs the

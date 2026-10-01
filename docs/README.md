@@ -6,6 +6,8 @@ requests remain bounded while the project prepares its first release.
 
 ## Choose an operation
 
+- [Getting started with the Rust facade](getting-started.md) demonstrates
+  a self-contained encode and inspection example.
 - [Supported profiles](supported-profiles.md) maps inspection, decoding and
   encoding to containers, component formats, output modes and important limits.
 - [Decoder profile contracts](decoding-profiles.md) gives exact admission and

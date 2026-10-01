@@ -6087,6 +6087,14 @@ impl IncrementalDecoder {
 }
 
 /// Inspect container and codestream metadata without allocating image samples.
+///
+/// Empty input is a structured error; inspection does not invent image metadata.
+///
+/// ```
+/// use emuella_j2k_core::{inspect, InspectOptions, J2kError};
+/// assert!(matches!(inspect(&[], &InspectOptions::default()),
+///     Err(J2kError::TruncatedInput { needed: 1, remaining: 0 })));
+/// ```
 pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
     if input.is_empty() {
         return Err(J2kError::TruncatedInput {
