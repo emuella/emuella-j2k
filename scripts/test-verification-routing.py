@@ -208,7 +208,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("cache-on-failure: false", workflow)
         self.assertIn("if: always()", workflow)
         self.assertIn("checkout/crates/emuella-j2k-codestream/fuzz -> target", workflow)
-        self.assertEqual(workflow.count("rust-version: 1.98.1"), 2)
+        self.assertEqual(workflow.count("rust-version: 1.99.0"), 2)
         self.assertIn("env -u CARGO_TARGET_DIR -u CARGO_BUILD_BUILD_DIR sh scripts/check-c-api.sh", full)
         self.assertIn("python3 scripts/test-layer2-rendered-pixel.py", full)
         self.assertIn("cargo test -p emuella-j2k-test-support --example lossless_bypass_batch", full)
