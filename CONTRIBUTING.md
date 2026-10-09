@@ -16,6 +16,26 @@ Before submitting a change:
 Unless explicitly stated otherwise, intentionally submitted contributions are
 provided under Apache-2.0 as described by section 5 of the licence.
 
+## Cargo dependency selection
+
+The virtual workspace explicitly selects [Cargo resolver
+3](https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions).
+Its default `resolver.incompatible-rust-versions = "fallback"` prefers dependency
+versions compatible with the packages' declared `rust-version` when generating
+or updating a lockfile. The compatibility floor remains Rust 1.97.1; development
+and canonical verification use the separate Rust 1.99.0 toolchain pin. The
+excluded fuzz workspace has an edition-2024 root package, so it already selects
+resolver 3 implicitly.
+
+Keep the committed lockfiles for reproducible builds. Fallback is a selection
+preference: it can still choose an incompatible dependency when no compatible
+version satisfies the requirements, and it does not prove that source or
+dependencies build on the floor. Check relevant builds with Rust 1.97.1 when
+changing dependencies. Cargo configuration, including environment or `--config`
+overrides that select `allow`, and `--ignore-rust-version` can bypass the
+[default policy](https://doc.rust-lang.org/cargo/reference/config.html#resolverincompatible-rust-versions).
+A consuming application's workspace controls its own resolver.
+
 ## Documentation roles
 
 The root README is the user-facing landing page. Keep it focused on purpose,

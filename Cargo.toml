@@ -15,7 +15,7 @@ members = [
   "crates/emuella-j2k-transform",
 ]
 exclude = ["crates/emuella-j2k-codestream/fuzz"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 edition = "2024"
