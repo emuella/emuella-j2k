@@ -27,14 +27,15 @@ CI runs both focused gates as well:
 
 ```sh
 sh scripts/check-lossy-ht-public-matrix.sh
-cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation
+python3 scripts/run-nextest.py native-parallel -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components
 ```
 
 The lossy HT entry point discovers the exact smoke and complete test names and
 checks that only the complete test is ignored before running that complete
 264-cell matrix with the optimised Cargo profile. A rename, duplicate or
 classification mismatch therefore fails instead of silently selecting zero
-tests. `cargo test --workspace` runs the six-cell unoptimised smoke through one
+tests. The `workspace` Nextest configuration runs the six-cell unoptimised smoke
+through one
 257 × 193 U8 greyscale row, both input layouts and all three selected rates.
 The complete matrix runs once, separately, through the checked entry point.
 
@@ -55,8 +56,8 @@ and warm Cargo caches affect both compile and execution time. To time or
 exercise only the ordinary smoke while editing, use:
 
 ```sh
-cargo test -p emuella-j2k-core --lib \
-  ht_lossy_public_tests::lossy_ht_public_smoke -- --exact --nocapture
+python3 scripts/run-nextest.py workspace -p emuella-j2k-core --lib \
+  -E 'test(=ht_lossy_public_tests::lossy_ht_public_smoke)' --success-output immediate
 ```
 
 The workspace's ordinary tests exercise the scalar configuration; compiling
@@ -64,6 +65,56 @@ the codestream parallel feature alone does not exercise these full-image
 caller-buffer and mapped-presentation paths. The focused command supplements,
 rather than replaces, those existing gates. It can also run while editing,
 without producing an exact-committed-tree verification claim.
+
+## Nextest configurations and reports
+
+Ordinary Rust tests use `cargo-nextest` 0.9.146 or later, with 0.9.146 pinned in
+hosted CI. `scripts/run-nextest.py` checks the installed version before the
+build and uses `.config/nextest.toml`. Slow tests emit a warning every five
+seconds; that warning does not terminate them. Tests have zero retries and
+named configurations inherit the CI profile's `fail-fast = false` policy.
+Cargo continues to run doctests separately, including the same feature/filter
+selections wherever the previous command included doctests. C API consumers,
+fuzz, documentation, source, dependency and package checks keep their own gates.
+
+`scripts/check-full-runtime.sh` retains these separate invocations:
+
+| Configuration | Cargo build and test selection |
+|---|---|
+| `workspace` | Default scalar workspace unit/integration tests |
+| `lossy-ht-matrix` | Core library, release, exact ignored complete matrix only |
+| `native-parallel` | Test-support with `emuella-j2k-core/parallel`; `native_planes`, `jp2_presentation`, `native_eight_components` |
+| `lossless-parallel-release` | Test-support with `parallel`, release; `lossless_parallel`, `lossless_bypass` |
+| `codestream-parallel` | Codestream with `parallel`; `scalable_lossless::parallel` |
+| `codestream-forward53` | Codestream with `parallel`; `scalable_lossless::forward53_tests` |
+| `transform-analysis53` | Transform with `parallel,classic-execution-diagnostics`; `analysis53` |
+| `forward53-panels` | Test-support with `parallel,classic-execution-diagnostics`, release; `forward53_panels` |
+| `ordinary-dispatch` | Test-support with `classic-execution-diagnostics`, release; `forward53_panels`, `ordinary_dispatch` |
+| `codestream-diagnostics` | Codestream with `parallel,classic-execution-diagnostics`; `scalable_lossless::diagnostics` |
+| `example-lossless-parallel` | Test-support's `lossless_parallel` example tests |
+| `example-bypass-batch` | Test-support's `lossless_bypass_batch` example tests |
+
+The release dry run uses the same scalar workspace selector under the distinct
+`release-workspace` report identity. Its existing package/distribution gates
+remain separate.
+
+Reports use `junit.xml` within each configuration's directory under
+`EMUELLA_NEXTEST_REPORT_DIR`. The committed-tree wrapper defaults that root to
+the original checkout's ignored `target/nextest`, outside the disposable export
+and its cleanup child. Hosted CI uses a sibling `nextest-reports` root and
+preserves it after cleanup. Nextest's store is explicitly configured:
+`CARGO_TARGET_DIR` alone does not redirect it. When running from an unpacked
+source tree, set an external report root as well as external Cargo build output.
+
+Each report names its configuration and emits all skipped tests. A filtered
+configuration can therefore repeat a skipped name from another report. Keep
+configuration, package, binary, full test name and ignored status together when
+comparing inventories; adding report totals does not measure unique coverage.
+The matrix guard requires exactly one ordinary smoke and one ignored complete
+test by their full names, then selects only the complete test in release mode.
+The optional export test remains excluded. The smoke, the 264-cell complete
+test, its 120 expected successes and all cross-rate/layout assertions are
+unchanged.
 
 ## Optional corpus verification
 

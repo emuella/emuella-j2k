@@ -211,7 +211,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(workflow.count("rust-version: 1.99.0"), 2)
         self.assertIn("env -u CARGO_TARGET_DIR -u CARGO_BUILD_BUILD_DIR sh scripts/check-c-api.sh", full)
         self.assertIn("python3 scripts/test-layer2-rendered-pixel.py", full)
-        self.assertIn("cargo test -p emuella-j2k-test-support --example lossless_bypass_batch", full)
+        self.assertIn("python3 scripts/run-nextest.py example-bypass-batch -p emuella-j2k-test-support --example lossless_bypass_batch", full)
 
     def test_failed_selected_command_cannot_complete(self):
         (self.root / "scripts/documentation_checks.py").write_text("raise SystemExit(7)\n")

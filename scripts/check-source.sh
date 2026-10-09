@@ -2,6 +2,7 @@
 set -eu
 export PYTHONDONTWRITEBYTECODE=1
 python3 scripts/test-check-committed-tree.py
+python3 scripts/test-nextest-runner.py
 python3 scripts/test-public-tree-policy.py
 python3 scripts/test-package-legal-policy.py
 python3 scripts/test-workspace-dependency-policy.py

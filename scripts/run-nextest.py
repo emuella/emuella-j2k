@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MINIMUM = (0, 9, 146)
 
 
-def run(profile: str, arguments: list[str], root: Path = ROOT) -> int:
+def prepare(profile: str, root: Path = ROOT) -> tuple[str, Path]:
     configuration = (root / ".config/nextest.toml").read_text()
     profiles = tomllib.loads(configuration)["profile"]
     if profile not in profiles or profile in {"default", "ci"}:
@@ -30,12 +30,22 @@ def run(profile: str, arguments: list[str], root: Path = ROOT) -> int:
         if not (root / ".git").exists() or target not in reports.parents:
             raise ValueError("Nextest reports must stay outside exported source")
     report = reports / profile / "junit.xml"
+    destination = report.parent.resolve()
+    if destination == root or root in destination.parents:
+        if not (root / ".git").exists() or root / "target" not in destination.parents:
+            raise ValueError("Nextest report directory resolves inside exported source")
     report.parent.mkdir(parents=True, exist_ok=True)
     report.unlink(missing_ok=True)
     version = subprocess.run(["cargo", "nextest", "--version"], capture_output=True, text=True, check=False)
     match = re.match(r"cargo-nextest (\d+)\.(\d+)\.(\d+)(?:\s|$)", version.stdout)
     if version.returncode or match is None or tuple(map(int, match.groups())) < MINIMUM:
         raise ValueError("cargo-nextest >= 0.9.146 is required; install the pinned pre-built release")
+    return configuration, reports
+
+
+def run(profile: str, arguments: list[str], root: Path = ROOT) -> int:
+    configuration, reports = prepare(profile, root)
+    report = reports / profile / "junit.xml"
     # Nextest 0.9.146 resolves store.dir against the workspace, independently of
     # CARGO_TARGET_DIR. Override it explicitly without editing audited source.
     with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", dir=reports) as config:

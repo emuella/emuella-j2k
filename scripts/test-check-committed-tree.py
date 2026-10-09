@@ -359,7 +359,7 @@ class CommittedTreeTests(unittest.TestCase):
             runner.verify(source, self.scratch)
 
     def test_canonical_entrypoint_and_ci_retain_focused_parallel_gate(self) -> None:
-        command = "cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components"
+        command = "python3 scripts/run-nextest.py native-parallel -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components"
         for path in ("scripts/check.sh", ".github/workflows/ci.yml"):
             text = (ROOT / path).read_text() + (ROOT / "scripts/check-source.sh").read_text() + (ROOT / "scripts/check-full-runtime.sh").read_text()
             self.assertIn(command, text)

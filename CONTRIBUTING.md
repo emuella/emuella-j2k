@@ -71,8 +71,11 @@ filters cannot silently change that source. Working source must match the
 committed bytes and executable modes, including files marked assume-unchanged
 or skip-worktree. Links, submodules and unsafe paths are refused.
 
-Python 3.11 or later, Git, the pinned Rust toolchain and `cargo-deny` must be
-available. By default, the wrapper allocates a disposable child in the system
+Python 3.11 or later, Git, the pinned Rust toolchain, `cargo-deny` and
+`cargo-nextest` 0.9.146 or later must be available. Use the
+[pre-built Nextest release](https://nexte.st/docs/installation/pre-built-binaries/);
+hosted CI pins 0.9.146 with checksum verification and no source-build fallback.
+By default, the wrapper allocates a disposable child in the system
 temporary directory. To choose an existing parent outside the checkout:
 
 ```sh
@@ -86,6 +89,17 @@ caches remain available outside the export. Only the allocated child is
 removed on normal completion or a handled failure; its parent and unrelated
 files are preserved. An abrupt process kill may leave that reported child for
 manual inspection and cleanup.
+
+Nextest reports survive separately in the original checkout's ignored
+`target/nextest/<configuration>/junit.xml`. Set `EMUELLA_NEXTEST_REPORT_DIR` to
+an external report root to choose another retained location. The wrapper
+resolves that path before changing to the export; each named configuration
+removes its previous report before discovery/build and retains any fresh
+failure report. Hosted CI uses a sibling `nextest-reports` directory and uploads
+the reports after export cleanup, including on failure. For unpacked source,
+set both Cargo build output and the report root outside the source tree.
+See [testing](docs/testing.md#nextest-configurations-and-reports) for selectors
+and the interpretation of skipped entries.
 
 A pass requires unchanged exported source and an unchanged, clean original
 checkout after the checks. Keep the checkout idle for the run; this guards
