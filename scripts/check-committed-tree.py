@@ -234,6 +234,10 @@ def verify(root: Path, temporary_parent: Path, base: str | None = None) -> None:
                 "TEMP": str(temporary),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "EMUELLA_FUZZ_TARGET_DIR": str(build / "fuzz"),
+                # Reports are retained independently of this owned child's
+                # source/build/temp cleanup. Resolve caller paths before cd.
+                "EMUELLA_NEXTEST_REPORT_DIR": str((root / Path(os.environ.get(
+                    "EMUELLA_NEXTEST_REPORT_DIR", "target/nextest"))).resolve()),
             }
         )
         print(f"Disposable source: {source}\nDisposable build:  {build}", flush=True)
@@ -339,6 +343,7 @@ def ci_environment(root: Path, scratch: Path) -> dict[str, str]:
     env.update({"CARGO_TARGET_DIR": str(root / "target"),
                 "CARGO_BUILD_BUILD_DIR": str(root / "target"),
                 "EMUELLA_FUZZ_TARGET_DIR": str(root / "crates/emuella-j2k-codestream/fuzz/target"),
+                "EMUELLA_NEXTEST_REPORT_DIR": str(root.parent / "nextest-reports"),
                 "TMPDIR": str(scratch / "tmp"), "TMP": str(scratch / "tmp"),
                 "TEMP": str(scratch / "tmp"), "PYTHONDONTWRITEBYTECODE": "1"})
     return env
