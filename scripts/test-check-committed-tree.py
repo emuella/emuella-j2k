@@ -367,6 +367,18 @@ class CommittedTreeTests(unittest.TestCase):
             self.assertIn("sh scripts/check-c-api.sh", text)
             self.assertIn("python3 scripts/test-check-committed-tree.py", text)
 
+    def test_reports_survive_local_export_cleanup(self) -> None:
+        reports = self.parent / "retained-reports"
+        (self.repo / "scripts/check.sh").write_text(PROBE + '\n'
+            'mkdir -p "$EMUELLA_NEXTEST_REPORT_DIR/workspace" "$EMUELLA_NEXTEST_REPORT_DIR/native-parallel"\n'
+            'touch "$EMUELLA_NEXTEST_REPORT_DIR/workspace/junit.xml" "$EMUELLA_NEXTEST_REPORT_DIR/native-parallel/junit.xml"\n')
+        self.commit()
+        with mock.patch.dict(os.environ, {"EMUELLA_NEXTEST_REPORT_DIR": str(reports)}):
+            self.verify()
+        self.assertEqual(list(self.scratch.iterdir()), [])
+        for profile in ("workspace", "native-parallel"):
+            self.assertTrue((reports / profile / "junit.xml").is_file())
+
     def test_real_shell_dispatches_checkout_but_not_parent_repository(self) -> None:
         # Exercise the actual shell entry point with no-op check commands. The
         # synthetic repository never invokes Cargo or any real policy gate.

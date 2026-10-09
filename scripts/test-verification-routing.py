@@ -227,6 +227,25 @@ class RoutingTests(unittest.TestCase):
             runner.ci_finish(self.root, digest, self.outcomes(full=True) | {"selected": {"outcome": "failure"}})
         self.assertFalse((self.parent / "ci-verification").exists())
 
+    def test_reports_survive_hosted_export_cleanup(self):
+        (self.root / "scripts/documentation_checks.py").write_text(
+            "import os\nfrom pathlib import Path\n"
+            "reports = Path(os.environ['EMUELLA_NEXTEST_REPORT_DIR'])\n"
+            "for profile in ('workspace', 'native-parallel'):\n"
+            "    report = reports / profile / 'junit.xml'\n"
+            "    report.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    report.write_text('synthetic report')\n")
+        self.commit()
+        self.head = runner.identity(self.root)[0]
+        os.environ["GITHUB_SHA"] = self.head
+        self.push_event()
+        digest = self.prepare()
+        runner.ci_run(self.root, digest)
+        runner.ci_finish(self.root, digest, self.outcomes(full=True))
+        self.assertFalse((self.parent / "ci-verification").exists())
+        for profile in ("workspace", "native-parallel"):
+            self.assertTrue((self.parent / "nextest-reports" / profile / "junit.xml").is_file())
+
     def test_unbound_archive_ignores_caller_route_assertion(self):
         archive = self.root / "archive"
         (archive / "scripts").mkdir(parents=True)
