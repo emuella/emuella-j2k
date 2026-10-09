@@ -71,6 +71,9 @@ The existing all-member legal-source audit covers them. No publication runs.
 
 Common source obligations are in `scripts/check-source.sh`; full runtime
 obligations are in `scripts/check-full-runtime.sh`. The full local/CI superset
+uses separate named Nextest configurations for ordinary Rust tests and keeps
+Cargo doctests explicit. Nextest reports remain outside the source export and
+cleanup child; CI uploads the sibling report directory after cleanup. The superset
 retains rendered Layer 2 runner tests, the bypass-batch example, all feature
 and fuzz checks, the complete 264-cell lossy HT matrix, strict clippy, dependency
 checks and clean C API consumers. Both Cargo target/build-directory variables

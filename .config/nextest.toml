@@ -1,0 +1,51 @@
+nextest-version = { required = "0.9.146" }
+
+[profile.default]
+slow-timeout = "5s"
+retries = 0
+
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+report-skipped = "all"
+
+[profile.workspace]
+inherits = "ci"
+
+[profile.native-parallel]
+inherits = "ci"
+
+[profile.lossless-parallel-release]
+inherits = "ci"
+
+[profile.codestream-parallel]
+inherits = "ci"
+
+[profile.codestream-forward53]
+inherits = "ci"
+
+[profile.transform-analysis53]
+inherits = "ci"
+
+[profile.forward53-panels]
+inherits = "ci"
+
+[profile.ordinary-dispatch]
+inherits = "ci"
+
+[profile.codestream-diagnostics]
+inherits = "ci"
+
+[profile.example-lossless-parallel]
+inherits = "ci"
+
+[profile.example-bypass-batch]
+inherits = "ci"
+
+[profile.lossy-ht-matrix]
+inherits = "ci"
+
+[profile.release-workspace]
+inherits = "ci"

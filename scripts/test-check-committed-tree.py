@@ -359,13 +359,25 @@ class CommittedTreeTests(unittest.TestCase):
             runner.verify(source, self.scratch)
 
     def test_canonical_entrypoint_and_ci_retain_focused_parallel_gate(self) -> None:
-        command = "cargo test -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components"
+        command = "python3 scripts/run-nextest.py native-parallel -p emuella-j2k-test-support --features emuella-j2k-core/parallel --test native_planes --test jp2_presentation --test native_eight_components"
         for path in ("scripts/check.sh", ".github/workflows/ci.yml"):
             text = (ROOT / path).read_text() + (ROOT / "scripts/check-source.sh").read_text() + (ROOT / "scripts/check-full-runtime.sh").read_text()
             self.assertIn(command, text)
             self.assertIn("sh scripts/check-lossy-ht-public-matrix.sh", text)
             self.assertIn("sh scripts/check-c-api.sh", text)
             self.assertIn("python3 scripts/test-check-committed-tree.py", text)
+
+    def test_reports_survive_local_export_cleanup(self) -> None:
+        reports = self.parent / "retained-reports"
+        (self.repo / "scripts/check.sh").write_text(PROBE + '\n'
+            'mkdir -p "$EMUELLA_NEXTEST_REPORT_DIR/workspace" "$EMUELLA_NEXTEST_REPORT_DIR/native-parallel"\n'
+            'touch "$EMUELLA_NEXTEST_REPORT_DIR/workspace/junit.xml" "$EMUELLA_NEXTEST_REPORT_DIR/native-parallel/junit.xml"\n')
+        self.commit()
+        with mock.patch.dict(os.environ, {"EMUELLA_NEXTEST_REPORT_DIR": str(reports)}):
+            self.verify()
+        self.assertEqual(list(self.scratch.iterdir()), [])
+        for profile in ("workspace", "native-parallel"):
+            self.assertTrue((reports / profile / "junit.xml").is_file())
 
     def test_real_shell_dispatches_checkout_but_not_parent_repository(self) -> None:
         # Exercise the actual shell entry point with no-op check commands. The

@@ -12,6 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
+      - name: Install pinned Nextest
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.146
+          checksum: true
+          fallback: none
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -20,7 +26,15 @@ jobs:
       - run: python3 scripts/test-workspace-dependency-policy.py
       - run: python3 scripts/audit-public-tree.py
       - run: python3 scripts/generate-binary-dependency-notices.py --check
-      - run: cargo test --workspace
+      - run: python3 scripts/run-nextest.py release-workspace --workspace
+      - run: cargo test --workspace --doc
+      - name: Preserve Nextest reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: emuella-j2k-release-nextest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/nextest/release-workspace/junit.xml
+          if-no-files-found: warn
       - run: cargo package --workspace --locked
       - run: python3 scripts/check-package-contents.py
       - name: Install the pinned Python build backend

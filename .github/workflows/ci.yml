@@ -27,6 +27,13 @@ jobs:
       - name: Prepare and audit exact source
         id: prepare
         run: python3 checkout/scripts/check-committed-tree.py --ci-prepare
+      - name: Install pinned Nextest
+        if: steps.prepare.outputs.route == 'full'
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.146
+          checksum: true
+          fallback: none
       - name: Check dependency policy and licences
         id: deny
         if: steps.prepare.outputs.route == 'full'
@@ -68,3 +75,10 @@ jobs:
           EMUELLA_BINDING_SHA256: ${{ steps.prepare.outputs.binding_sha256 }}
           EMUELLA_STEP_OUTCOMES: ${{ toJSON(steps) }}
         run: python3 checkout/scripts/check-committed-tree.py --ci-finish --binding-sha256 "$EMUELLA_BINDING_SHA256"
+      - name: Preserve Nextest reports
+        if: always() && steps.prepare.outputs.route == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: emuella-j2k-nextest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: nextest-reports/*/junit.xml
+          if-no-files-found: warn
