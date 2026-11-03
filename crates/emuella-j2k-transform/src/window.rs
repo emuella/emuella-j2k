@@ -1455,26 +1455,32 @@ fn parallel_vertical_phase<T: ParallelWindowSample>(
             let columns = lines.len() / line_len;
             let split_low = T::SPLIT_LOW_INPUT && low_rows.checked_mul(2) == Some(line_len);
             let low_destination = if split_low { &mut *works } else { &mut *lines };
-            T::transpose_stripe(
-                horizontal_low,
-                output_width,
-                output_width,
-                low_rows,
-                first_column,
-                columns,
-                low_destination,
-                line_len,
-            )?;
-            T::transpose_stripe(
-                horizontal_high,
-                output_width,
-                output_width,
-                high_rows,
-                first_column,
-                columns,
-                &mut lines[low_rows..],
-                line_len,
-            )?;
+            // A one-sample line leaves one band empty; there is nothing to
+            // transpose, and the stripe kernel rejects empty sources.
+            if low_rows != 0 {
+                T::transpose_stripe(
+                    horizontal_low,
+                    output_width,
+                    output_width,
+                    low_rows,
+                    first_column,
+                    columns,
+                    low_destination,
+                    line_len,
+                )?;
+            }
+            if high_rows != 0 {
+                T::transpose_stripe(
+                    horizontal_high,
+                    output_width,
+                    output_width,
+                    high_rows,
+                    first_column,
+                    columns,
+                    &mut lines[low_rows..],
+                    line_len,
+                )?;
+            }
             for local_column in 0..columns {
                 let line = &mut lines[local_column * line_len..(local_column + 1) * line_len];
                 let work = &mut works[local_column * line_len..(local_column + 1) * line_len];
@@ -2204,4 +2210,149 @@ pub fn inverse_irreversible_9_7_window(
     }
     report.work.output_samples = plan.output_region.sample_count();
     Ok(report)
+}
+
+#[cfg(all(test, feature = "parallel"))]
+mod parallel_degenerate_geometry_tests {
+    use super::*;
+
+    fn fill<T: Copy + Default>(
+        plane: &mut WindowCoefficientPlane<T>,
+        plan: &WindowSynthesisPlan,
+        sample: impl Fn(usize) -> T,
+    ) {
+        let mut next = 0_usize;
+        let mut fill_band = |band: &mut WindowCoefficientBand<T>| {
+            for value in &mut band.values {
+                *value = sample(next);
+                next += 1;
+            }
+        };
+        fill_band(plane.band_mut(0, WindowSubband::LowLow).unwrap());
+        for level in &plan.levels {
+            for subband in [
+                WindowSubband::HighLow,
+                WindowSubband::LowHigh,
+                WindowSubband::HighHigh,
+            ] {
+                fill_band(plane.band_mut(level.resolution, subband).unwrap());
+            }
+        }
+    }
+
+    // One-sample lines leave an empty high or low band at some level. The
+    // phase-parallel route must match scalar synthesis rather than reject it.
+    const GEOMETRIES: [(u32, u32, u8); 10] = [
+        (1, 1, 1),
+        (2, 1, 1),
+        (300, 1, 1),
+        (1, 2, 1),
+        (1, 300, 1),
+        (64, 2, 2),
+        (257, 2, 2),
+        (1000, 3, 2),
+        (64, 64, 7),
+        (256, 1, 5),
+    ];
+
+    fn regions(width: u32, height: u32) -> [AxisAlignedRegion; 2] {
+        [
+            AxisAlignedRegion {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            AxisAlignedRegion {
+                x: width / 2,
+                y: height / 2,
+                width: width.div_ceil(2),
+                height: height.div_ceil(2),
+            },
+        ]
+    }
+
+    #[test]
+    fn reversible_parallel_window_matches_scalar_with_empty_bands() {
+        for (width, height, levels) in GEOMETRIES {
+            for region in regions(width, height) {
+                let plan = plan_window_synthesis(
+                    width,
+                    height,
+                    levels,
+                    region,
+                    WaveletTransform::Reversible53,
+                )
+                .unwrap();
+                let mut plane = WindowCoefficientPlane::<i32>::new(&plan).unwrap();
+                fill(&mut plane, &plan, |index| {
+                    (index as i32 * 37 + 11) % 401 - 200
+                });
+                let mut scalar = WindowSynthesisWorkspace::new();
+                inverse_reversible_5_3_window(&plane, &plan, &mut scalar, false).unwrap();
+                for workers in [1, 3] {
+                    let mut parallel = WindowSynthesisWorkspace::new();
+                    inverse_reversible_5_3_window_parallel_with_workers(
+                        &plane,
+                        &plan,
+                        &mut parallel,
+                        false,
+                        workers,
+                        workers,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("{width}x{height} L{levels} {region:?} x{workers}: {error:?}")
+                    });
+                    assert_eq!(parallel.output_region(), scalar.output_region());
+                    assert_eq!(
+                        parallel.output(),
+                        scalar.output(),
+                        "{width}x{height} L{levels} {region:?} x{workers}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn irreversible_parallel_window_matches_scalar_with_empty_bands() {
+        for (width, height, levels) in GEOMETRIES {
+            for region in regions(width, height) {
+                let plan = plan_window_synthesis(
+                    width,
+                    height,
+                    levels,
+                    region,
+                    WaveletTransform::Irreversible97,
+                )
+                .unwrap();
+                let mut plane = WindowCoefficientPlane::<f32>::new(&plan).unwrap();
+                fill(&mut plane, &plan, |index| {
+                    ((index * 37 + 11) % 401) as f32 * 0.25 - 50.0
+                });
+                let mut scalar = WindowSynthesisWorkspace::new();
+                inverse_irreversible_9_7_window(&plane, &plan, &mut scalar, false).unwrap();
+                for workers in [1, 3] {
+                    let mut parallel = WindowSynthesisWorkspace::new();
+                    inverse_irreversible_9_7_window_parallel_with_workers(
+                        &plane,
+                        &plan,
+                        &mut parallel,
+                        false,
+                        workers,
+                        workers,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("{width}x{height} L{levels} {region:?} x{workers}: {error:?}")
+                    });
+                    assert_eq!(parallel.output_region(), scalar.output_region());
+                    assert_eq!(
+                        parallel.output(),
+                        scalar.output(),
+                        "{width}x{height} L{levels} {region:?} x{workers}"
+                    );
+                }
+            }
+        }
+    }
 }

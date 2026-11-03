@@ -21,9 +21,21 @@ inspect/decode/encode entry points. Lower-level crates parse boxes and markers,
 walk packets, decode or encode code blocks, and apply transforms. Optional
 parallel and SIMD paths retain deterministic scalar fallbacks.
 
+Among the library and application crates, project-authored unsafe code is
+confined to two; the others keep `unsafe_code = "deny"`. The only other
+exception is test-only: the diagnostic allocation-meter examples in
+`emuella-j2k-test-support` wrap the system allocator, and they are never
+linked into codec libraries. `emuella-j2k-accel` is the internal acceleration
+boundary. It holds raw-pointer output views that parallel workers split by
+consuming ownership, with manual `Send` implementations for those views. It
+also holds pointer-based scalar kernels and SIMD intrinsic kernels selected by
+runtime CPU detection. Callers reach them only through checked safe wrappers
+that validate geometry and source bounds first. The C API unsafe inventory and
+its audit do not cover this crate.
+
 The experimental [`emuella-j2k-capi`](c-abi-safety-contract.md) adapter sits
-above the safe public facade in a separate crate. It contains the only
-project-authored unsafe boundary and is limited to positioned raw Part 1
+above the safe public facade in a separate crate. It contains the
+foreign-language unsafe boundary and is limited to positioned raw Part 1
 inspection and selected one- to four-component region decode. The facade owns
 source parsing, admission, metadata and source-error provenance; the adapter
 owns only C representation, handle lifetimes, panic containment and failure

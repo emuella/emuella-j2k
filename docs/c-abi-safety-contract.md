@@ -328,9 +328,15 @@ separate binary ABI.
 ## Initial unsafe budget
 
 All existing codec, parser, container, transform, entropy, facade and CLI crates
-retain `unsafe_code = "deny"`. Only `emuella-j2k-capi` may contain
-project-authored unsafe code. Generated code and dependency unsafe code are
-reported separately and never represented as eliminating risk.
+retain `unsafe_code = "deny"`. Among library and application crates, two
+contain project-authored unsafe code; the only other occurrence is in the
+test-only allocation-meter examples of `emuella-j2k-test-support`, which are
+never linked into codec libraries. `emuella-j2k-capi` holds the C boundary that
+this budget governs. The internal `emuella-j2k-accel` crate predates this
+record and holds acceleration kernels behind checked safe wrappers; the
+[architecture](architecture.md) describes it. That crate is outside this
+budget, its inventory and its audit. Generated code and dependency unsafe code
+are reported separately and never represented as eliminating risk.
 
 The initial C API permits only these unsafe categories:
 
@@ -428,7 +434,9 @@ that the callee cannot establish.
 
 ## Consequences and deferred decisions
 
-This design preserves a zero-unsafe codec core while acknowledging the real
+This design keeps unsafe code out of the codec, parser, container and facade
+crates; only the separate acceleration crate holds kernel unsafe code. It also
+acknowledges the real
 trust boundary introduced by C. Rust-owned first-version output costs one copy
 in a typical GDAL block read; that is accepted until measurement demonstrates a
 need for a direct-output contract. Concurrent source callbacks place a clear

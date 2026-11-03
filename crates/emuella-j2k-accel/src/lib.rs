@@ -2626,10 +2626,7 @@ impl HtCleanupDispatch {
             .iter()
             .map(|&length| usize::from(length))
             .sum::<usize>();
-        let last_byte = (bit_offset + consumed).div_ceil(8);
-        if prepared.len() < last_byte.saturating_add(8) {
-            return Err(HtCleanupOctetError::InputTooShort);
-        }
+        require_prepared_octet_window(prepared, bit_offset, consumed)?;
         Ok(kernel(
             prepared,
             bit_offset,
@@ -2654,10 +2651,7 @@ impl HtCleanupDispatch {
     ) -> Result<HtCleanupOctetOutput, HtCleanupOctetError> {
         let consumed =
             codeword_octet_consumed_bits(first_codeword, second_codeword, first_u, second_u)?;
-        let last_byte = (bit_offset + consumed).div_ceil(8);
-        if prepared.len() < last_byte.saturating_add(8) {
-            return Err(HtCleanupOctetError::InputTooShort);
-        }
+        require_prepared_octet_window(prepared, bit_offset, consumed)?;
         let _ = dense;
         let kernel: PreparedCodewordOctetKernel = match self.backend {
             HtCleanupBackend::Reference => decode_prepared_codeword_octet_reference,
@@ -2724,6 +2718,26 @@ fn codeword_quad_consumed_bits(codeword: u16, u_value: u16) -> Result<usize, HtC
         return Err(HtCleanupOctetError::InvalidBitLength);
     }
     Ok(usize::from(u_value) * significance.count_ones() as usize - reduced_count)
+}
+
+/// Prove that an octet's bit window and the eight-byte sentinel lie within
+/// `prepared`. Every backend kernel, including the unchecked gathers, relies
+/// on this; a caller-supplied offset must not wrap the bound.
+#[inline(always)]
+fn require_prepared_octet_window(
+    prepared: &[u8],
+    bit_offset: usize,
+    consumed: usize,
+) -> Result<(), HtCleanupOctetError> {
+    let required = bit_offset
+        .checked_add(consumed)
+        .map(|last_bit| last_bit.div_ceil(8))
+        .and_then(|last_byte| last_byte.checked_add(8))
+        .ok_or(HtCleanupOctetError::InputTooShort)?;
+    if prepared.len() < required {
+        return Err(HtCleanupOctetError::InputTooShort);
+    }
+    Ok(())
 }
 
 #[inline(always)]
@@ -3302,5 +3316,97 @@ mod aarch64 {
             }
         }
         output
+    }
+}
+
+#[cfg(test)]
+mod prepared_octet_window_tests {
+    use super::*;
+
+    const BACKENDS: [HtCleanupBackend; 5] = [
+        HtCleanupBackend::Reference,
+        HtCleanupBackend::Scalar,
+        HtCleanupBackend::Avx2,
+        HtCleanupBackend::Avx2Bmi2,
+        HtCleanupBackend::Neon,
+    ];
+
+    fn available_dispatches() -> impl Iterator<Item = HtCleanupDispatch> {
+        BACKENDS
+            .into_iter()
+            .filter_map(|backend| ht_cleanup_dispatch_for_backend(backend).ok())
+    }
+
+    // A bit offset whose end wraps past usize::MAX must not satisfy the
+    // padded-source bound that every kernel relies on.
+    #[test]
+    fn wrapping_bit_offsets_are_rejected_by_every_backend() {
+        let prepared = [0_u8; 16];
+        let bit_lengths = [1_u8; 8];
+        let octet_offset = usize::MAX - 7;
+        let (first_codeword, second_codeword, first_u, second_u) = (0x00f0, 0x00f0, 1, 1);
+        let consumed =
+            codeword_octet_consumed_bits(first_codeword, second_codeword, first_u, second_u)
+                .unwrap();
+        assert_ne!(consumed, 0);
+        let codeword_offset = usize::MAX - consumed + 1;
+        for dispatch in available_dispatches() {
+            for result in [
+                dispatch.decode_prepared_octet(&prepared, octet_offset, bit_lengths, 0xff, 0, 0),
+                dispatch.decode_prepared_dense_octet(
+                    &prepared,
+                    octet_offset,
+                    bit_lengths,
+                    0xff,
+                    0,
+                    0,
+                ),
+                dispatch.decode_prepared_codeword_octet(
+                    &prepared,
+                    codeword_offset,
+                    first_codeword,
+                    second_codeword,
+                    first_u,
+                    second_u,
+                    0,
+                ),
+                dispatch.decode_prepared_dense_codeword_octet(
+                    &prepared,
+                    codeword_offset,
+                    first_codeword,
+                    second_codeword,
+                    first_u,
+                    second_u,
+                    0,
+                ),
+            ] {
+                assert_eq!(
+                    result.err(),
+                    Some(HtCleanupOctetError::InputTooShort),
+                    "{:?}",
+                    dispatch.backend
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_exact_sentinel_bound_is_still_accepted() {
+        let bit_lengths = [1_u8; 8];
+        // Eight bits from bit 8 end at byte 2; the sentinel needs eight more.
+        let prepared = [0_u8; 10];
+        for dispatch in available_dispatches() {
+            assert!(
+                dispatch
+                    .decode_prepared_octet(&prepared, 8, bit_lengths, 0xff, 0, 0)
+                    .is_ok()
+            );
+            assert_eq!(
+                dispatch
+                    .decode_prepared_octet(&prepared[..9], 8, bit_lengths, 0xff, 0, 0)
+                    .err(),
+                Some(HtCleanupOctetError::InputTooShort)
+            );
+        }
     }
 }
