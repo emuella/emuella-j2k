@@ -9049,6 +9049,9 @@ fn parse_selected_tile_parts_from_tlm(
     else {
         return Ok(None);
     };
+    // Enumerate the grid first: it rejects grids beyond the 16-bit tile index
+    // before the selection table is sized from SIZ.
+    let tile_rects = tile_rects_for_siz(siz)?;
     let tile_count = siz
         .tile_count_x()?
         .checked_mul(siz.tile_count_y()?)
@@ -9056,7 +9059,7 @@ fn parse_selected_tile_parts_from_tlm(
     let mut selected_tiles = alloc::vec![false; usize::try_from(tile_count)
         .map_err(|_| CodestreamError::SizeOverflow)?];
     let mut selected_tile_count = 0_usize;
-    for tile in tile_rects_for_siz(siz)? {
+    for tile in tile_rects {
         if tile_intersects_region(tile, selected_region) {
             let selected = selected_tiles
                 .get_mut(usize::from(tile.tile_index))
@@ -36124,6 +36127,42 @@ mod packed_packet_header_tests {
     }
 
     #[test]
+    fn regional_tlm_preparation_rejects_oversized_tile_grid_before_selection() {
+        // A 65535 x 65535 grid of 1 x 1 tiles exceeds the 16-bit tile index.
+        // The selection table must not be sized from SIZ before that check.
+        let mut codestream = fixture();
+        let siz = find_marker(&codestream, 0, Marker::Siz).unwrap();
+        for field in [6, 10] {
+            codestream[siz + field..siz + field + 4].copy_from_slice(&65_535_u32.to_be_bytes());
+        }
+        for field in [22, 26] {
+            codestream[siz + field..siz + field + 4].copy_from_slice(&1_u32.to_be_bytes());
+        }
+        let first_sot = find_marker(&codestream, 0, Marker::Sot).unwrap();
+        let psot = read_u32(&codestream, first_sot + 6).unwrap();
+        let mut tlm_data = vec![0, 0x10, 0];
+        tlm_data.extend_from_slice(&u16::try_from(psot).unwrap().to_be_bytes());
+        let tlm = marker_segment(Marker::Tlm, &tlm_data);
+        codestream.splice(first_sot..first_sot, tlm);
+
+        let result = prepare_part1_component_decode(
+            &codestream,
+            Part1ComponentDecodeRequest {
+                component_indices: &[0],
+                region: TileRegionRequest {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                discard_levels: 0,
+                max_layers: None,
+            },
+        );
+        assert!(matches!(result, Err(CodestreamError::SizeOverflow)));
+    }
+
+    #[test]
     fn packed_headers_keep_sop_in_the_body_and_eph_with_the_header() {
         for kind in [PacketHeaderSourceKind::Ppm, PacketHeaderSourceKind::Ppt] {
             assert!(!contributions(&packed_fixture(kind, true, true)).is_empty());
@@ -42721,6 +42760,22 @@ fn read_coding_pass_count(reader: &mut PacketBitReader<'_>) -> Result<u16> {
 }
 
 #[test]
+fn wide_packet_length_fields_keep_leading_zeros_and_reject_overflow() {
+    // A 33-bit field can follow a large Lblock increment. With a leading zero
+    // it still encodes 5; with a leading one it would denote 2^32 + 5.
+    let mut reader = PacketBitReader::new(&[0x00, 0x00, 0x00, 0x02, 0x80]);
+    assert_eq!(reader.read_bits_with_stuffing(33).unwrap(), 5);
+    let mut reader = PacketBitReader::new(&[0x80, 0x00, 0x00, 0x02, 0x80]);
+    assert!(matches!(
+        reader.read_bits_with_stuffing(33),
+        Err(CodestreamError::InvalidMarker {
+            message: "packet header field value exceeds 32 bits",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn short_continued_packet_does_not_require_neighbouring_bytes() {
     // An included block can announce another pass without contributing bytes.
     // Packet-present, already-included, one pass, unchanged Lblock and zero
@@ -42940,6 +42995,15 @@ impl<'a> PacketBitReader<'a> {
         let mut value = 0_u32;
         for _ in 0..bit_size {
             let needs_stuff_bit = self.needs_to_read_stuff_bit()?;
+            // Lblock growth can make a length field wider than 32 bits. Leading
+            // zero bits remain valid, but a set bit must not be shifted out.
+            if value > u32::MAX >> 1 {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Sod),
+                    "packet header field value exceeds 32 bits",
+                ));
+            }
             value = (value << 1) | self.read_bit()?;
             if needs_stuff_bit && self.read_bit()? != 0 {
                 return Err(invalid(

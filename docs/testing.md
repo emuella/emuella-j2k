@@ -88,6 +88,7 @@ fuzz, documentation, source, dependency and package checks keep their own gates.
 | `codestream-parallel` | Codestream with `parallel`; `scalable_lossless::parallel` |
 | `codestream-forward53` | Codestream with `parallel`; `scalable_lossless::forward53_tests` |
 | `transform-analysis53` | Transform with `parallel,classic-execution-diagnostics`; `analysis53` |
+| `transform-window-parallel` | Transform with `parallel`; `window::parallel_degenerate_geometry_tests` |
 | `forward53-panels` | Test-support with `parallel,classic-execution-diagnostics`, release; `forward53_panels` |
 | `ordinary-dispatch` | Test-support with `classic-execution-diagnostics`, release; `forward53_panels`, `ordinary_dispatch` |
 | `codestream-diagnostics` | Codestream with `parallel,classic-execution-diagnostics`; `scalable_lossless::diagnostics` |

@@ -25,6 +25,7 @@ python3 scripts/run-nextest.py codestream-forward53 -p emuella-j2k-codestream --
 cargo test -p emuella-j2k-codestream --features parallel --doc scalable_lossless::forward53_tests
 python3 scripts/run-nextest.py transform-analysis53 -p emuella-j2k-transform --features parallel,classic-execution-diagnostics analysis53
 cargo test -p emuella-j2k-transform --features parallel,classic-execution-diagnostics --doc analysis53
+python3 scripts/run-nextest.py transform-window-parallel -p emuella-j2k-transform --features parallel window::parallel_degenerate_geometry_tests
 python3 scripts/run-nextest.py forward53-panels --release -p emuella-j2k-test-support --features parallel,classic-execution-diagnostics --test forward53_panels
 python3 scripts/run-nextest.py ordinary-dispatch --release -p emuella-j2k-test-support --features classic-execution-diagnostics --test forward53_panels ordinary_dispatch
 python3 scripts/run-nextest.py codestream-diagnostics -p emuella-j2k-codestream --features parallel,classic-execution-diagnostics scalable_lossless::diagnostics

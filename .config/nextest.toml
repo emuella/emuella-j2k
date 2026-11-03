@@ -29,6 +29,9 @@ inherits = "ci"
 [profile.transform-analysis53]
 inherits = "ci"
 
+[profile.transform-window-parallel]
+inherits = "ci"
+
 [profile.forward53-panels]
 inherits = "ci"
 
