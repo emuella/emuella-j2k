@@ -328,13 +328,15 @@ separate binary ABI.
 ## Initial unsafe budget
 
 All existing codec, parser, container, transform, entropy, facade and CLI crates
-retain `unsafe_code = "deny"`. Two crates contain project-authored unsafe code.
-`emuella-j2k-capi` holds the C boundary that this budget governs. The internal
-`emuella-j2k-accel` crate predates this record and holds acceleration kernels
-behind checked safe wrappers; the [architecture](architecture.md) describes it.
-That crate is outside this budget, its inventory and its audit. Generated code
-and dependency unsafe code are reported separately and never represented as
-eliminating risk.
+retain `unsafe_code = "deny"`. Among library and application crates, two
+contain project-authored unsafe code; the only other occurrence is in the
+test-only allocation-meter examples of `emuella-j2k-test-support`, which are
+never linked into codec libraries. `emuella-j2k-capi` holds the C boundary that
+this budget governs. The internal `emuella-j2k-accel` crate predates this
+record and holds acceleration kernels behind checked safe wrappers; the
+[architecture](architecture.md) describes it. That crate is outside this
+budget, its inventory and its audit. Generated code and dependency unsafe code
+are reported separately and never represented as eliminating risk.
 
 The initial C API permits only these unsafe categories:
 

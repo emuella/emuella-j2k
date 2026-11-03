@@ -36126,7 +36126,38 @@ mod packed_packet_header_tests {
         assert_eq!(prepared.preparation_timings().tile_parts_skipped_via_tlm, 1);
     }
 
+    // Overcommit lets an unused multi-gigabyte zeroed table succeed, so the
+    // ordering is only observable under an address-space limit. Re-run the
+    // ignored check below in a child process limited to about 2 GB.
+    #[cfg(all(target_os = "linux", feature = "std"))]
     #[test]
+    fn regional_tlm_oversized_tile_grid_fails_within_an_address_space_limit() {
+        let test = module_path!()
+            .split_once("::")
+            .map(|(_, module)| {
+                std::format!(
+                    "{module}::regional_tlm_preparation_rejects_oversized_tile_grid_before_selection"
+                )
+            })
+            .unwrap();
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(r#"ulimit -v 2000000 && exec "$0" "$@""#)
+            .arg(std::env::current_exe().unwrap())
+            .args([test.as_str(), "--exact", "--ignored", "--test-threads=1"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{}\n{stdout}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "run under an address-space limit by the test above"]
     fn regional_tlm_preparation_rejects_oversized_tile_grid_before_selection() {
         // A 65535 x 65535 grid of 1 x 1 tiles exceeds the 16-bit tile index.
         // The selection table must not be sized from SIZ before that check.

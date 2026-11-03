@@ -21,8 +21,11 @@ inspect/decode/encode entry points. Lower-level crates parse boxes and markers,
 walk packets, decode or encode code blocks, and apply transforms. Optional
 parallel and SIMD paths retain deterministic scalar fallbacks.
 
-Project-authored unsafe code is confined to two crates; every other crate keeps
-`unsafe_code = "deny"`. `emuella-j2k-accel` is the internal acceleration
+Among the library and application crates, project-authored unsafe code is
+confined to two; the others keep `unsafe_code = "deny"`. The only other
+exception is test-only: the diagnostic allocation-meter examples in
+`emuella-j2k-test-support` wrap the system allocator, and they are never
+linked into codec libraries. `emuella-j2k-accel` is the internal acceleration
 boundary. It holds raw-pointer output views that parallel workers split by
 consuming ownership, with manual `Send` implementations for those views. It
 also holds pointer-based scalar kernels and SIMD intrinsic kernels selected by
