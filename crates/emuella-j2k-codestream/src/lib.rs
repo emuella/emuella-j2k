@@ -56476,13 +56476,19 @@ fn decode_htj2k_lossless_no_decomp_tile_components(
     }
 
     let component_count = usize::from(codestream.siz.component_count());
+    // Only coded code-blocks are placed below. A code-block that no packet
+    // includes still reconstructs zero coefficients, which unsigned components
+    // carry through the inverse DC level shift, so seed every sample with that
+    // reconstruction rather than with zero bytes.
     let mut components = Vec::with_capacity(component_count);
     for component in &codestream.siz.components {
-        let sample_len = plane_len
-            .checked_mul(component_sample_byte_width(component.bits_per_sample)?)
+        let zero_coefficient_sample =
+            component_sample_slice_to_bytes(component.bits_per_sample, component.signed, &[0])?;
+        plane_len
+            .checked_mul(zero_coefficient_sample.len())
             .ok_or(CodestreamError::SizeOverflow)?;
         components.push(DecodedComponent {
-            samples: alloc::vec![0_u8; sample_len],
+            samples: zero_coefficient_sample.repeat(plane_len),
         });
     }
 

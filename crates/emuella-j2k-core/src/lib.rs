@@ -20018,12 +20018,18 @@ mod many_tile_tests {
     /// tile part holding one empty packet. `htj2k` adds Part 15 signalling
     /// and the HT code-block style.
     fn one_sample_tiles(width: u32, height: u32, htj2k: bool) -> Vec<u8> {
+        one_sample_tiles_with_ssiz(width, height, 7, htj2k)
+    }
+
+    /// As [`one_sample_tiles`], with the component's `Ssiz` byte (signedness
+    /// in the top bit, precision minus one below it) chosen by the caller.
+    fn one_sample_tiles_with_ssiz(width: u32, height: u32, ssiz: u8, htj2k: bool) -> Vec<u8> {
         let mut bytes = vec![0xff, 0x4f];
         let mut siz = vec![if htj2k { 0x40 } else { 0 }, 0];
         for value in [width, height, 0, 0, 1, 1, 0, 0] {
             siz.extend_from_slice(&value.to_be_bytes());
         }
-        siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+        siz.extend_from_slice(&[0, 1, ssiz, 1, 1]);
         segment(&mut bytes, 0xff51, &siz);
         if htj2k {
             segment(&mut bytes, 0xff50, &[0, 2, 0, 0, 0, 0]);
@@ -20031,8 +20037,9 @@ mod many_tile_tests {
         // LRCP, one layer, no MCT or decomposition, 64x64 code-blocks, 5/3.
         let style = if htj2k { 0x40 } else { 0 };
         segment(&mut bytes, 0xff52, &[0, 0, 0, 1, 0, 0, 4, 4, style, 1]);
-        // No quantisation, two guard bits and one subband exponent.
-        segment(&mut bytes, 0xff5c, &[0x40, 9 << 3]);
+        // No quantisation, two guard bits and one subband exponent two above
+        // the component precision.
+        segment(&mut bytes, 0xff5c, &[0x40, ((ssiz & 0x7f) + 2) << 3]);
         for tile in 0..u16::try_from(width * height).unwrap() {
             let mut sot = tile.to_be_bytes().to_vec();
             sot.extend_from_slice(&15_u32.to_be_bytes());
@@ -20066,13 +20073,45 @@ mod many_tile_tests {
                 panic!("one component was expected");
             };
             assert_eq!(plane.len(), 64 * 64);
-            // Every tile carries the same empty packet, so every tile must
-            // reconstruct the same sample.
-            assert!(plane.iter().all(|sample| *sample == plane[0]));
-            if !htj2k {
-                // Zero Part 1 coefficients reconstruct to the level-shift
-                // midpoint.
-                assert_eq!(plane[0], 128);
+            // Every tile carries only an empty packet, so its coefficients
+            // are zero and every sample reconstructs to the level-shift
+            // midpoint whichever block coder the code-block style selects.
+            assert!(plane.iter().all(|sample| *sample == 128), "HTJ2K {htj2k}");
+        }
+    }
+
+    #[test]
+    fn uncoded_code_blocks_reconstruct_the_level_shifted_zero_for_each_precision() {
+        // `Ssiz`, then the little-endian bytes of the sample that a zero
+        // coefficient reconstructs to after any inverse DC level shift.
+        let cases: [(u8, &[u8]); 5] = [
+            (7, &[0x80]),
+            (8, &[0x00, 0x01]),
+            (11, &[0x00, 0x08]),
+            (15, &[0x00, 0x80]),
+            (0x87, &[0x00]),
+        ];
+        for (ssiz, expected) in cases {
+            for htj2k in [false, true] {
+                let bytes = one_sample_tiles_with_ssiz(4, 3, ssiz, htj2k);
+                let image = decode(
+                    &bytes,
+                    &DecodeOptions {
+                        mode: DecodeMode::Components,
+                        ..DecodeOptions::default()
+                    },
+                )
+                .unwrap();
+                let ImageData::Planes(planes) = image.data else {
+                    panic!("component decode returned interleaved samples");
+                };
+                let [plane] = planes.as_slice() else {
+                    panic!("one component was expected");
+                };
+                assert_eq!(plane.len(), 4 * 3 * expected.len(), "Ssiz {ssiz:#x}");
+                for sample in plane.chunks_exact(expected.len()) {
+                    assert_eq!(sample, expected, "Ssiz {ssiz:#x}, HTJ2K {htj2k}");
+                }
             }
         }
     }
