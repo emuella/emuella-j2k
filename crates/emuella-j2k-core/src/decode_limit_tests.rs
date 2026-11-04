@@ -493,3 +493,47 @@ fn crop_backed_partial_routes_also_bound_their_full_decode() {
     let image = decode_partial(&input, &region.with_limits(limits(full_image))).unwrap();
     assert_eq!(output_samples(&image), 100);
 }
+
+fn inspect_options(max_output_samples: u64) -> InspectOptions {
+    InspectOptions::default().with_limits(limits(max_output_samples))
+}
+
+#[test]
+fn lowered_inspect_limits_preflight_the_full_native_decode() {
+    let large = large_siz_empty_packet_fixture();
+    assert_eq!(InspectOptions::default().limits, DecodeLimits::default());
+    assert!(inspect(&large, &InspectOptions::default()).is_ok());
+    assert_eq!(
+        inspect(&large, &inspect_options(1024 * 1024)).map(|_| ()),
+        Err(exceeded(
+            LARGE_COMPONENTS * LARGE_PLANE_SAMPLES,
+            1024 * 1024
+        ))
+    );
+    assert!(matches!(
+        inspect(&large, &inspect_options(0)),
+        Err(J2kError::InvalidParameter {
+            parameter: "max_output_samples",
+            ..
+        })
+    ));
+    assert_eq!(
+        inspect(&large, &inspect_options(u64::MAX)),
+        inspect(&large, &InspectOptions::default())
+    );
+
+    // The count is the full native decode's own output, and the metadata
+    // returned at the limit is the default inspection's.
+    let input = subsampled_fixture(129, 67);
+    let requested = 129 * 67 + 65 * 67 + 65 * 34;
+    let full = decode(&input, &components_options(u64::MAX)).unwrap();
+    assert_eq!(output_samples(&full), requested);
+    assert_eq!(
+        inspect(&input, &inspect_options(requested)),
+        inspect(&input, &InspectOptions::default())
+    );
+    assert_eq!(
+        inspect(&input, &inspect_options(requested - 1)).map(|_| ()),
+        Err(exceeded(requested, requested - 1))
+    );
+}

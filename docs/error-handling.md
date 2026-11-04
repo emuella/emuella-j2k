@@ -69,7 +69,7 @@ packet reconstruction or sample value will succeed.
 | `TruncatedInput { needed, remaining }` | Input is incomplete for the attempted operation. `needed` reports additional required bytes at that failure, not a full-file length predictor. |
 | `Unsupported { feature, detail }` | Input feature or requested combination is outside the implemented route. Choose another documented request or report the missing capability. |
 | `BufferTooSmall { required, provided }` | Declared byte storage is insufficient. Discover and validate the intended output, then size its rows and capacity. |
-| `LimitExceeded { limit, requested, maximum }` | The request needs more than a caller-selected `DecodeLimits` budget. It is reported before decode work begins. Reduce the request or raise the budget; it says nothing about input validity. |
+| `LimitExceeded { limit, requested, maximum }` | The request, or with `InspectOptions::limits` the full native decode, needs more than a caller-selected `DecodeLimits` budget. It is reported before decode work begins. Reduce the request or raise the budget; it says nothing about input validity. |
 | `InternalInvariant { message }` | An internal consistency check failed. Report a reproducible case rather than treating it as normal support admission. |
 
 `UnsupportedFeature` names `InputFormat`, `OutputFormat`, `ContainerBox`,

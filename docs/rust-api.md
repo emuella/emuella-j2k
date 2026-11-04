@@ -45,7 +45,9 @@ tables below has a chainable `with_<field>` setter on its options type; see
 | `allow_best_effort_backend_decode` | Default `false`. Legacy compatibility attempt for selected native Part 1 inputs classified unsupported; it may still fail. It enables no external codec and does not admit JPH, raw HTJ2K or unknown formats. |
 | `limits` | `DecodeLimits` budgets; see [caller decode limits](#caller-decode-limits). `decode_shape` and caller-output execution apply them too. |
 
-`InspectOptions` has two independent booleans, both defaulting to `true`.
+`InspectOptions` has two independent booleans, both defaulting to `true`, and
+a `limits` pre-flight budget described under
+[caller decode limits](#caller-decode-limits).
 `preserve_raw_metadata` retains selected raw metadata records; turning it off
 does not skip structural parsing. `classify_support` requests the implemented
 decode-support classification; disabling it yields `SupportStatus::Unknown`.
@@ -104,8 +106,11 @@ preparation, decode work or output allocation, on every entry point that takes
 variants. A request over budget fails with `J2kError::LimitExceeded { limit,
 requested, maximum }`; caller-owned output is untouched. A partial request
 served by reconstructing the full image and cropping it also checks that full
-decode, so its budget must cover the full image. `InspectOptions` has no
-limits because inspection produces no samples. Positioned-source preparation
+decode, so its budget must cover the full image. `InspectOptions::limits`
+(set with `InspectOptions::with_limits`) is a pre-flight check: a lowered
+budget makes `inspect` fail with the same error when the full-resolution,
+all-component native decode would exceed it. Rendered output can need more,
+and decode checks that itself. Positioned-source preparation
 takes a `Part1ComponentDecodeRequest` rather than these options and keeps its
 existing `Part1SourceIndexLimits` and built-in bounds.
 
@@ -166,7 +171,7 @@ supported profiles, and ordinary applications do not need them.
 
 | Group | Exports |
 |---|---|
-| Caller decode budgets | `DecodeLimits`, carried by `DecodeOptions::limits` and `PartialDecodeOptions::limits` |
+| Caller decode budgets | `DecodeLimits`, carried by `DecodeOptions::limits`, `PartialDecodeOptions::limits` and the `InspectOptions::limits` pre-flight check |
 | Resource-bounded lossless encode (`std`) | `lossless_encode_requirements`, `lossless_bypass_encode_requirements`, `encode_with_limits`, `encode_lossless_bypass_with_limits`, `LosslessEncodeLimits`, `LosslessEncodeRequirements` |
 | Reusable decode workspaces | `Part1DecodeWorkspace`, `decode_into_with_workspace`, `decode_partial_into_with_workspace`; with `std`, `Htj2kDecodeWorkspace` and `decode_htj2k_with_workspace` |
 | Prepared Part 1 requests and positioned sources | `prepare_part1_decode`, `prepare_part1_decode_from_source`, `PreparedPart1Decode`, `execute_prepared_part1_decode`, `Part1ExecutionOptions`, `Part1DecodeWork`, `Part1ComponentDecodeRequest`, `TileRegionRequest`, `inspect_part1_source`, `Part1SourceInspection`, `Part1SourceIndex`, `Part1SourceIndexLimits`, `CodestreamSource`, `SliceSource`, `SourceError`, `SourceErrorKind`, `SourceMetrics` |

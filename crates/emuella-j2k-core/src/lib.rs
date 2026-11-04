@@ -6076,6 +6076,11 @@ pub struct InspectOptions {
     /// Compute the bounded decode classification. Default `true`; `false`
     /// returns [`SupportStatus::Unknown`], not an approval.
     pub classify_support: bool,
+    /// Pre-flight budget. A lowered `max_output_samples` rejects an input
+    /// whose full-resolution, all-component native output would exceed it,
+    /// counted from headers. The default checks nothing beyond today's
+    /// inspection.
+    pub limits: DecodeLimits,
 }
 
 impl InspectOptions {
@@ -6092,6 +6097,13 @@ impl InspectOptions {
         self.classify_support = classify_support;
         self
     }
+
+    /// Returns these options with `limits` replaced.
+    #[must_use]
+    pub fn with_limits(mut self, limits: DecodeLimits) -> Self {
+        self.limits = limits;
+        self
+    }
 }
 
 impl Default for InspectOptions {
@@ -6099,6 +6111,7 @@ impl Default for InspectOptions {
         Self {
             preserve_raw_metadata: true,
             classify_support: true,
+            limits: DecodeLimits::default(),
         }
     }
 }
@@ -6370,6 +6383,13 @@ mod option_setter_tests {
                 ..PartialDecodeOptions::default()
             }
         );
+        assert_eq!(
+            InspectOptions::default().with_limits(limits),
+            InspectOptions {
+                limits,
+                ..InspectOptions::default()
+            }
+        );
     }
 
     #[test]
@@ -6403,12 +6423,16 @@ mod option_setter_tests {
         );
         let inspect = InspectOptions::default()
             .with_preserve_raw_metadata(false)
-            .with_classify_support(false);
+            .with_classify_support(false)
+            .with_limits(DecodeLimits::default().with_max_output_samples(13));
         assert_eq!(
             inspect,
             InspectOptions {
                 preserve_raw_metadata: false,
                 classify_support: false,
+                limits: DecodeLimits {
+                    max_output_samples: 13,
+                },
             }
         );
     }
@@ -6796,7 +6820,25 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
             remaining: 0,
         });
     }
+    let maximum = options.limits.lowered_max_output_samples()?;
+    let metadata = inspect_metadata(input, options)?;
+    if let Some(maximum) = maximum {
+        // The smallest full decode: every component at full resolution on its
+        // own sampled grid. Rendered output can need more; decode checks that.
+        let requested = requested_output_samples(
+            input,
+            &metadata,
+            OutputSampleMeasure::Native(&ComponentSelection::All),
+            None,
+            None,
+            0,
+        )?;
+        check_output_sample_limit(requested, maximum)?;
+    }
+    Ok(metadata)
+}
 
+fn inspect_metadata(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
     if input.starts_with(&[0xff, 0x4f]) {
         let codestream = codestream::parse(input).map_err(map_codestream_error)?;
         #[cfg(feature = "std")]
