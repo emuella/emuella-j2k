@@ -42498,6 +42498,8 @@ impl TagTree {
         leaf_y: u16,
         threshold: u32,
     ) -> Result<Option<u32>> {
+        #[cfg(test)]
+        TAG_TREE_DECODES.with(|count| count.set(count.get() + 1));
         let mut coordinates = [(0_u16, 0_u16); MAX_TAG_TREE_LEVELS];
         if self.levels.len() > coordinates.len() {
             return Err(CodestreamError::SizeOverflow);
@@ -42666,6 +42668,13 @@ impl TagTreeRasterWalk {
 }
 
 #[cfg(test)]
+std::thread_local! {
+    /// Tag-tree leaf decodes, so tests can bound packet-header work through
+    /// the real packet parser.
+    static TAG_TREE_DECODES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tag_tree_raster_walk_tests {
     use super::*;
 
@@ -42781,6 +42790,58 @@ mod tag_tree_raster_walk_tests {
                 "case {case}: inclusion decisions"
             );
         }
+    }
+
+    /// One 256 x 256 unsigned 8-bit component, no decomposition levels and
+    /// 4 x 4 code-blocks, so 4096 code-blocks share one precinct. Each layer's
+    /// packet is the byte 0x80: present, then a zero inclusion bit that keeps
+    /// the root of the inclusion tree beyond the layer.
+    fn many_code_block_layers(layers: u16) -> Vec<u8> {
+        fn segment(output: &mut Vec<u8>, marker: Marker, data: &[u8]) {
+            output.extend_from_slice(&marker.code().to_be_bytes());
+            output.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+            output.extend_from_slice(data);
+        }
+        let mut bytes = Marker::Soc.code().to_be_bytes().to_vec();
+        let mut siz = vec![0, 0];
+        for value in [256_u32, 256, 0, 0, 256, 256, 0, 0] {
+            siz.extend_from_slice(&value.to_be_bytes());
+        }
+        siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+        segment(&mut bytes, Marker::Siz, &siz);
+        let mut cod = vec![0, 0];
+        cod.extend_from_slice(&layers.to_be_bytes());
+        cod.extend_from_slice(&[0, 0, 0, 0, 0, 1]);
+        segment(&mut bytes, Marker::Cod, &cod);
+        segment(&mut bytes, Marker::Qcd, &[0x40, 9 << 3]);
+        let body = alloc::vec![0x80_u8; usize::from(layers)];
+        let mut sot = 0_u16.to_be_bytes().to_vec();
+        sot.extend_from_slice(&u32::try_from(14 + body.len()).unwrap().to_be_bytes());
+        sot.extend_from_slice(&[0, 1]);
+        segment(&mut bytes, Marker::Sot, &sot);
+        bytes.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        bytes.extend_from_slice(&body);
+        bytes.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn packet_parser_decodes_one_inclusion_leaf_per_excluded_layer() {
+        let layers = 64;
+        let bytes = many_code_block_layers(layers);
+        TAG_TREE_DECODES.with(|count| count.set(0));
+        let decoded = decode_baseline_owned_components_selected(&bytes, &[0])
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let decodes = TAG_TREE_DECODES.with(|count| count.get());
+        assert_eq!(decoded.components.len(), 1);
+        assert!(
+            decoded.components[0]
+                .samples
+                .iter()
+                .all(|&sample| sample == 128)
+        );
+        // A full scan would decode all 4096 leaves in every layer.
+        assert_eq!(decodes, usize::from(layers));
     }
 
     #[test]
