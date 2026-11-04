@@ -34606,6 +34606,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
     let mut packets_skipped_via_plt = 0_u64;
     let mut packet_bytes_skipped_via_plt = 0_u64;
     let mut packet_length_cursor = 0_usize;
+    let mut inclusion_walk = TagTreeRasterWalk::default();
     let aggregate_quality_layers = coding_style.layers > 1;
     let retained_layers = max_layers
         .unwrap_or(coding_style.layers)
@@ -34816,8 +34817,34 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                             precinct.code_block_rows,
                         )
                     };
-                    for local_code_block_y in 0..precinct_code_block_rows {
-                        for local_code_block_x in 0..precinct_code_block_cols {
+                    if precinct_code_block_cols == 0 || precinct_code_block_rows == 0 {
+                        continue;
+                    }
+                    // Visit only the code-blocks whose inclusion is not already
+                    // decided against this layer, so a packet costs work in
+                    // proportion to the header bits it carries rather than to
+                    // the precinct's code-block count.
+                    let inclusion_threshold = u32::from(packet_cursor.layer) + 1;
+                    inclusion_walk.start(
+                        subband
+                            .precincts
+                            .get(precinct_index)
+                            .and_then(|precinct| precinct.inclusion.as_ref())
+                            .ok_or(CodestreamError::SizeOverflow)?,
+                    );
+                    loop {
+                        let next = inclusion_walk.next_leaf(
+                            subband
+                                .precincts
+                                .get(precinct_index)
+                                .and_then(|precinct| precinct.inclusion.as_ref())
+                                .ok_or(CodestreamError::SizeOverflow)?,
+                            inclusion_threshold,
+                        );
+                        let Some((local_code_block_x, local_code_block_y)) = next else {
+                            break;
+                        };
+                        {
                             let code_block_x = first_code_block_x
                                 .checked_add(local_code_block_x)
                                 .ok_or(CodestreamError::SizeOverflow)?;
@@ -34839,7 +34866,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                                         &mut reader,
                                         local_code_block_x,
                                         local_code_block_y,
-                                        u32::from(packet_cursor.layer) + 1,
+                                        inclusion_threshold,
                                     )?;
                                 if included.is_none() {
                                     false
@@ -41645,6 +41672,16 @@ impl EncTagTree {
 }
 
 impl TagTree {
+    fn node(&self, level: u8, x: u16, y: u16) -> Option<&TagTreeNode> {
+        let level = self.levels.get(usize::from(level))?;
+        if x >= level.width || y >= level.height {
+            return None;
+        }
+        level
+            .nodes
+            .get(usize::from(y) * usize::from(level.width) + usize::from(x))
+    }
+
     fn new(width: u16, height: u16) -> Result<Self> {
         if width == 0 || height == 0 {
             return Err(CodestreamError::SizeOverflow);
@@ -41683,14 +41720,17 @@ impl TagTree {
         leaf_y: u16,
         threshold: u32,
     ) -> Result<Option<u32>> {
-        let mut coordinates = Vec::new();
+        let mut coordinates = [(0_u16, 0_u16); MAX_TAG_TREE_LEVELS];
+        if self.levels.len() > coordinates.len() {
+            return Err(CodestreamError::SizeOverflow);
+        }
         let mut x = leaf_x;
         let mut y = leaf_y;
-        for level in &self.levels {
+        for (level_index, level) in self.levels.iter().enumerate() {
             if x >= level.width || y >= level.height {
                 return Err(CodestreamError::SizeOverflow);
             }
-            coordinates.push((x, y));
+            coordinates[level_index] = (x, y);
             x /= 2;
             y /= 2;
         }
@@ -41735,6 +41775,295 @@ impl TagTree {
     ) -> Result<u32> {
         self.decode(reader, leaf_x, leaf_y, u32::MAX)?
             .ok_or_else(|| invalid(None, Some(Marker::Sod), "packet tag-tree value was not set"))
+    }
+}
+
+/// Raster-order walk over the leaves of an inclusion tag tree that a packet
+/// can still touch.
+///
+/// A node whose value is undecided and whose lower bound already reaches the
+/// layer threshold excludes its whole subtree without reading a bit, and the
+/// ancestors of such a node are all decided. Every leaf the walk skips would
+/// therefore have read nothing and decoded as not included. An undecided node
+/// is resolved by decoding its first raster leaf, which is its top-left leaf,
+/// so the walk hands that leaf out and examines the node again on the next
+/// call. Work per packet is then bounded by the bits read and the
+/// already-included code-blocks, not by the precinct's code-block count.
+#[derive(Debug, Default)]
+struct TagTreeRasterWalk {
+    /// Pending subtrees keyed by the raster index of their top-left leaf. The
+    /// parent of every queued node is decided.
+    queue: alloc::collections::BinaryHeap<core::cmp::Reverse<(u32, u8, u16, u16)>>,
+    /// An undecided node whose top-left leaf was handed out last.
+    pending: Option<(u8, u16, u16)>,
+    /// Raster index of the last leaf handed out.
+    last_leaf: Option<u32>,
+    /// Queue entries examined, so tests can bound the walk's work.
+    #[cfg(test)]
+    examined: usize,
+}
+
+impl TagTreeRasterWalk {
+    fn start(&mut self, tree: &TagTree) {
+        self.queue.clear();
+        self.pending = None;
+        self.last_leaf = None;
+        if let Some(top) = tree.levels.len().checked_sub(1)
+            && let Ok(top) = u8::try_from(top)
+        {
+            self.queue.push(core::cmp::Reverse((0, top, 0, 0)));
+        }
+    }
+
+    /// Return the next leaf, in raster order, that the caller must decode
+    /// for `threshold`; the caller decodes it before asking again.
+    fn next_leaf(&mut self, tree: &TagTree, threshold: u32) -> Option<(u16, u16)> {
+        if let Some((level, x, y)) = self.pending.take()
+            && !Self::excludes(tree, level, x, y, threshold)
+        {
+            self.push_children(tree, level, x, y);
+        }
+        while let Some(core::cmp::Reverse((key, level, x, y))) = self.queue.pop() {
+            #[cfg(test)]
+            {
+                self.examined += 1;
+            }
+            let Some(node) = tree.node(level, x, y) else {
+                continue;
+            };
+            if Self::excludes(tree, level, x, y, threshold) {
+                continue;
+            }
+            if level == 0 {
+                if self.last_leaf.is_some_and(|last| key <= last) {
+                    continue;
+                }
+                self.last_leaf = Some(key);
+                return Some((x, y));
+            }
+            if node.value.is_some() {
+                self.push_children(tree, level, x, y);
+                continue;
+            }
+            self.pending = Some((level, x, y));
+            self.last_leaf = Some(key);
+            let corner =
+                |coordinate: u16| u16::try_from(u32::from(coordinate) << level).unwrap_or(u16::MAX);
+            return Some((corner(x), corner(y)));
+        }
+        None
+    }
+
+    /// Whether this node already rules out every leaf below it for
+    /// `threshold`. A queued node's parent is decided, and a decided value is
+    /// always below the current threshold, so the floor the decoder would
+    /// propagate from the parent cannot change the answer.
+    fn excludes(tree: &TagTree, level: u8, x: u16, y: u16, threshold: u32) -> bool {
+        tree.node(level, x, y)
+            .is_none_or(|node| node.value.is_none() && node.low >= threshold)
+    }
+
+    fn push_children(&mut self, tree: &TagTree, level: u8, x: u16, y: u16) {
+        let Some(child_level) = level.checked_sub(1) else {
+            return;
+        };
+        let Some(children) = tree.levels.get(usize::from(child_level)) else {
+            return;
+        };
+        let leaf_width = u32::from(tree.levels[0].width);
+        for child_y in [y * 2, y * 2 + 1] {
+            for child_x in [x * 2, x * 2 + 1] {
+                if child_x >= children.width || child_y >= children.height {
+                    continue;
+                }
+                // Tag-tree leaves are u16 coordinates, so the scaled corner and
+                // its raster index fit in u32.
+                let key = (u32::from(child_y) << child_level) * leaf_width
+                    + (u32::from(child_x) << child_level);
+                self.queue
+                    .push(core::cmp::Reverse((key, child_level, child_x, child_y)));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tag_tree_raster_walk_tests {
+    use super::*;
+
+    /// One inclusion decision per visited code-block, in decode order.
+    type Decisions = Vec<(u16, u16, u16, bool)>;
+
+    /// Decode `layers` packets' inclusion information for one precinct, as
+    /// the packet parser does, visiting either every code-block or only those
+    /// the raster walk hands out. Already-included code-blocks read one bit.
+    fn decode_inclusion(
+        bytes: &[u8],
+        width: u16,
+        height: u16,
+        layers: u16,
+        walk: Option<&mut TagTreeRasterWalk>,
+    ) -> (Decisions, core::result::Result<usize, CodestreamError>) {
+        let mut tree = TagTree::new(width, height).expect("tag tree");
+        let mut included = alloc::vec![false; usize::from(width) * usize::from(height)];
+        let mut reader = PacketBitReader::new(bytes);
+        let mut decisions = Vec::new();
+        let mut walk = walk;
+        let mut decide = |tree: &mut TagTree,
+                          reader: &mut PacketBitReader<'_>,
+                          layer: u16,
+                          x: u16,
+                          y: u16|
+         -> Result<()> {
+            let index = usize::from(y) * usize::from(width) + usize::from(x);
+            let decision = if included[index] {
+                reader.read_bits_with_stuffing(1)? == 1
+            } else {
+                let first = tree.decode(reader, x, y, u32::from(layer) + 1)?.is_some();
+                included[index] = first;
+                first
+            };
+            decisions.push((layer, x, y, decision));
+            Ok(())
+        };
+        let result = (|| {
+            for layer in 0..layers {
+                let threshold = u32::from(layer) + 1;
+                if let Some(walk) = walk.as_deref_mut() {
+                    walk.start(&tree);
+                    while let Some((x, y)) = walk.next_leaf(&tree, threshold) {
+                        decide(&mut tree, &mut reader, layer, x, y)?;
+                    }
+                } else {
+                    for y in 0..height {
+                        for x in 0..width {
+                            decide(&mut tree, &mut reader, layer, x, y)?;
+                        }
+                    }
+                }
+            }
+            Ok(reader.bit_pos)
+        })();
+        (decisions, result)
+    }
+
+    /// Inclusions and every later decision for an included code-block. The
+    /// full scan also records code-blocks the walk skips; those decode as not
+    /// included without reading a bit, so dropping them leaves the decisions
+    /// both routes must agree on.
+    fn significant(decisions: &Decisions, width: u16, height: u16) -> Decisions {
+        let mut included = alloc::vec![false; usize::from(width) * usize::from(height)];
+        decisions
+            .iter()
+            .copied()
+            .filter(|&(_, x, y, decision)| {
+                let index = usize::from(y) * usize::from(width) + usize::from(x);
+                let keep = included[index] || decision;
+                included[index] |= decision;
+                keep
+            })
+            .collect()
+    }
+
+    #[test]
+    fn raster_walk_reads_the_same_bits_as_a_full_scan() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for case in 0..4000 {
+            let width = u16::try_from(next() % 23 + 1).expect("width");
+            let height = u16::try_from(next() % 23 + 1).expect("height");
+            let layers = u16::try_from(next() % 12 + 1).expect("layers");
+            // Vary the density of one bits so trees reach every mixture of
+            // decided, undecided and excluded nodes, including streams no
+            // conforming encoder would produce.
+            let ones_per_256 = next() % 256;
+            let bytes: Vec<u8> = (0..64)
+                .map(|_| {
+                    (0..8).fold(0_u8, |byte, bit| {
+                        byte | (u8::from(next() % 256 < ones_per_256) << bit)
+                    })
+                })
+                .collect();
+            let (full, full_result) = decode_inclusion(&bytes, width, height, layers, None);
+            let mut walk = TagTreeRasterWalk::default();
+            let (walked, walked_result) =
+                decode_inclusion(&bytes, width, height, layers, Some(&mut walk));
+            assert_eq!(
+                walked_result, full_result,
+                "case {case}: bit position or error"
+            );
+            assert_eq!(
+                significant(&walked, width, height),
+                significant(&full, width, height),
+                "case {case}: inclusion decisions"
+            );
+        }
+    }
+
+    #[test]
+    fn excluded_precinct_costs_constant_work_per_layer() {
+        // One zero bit per layer keeps the root undecided but beyond the
+        // layer, so no code-block of a 1024 x 1024 precinct is ever included.
+        let layers = 512_u16;
+        let bytes = alloc::vec![0_u8; usize::from(layers) / 8 + 1];
+        let mut walk = TagTreeRasterWalk::default();
+        let (decisions, result) = decode_inclusion(&bytes, 1024, 1024, layers, Some(&mut walk));
+        assert_eq!(result, Ok(usize::from(layers)));
+        assert_eq!(decisions.len(), usize::from(layers));
+        assert!(
+            decisions
+                .iter()
+                .all(|&(_, x, y, decision)| (x, y, decision) == (0, 0, false))
+        );
+        assert!(
+            walk.examined <= usize::from(layers) * 2,
+            "examined {}",
+            walk.examined
+        );
+    }
+
+    #[test]
+    fn work_follows_header_bits_when_one_code_block_is_included() {
+        // Include only code-block (0, 0) at layer 0, then exclude every other
+        // subtree again in each later layer. The walk examines the decided
+        // path and its siblings, not the code-blocks below them.
+        let (width, height, layers) = (256_u16, 256_u16, 32_u16);
+        let mut tree = EncTagTree::new(
+            width,
+            height,
+            (0..u32::from(width) * u32::from(height))
+                .map(|index| if index == 0 { 0 } else { u32::MAX }),
+        )
+        .expect("encoder tag tree");
+        let mut writer = PacketBitWriter::new();
+        for layer in 0..layers {
+            for y in 0..height {
+                for x in 0..width {
+                    if (x, y) == (0, 0) && layer > 0 {
+                        writer.write_bit(0).expect("not included again");
+                    } else {
+                        tree.encode(&mut writer, x, y, u32::from(layer) + 1)
+                            .expect("encode inclusion");
+                    }
+                }
+            }
+        }
+        let mut walk = TagTreeRasterWalk::default();
+        let (decisions, result) =
+            decode_inclusion(writer.bytes(), width, height, layers, Some(&mut walk));
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(decisions.iter().filter(|decision| decision.3).count(), 1);
+        let levels = 9;
+        assert!(
+            walk.examined <= usize::from(layers) * levels * 4,
+            "examined {}",
+            walk.examined
+        );
     }
 }
 
