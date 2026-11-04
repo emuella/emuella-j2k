@@ -54,10 +54,9 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                     sample_step_bytes: bytes * if planar { 1 } else { components as usize },
                 })
                 .collect();
-            let limits = cs::LosslessEncodeLimits {
-                max_working_bytes: 256 << 20,
-                max_output_bytes: 16 << 20,
-            };
+            let limits = cs::LosslessEncodeLimits::default()
+                .with_max_working_bytes(256 << 20)
+                .with_max_output_bytes(16 << 20);
             let serial = pools[0].install(|| {
                 cs::lossless_d2_requirements(width, height, components, limits).unwrap()
             });
@@ -105,10 +104,9 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                     // Memory pressure reduces concurrency without rejecting a
                     // geometry that fits the previous serial working bound.
                     for admitted in [1, 2] {
-                        let tight = cs::LosslessEncodeLimits {
-                            max_working_bytes: serial.working_bytes + (admitted - 1) * (4 << 20),
-                            ..limits
-                        };
+                        let tight = limits.with_max_working_bytes(
+                            serial.working_bytes + (admitted - 1) * (4 << 20),
+                        );
                         let (limited, _, t) = cs::encode_lossless_d2_execution_profiled(
                             width, height, bits, &planes, tight,
                         )
@@ -122,10 +120,7 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                             height,
                             bits,
                             &planes,
-                            cs::LosslessEncodeLimits {
-                                max_working_bytes: serial.working_bytes - 1,
-                                ..limits
-                            }
+                            limits.with_max_working_bytes(serial.working_bytes - 1)
                         )
                         .is_err()
                     );
@@ -137,10 +132,7 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                             height,
                             bits,
                             &planes,
-                            cs::LosslessEncodeLimits {
-                                max_output_bytes: 128,
-                                ..limits
-                            }
+                            limits.with_max_output_bytes(128)
                         )
                         .is_err()
                     );

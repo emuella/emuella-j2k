@@ -8232,6 +8232,7 @@ fn scan_part1_source_headers(
 /// Explicit retained-resource ceilings for a reusable Part 1 source index.
 /// Counts bound metadata as well as marker bytes; they do not bound pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Part1SourceIndexLimits {
     /// Maximum retained compact marker bytes, excluding metadata overhead.
     pub header_bytes: usize,
@@ -8252,6 +8253,27 @@ impl Default for Part1SourceIndexLimits {
 }
 
 impl Part1SourceIndexLimits {
+    /// Returns these limits with `header_bytes` replaced.
+    #[must_use]
+    pub fn with_header_bytes(mut self, header_bytes: usize) -> Self {
+        self.header_bytes = header_bytes;
+        self
+    }
+
+    /// Returns these limits with `markers` replaced.
+    #[must_use]
+    pub fn with_markers(mut self, markers: usize) -> Self {
+        self.markers = markers;
+        self
+    }
+
+    /// Returns these limits with `tile_parts` replaced.
+    #[must_use]
+    pub fn with_tile_parts(mut self, tile_parts: usize) -> Self {
+        self.tile_parts = tile_parts;
+        self
+    }
+
     fn check(self, bytes: usize, markers: usize, parts: usize) -> Result<()> {
         if bytes > self.header_bytes || markers > self.markers || parts > self.tile_parts {
             return Err(source_index_limit_error());

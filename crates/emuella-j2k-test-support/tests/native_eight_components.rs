@@ -335,10 +335,9 @@ fn rejects_unsupported_encode_contract_and_preserves_append_destination() {
 }
 #[test]
 fn checked_eight_component_resources_match_aggregate_decode_ceiling() {
-    let limits = LosslessEncodeLimits {
-        max_working_bytes: u64::MAX,
-        max_output_bytes: 128,
-    };
+    let limits = LosslessEncodeLimits::default()
+        .with_max_working_bytes(u64::MAX)
+        .with_max_output_bytes(128);
     let good = info(8192, 4096, ComponentLayout::Planar);
     let req = lossless_encode_requirements(&good, &options(), &limits).unwrap();
     assert_eq!(req.total_component_samples, 256 * 1024 * 1024);
@@ -360,10 +359,7 @@ fn checked_eight_component_resources_match_aggregate_decode_ceiling() {
         lossless_encode_requirements(
             &small,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: req.working_bytes,
-                ..limits
-            }
+            &limits.with_max_working_bytes(req.working_bytes)
         )
         .is_ok()
     );
@@ -375,39 +371,22 @@ fn checked_eight_component_resources_match_aggregate_decode_ceiling() {
         + limits.max_output_bytes * 2
         + (4 << 20);
     assert_eq!(
-        lossless_encode_requirements(
-            &small,
-            &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum,
-                ..limits
-            }
-        )
-        .unwrap()
-        .working_bytes,
+        lossless_encode_requirements(&small, &options(), &limits.with_max_working_bytes(minimum))
+            .unwrap()
+            .working_bytes,
         minimum
     );
     assert!(
         lossless_encode_requirements(
             &small,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum - 1,
-                ..limits
-            }
+            &limits.with_max_working_bytes(minimum - 1)
         )
         .is_err()
     );
     assert!(
-        lossless_encode_requirements(
-            &small,
-            &options(),
-            &LosslessEncodeLimits {
-                max_output_bytes: u64::MAX,
-                ..limits
-            }
-        )
-        .is_err()
+        lossless_encode_requirements(&small, &options(), &limits.with_max_output_bytes(u64::MAX))
+            .is_err()
     );
     assert!(
         encode_with_limits(

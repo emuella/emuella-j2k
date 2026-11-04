@@ -123,10 +123,10 @@ pub use emuella_j2k_core::{
 
 // Prepared Part 1 requests and positioned sources.
 pub use emuella_j2k_core::{
-    CodestreamSource, DecodeInstrumentation, DecodeStageTimings, Part1ComponentDecodeRequest,
+    CodestreamSource, Part1ComponentDecodeRequest, Part1DecodeWork, Part1ExecutionOptions,
     Part1SourceIndex, Part1SourceIndexLimits, Part1SourceInspection, PreparedPart1Decode,
-    PreparedPart1ExecutionOptions, SliceSource, SourceError, SourceErrorKind, TileRegionRequest,
-    execute_prepared_part1_decode_into_with_workspace, inspect_part1_source, prepare_part1_decode,
+    SliceSource, SourceError, SourceErrorKind, SourceMetrics, TileRegionRequest,
+    execute_prepared_part1_decode, inspect_part1_source, prepare_part1_decode,
     prepare_part1_decode_from_source,
 };
 
@@ -148,6 +148,16 @@ pub use emuella_j2k_core::{
 ///
 /// ```compile_fail,E0432
 /// use emuella_j2k::decode_htj2k_cleanup_vlc_output_probe_with_workspace;
+/// ```
+///
+/// ```compile_fail,E0432
+/// use emuella_j2k::PreparedPart1ExecutionOptions;
+/// ```
+///
+/// ```compile_fail,E0599
+/// fn diagnostic(prepared: &emuella_j2k::PreparedPart1Decode<'_>) {
+///     let _ = prepared.preparation_timings();
+/// }
 /// ```
 ///
 /// Option types cannot be built with struct literals, so fields can be added:
@@ -179,6 +189,17 @@ pub use emuella_j2k_core::{
 ///         Unsupported { .. } => 4,
 ///         BufferTooSmall { .. } => 5,
 ///         InternalInvariant { .. } => 6,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail,E0004
+/// fn class(kind: emuella_j2k::SourceErrorKind) -> u8 {
+///     use emuella_j2k::SourceErrorKind::*;
+///     match kind {
+///         OutOfRange => 0,
+///         ShortRead => 1,
+///         Io => 2,
 ///     }
 /// }
 /// ```

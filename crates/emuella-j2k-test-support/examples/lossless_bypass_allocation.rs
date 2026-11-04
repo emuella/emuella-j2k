@@ -65,10 +65,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Diagnose the admitted production envelope, including large complete
     // streams; report the exact queried bound alongside the observed peak.
     let limits = if args.len() == 10 {
-        LosslessEncodeLimits {
-            max_working_bytes: args[8].parse()?,
-            max_output_bytes: args[9].parse()?,
-        }
+        LosslessEncodeLimits::default()
+            .with_max_working_bytes(args[8].parse()?)
+            .with_max_output_bytes(args[9].parse()?)
     } else {
         LosslessEncodeLimits::default()
     };

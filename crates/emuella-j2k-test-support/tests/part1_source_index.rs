@@ -50,13 +50,13 @@ impl CodestreamSource for RecordingSource {
                     .any(|span| span.start <= range.start && span.end >= range.end)
             })
         {
-            return Err(SourceError {
-                kind: SourceErrorKind::Io,
+            return Err(SourceError::new(
+                SourceErrorKind::Io,
                 offset,
-                requested: destination.len() as u64,
-                available: self.bytes.len() as u64 - offset,
-                message: "source-index probe denied an unselected range".into(),
-            });
+                destination.len() as u64,
+                self.bytes.len() as u64 - offset,
+                "source-index probe denied an unselected range",
+            ));
         }
         SliceSource::new(&self.bytes).read_exact_at(offset, destination)
     }
@@ -288,8 +288,11 @@ fn index_geometry_scaling_calibration() {
             };
             source.reads.lock().unwrap().clear();
             let prepared = index.prepare(req).unwrap();
-            metadata_ns.push(prepared.preparation_timings().marker_parse_ns);
-            preparation_ns.push(prepared.preparation_timings().prepare_ns);
+            metadata_ns.push(
+                emuella_j2k_core::prepared_part1_preparation_timings(&prepared).marker_parse_ns,
+            );
+            preparation_ns
+                .push(emuella_j2k_core::prepared_part1_preparation_timings(&prepared).prepare_ns);
             execute(&prepared);
             assert_eq!(source.reads.lock().unwrap().len(), 8);
         }

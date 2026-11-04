@@ -5431,24 +5431,39 @@ impl PreparedPart1Decode<'_> {
         &self.component_info
     }
 
-    pub fn preparation_timings(&self) -> codestream::DecodeStageTimings {
-        self.codestream.preparation_timings()
-    }
-
-    pub fn memory_accounting(&self) -> codestream::PreparedPart1PlanMemory {
-        self.codestream.memory_accounting()
-    }
-
     /// Source components retained solely for reconstruction and transform
     /// dependencies, independently of caller-visible output selection.
     #[doc(hidden)]
     pub fn reconstruction_component_indices(&self) -> &[u16] {
         self.codestream.reconstruction_component_indices()
     }
+}
 
-    pub fn execution_parallelism(&self) -> (codestream::DecodeParallelAxis, usize) {
-        self.codestream.execution_parallelism()
-    }
+/// Diagnostic preparation counters for a prepared Part 1 plan.
+///
+/// Core-only profiling surface; the facade does not re-export it.
+pub fn prepared_part1_preparation_timings(
+    prepared: &PreparedPart1Decode<'_>,
+) -> codestream::DecodeStageTimings {
+    prepared.codestream.preparation_timings()
+}
+
+/// Diagnostic retained-memory accounting for a prepared Part 1 plan.
+///
+/// Core-only profiling surface; the facade does not re-export it.
+pub fn prepared_part1_memory_accounting(
+    prepared: &PreparedPart1Decode<'_>,
+) -> codestream::PreparedPart1PlanMemory {
+    prepared.codestream.memory_accounting()
+}
+
+/// Diagnostic parallel axis and worker count selected for a prepared Part 1 plan.
+///
+/// Core-only profiling surface; the facade does not re-export it.
+pub fn prepared_part1_execution_parallelism(
+    prepared: &PreparedPart1Decode<'_>,
+) -> (codestream::DecodeParallelAxis, usize) {
+    prepared.codestream.execution_parallelism()
 }
 
 /// Reusable std workspace for algorithmic HTJ2K decode.
@@ -5980,34 +5995,6 @@ impl Htj2kDecodeWorkspace {
     pub fn scratch_len(&self) -> usize {
         self.codestream.scratch_len()
     }
-
-    /// Number of reusable Part 15 VLC quad side-bit slots currently retained.
-    pub fn vlc_quad_side_bit_len(&self) -> usize {
-        self.codestream.vlc_quad_side_bit_len()
-    }
-
-    /// Number of reusable Part 15 VLC odd-tail `u` slots currently retained.
-    pub fn vlc_odd_tail_u_value_len(&self) -> usize {
-        self.codestream.vlc_odd_tail_u_value_len()
-    }
-
-    /// Number of reusable direct VLC cleanup-output slots currently retained.
-    pub fn vlc_cleanup_output_len(&self) -> usize {
-        self.codestream.vlc_cleanup_output_len()
-    }
-
-    /// Number of reusable VLC context-progression slots currently retained.
-    pub fn vlc_context_state_len(&self) -> usize {
-        self.codestream.vlc_context_state_len()
-    }
-
-    /// Dispatch provenance from the most recent reusable HT code-block decode,
-    /// if any.
-    pub fn last_code_block_dispatch_progress(
-        &self,
-    ) -> Option<codestream::HtCodestreamCodeBlockDispatchProgressSnapshot> {
-        self.codestream.last_code_block_dispatch_progress()
-    }
 }
 
 /// Metadata parse parameters.
@@ -6189,6 +6176,101 @@ impl Htj2kLossyEncodeOptions {
 #[cfg(test)]
 mod option_setter_tests {
     use super::*;
+
+    #[test]
+    fn lower_layer_limits_and_errors_build_without_literals() {
+        let encode = codestream::LosslessEncodeLimits::default()
+            .with_max_working_bytes(7)
+            .with_max_output_bytes(9);
+        assert_eq!((encode.max_working_bytes, encode.max_output_bytes), (7, 9));
+        let index = Part1SourceIndexLimits::default()
+            .with_header_bytes(1)
+            .with_markers(2)
+            .with_tile_parts(3);
+        assert_eq!(
+            (index.header_bytes, index.markers, index.tile_parts),
+            (1, 2, 3)
+        );
+        let defaults = Part1SourceIndexLimits::default();
+        assert_eq!(defaults.with_markers(5).header_bytes, defaults.header_bytes);
+        let error = SourceError::new(SourceErrorKind::ShortRead, 4, 8, 2, "short");
+        assert_eq!(
+            (error.kind, error.offset, error.requested, error.available),
+            (SourceErrorKind::ShortRead, 4, 8, 2)
+        );
+        assert_eq!(error.message, "short");
+    }
+
+    #[cfg(feature = "std")]
+    fn execute_with(
+        prepared: &PreparedPart1Decode<'_>,
+        options: &Part1ExecutionOptions,
+    ) -> (Vec<u8>, Part1DecodeWork) {
+        let info = prepared.info();
+        let mut samples = vec![0_u8; usize::try_from(info.width * info.height).unwrap()];
+        let mut planes = [PlaneMut::new(
+            &mut samples,
+            info.width,
+            info.height,
+            usize::try_from(info.width).unwrap(),
+            info.sample_format,
+        )
+        .unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info,
+            planes: &mut planes,
+        };
+        let work = execute_prepared_part1_decode(
+            prepared,
+            &mut target,
+            &mut Part1DecodeWorkspace::new(),
+            options,
+        )
+        .unwrap();
+        (samples, work)
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn prepared_execution_reports_work_only_when_requested() {
+        let source = (0..17 * 13)
+            .map(|index| (index * 37 % 251) as u8)
+            .collect::<Vec<_>>();
+        let raw = codestream::encode_planar_u8_no_decomp_test_fixture(17, 13, &[&source]).unwrap();
+        let prepared = prepare_part1_decode(&raw, &PartialDecodeOptions::default()).unwrap();
+
+        let (quiet_samples, quiet) = execute_with(&prepared, &Part1ExecutionOptions::default());
+        assert_eq!(quiet, Part1DecodeWork::default());
+        let (counted_samples, counted) = execute_with(
+            &prepared,
+            &Part1ExecutionOptions::default().with_collect_work_counters(true),
+        );
+        assert_eq!(counted_samples, quiet_samples);
+        assert_eq!(counted_samples, source);
+        assert!(counted.code_blocks_decoded > 0);
+        assert!(counted.tier1_coefficients > 0);
+
+        let mut reference_samples = vec![0_u8; quiet_samples.len()];
+        let info = prepared.info();
+        let mut planes =
+            [PlaneMut::new(&mut reference_samples, 17, 13, 17, info.sample_format).unwrap()];
+        let mut target = ImageViewMut::Planar {
+            info,
+            planes: &mut planes,
+        };
+        let timings = execute_prepared_part1_decode_into_with_workspace(
+            &prepared,
+            &mut target,
+            &mut Part1DecodeWorkspace::new(),
+            codestream::PreparedPart1ExecutionOptions {
+                instrumentation: codestream::DecodeInstrumentation::WorkCounters,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(reference_samples, counted_samples);
+        assert_eq!(counted, Part1DecodeWork::from_stage_timings(&timings));
+    }
 
     #[test]
     fn decode_and_inspect_setters_replace_only_their_field() {
@@ -10259,13 +10341,13 @@ mod part1_source_inspection_tests {
             offset: u64,
             destination: &mut [u8],
         ) -> core::result::Result<(), codestream::source::SourceError> {
-            Err(codestream::source::SourceError {
-                kind: codestream::source::SourceErrorKind::Io,
+            Err(codestream::source::SourceError::new(
+                codestream::source::SourceErrorKind::Io,
                 offset,
-                requested: destination.len() as u64,
-                available: 64_u64.saturating_sub(offset),
-                message: "injected positioned failure".into(),
-            })
+                destination.len() as u64,
+                64_u64.saturating_sub(offset),
+                "injected positioned failure",
+            ))
         }
     }
 
@@ -10320,11 +10402,10 @@ pub fn prepare_part1_decode_from_source<'a>(
 
 /// Explicit retained-resource ceilings for a Part 1 source index.
 pub use codestream::Part1SourceIndexLimits;
-pub use codestream::source::{CodestreamSource, SliceSource, SourceError, SourceErrorKind};
-pub use codestream::{
-    DecodeInstrumentation, DecodeStageTimings, Part1ComponentDecodeRequest,
-    PreparedPart1ExecutionOptions, TileRegionRequest,
+pub use codestream::source::{
+    CodestreamSource, SliceSource, SourceError, SourceErrorKind, SourceMetrics,
 };
+pub use codestream::{Part1ComponentDecodeRequest, TileRegionRequest};
 
 /// Reusable validated raw Part 1 headers bound to one immutable positioned source.
 /// See [`codestream::Part1SourceIndex`] for construction budgets and source lifetime.
@@ -10465,6 +10546,105 @@ fn prepared_part1_source_decode<'a>(
         info,
         component_info,
         codestream,
+    })
+}
+
+/// Options for [`execute_prepared_part1_decode`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Part1ExecutionOptions {
+    /// Count the reconstruction work reported in [`Part1DecodeWork`]. When
+    /// `false`, every reported counter is zero.
+    pub collect_work_counters: bool,
+}
+
+impl Part1ExecutionOptions {
+    /// Returns these options with `collect_work_counters` replaced.
+    #[must_use]
+    pub fn with_collect_work_counters(mut self, collect_work_counters: bool) -> Self {
+        self.collect_work_counters = collect_work_counters;
+        self
+    }
+}
+
+/// Reconstruction work performed by one prepared Part 1 execution.
+///
+/// Counters are populated only when
+/// [`Part1ExecutionOptions::collect_work_counters`] is set. They describe work
+/// for the observed execution, not a resource bound or a performance promise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Part1DecodeWork {
+    /// Code-blocks entropy decoded.
+    pub code_blocks_decoded: u64,
+    /// Coefficients produced by code-block decoding.
+    pub tier1_coefficients: u64,
+    /// Samples processed by inverse wavelet synthesis.
+    pub dwt_samples: u64,
+    /// Coefficients loaded into synthesis.
+    pub synthesis_coefficients_loaded: u64,
+    /// Values filtered horizontally during synthesis.
+    pub synthesis_horizontal_values: u64,
+    /// Values filtered vertically during synthesis.
+    pub synthesis_vertical_values: u64,
+    /// Lifting updates applied during synthesis.
+    pub synthesis_lifting_updates: u64,
+    /// Samples written by synthesis.
+    pub synthesis_output_samples: u64,
+    /// Component tiles reconstructed through windowed synthesis.
+    pub windowed_synthesis_component_tiles: u64,
+    /// Component tiles reconstructed through full synthesis.
+    pub full_synthesis_component_tiles: u64,
+}
+
+impl Part1DecodeWork {
+    fn from_stage_timings(timings: &codestream::DecodeStageTimings) -> Self {
+        Self {
+            code_blocks_decoded: timings.code_blocks_decoded,
+            tier1_coefficients: timings.tier1_coefficients,
+            dwt_samples: timings.dwt_samples,
+            synthesis_coefficients_loaded: timings.synthesis_coefficients_loaded,
+            synthesis_horizontal_values: timings.synthesis_horizontal_values,
+            synthesis_vertical_values: timings.synthesis_vertical_values,
+            synthesis_lifting_updates: timings.synthesis_lifting_updates,
+            synthesis_output_samples: timings.synthesis_output_samples,
+            windowed_synthesis_component_tiles: timings.windowed_synthesis_component_tiles,
+            full_synthesis_component_tiles: timings.full_synthesis_component_tiles,
+        }
+    }
+}
+
+/// Execute a prepared Part 1 plan into caller-owned planar rows.
+///
+/// Uses the default execution policy and optionally reports work counters.
+/// Output is unspecified after an execution-time entropy decode failure. The
+/// target is fully validated before execution, but independent work may already
+/// have committed rows when a later block fails. Decode into staging storage
+/// when an application requires transactional publication.
+///
+/// # Errors
+/// Invalid or mismatched targets, unsupported layouts, source failures and
+/// reconstruction failures return structured [`J2kError`].
+pub fn execute_prepared_part1_decode(
+    prepared: &PreparedPart1Decode<'_>,
+    target: &mut ImageViewMut<'_>,
+    workspace: &mut Part1DecodeWorkspace,
+    options: &Part1ExecutionOptions,
+) -> Result<Part1DecodeWork> {
+    let execution = codestream::PreparedPart1ExecutionOptions {
+        instrumentation: if options.collect_work_counters {
+            codestream::DecodeInstrumentation::WorkCounters
+        } else {
+            codestream::DecodeInstrumentation::None
+        },
+        ..Default::default()
+    };
+    let timings =
+        execute_prepared_part1_decode_into_with_workspace(prepared, target, workspace, execution)?;
+    Ok(if options.collect_work_counters {
+        Part1DecodeWork::from_stage_timings(&timings)
+    } else {
+        Part1DecodeWork::default()
     })
 }
 
@@ -15538,18 +15718,15 @@ mod effective_coding_style_tests {
         assert_eq!(limited_prepared_samples, planar_bytes(&oracle)[0]);
         assert_eq!(full_prepared_samples, samples);
         assert_eq!(
-            limited_prepared.preparation_timings().packet_headers_parsed,
-            full_prepared.preparation_timings().packet_headers_parsed
+            prepared_part1_preparation_timings(&limited_prepared).packet_headers_parsed,
+            prepared_part1_preparation_timings(&full_prepared).packet_headers_parsed
         );
         assert_eq!(
-            limited_prepared.preparation_timings().packet_headers_parsed,
+            prepared_part1_preparation_timings(&limited_prepared).packet_headers_parsed,
             6
         );
         assert!(
-            limited_prepared
-                .preparation_timings()
-                .packet_body_bytes_skipped
-                > 0
+            prepared_part1_preparation_timings(&limited_prepared).packet_body_bytes_skipped > 0
         );
         assert!(limited_work.tier1_codeword_bytes < full_work.tier1_codeword_bytes);
         let tier1_positions = |work: &codestream::DecodeStageTimings| {
@@ -16039,8 +16216,8 @@ mod effective_coding_style_tests {
         assert!(windowed_work.executed_code_blocks < full_work.executed_code_blocks);
         assert!(windowed_work.output_samples < full_work.output_samples);
         assert!(
-            crossing_prepared.preparation_timings().prepared_code_blocks
-                < full_prepared.preparation_timings().prepared_code_blocks
+            prepared_part1_preparation_timings(&crossing_prepared).prepared_code_blocks
+                < prepared_part1_preparation_timings(&full_prepared).prepared_code_blocks
         );
         let whole_tile = PartialDecodeOptions {
             tile: Some(TileSelection {

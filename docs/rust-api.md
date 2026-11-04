@@ -138,10 +138,12 @@ supported profiles, and ordinary applications do not need them.
 |---|---|
 | Resource-bounded lossless encode (`std`) | `lossless_encode_requirements`, `lossless_bypass_encode_requirements`, `encode_with_limits`, `encode_lossless_bypass_with_limits`, `LosslessEncodeLimits`, `LosslessEncodeRequirements` |
 | Reusable decode workspaces | `Part1DecodeWorkspace`, `decode_into_with_workspace`, `decode_partial_into_with_workspace`; with `std`, `Htj2kDecodeWorkspace` and `decode_htj2k_with_workspace` |
-| Prepared Part 1 requests and positioned sources | `prepare_part1_decode`, `prepare_part1_decode_from_source`, `PreparedPart1Decode`, `execute_prepared_part1_decode_into_with_workspace`, `PreparedPart1ExecutionOptions`, `DecodeInstrumentation`, `DecodeStageTimings`, `Part1ComponentDecodeRequest`, `TileRegionRequest`, `inspect_part1_source`, `Part1SourceInspection`, `Part1SourceIndex`, `Part1SourceIndexLimits`, `CodestreamSource`, `SliceSource`, `SourceError`, `SourceErrorKind` |
+| Prepared Part 1 requests and positioned sources | `prepare_part1_decode`, `prepare_part1_decode_from_source`, `PreparedPart1Decode`, `execute_prepared_part1_decode`, `Part1ExecutionOptions`, `Part1DecodeWork`, `Part1ComponentDecodeRequest`, `TileRegionRequest`, `inspect_part1_source`, `Part1SourceInspection`, `Part1SourceIndex`, `Part1SourceIndexLimits`, `CodestreamSource`, `SliceSource`, `SourceError`, `SourceErrorKind`, `SourceMetrics` |
 
 The facade does not export the `codestream` or `container` modules, the
-entropy-coding and transform crates, profiling diagnostics or test fixtures.
+entropy-coding and transform crates or their types, profiling diagnostics,
+stage timings, execution-tuning policies or test fixtures. Prepared execution
+uses the default policy and reports only `Part1DecodeWork` counters.
 `emuella-j2k-core`, `emuella-j2k-codestream` and the other lower-layer crates
 are implementation crates whose APIs follow the facade's needs and can change
 in any release. Depend on them directly only for lower-layer work, pinned to
@@ -151,15 +153,20 @@ Types expected to grow are `#[non_exhaustive]`:
 
 - enums `J2kError`, `UnsupportedFeature`, `SupportStatus`, `InputFormat`,
   `CodestreamKind`, `OutputFormat`, `ColorModel`, `WaveletTransform`,
-  `EntropyCoder`, `MetadataKind` and `EncodeQuality`: give an exhaustive
-  `match` a wildcard arm;
-- options `DecodeOptions`, `InspectOptions`, `PartialDecodeOptions`,
-  `EncodeOptions`, `Htj2kEncodeOptions` and `Htj2kLossyEncodeOptions`: start
-  from `Default::default()` or `Htj2kLossyEncodeOptions::new`, then use the
-  `with_<field>` setters or assign the public fields;
+  `EntropyCoder`, `MetadataKind`, `EncodeQuality` and `SourceErrorKind`: give
+  an exhaustive `match` a wildcard arm;
+- options and limits `DecodeOptions`, `InspectOptions`, `PartialDecodeOptions`,
+  `EncodeOptions`, `Htj2kEncodeOptions`, `Htj2kLossyEncodeOptions`,
+  `Part1ExecutionOptions`, `LosslessEncodeLimits` and `Part1SourceIndexLimits`:
+  start from `Default::default()` or `Htj2kLossyEncodeOptions::new`, then use
+  the `with_<field>` setters or assign the public fields;
+- `SourceError`: source implementations construct it with `SourceError::new`;
 - returned records `Metadata`, `CodestreamInfo`, `ContainerInfo`,
-  `DecodeShape`, `ComponentInfo` and `Part1SourceInspection`: read their
-  fields; callers do not construct them.
+  `DecodeShape`, `ComponentInfo`, `Part1SourceInspection`, `Part1DecodeWork`,
+  `LosslessEncodeRequirements` and `SourceMetrics`: read their fields; callers
+  do not construct them, except that a source implementation may start
+  `SourceMetrics` from `Default::default()`.
 
-`ImageInfo`, `SampleFormat`, `Region`, `TileSize`, `TileSelection`, `TileGrid`
-and the remaining enums are fixed value types.
+`ImageInfo`, `SampleFormat`, `Region`, `TileSize`, `TileSelection`, `TileGrid`,
+`Part1ComponentDecodeRequest`, `TileRegionRequest` and the remaining enums are
+fixed value types.

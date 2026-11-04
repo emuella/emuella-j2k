@@ -15,8 +15,8 @@ use std::sync::{Mutex, OnceLock};
 use emuella_j2k::{CodestreamSource, SourceError, SourceErrorKind};
 use emuella_j2k::{
     ComponentInfo, Image, ImageData, ImageInfo, ImageViewMut, J2kError, Part1DecodeWorkspace,
-    Part1SourceIndex, Part1SourceIndexLimits, PlaneMut, SampleEndian, SampleFormat,
-    execute_prepared_part1_decode_into_with_workspace, inspect_part1_source,
+    Part1ExecutionOptions, Part1SourceIndex, Part1SourceIndexLimits, PlaneMut, SampleEndian,
+    SampleFormat, execute_prepared_part1_decode, inspect_part1_source,
     prepare_part1_decode_from_source,
 };
 
@@ -222,21 +222,23 @@ impl CodestreamSource for CallbackSource {
     fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> Result<(), SourceError> {
         let requested = destination.len() as u64;
         let available = self.length.saturating_sub(offset);
-        let end = offset.checked_add(requested).ok_or_else(|| SourceError {
-            kind: SourceErrorKind::OutOfRange,
-            offset,
-            requested,
-            available,
-            message: "positioned callback range overflowed u64".into(),
-        })?;
-        if end > self.length {
-            return Err(SourceError {
-                kind: SourceErrorKind::ShortRead,
+        let end = offset.checked_add(requested).ok_or_else(|| {
+            SourceError::new(
+                SourceErrorKind::OutOfRange,
                 offset,
                 requested,
                 available,
-                message: "positioned callback range exceeds the declared source length".into(),
-            });
+                "positioned callback range overflowed u64",
+            )
+        })?;
+        if end > self.length {
+            return Err(SourceError::new(
+                SourceErrorKind::ShortRead,
+                offset,
+                requested,
+                available,
+                "positioned callback range exceeds the declared source length",
+            ));
         }
         // SAFETY: source creation validated the callback pointer and retained
         // the context's exposed-provenance address. The consumer contract keeps
@@ -255,13 +257,13 @@ impl CodestreamSource for CallbackSource {
         if status == EMUELLA_J2K_STATUS_OK {
             Ok(())
         } else {
-            Err(SourceError {
-                kind: SourceErrorKind::Io,
+            Err(SourceError::new(
+                SourceErrorKind::Io,
                 offset,
                 requested,
                 available,
-                message: format!("positioned callback returned status {status}"),
-            })
+                format!("positioned callback returned status {status}"),
+            ))
         }
     }
 }
@@ -725,17 +727,16 @@ pub unsafe extern "C" fn emuella_j2k_decoder_create_indexed(
                 "index ceilings must be positive and reserved must be zero",
             ));
         }
-        let limits = Part1SourceIndexLimits {
-            header_bytes: usize::try_from(options.max_header_bytes).map_err(|_| {
+        let limits = Part1SourceIndexLimits::default()
+            .with_header_bytes(usize::try_from(options.max_header_bytes).map_err(|_| {
                 AbiFailure::invalid("index header ceiling exceeds addressable memory")
-            })?,
-            markers: usize::try_from(options.max_markers).map_err(|_| {
+            })?)
+            .with_markers(usize::try_from(options.max_markers).map_err(|_| {
                 AbiFailure::invalid("index marker ceiling exceeds addressable memory")
-            })?,
-            tile_parts: usize::try_from(options.max_tile_parts).map_err(|_| {
+            })?)
+            .with_tile_parts(usize::try_from(options.max_tile_parts).map_err(|_| {
                 AbiFailure::invalid("index tile-part ceiling exceeds addressable memory")
-            })?,
-        };
+            })?);
         // SAFETY: The export supplies the complete source descriptor and callback lifetime.
         let decoder = unsafe { decoder_from_source(source, Some(limits)) }?;
         // SAFETY: The export supplies exclusive, disjoint output storage for the new handle.
@@ -1246,18 +1247,11 @@ fn decode_components(
     if FORCE_DECODE_PANIC.with(|force| force.replace(false)) {
         panic!("C ABI panic containment test");
     }
-    let timings = execute_prepared_part1_decode_into_with_workspace(
+    let work_counters = execute_prepared_part1_decode(
         &prepared,
         &mut target,
         &mut workspace,
-        emuella_j2k::PreparedPart1ExecutionOptions {
-            instrumentation: if collect_work {
-                emuella_j2k::DecodeInstrumentation::WorkCounters
-            } else {
-                emuella_j2k::DecodeInstrumentation::None
-            },
-            ..Default::default()
-        },
+        &Part1ExecutionOptions::default().with_collect_work_counters(collect_work),
     )
     .map_err(AbiFailure::from)?;
     let work = collect_work.then(|| EmuellaJ2kDecodeWorkV0 {
@@ -1265,16 +1259,16 @@ fn decode_components(
         abi_version: EMUELLA_J2K_ABI_VERSION,
         reserved: 0,
         preparation_count: 1,
-        code_blocks_decoded: timings.code_blocks_decoded,
-        tier1_coefficients: timings.tier1_coefficients,
-        dwt_samples: timings.dwt_samples,
-        synthesis_coefficients_loaded: timings.synthesis_coefficients_loaded,
-        synthesis_horizontal_values: timings.synthesis_horizontal_values,
-        synthesis_vertical_values: timings.synthesis_vertical_values,
-        synthesis_lifting_updates: timings.synthesis_lifting_updates,
-        synthesis_output_samples: timings.synthesis_output_samples,
-        windowed_synthesis_component_tiles: timings.windowed_synthesis_component_tiles,
-        full_synthesis_component_tiles: timings.full_synthesis_component_tiles,
+        code_blocks_decoded: work_counters.code_blocks_decoded,
+        tier1_coefficients: work_counters.tier1_coefficients,
+        dwt_samples: work_counters.dwt_samples,
+        synthesis_coefficients_loaded: work_counters.synthesis_coefficients_loaded,
+        synthesis_horizontal_values: work_counters.synthesis_horizontal_values,
+        synthesis_vertical_values: work_counters.synthesis_vertical_values,
+        synthesis_lifting_updates: work_counters.synthesis_lifting_updates,
+        synthesis_output_samples: work_counters.synthesis_output_samples,
+        windowed_synthesis_component_tiles: work_counters.windowed_synthesis_component_tiles,
+        full_synthesis_component_tiles: work_counters.full_synthesis_component_tiles,
         output_allocation_bytes: samples.iter().map(|plane| plane.len() as u64).sum(),
         output_capacity_bytes: samples.iter().map(|plane| plane.capacity() as u64).sum(),
         coefficient_capacity: workspace.coefficient_capacity() as u64,

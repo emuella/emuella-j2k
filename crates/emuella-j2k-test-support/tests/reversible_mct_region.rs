@@ -502,13 +502,13 @@ impl codestream::source::CodestreamSource for SwitchFailSource<'_> {
         destination: &mut [u8],
     ) -> Result<(), codestream::source::SourceError> {
         if self.fail.load(Ordering::Relaxed) {
-            return Err(codestream::source::SourceError {
-                kind: codestream::source::SourceErrorKind::Io,
+            return Err(codestream::source::SourceError::new(
+                codestream::source::SourceErrorKind::Io,
                 offset,
-                requested: destination.len() as u64,
-                available: self.bytes.len() as u64,
-                message: "injected execution read failure".into(),
-            });
+                destination.len() as u64,
+                self.bytes.len() as u64,
+                "injected execution read failure",
+            ));
         }
         let start = usize::try_from(offset).unwrap();
         let source = self.bytes.get(start..start + destination.len()).unwrap();

@@ -119,10 +119,9 @@ fn checked_requirements_reject_arithmetic_geometry_and_working_budgets() {
     let base = info(65, 67, 3, 16, ComponentLayout::Interleaved);
     let limits = LosslessEncodeLimits::default();
     let req = lossless_encode_requirements(&base, &options(), &limits).unwrap();
-    let tight = LosslessEncodeLimits {
-        max_working_bytes: req.working_bytes,
-        max_output_bytes: limits.max_output_bytes,
-    };
+    let tight = LosslessEncodeLimits::default()
+        .with_max_working_bytes(req.working_bytes)
+        .with_max_output_bytes(limits.max_output_bytes);
     assert_eq!(
         lossless_encode_requirements(&base, &options(), &tight).unwrap(),
         req
@@ -137,10 +136,7 @@ fn checked_requirements_reject_arithmetic_geometry_and_working_budgets() {
         lossless_encode_requirements(
             &base,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum - 1,
-                ..tight
-            }
+            &tight.with_max_working_bytes(minimum - 1)
         )
         .is_err()
     );
@@ -157,15 +153,8 @@ fn checked_requirements_reject_arithmetic_geometry_and_working_budgets() {
         assert!(lossless_encode_requirements(&bad, &options(), &limits).is_err());
     }
     assert!(
-        lossless_encode_requirements(
-            &base,
-            &options(),
-            &LosslessEncodeLimits {
-                max_output_bytes: u64::MAX,
-                ..limits
-            }
-        )
-        .is_err()
+        lossless_encode_requirements(&base, &options(), &limits.with_max_output_bytes(u64::MAX))
+            .is_err()
     );
     for (w, h) in [(6650, 7054), (8001, 8003), (8192, 8192)] {
         assert!(
@@ -186,10 +175,7 @@ fn checked_requirements_reject_arithmetic_geometry_and_working_budgets() {
             stride_bytes: 0,
         },
         &options(),
-        &LosslessEncodeLimits {
-            max_working_bytes: 0,
-            ..limits
-        },
+        &limits.with_max_working_bytes(0),
     )
     .unwrap_err();
     assert!(error.to_string().contains("working-memory budget"));
@@ -206,10 +192,7 @@ fn output_limit_is_enforced_and_explicit_limits_never_fall_through() {
     };
     let limits = LosslessEncodeLimits::default();
     let encoded = encode(view, &options()).unwrap();
-    let tight = LosslessEncodeLimits {
-        max_output_bytes: encoded.len() as u64,
-        ..limits
-    };
+    let tight = limits.with_max_output_bytes(encoded.len() as u64);
     let bounded = encode_with_limits(view, &options(), &tight).unwrap();
     assert_eq!(bounded, encoded);
     assert_eq!(bounded.capacity(), encoded.len());
@@ -217,24 +200,11 @@ fn output_limit_is_enforced_and_explicit_limits_never_fall_through() {
         encode_with_limits(
             view,
             &options(),
-            &LosslessEncodeLimits {
-                max_output_bytes: encoded.len() as u64 - 1,
-                ..limits
-            }
+            &limits.with_max_output_bytes(encoded.len() as u64 - 1)
         )
         .is_err()
     );
-    assert!(
-        encode_with_limits(
-            view,
-            &options(),
-            &LosslessEncodeLimits {
-                max_output_bytes: 0,
-                ..limits
-            }
-        )
-        .is_err()
-    );
+    assert!(encode_with_limits(view, &options(), &limits.with_max_output_bytes(0)).is_err());
     let mut variants = vec![options(); 5];
     variants[0].format = OutputFormat::Jp2;
     variants[1].decomposition_levels = 0;

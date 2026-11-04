@@ -58,10 +58,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let options = EncodeOptions::default()
         .with_format(OutputFormat::J2kCodestream)
         .with_decomposition_levels(2);
-    let limits = LosslessEncodeLimits {
-        max_output_bytes: 64 * 1024 * 1024,
-        max_working_bytes: 768 * 1024 * 1024,
-    };
+    let limits = LosslessEncodeLimits::default()
+        .with_max_output_bytes(64 * 1024 * 1024)
+        .with_max_working_bytes(768 * 1024 * 1024);
     let bypass = encode_lossless_bypass_with_limits(view, &options, &limits)?;
     let decoded = decode(
         &bypass,

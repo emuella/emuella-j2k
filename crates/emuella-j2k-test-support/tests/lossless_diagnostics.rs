@@ -239,10 +239,7 @@ fn errors_preserve_profile_and_resource_gates() {
         ..plane
     };
     assert!(cs::encode_lossless_d2_profiled(67, 65, 16, &[short], limits).is_err());
-    let tiny = LosslessEncodeLimits {
-        max_output_bytes: 128,
-        ..limits
-    };
+    let tiny = limits.with_max_output_bytes(128);
     let noisy: Vec<_> = (0..67 * 65 * 2).map(|i| (i * 73 + i / 19) as u8).collect();
     assert!(
         cs::encode_lossless_d2_profiled(
@@ -258,17 +255,8 @@ fn errors_preserve_profile_and_resource_gates() {
         .is_err()
     );
     assert!(
-        cs::encode_lossless_d2_profiled(
-            67,
-            65,
-            16,
-            &[plane],
-            LosslessEncodeLimits {
-                max_working_bytes: 1,
-                ..limits
-            }
-        )
-        .is_err()
+        cs::encode_lossless_d2_profiled(67, 65, 16, &[plane], limits.with_max_working_bytes(1))
+            .is_err()
     );
     single_thread(|| {
         assert!(

@@ -59,10 +59,9 @@ fn all_backends_workers_styles_full_range_components_and_padding_have_exact_byte
                 })
                 .collect();
             for bypass in [false, true] {
-                let limits = cs::LosslessEncodeLimits {
-                    max_working_bytes: 128 << 20,
-                    max_output_bytes: 4 << 20,
-                };
+                let limits = cs::LosslessEncodeLimits::default()
+                    .with_max_working_bytes(128 << 20)
+                    .with_max_output_bytes(4 << 20);
                 let encode = |limits| {
                     if bypass {
                         cs::encode_lossless_d2_bypass(
@@ -178,10 +177,7 @@ fn all_backends_workers_styles_full_range_components_and_padding_have_exact_byte
                     }
                 }
                 pools[3].install(|| {
-                    let tight = cs::LosslessEncodeLimits {
-                        max_working_bytes: serial.working_bytes,
-                        ..limits
-                    };
+                    let tight = limits.with_max_working_bytes(serial.working_bytes);
                     let (encoded, detail) = cs::observe_lossless_encode(|| encode(tight));
                     assert_eq!(encoded.unwrap(), reference);
                     assert_eq!(detail.execution.effective_workers, 1);
@@ -190,20 +186,10 @@ fn all_backends_workers_styles_full_range_components_and_padding_have_exact_byte
                     assert_eq!(detail.forward53_original_helper_calls, components);
                     assert!(detail.forward53_original_scratch_capacity_bytes >= 12 * height);
                     assert!(
-                        encode(cs::LosslessEncodeLimits {
-                            max_working_bytes: serial.working_bytes - 1,
-                            ..limits
-                        })
-                        .is_err()
+                        encode(limits.with_max_working_bytes(serial.working_bytes - 1)).is_err()
                     );
                     if reference.len() > 128 {
-                        assert!(
-                            encode(cs::LosslessEncodeLimits {
-                                max_output_bytes: 128,
-                                ..limits
-                            })
-                            .is_err()
-                        );
+                        assert!(encode(limits.with_max_output_bytes(128)).is_err());
                     }
                 });
             }
@@ -234,10 +220,9 @@ fn ordinary_dispatch_tracks_original_scratch_and_admitted_parallel_storage() {
                     stride_bytes: width,
                     sample_step_bytes: 1,
                 }];
-                let limits = cs::LosslessEncodeLimits {
-                    max_working_bytes: 128 << 20,
-                    max_output_bytes: 4 << 20,
-                };
+                let limits = cs::LosslessEncodeLimits::default()
+                    .with_max_working_bytes(128 << 20)
+                    .with_max_output_bytes(4 << 20);
                 let requirement =
                     cs::lossless_d2_requirements(width as u32, height as u32, 1, limits).unwrap();
                 let available = cs::parallel_worker_count()
@@ -253,10 +238,8 @@ fn ordinary_dispatch_tracks_original_scratch_and_admitted_parallel_storage() {
                     || encode(limits).unwrap(),
                 );
                 for admitted in [1usize, 2, 4, 8] {
-                    let tight = cs::LosslessEncodeLimits {
-                        max_working_bytes: serial_bytes + (admitted as u64 - 1) * (4 << 20),
-                        ..limits
-                    };
+                    let tight = limits
+                        .with_max_working_bytes(serial_bytes + (admitted as u64 - 1) * (4 << 20));
                     let (result, detail) = cs::observe_lossless_encode(|| encode(tight));
                     assert_eq!(result.unwrap(), reference);
                     let effective = available.min(admitted);

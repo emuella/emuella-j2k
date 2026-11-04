@@ -106,10 +106,7 @@ fn explicit_bypass_retains_padded_layouts_and_default_entry_points() {
                     encode_lossless_bypass_with_limits(
                         planar,
                         &options(),
-                        &LosslessEncodeLimits {
-                            max_output_bytes: 128,
-                            ..limits
-                        }
+                        &limits.with_max_output_bytes(128)
                     )
                     .is_err()
                 );
@@ -138,10 +135,7 @@ fn bypass_admission_adds_only_bounded_metadata_and_rejects_other_profiles() {
         lossless_bypass_encode_requirements(
             &image,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum - 1,
-                ..limits
-            }
+            &limits.with_max_working_bytes(minimum - 1)
         )
         .is_err()
     );
@@ -149,10 +143,7 @@ fn bypass_admission_adds_only_bounded_metadata_and_rejects_other_profiles() {
         lossless_bypass_encode_requirements(
             &image,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum,
-                ..limits
-            }
+            &limits.with_max_working_bytes(minimum)
         )
         .is_ok()
     );
@@ -202,10 +193,9 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
             samples: &raw,
             stride_bytes: width as usize * components as usize * usize::from(bits / 8),
         };
-        let limits = LosslessEncodeLimits {
-            max_working_bytes: 256 << 20,
-            max_output_bytes: 16 << 20,
-        };
+        let limits = LosslessEncodeLimits::default()
+            .with_max_working_bytes(256 << 20)
+            .with_max_output_bytes(16 << 20);
         let serial = pools[0]
             .install(|| lossless_bypass_encode_requirements(&image, &options(), &limits).unwrap());
         let expected = pools[0]
@@ -223,10 +213,8 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
                     encode_lossless_bypass_with_limits(view, &options(), &limits).unwrap()
                 );
                 for allowed in [1u64, 2] {
-                    let tight = LosslessEncodeLimits {
-                        max_working_bytes: serial.working_bytes + (allowed - 1) * (4 << 20),
-                        ..limits
-                    };
+                    let tight = limits
+                        .with_max_working_bytes(serial.working_bytes + (allowed - 1) * (4 << 20));
                     let req =
                         lossless_bypass_encode_requirements(&image, &options(), &tight).unwrap();
                     assert_eq!(
@@ -242,10 +230,7 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
                     encode_lossless_bypass_with_limits(
                         view,
                         &options(),
-                        &LosslessEncodeLimits {
-                            max_output_bytes: 128,
-                            ..limits
-                        }
+                        &limits.with_max_output_bytes(128)
                     )
                     .is_err()
                 );
