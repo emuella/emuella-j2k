@@ -76,9 +76,10 @@ Cargo doctests explicit. Nextest reports remain outside the source export and
 cleanup child; CI uploads the sibling report directory after cleanup. The superset
 retains rendered Layer 2 runner tests, the bypass-batch example, all feature
 and fuzz checks, the facade public API snapshot, the complete 264-cell lossy HT
-matrix, strict clippy, dependency checks and clean C API consumers. Both Cargo target/build-directory variables
-are cleared for the fresh C API target. Parallel/SIMD/no-default-feature and
-cross-target documentation are outside this bounded documentation group.
+matrix, strict clippy, dependency checks and clean C API consumers. Both Cargo
+target/build-directory variables are cleared for the fresh C API target.
+Parallel/SIMD/no-default-feature and cross-target documentation are outside
+this bounded documentation group.
 
 CI creates an owned `ci-verification` sibling of `checkout`, audits its source
 before cache restore and runs all selected commands against that export.

@@ -120,12 +120,12 @@ repeating that complete matrix in unoptimised mode. See
 
 The reviewed public surface of the `emuella-j2k` facade is committed in
 [`docs/emuella-j2k-public-api.txt`](docs/emuella-j2k-public-api.txt). The full
-route, locally and in hosted CI, runs `python3 scripts/check-facade-public-api.py`
-and its fixture tests. The check documents the facade and each workspace crate
-it depends on as rustdoc JSON, follows every re-export into its defining crate
-and renders public fields, variants, inherent and trait methods, associated
-items and trait implementations, including `#[doc(hidden)]` members. It fails
-when:
+route, locally and in hosted CI, runs
+`python3 scripts/check-facade-public-api.py` and its fixture tests. The check
+documents the facade and each workspace crate it depends on as rustdoc JSON,
+follows every re-export into its defining crate and renders public fields,
+variants, inherent and trait methods, associated items and trait
+implementations, including `#[doc(hidden)]` members. It fails when:
 
 - a rendered signature names an item that the facade does not itself export,
   other than `core`, `alloc` and `std` items; or

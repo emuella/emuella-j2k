@@ -203,6 +203,18 @@ class FacadePublicApiTests(unittest.TestCase):
         )
         self.assert_leak(core=core, reaches="fixture_lower::Internal")
 
+    def test_lower_layer_trait_implemented_on_exported_type_fails(self) -> None:
+        lower = LOWER + "pub trait Hidden {}\n"
+        core = CORE + "impl fixture_lower::Hidden for Options {}\n"
+        self.assert_leak(lower=lower, core=core, reaches="fixture_lower::Hidden")
+
+    def test_lower_type_as_generic_argument_in_inherent_method_fails(self) -> None:
+        core = CORE + (
+            "impl Options {\n    pub fn internals(&self) -> Vec<fixture_lower::Internal> {\n"
+            "        Vec::new()\n    }\n}\n"
+        )
+        self.assert_leak(core=core, reaches="fixture_lower::Internal")
+
     def test_associated_type_naming_lower_type_fails(self) -> None:
         core = CORE + (
             "impl core::ops::Deref for Options {\n    type Target = fixture_lower::Internal;\n"

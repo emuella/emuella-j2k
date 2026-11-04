@@ -73,9 +73,10 @@ image; rejected copies preserve destination bytes and row padding.
 
 Optional per-image work observations use the facade's
 `Part1ExecutionOptions::collect_work_counters` and immutable scalar
-snapshots. They include unrequested reconstruction dependencies. Output allocation observations count only successful C ABI
-output-plane reservation requests and their logical bytes and actual
-capacities. They exclude all other allocations and allocator metadata.
+snapshots. They include unrequested reconstruction dependencies. Output
+allocation observations count only successful C ABI output-plane reservation
+requests and their logical bytes and actual capacities. They exclude all other
+allocations and allocator metadata.
 Workspace fields report retained capacities after the call, including earlier
 reuse, rather than allocation counts or growth. Consumer callbacks own source
 byte attribution. A reused decoder preserves source identity and a reused
