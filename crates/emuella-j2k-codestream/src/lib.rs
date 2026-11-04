@@ -35696,15 +35696,6 @@ fn parse_default_precinct_packets_in_scope(
                                 ht_continuation_set_passes,
                             ) = if packet_style.code_block_style & 0x40 != 0 {
                                 if aggregate_quality_layers {
-                                    let (codeword_len, coding_segments, coding_passes, cleanup_set) =
-                                        read_layered_ht_codeword_lengths(
-                                            &mut reader,
-                                            subband.l_block[code_block_index],
-                                            first_coding_pass,
-                                            announced_coding_passes,
-                                            subband.first_non_empty_ht_set[code_block_index]
-                                                .is_some(),
-                                        )?;
                                     let pass_end = first_coding_pass
                                         .checked_add(announced_coding_passes)
                                         .ok_or(CodestreamError::SizeOverflow)?;
@@ -35717,6 +35708,9 @@ fn parse_default_precinct_packets_in_scope(
                                     let actual_set_index = actual_start / 3;
                                     let first_non_empty_set =
                                         subband.first_non_empty_ht_set[code_block_index];
+                                    // The SINGLEHT contradiction depends only on
+                                    // the announced passes, so it precedes any
+                                    // unsupported length signalling.
                                     if part15_single_ht_declared
                                         && actual_start.is_multiple_of(3)
                                         && first_non_empty_set
@@ -35724,6 +35718,14 @@ fn parse_default_precinct_packets_in_scope(
                                     {
                                         return Err(part15_single_ht_error(codestream));
                                     }
+                                    let (codeword_len, coding_segments, coding_passes, cleanup_set) =
+                                        read_layered_ht_codeword_lengths(
+                                            &mut reader,
+                                            subband.l_block[code_block_index],
+                                            first_coding_pass,
+                                            announced_coding_passes,
+                                            first_non_empty_set.is_some(),
+                                        )?;
                                     if cleanup_set.is_some_and(|(_, cleanup_len)| cleanup_len != 0)
                                         && subband.first_non_empty_ht_set[code_block_index]
                                             .is_none()
@@ -38840,7 +38842,7 @@ fn read_layered_ht_codeword_lengths(
 /// 15444-15:2019, B.3 NOTE 2, physical page 41; retrieval
 /// 10baf9472429d52f5d6b5f9b7a892dbed395b1db). A bridge that carries bytes
 /// would need more than one retained set from one packet contribution, which
-/// the reader does not yet split.
+/// the reader does not yet split (emuella/emuella-j2k#157).
 fn read_empty_ht_bridge_lengths(
     reader: &mut PacketBitReader<'_>,
     l_block: u8,
@@ -38848,8 +38850,10 @@ fn read_empty_ht_bridge_lengths(
     final_set_start: u16,
 ) -> Result<()> {
     let mut pass = first_coding_pass;
+    let mut empty_cleanup_in_set = false;
     while pass < final_set_start {
-        let segment_end = if pass.is_multiple_of(3) {
+        let cleanup = pass.is_multiple_of(3);
+        let segment_end = if cleanup {
             pass + 1
         } else {
             (pass / 3 + 1) * 3
@@ -38857,7 +38861,24 @@ fn read_empty_ht_bridge_lengths(
         let length_bits = l_block
             .checked_add(u8::from(segment_end - pass > 1))
             .ok_or(CodestreamError::SizeOverflow)?;
-        if reader.read_bits_with_stuffing(length_bits)? != 0 {
+        let length = reader.read_bits_with_stuffing(length_bits)?;
+        // B.3 validity precedes the unsupported-bytes decision.
+        if cleanup && length == 1 {
+            return Err(invalid(
+                None,
+                Some(Marker::Sod),
+                "HT cleanup pass segment length must be 0 or at least 2 bytes",
+            ));
+        }
+        if !cleanup && empty_cleanup_in_set && length != 0 {
+            return Err(invalid(
+                None,
+                Some(Marker::Sod),
+                "HT refinement segment follows a zero-length cleanup segment",
+            ));
+        }
+        empty_cleanup_in_set = cleanup && length == 0;
+        if length != 0 {
             return Err(unsupported(
                 None,
                 Some(Marker::Sod),

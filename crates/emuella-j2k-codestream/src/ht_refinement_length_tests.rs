@@ -610,3 +610,64 @@ fn later_empty_set_refinement_length_keeps_the_packet_header_in_step() {
         "{error:?}"
     );
 }
+
+#[test]
+fn singleht_contradiction_precedes_unsupported_bridge_bytes() {
+    // Without MULTIHT, any later HT set contradicts SINGLEHT. That validity
+    // error wins over the unsupported bytes before the final set.
+    let error = contributions(&layered_fixture(&[
+        starts_set(1, &[]),
+        bridged_empty_set(3, REFINEMENT),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CodestreamError::InvalidMarker {
+                marker: Some(Marker::Cap),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn bridge_segments_follow_b3_validity_before_support() {
+    // Passes 1-6 after set 0: set 0's refinement remainder (4 bits), set 1's
+    // Cleanup (3 bits) and refinement (4 bits), then set 2's Cleanup.
+    let read = |bridge: [u32; 3]| {
+        let mut writer = PacketBitWriter::new();
+        for (len, width) in bridge.into_iter().zip([4_u8, 3, 4]) {
+            writer.write_bits(len, width).unwrap();
+        }
+        writer.write_bits(5, 3).unwrap();
+        let source = ContiguousPacketSource {
+            bytes: writer.bytes(),
+        };
+        let mut reader = PacketBitReader::at(&source, 0).unwrap();
+        read_layered_ht_codeword_lengths(&mut reader, 3, 1, 6, true).unwrap_err()
+    };
+    for (bridge, message) in [
+        ([0, 1, 0], "must be 0 or at least 2 bytes"),
+        ([0, 0, 3], "follows a zero-length cleanup segment"),
+    ] {
+        let error = read(bridge);
+        assert!(
+            matches!(error, CodestreamError::InvalidMarker { .. })
+                && format!("{error:?}").contains(message),
+            "{bridge:?}: {error:?}"
+        );
+    }
+    let error = read([0, 2, 0]);
+    assert!(
+        matches!(
+            error,
+            CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}

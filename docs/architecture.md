@@ -132,9 +132,11 @@ set's Cleanup and refinement segments carry their own length fields, so a
 later empty set's refinement length is read and must be 0. A later packet
 contribution may reach its final set through an empty bridge: the reader
 reads one length field per bridge segment, completes the preceding set's
-`Z_blk` and retains only the final set. Bytes before the final set would need
-more than one retained set from one contribution, which the reader does not
-yet split, so it rejects them as unsupported. HTMIX syntax remains
+`Z_blk` and retains only the final set. A SINGLEHT contradiction and B.3
+violations in the bridge remain validity errors. Well-formed bytes before the
+final set would need more than one retained set from one contribution, which
+the reader does not yet split (issue #157), so it rejects them as
+unsupported. HTMIX syntax remains
 structurally inspectable but outside native decode and packet-semantic
 admission, because a mixed code-block must first be distinguished from a
 classic Part 1 code-block.
