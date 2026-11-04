@@ -190,3 +190,54 @@ fn both_refinement_streams_read_zero_beyond_a_one_byte_segment() {
     assert_eq!(progress, padded_progress);
     assert_eq!(output, padded_output);
 }
+
+#[test]
+fn sigprop_stuffed_final_byte_continues_into_zero_fill() {
+    // A segment cannot end in 0xFF, so a stuffed byte before the fill is the
+    // next-to-last byte: the last stored byte then gives 7 bits, and the
+    // zero bytes beyond the segment give 8 bits each. The stuffed bit and the
+    // fill are both zero, so the boundary cannot change the decoded bits;
+    // this pins that the conforming boundary is not rejected.
+    let edge = 64;
+    let coefficients = sparse_coefficients(edge);
+    let trimmed = [0x5a_u8, 0xff, 0x3c];
+    let mut padded = trimmed.to_vec();
+    padded.resize(padding_len(edge), 0);
+
+    let (expected, padded_progress) = decode(edge, &coefficients, 2, &padded).unwrap();
+    let (actual, trimmed_progress) = decode(edge, &coefficients, 2, &trimmed)
+        .expect("a SigProp stream may end after a stuffed byte");
+
+    assert!(
+        padded_progress.significance_propagation_bits > 8 + 8 + 7,
+        "the fixture must read SigProp bits beyond the stuffed final byte"
+    );
+    assert_eq!(trimmed_progress, padded_progress);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn magref_stuffing_state_at_the_segment_start_carries_into_zero_fill() {
+    // MagRef reads backwards: 0xA5 gives 8 bits, then byte 0 (0x7F) has its
+    // seven LSBs set after a byte above 0x8F, so it is stuffed and gives 7
+    // bits. The implied zero bytes before the segment start then give 8 bits
+    // each. As for SigProp, the stuffed bit and the fill are both zero; this
+    // pins that the conforming boundary is not rejected.
+    let edge = 16;
+    let coefficients = dense_coefficients(edge);
+    let trimmed = [0x7f_u8, 0xa5];
+    let mut padded = vec![0; padding_len(edge) - trimmed.len()];
+    padded.extend_from_slice(&trimmed);
+
+    let (expected, padded_progress) = decode(edge, &coefficients, 3, &padded).unwrap();
+    let (actual, trimmed_progress) = decode(edge, &coefficients, 3, &trimmed)
+        .expect("a MagRef stream may reach its start in a stuffing state");
+
+    assert_eq!(padded_progress.significance_propagation_bits, 0);
+    assert!(
+        padded_progress.magnitude_refinement_bits > 8 + 7,
+        "the fixture must read MagRef bits before the segment start"
+    );
+    assert_eq!(trimmed_progress, padded_progress);
+    assert_eq!(actual, expected);
+}

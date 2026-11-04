@@ -214,6 +214,9 @@ impl ComponentQuantization {
 }
 
 #[cfg(test)]
+mod ht_refinement_length_tests;
+
+#[cfg(test)]
 mod reversible_quantization_tests {
     use super::*;
 
@@ -35666,6 +35669,7 @@ fn parse_default_precinct_packets_in_scope(
                                 ht_missing_bitplanes,
                                 ht_coding_set,
                                 ht_coded,
+                                ht_continuation_set_passes,
                             ) = if packet_style.code_block_style & 0x40 != 0 {
                                 if aggregate_quality_layers {
                                     let (codeword_len, coding_segments, coding_passes, cleanup_set) =
@@ -35757,6 +35761,12 @@ fn parse_default_precinct_packets_in_scope(
                                             }
                                         })
                                     };
+                                    let ht_continuation_set_passes =
+                                        if actual_start.is_multiple_of(3) {
+                                            0
+                                        } else {
+                                            pass_end - actual_start / 3 * 3
+                                        };
                                     (
                                         codeword_len,
                                         coding_segments,
@@ -35765,6 +35775,7 @@ fn parse_default_precinct_packets_in_scope(
                                         ht_missing_bitplanes,
                                         ht_coding_set,
                                         true,
+                                        ht_continuation_set_passes,
                                     )
                                 } else {
                                     let (
@@ -35788,6 +35799,7 @@ fn parse_default_precinct_packets_in_scope(
                                             .ok_or(CodestreamError::SizeOverflow)?,
                                         None,
                                         true,
+                                        0,
                                     )
                                 }
                             } else {
@@ -35807,6 +35819,7 @@ fn parse_default_precinct_packets_in_scope(
                                     subband.missing_most_significant_bitplanes[code_block_index],
                                     None,
                                     false,
+                                    0,
                                 )
                             };
                             subband.coding_passes[code_block_index] = first_coding_pass
@@ -35836,6 +35849,7 @@ fn parse_default_precinct_packets_in_scope(
                                 ht_coding_set,
                                 ht_coded,
                                 first_segment_continues,
+                                ht_continuation_set_passes,
                             });
                         }
                     }
@@ -38482,6 +38496,9 @@ struct PendingPacketContribution {
     ht_coding_set: Option<HtCodeBlockCodingSet>,
     ht_coded: bool,
     first_segment_continues: bool,
+    /// For an HT refinement continuation, the passes its set has announced
+    /// through this packet; zero otherwise.
+    ht_continuation_set_passes: u16,
 }
 
 fn read_classic_codeword_lengths(
@@ -38575,6 +38592,7 @@ fn read_ht_codeword_lengths(
         coding_passes: 1,
     }];
     let mut codeword_len = cleanup_len;
+    let mut decoded_coding_passes = 1;
     if coding_passes > 1 {
         let refinement_length_bits = l_block
             .checked_add(u8::from(coding_passes > 2))
@@ -38582,23 +38600,35 @@ fn read_ht_codeword_lengths(
         let refinement_len =
             usize::try_from(reader.read_bits_with_stuffing(refinement_length_bits)?)
                 .map_err(|_| CodestreamError::SizeOverflow)?;
-        if refinement_len == 0 || refinement_len >= 2047 {
+        if refinement_len >= 2047 {
             return Err(invalid(
                 None,
                 Some(Marker::Sod),
-                "HT refinement pass segment length must be between 1 and 2046 bytes",
+                "HT refinement pass segment length must be less than 2047 bytes",
             ));
         }
-        codeword_len = codeword_len
-            .checked_add(refinement_len)
-            .ok_or(CodestreamError::SizeOverflow)?;
-        segments.push(tier1::CodeBlockSegment {
-            byte_len: refinement_len,
-            coding_passes: coding_passes - 1,
-        });
+        // A zero-length refinement segment leaves the Cleanup segment as the
+        // only non-empty segment of the set, so Z_blk is 1. ISO/IEC
+        // 15444-15:2019, B.3, physical page 41; retrieval
+        // 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+        if refinement_len != 0 {
+            codeword_len = codeword_len
+                .checked_add(refinement_len)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            segments.push(tier1::CodeBlockSegment {
+                byte_len: refinement_len,
+                coding_passes: coding_passes - 1,
+            });
+            decoded_coding_passes = coding_passes;
+        }
     }
 
-    Ok((codeword_len, segments, coding_passes, placeholder_sets))
+    Ok((
+        codeword_len,
+        segments,
+        decoded_coding_passes,
+        placeholder_sets,
+    ))
 }
 
 fn read_layered_ht_codeword_lengths(
@@ -38631,15 +38661,21 @@ fn read_layered_ht_codeword_lengths(
         let refinement_len =
             usize::try_from(reader.read_bits_with_stuffing(refinement_length_bits)?)
                 .map_err(|_| CodestreamError::SizeOverflow)?;
-        if refinement_len == 0 {
-            return Ok((0, Vec::new(), 0, None));
-        }
-        return Ok((
-            refinement_len,
+        // A zero-length continuation still announces passes of the set: the
+        // merge decides Z_blk from the set's total refinement length.
+        // ISO/IEC 15444-15:2019, B.3, physical page 41; retrieval
+        // 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+        let segments = if refinement_len == 0 {
+            Vec::new()
+        } else {
             alloc::vec![tier1::CodeBlockSegment {
                 byte_len: refinement_len,
                 coding_passes: announced_coding_passes,
-            }],
+            }]
+        };
+        return Ok((
+            refinement_len,
+            segments,
             announced_coding_passes,
             Some((
                 u8::try_from(first_coding_pass / 3).map_err(|_| CodestreamError::SizeOverflow)?,
@@ -38788,28 +38824,27 @@ fn append_default_precinct_contribution(
                 && coding_set.byte_len == 0
                 && coding_set.coding_passes == 0;
             if coding_set.cleanup_byte_len == 0 && !empty_set_announcement {
-                if contribution.expanded_ht_coding_sets.is_none() {
-                    if !contribution.ht_coded
-                        || contribution.missing_most_significant_bitplanes
-                            != coding_set.missing_most_significant_bitplanes
-                        || contribution
-                            .coding_passes
-                            .checked_add(coding_set.coding_passes)
-                            .ok_or(CodestreamError::SizeOverflow)?
-                            > 3
-                    {
-                        return Err(invalid(
-                            None,
-                            Some(Marker::Sod),
-                            "HT refinement continuation does not match the preceding cleanup set",
-                        ));
+                // Z_blk depends on the whole set: 1 while every refinement
+                // segment is empty, otherwise every pass the set announces.
+                // ISO/IEC 15444-15:2019, B.3, physical page 41; retrieval
+                // 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+                let set_passes = pending.ht_continuation_set_passes;
+                let (previous_cleanup_len, previous_set_len, previous_passes) = if let Some(sets) =
+                    contribution.expanded_ht_coding_sets.as_deref()
+                {
+                    let previous = sets.last().ok_or(CodestreamError::SizeOverflow)?;
+                    // An empty set keeps Z_blk = 0, and its refinement
+                    // segment must stay empty too (B.3).
+                    if previous.cleanup_byte_len == 0 {
+                        if coding_set.byte_len != 0 {
+                            return Err(invalid(
+                                None,
+                                Some(Marker::Sod),
+                                "HT refinement segment follows a zero-length cleanup segment",
+                            ));
+                        }
+                        return Ok(());
                     }
-                } else {
-                    let previous = contribution
-                        .expanded_ht_coding_sets
-                        .as_deref_mut()
-                        .and_then(<[HtCodeBlockCodingSet]>::last_mut)
-                        .ok_or(CodestreamError::SizeOverflow)?;
                     if previous.missing_most_significant_bitplanes
                         != coding_set.missing_most_significant_bitplanes
                         || previous
@@ -38824,21 +38859,82 @@ fn append_default_precinct_contribution(
                             "HT refinement continuation does not match the preceding cleanup set",
                         ));
                     }
+                    (
+                        previous.cleanup_byte_len,
+                        previous.byte_len,
+                        previous.coding_passes,
+                    )
+                } else {
+                    if !contribution.ht_coded
+                        || contribution.missing_most_significant_bitplanes
+                            != coding_set.missing_most_significant_bitplanes
+                    {
+                        return Err(invalid(
+                            None,
+                            Some(Marker::Sod),
+                            "HT refinement continuation does not match the preceding cleanup set",
+                        ));
+                    }
+                    (
+                        contribution
+                            .coding_segments
+                            .first()
+                            .map_or(contribution.codeword_len, |segment| segment.byte_len),
+                        contribution.codeword_len,
+                        contribution.coding_passes,
+                    )
+                };
+                if !(1..=3).contains(&set_passes)
+                    || previous_cleanup_len == 0
+                    || previous_passes >= set_passes
+                {
+                    return Err(invalid(
+                        None,
+                        Some(Marker::Sod),
+                        "HT refinement continuation does not match the preceding cleanup set",
+                    ));
+                }
+                let refinement_len = previous_set_len
+                    .checked_sub(previous_cleanup_len)
+                    .and_then(|len| len.checked_add(coding_set.byte_len))
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                let decoded_passes = if refinement_len == 0 { 1 } else { set_passes };
+                let added_passes = decoded_passes
+                    .checked_sub(previous_passes)
+                    .ok_or(CodestreamError::SizeOverflow)?;
+                if let Some(previous) = contribution
+                    .expanded_ht_coding_sets
+                    .as_deref_mut()
+                    .and_then(<[HtCodeBlockCodingSet]>::last_mut)
+                {
                     previous.byte_len = previous
                         .byte_len
                         .checked_add(coding_set.byte_len)
                         .ok_or(CodestreamError::SizeOverflow)?;
-                    previous.coding_passes = previous
-                        .coding_passes
-                        .checked_add(coding_set.coding_passes)
-                        .ok_or(CodestreamError::SizeOverflow)?;
-                    if previous.coding_passes > 3 {
-                        return Err(invalid(
-                            None,
-                            Some(Marker::Sod),
-                            "HT coding set contains more than three coding passes",
-                        ));
+                    previous.coding_passes = decoded_passes;
+                }
+                pending.coding_passes = added_passes;
+                if coding_set.byte_len == 0 {
+                    // No bytes to append: credit the added passes to the
+                    // set's existing refinement segment.
+                    if added_passes != 0 {
+                        let previous_segment = contribution
+                            .coding_segments
+                            .last_mut()
+                            .ok_or(CodestreamError::SizeOverflow)?;
+                        previous_segment.coding_passes = previous_segment
+                            .coding_passes
+                            .checked_add(added_passes)
+                            .ok_or(CodestreamError::SizeOverflow)?;
                     }
+                    contribution.coding_passes = contribution
+                        .coding_passes
+                        .checked_add(added_passes)
+                        .ok_or(CodestreamError::SizeOverflow)?;
+                    return Ok(());
+                }
+                if let Some(segment) = pending.coding_segments.first_mut() {
+                    segment.coding_passes = added_passes;
                 }
             } else {
                 if !contribution.ht_coded {
@@ -38927,6 +39023,15 @@ fn append_default_precinct_contribution(
         return Ok(());
     }
 
+    if pending.codeword_len == 0
+        && pending.ht_coding_set.is_some_and(|coding_set| {
+            coding_set.cleanup_byte_len == 0 && coding_set.coding_passes != 0
+        })
+    {
+        // A zero-length refinement continuation with no retained set adds
+        // nothing to decode.
+        return Ok(());
+    }
     let contribution_index = contributions.len();
     push_default_precinct_contribution(contributions, pending, segment_offset)?;
     contribution_indices.insert(key, contribution_index);
@@ -53952,7 +54057,18 @@ mod htj2k_native_component_grid_tests {
                 let result =
                     read_layered_ht_codeword_lengths(&mut reader, 3, first, announced, false)
                         .unwrap();
-                assert_eq!((result.0, result.2, result.3), (0, 0, None));
+                let pass_end = first + announced;
+                if first.max((pass_end - 1) / 3 * 3) % 3 == 0 {
+                    assert_eq!((result.0, result.2, result.3), (0, 0, None));
+                } else {
+                    // A zero-length refinement continuation keeps its passes
+                    // for the merge to resolve Z_blk.
+                    assert!(result.1.is_empty());
+                    assert_eq!(
+                        (result.0, result.2, result.3),
+                        (0, announced, Some((u8::try_from(first / 3).unwrap(), 0)))
+                    );
+                }
                 assert_eq!(
                     reader.read_bits_with_stuffing(1).unwrap(),
                     1,
