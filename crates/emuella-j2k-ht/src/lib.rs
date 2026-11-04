@@ -24882,12 +24882,18 @@ impl<'a> HtForwardRefinementReader<'a> {
 
     fn read_bit(&mut self) -> Result<u8, HtLayoutError> {
         if self.available == 0 {
-            let byte = *self.bytes.get(self.offset).ok_or(
-                HtLayoutError::InvalidRefinementPassSegment {
-                    reason: "significance-propagation stream is truncated",
-                },
-            )?;
-            self.offset += 1;
+            // A SigProp read past the end of the HT refinement segment sees a
+            // zero byte; nothing is synthesised as 0xFF, so an encoder may
+            // drop trailing zero bytes. ISO/IEC 15444-15:2019 | ITU-T T.814,
+            // 7.1.5, physical pages 15-16; retrieval
+            // 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+            let byte = match self.bytes.get(self.offset) {
+                Some(&byte) => {
+                    self.offset += 1;
+                    byte
+                }
+                None => 0,
+            };
             if self.previous_was_ff && byte & 0x80 != 0 {
                 return Err(HtLayoutError::InvalidRefinementPassSegment {
                     reason: "significance-propagation stream has a non-zero stuffed bit",
@@ -24931,13 +24937,17 @@ impl<'a> HtReverseRefinementReader<'a> {
     #[inline(always)]
     fn read_bit(&mut self) -> Result<u8, HtLayoutError> {
         if self.available == 0 {
-            self.offset =
-                self.offset
-                    .checked_sub(1)
-                    .ok_or(HtLayoutError::InvalidRefinementPassSegment {
-                        reason: "magnitude-refinement stream is truncated",
-                    })?;
-            let byte = self.bytes[self.offset];
+            // A MagRef read before byte 0 of the HT refinement segment sees a
+            // zero byte, which never carries a stuffing bit. ISO/IEC
+            // 15444-15:2019 | ITU-T T.814, 7.1.6, physical pages 16-17;
+            // retrieval 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+            let byte = match self.offset.checked_sub(1) {
+                Some(offset) => {
+                    self.offset = offset;
+                    self.bytes[offset]
+                }
+                None => 0,
+            };
             let stuffed = self.unstuff && (byte & 0x7f) == 0x7f;
             if stuffed && byte & 0x80 != 0 {
                 return Err(HtLayoutError::InvalidRefinementPassSegment {
