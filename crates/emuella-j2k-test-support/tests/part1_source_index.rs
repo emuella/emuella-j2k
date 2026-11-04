@@ -2,11 +2,12 @@ use std::ops::Range;
 use std::sync::Mutex;
 
 use c::source::{CodestreamSource, SliceSource, SourceError, SourceErrorKind};
+use emuella_j2k_codestream as c;
 use emuella_j2k_core::{
     ColorModel, ComponentLayout, EncodeOptions, ImageInfo, ImageView, ImageViewMut, J2kError,
     OutputFormat, Part1DecodeWorkspace, Part1SourceIndex, PlaneMut, PreparedPart1Decode,
-    SampleFormat, TileSize, codestream as c, encode,
-    execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
+    SampleFormat, TileSize, encode, execute_prepared_part1_decode_into_with_workspace,
+    prepare_part1_decode_from_source,
 };
 
 struct RecordingSource {
@@ -49,13 +50,13 @@ impl CodestreamSource for RecordingSource {
                     .any(|span| span.start <= range.start && span.end >= range.end)
             })
         {
-            return Err(SourceError {
-                kind: SourceErrorKind::Io,
+            return Err(SourceError::new(
+                SourceErrorKind::Io,
                 offset,
-                requested: destination.len() as u64,
-                available: self.bytes.len() as u64 - offset,
-                message: "source-index probe denied an unselected range".into(),
-            });
+                destination.len() as u64,
+                self.bytes.len() as u64 - offset,
+                "source-index probe denied an unselected range",
+            ));
         }
         SliceSource::new(&self.bytes).read_exact_at(offset, destination)
     }
@@ -84,15 +85,13 @@ fn sized_fixture(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
             samples: &samples,
             stride_bytes: width as usize,
         },
-        &EncodeOptions {
-            format: OutputFormat::J2kCodestream,
-            decomposition_levels: 2,
-            tile_size: Some(TileSize {
+        &EncodeOptions::default()
+            .with_format(OutputFormat::J2kCodestream)
+            .with_decomposition_levels(2)
+            .with_tile_size(Some(TileSize {
                 width: 32,
                 height: 32,
-            }),
-            ..Default::default()
-        },
+            })),
     )
     .unwrap();
     (bytes, samples)
@@ -289,8 +288,11 @@ fn index_geometry_scaling_calibration() {
             };
             source.reads.lock().unwrap().clear();
             let prepared = index.prepare(req).unwrap();
-            metadata_ns.push(prepared.preparation_timings().marker_parse_ns);
-            preparation_ns.push(prepared.preparation_timings().prepare_ns);
+            metadata_ns.push(
+                emuella_j2k_core::prepared_part1_preparation_timings(&prepared).marker_parse_ns,
+            );
+            preparation_ns
+                .push(emuella_j2k_core::prepared_part1_preparation_timings(&prepared).prepare_ns);
             execute(&prepared);
             assert_eq!(source.reads.lock().unwrap().len(), 8);
         }

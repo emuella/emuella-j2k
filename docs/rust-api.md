@@ -31,7 +31,9 @@ See [native component grids](decoding-profiles.md#full-native-component-grids).
 ## Full decode and inspection options
 
 `DecodeOptions::default()` requests rendered output, all components, all
-quality layers, planar layout and no best-effort attempt.
+quality layers, planar layout and no best-effort attempt. Each field in the
+tables below has a chainable `with_<field>` setter on its options type; see
+[compatibility](#compatibility-and-specialised-api).
 
 | Field | Meaning and combinations |
 |---|---|
@@ -101,7 +103,7 @@ output-slice API.
 
 The separate HT functions choose raw/JPH output by function name.
 `Htj2kEncodeOptions::default()` selects zero reversible levels; only zero or one
-is admitted. `Htj2kLossyEncodeOptions { bits_per_pixel }` selects the separate
+is admitted. `Htj2kLossyEncodeOptions::new(bits_per_pixel)` selects the separate
 two-level, no-MCT irreversible profile. Its checked budget and finite search
 can return an unattainable-rate result. Neither HT type is a way to request
 arbitrary Part 1 `EncodeOptions` combinations.
@@ -123,10 +125,48 @@ cargo doc --locked --lib --no-deps -p emuella-j2k -p emuella-j2k-core -p emuella
 
 Open `target/doc/emuella_j2k/index.html` (or the equivalent beneath
 `CARGO_TARGET_DIR`). Its application links lead to re-exported defining-core
-contracts. The facade deliberately also exposes `codestream` and `container`
-modules, prepared/source-index/workspace APIs and diagnostic hooks. They serve
-lower-layer or specialised integration tasks; ordinary applications can begin
-with the operation table. Their exports remain available, and their presence
-does not broaden supported profiles. [Architecture](architecture.md) describes
-crate ownership. This local generation route makes no hosted-docs availability
-claim.
+contracts. [Architecture](architecture.md) describes crate ownership. This
+local generation route makes no hosted-docs availability claim.
+
+## Compatibility and specialised API
+
+The facade re-exports an explicit list; nothing reaches it by glob. Besides the
+operation table, it exports these specialised groups. None of them broadens
+supported profiles, and ordinary applications do not need them.
+
+| Group | Exports |
+|---|---|
+| Resource-bounded lossless encode (`std`) | `lossless_encode_requirements`, `lossless_bypass_encode_requirements`, `encode_with_limits`, `encode_lossless_bypass_with_limits`, `LosslessEncodeLimits`, `LosslessEncodeRequirements` |
+| Reusable decode workspaces | `Part1DecodeWorkspace`, `decode_into_with_workspace`, `decode_partial_into_with_workspace`; with `std`, `Htj2kDecodeWorkspace` and `decode_htj2k_with_workspace` |
+| Prepared Part 1 requests and positioned sources | `prepare_part1_decode`, `prepare_part1_decode_from_source`, `PreparedPart1Decode`, `execute_prepared_part1_decode`, `Part1ExecutionOptions`, `Part1DecodeWork`, `Part1ComponentDecodeRequest`, `TileRegionRequest`, `inspect_part1_source`, `Part1SourceInspection`, `Part1SourceIndex`, `Part1SourceIndexLimits`, `CodestreamSource`, `SliceSource`, `SourceError`, `SourceErrorKind`, `SourceMetrics` |
+
+The facade does not export the `codestream` or `container` modules, the
+entropy-coding and transform crates or their types, profiling diagnostics,
+stage timings, execution-tuning policies or test fixtures. Prepared execution
+uses the default policy and reports only `Part1DecodeWork` counters.
+`emuella-j2k-core`, `emuella-j2k-codestream` and the other lower-layer crates
+are implementation crates whose APIs follow the facade's needs and can change
+in any release. Depend on them directly only for lower-layer work, pinned to
+an exact version.
+
+Types expected to grow are `#[non_exhaustive]`:
+
+- enums `J2kError`, `UnsupportedFeature`, `SupportStatus`, `InputFormat`,
+  `CodestreamKind`, `OutputFormat`, `ColorModel`, `WaveletTransform`,
+  `EntropyCoder`, `MetadataKind`, `EncodeQuality` and `SourceErrorKind`: give
+  an exhaustive `match` a wildcard arm;
+- options and limits `DecodeOptions`, `InspectOptions`, `PartialDecodeOptions`,
+  `EncodeOptions`, `Htj2kEncodeOptions`, `Htj2kLossyEncodeOptions`,
+  `Part1ExecutionOptions`, `LosslessEncodeLimits` and `Part1SourceIndexLimits`:
+  start from `Default::default()` or `Htj2kLossyEncodeOptions::new`, then use
+  the `with_<field>` setters or assign the public fields;
+- `SourceError`: source implementations construct it with `SourceError::new`;
+- returned records `Metadata`, `CodestreamInfo`, `ContainerInfo`,
+  `DecodeShape`, `ComponentInfo`, `Part1SourceInspection`, `Part1DecodeWork`,
+  `LosslessEncodeRequirements` and `SourceMetrics`: read their fields; callers
+  do not construct them, except that a source implementation may start
+  `SourceMetrics` from `Default::default()`.
+
+`ImageInfo`, `SampleFormat`, `Region`, `TileSize`, `TileSelection`, `TileGrid`,
+`Part1ComponentDecodeRequest`, `TileRegionRequest` and the remaining enums are
+fixed value types.

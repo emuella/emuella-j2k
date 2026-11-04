@@ -85,11 +85,9 @@ fn main() {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    let options = EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let requirements =
         lossless_encode_requirements(&info, &options, &LosslessEncodeLimits::default()).unwrap();
     let mut planar_info = info.clone();
@@ -138,11 +136,9 @@ fn main() {
         .collect::<String>();
     let decoded = decode(
         &stream,
-        &DecodeOptions {
-            mode: DecodeMode::Components,
-            target_layout: ComponentLayout::Interleaved,
-            ..Default::default()
-        },
+        &DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_target_layout(ComponentLayout::Interleaved),
     )
     .unwrap();
     assert_eq!(decoded.data, ImageData::Interleaved(samples));

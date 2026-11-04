@@ -55,11 +55,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
         samples: &raw,
         stride_bytes: width as usize * components as usize * usize::from(bits / 8),
     };
-    let options = EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()?;
@@ -67,10 +65,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Diagnose the admitted production envelope, including large complete
     // streams; report the exact queried bound alongside the observed peak.
     let limits = if args.len() == 10 {
-        LosslessEncodeLimits {
-            max_working_bytes: args[8].parse()?,
-            max_output_bytes: args[9].parse()?,
-        }
+        LosslessEncodeLimits::default()
+            .with_max_working_bytes(args[8].parse()?)
+            .with_max_output_bytes(args[9].parse()?)
     } else {
         LosslessEncodeLimits::default()
     };
@@ -99,11 +96,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let decoded = pool.install(|| {
         decode(
             &stream,
-            &DecodeOptions {
-                mode: DecodeMode::Components,
-                target_layout: ComponentLayout::Interleaved,
-                ..Default::default()
-            },
+            &DecodeOptions::default()
+                .with_mode(DecodeMode::Components)
+                .with_target_layout(ComponentLayout::Interleaved),
         )
     })?;
     let decode_peak = allocation_meter::peak_since(baseline);

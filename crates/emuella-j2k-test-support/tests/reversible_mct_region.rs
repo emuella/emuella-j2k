@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use emuella_j2k_codestream as codestream;
 use emuella_j2k_core::{
-    ImageViewMut, Part1DecodeWorkspace, PlaneMut, Region, SampleFormat, codestream,
+    ImageViewMut, Part1DecodeWorkspace, PlaneMut, Region, SampleFormat,
     execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
 };
 use emuella_j2k_test_support::native_planes::{
@@ -501,13 +502,13 @@ impl codestream::source::CodestreamSource for SwitchFailSource<'_> {
         destination: &mut [u8],
     ) -> Result<(), codestream::source::SourceError> {
         if self.fail.load(Ordering::Relaxed) {
-            return Err(codestream::source::SourceError {
-                kind: codestream::source::SourceErrorKind::Io,
+            return Err(codestream::source::SourceError::new(
+                codestream::source::SourceErrorKind::Io,
                 offset,
-                requested: destination.len() as u64,
-                available: self.bytes.len() as u64,
-                message: "injected execution read failure".into(),
-            });
+                destination.len() as u64,
+                self.bytes.len() as u64,
+                "injected execution read failure",
+            ));
         }
         let start = usize::try_from(offset).unwrap();
         let source = self.bytes.get(start..start + destination.len()).unwrap();

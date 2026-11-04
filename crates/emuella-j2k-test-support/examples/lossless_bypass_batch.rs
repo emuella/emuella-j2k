@@ -280,14 +280,20 @@ fn run() -> Result<Value> {
         return Err("usage: lossless_bypass_batch REQUEST.json".into());
     }
     let request: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
-    let limits = api::LosslessEncodeLimits {
-        max_working_bytes: optional_limit(&request, "max_working_bytes", 4 * 1024 * 1024 * 1024)?,
-        max_output_bytes: optional_limit(&request, "max_output_bytes", 1024 * 1024 * 1024)?,
-    };
-    let native_limits = cs::LosslessEncodeLimits {
-        max_working_bytes: limits.max_working_bytes,
-        max_output_bytes: limits.max_output_bytes,
-    };
+    let limits = api::LosslessEncodeLimits::default()
+        .with_max_working_bytes(optional_limit(
+            &request,
+            "max_working_bytes",
+            4 * 1024 * 1024 * 1024,
+        )?)
+        .with_max_output_bytes(optional_limit(
+            &request,
+            "max_output_bytes",
+            1024 * 1024 * 1024,
+        )?);
+    let native_limits = cs::LosslessEncodeLimits::default()
+        .with_max_working_bytes(limits.max_working_bytes)
+        .with_max_output_bytes(limits.max_output_bytes);
     let width = u32::try_from(number(&request, "width")?)?;
     let height = u32::try_from(number(&request, "height")?)?;
     let components = usize::try_from(number(&request, "components")?)?;
@@ -402,11 +408,9 @@ fn run() -> Result<Value> {
         },
         layout,
     )?;
-    let options = api::EncodeOptions {
-        format: api::OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = api::EncodeOptions::default()
+        .with_format(api::OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let api_planes: Vec<_> = if planar {
         raw.chunks_exact(plane_bytes)
             .map(|samples| {
@@ -434,11 +438,9 @@ fn run() -> Result<Value> {
             stride_bytes: width as usize * sample_bytes * components,
         }
     };
-    let decode_options = api::DecodeOptions {
-        mode: api::DecodeMode::Components,
-        target_layout: layout,
-        ..Default::default()
-    };
+    let decode_options = api::DecodeOptions::default()
+        .with_mode(api::DecodeMode::Components)
+        .with_target_layout(layout);
     let verify_api = |decoded: &api::Image| -> Result<()> {
         if decoded.info.width != width
             || decoded.info.height != height

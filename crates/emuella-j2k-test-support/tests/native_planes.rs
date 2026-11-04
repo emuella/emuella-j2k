@@ -8,11 +8,9 @@ use emuella_j2k_test_support::native_planes::{
 };
 
 fn options(layout: ComponentLayout) -> DecodeOptions {
-    DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: layout,
-        ..DecodeOptions::default()
-    }
+    DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(layout)
 }
 
 fn wrap(raw: &[u8], width: u32, height: u32, count: usize) -> Vec<u8> {
@@ -164,10 +162,7 @@ fn hand_built_native_planes_have_independently_specified_samples() {
                             indices.iter().map(|i| usize::from(*i)).collect()
                         }
                     };
-                    let options = DecodeOptions {
-                        requested_components: selection.clone(),
-                        ..options(layout)
-                    };
+                    let options = options(layout).with_requested_components(selection.clone());
                     let image = decode(input, &options).unwrap();
                     let shape = decode_shape(input, &options).unwrap();
                     assert_eq!(
@@ -285,8 +280,8 @@ fn multiple_blocks_and_odd_edges_preserve_native_values() {
         })
         .collect::<Vec<_>>();
     let refs = planes.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let raw = emuella_j2k_core::codestream::encode_planar_u8_no_decomp_test_fixture(65, 67, &refs)
-        .unwrap();
+    let raw =
+        emuella_j2k_codestream::encode_planar_u8_no_decomp_test_fixture(65, 67, &refs).unwrap();
     for input in [&raw, &wrap(&raw, 65, 67, 4)] {
         let options = options(ComponentLayout::Planar);
         let image = decode(input, &options).unwrap();

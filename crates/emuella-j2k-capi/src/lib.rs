@@ -12,11 +12,11 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use emuella_j2k::codestream::source::{CodestreamSource, SourceError, SourceErrorKind};
+use emuella_j2k::{CodestreamSource, SourceError, SourceErrorKind};
 use emuella_j2k::{
     ComponentInfo, Image, ImageData, ImageInfo, ImageViewMut, J2kError, Part1DecodeWorkspace,
-    Part1SourceIndex, Part1SourceIndexLimits, PlaneMut, SampleEndian, SampleFormat,
-    execute_prepared_part1_decode_into_with_workspace, inspect_part1_source,
+    Part1ExecutionOptions, Part1SourceIndex, Part1SourceIndexLimits, PlaneMut, SampleEndian,
+    SampleFormat, execute_prepared_part1_decode, inspect_part1_source,
     prepare_part1_decode_from_source,
 };
 
@@ -222,21 +222,23 @@ impl CodestreamSource for CallbackSource {
     fn read_exact_at(&self, offset: u64, destination: &mut [u8]) -> Result<(), SourceError> {
         let requested = destination.len() as u64;
         let available = self.length.saturating_sub(offset);
-        let end = offset.checked_add(requested).ok_or_else(|| SourceError {
-            kind: SourceErrorKind::OutOfRange,
-            offset,
-            requested,
-            available,
-            message: "positioned callback range overflowed u64".into(),
-        })?;
-        if end > self.length {
-            return Err(SourceError {
-                kind: SourceErrorKind::ShortRead,
+        let end = offset.checked_add(requested).ok_or_else(|| {
+            SourceError::new(
+                SourceErrorKind::OutOfRange,
                 offset,
                 requested,
                 available,
-                message: "positioned callback range exceeds the declared source length".into(),
-            });
+                "positioned callback range overflowed u64",
+            )
+        })?;
+        if end > self.length {
+            return Err(SourceError::new(
+                SourceErrorKind::ShortRead,
+                offset,
+                requested,
+                available,
+                "positioned callback range exceeds the declared source length",
+            ));
         }
         // SAFETY: source creation validated the callback pointer and retained
         // the context's exposed-provenance address. The consumer contract keeps
@@ -255,13 +257,13 @@ impl CodestreamSource for CallbackSource {
         if status == EMUELLA_J2K_STATUS_OK {
             Ok(())
         } else {
-            Err(SourceError {
-                kind: SourceErrorKind::Io,
+            Err(SourceError::new(
+                SourceErrorKind::Io,
                 offset,
                 requested,
                 available,
-                message: format!("positioned callback returned status {status}"),
-            })
+                format!("positioned callback returned status {status}"),
+            ))
         }
     }
 }
@@ -344,6 +346,8 @@ impl From<J2kError> for AbiFailure {
             J2kError::Unsupported { .. } => EMUELLA_J2K_STATUS_UNSUPPORTED,
             J2kError::Source { .. } => EMUELLA_J2K_STATUS_SOURCE_IO,
             J2kError::InternalInvariant { .. } => EMUELLA_J2K_STATUS_INTERNAL,
+            // A variant added by a later core release has no dedicated status yet.
+            _ => EMUELLA_J2K_STATUS_INTERNAL,
         };
         Self {
             status,
@@ -723,17 +727,16 @@ pub unsafe extern "C" fn emuella_j2k_decoder_create_indexed(
                 "index ceilings must be positive and reserved must be zero",
             ));
         }
-        let limits = Part1SourceIndexLimits {
-            header_bytes: usize::try_from(options.max_header_bytes).map_err(|_| {
+        let limits = Part1SourceIndexLimits::default()
+            .with_header_bytes(usize::try_from(options.max_header_bytes).map_err(|_| {
                 AbiFailure::invalid("index header ceiling exceeds addressable memory")
-            })?,
-            markers: usize::try_from(options.max_markers).map_err(|_| {
+            })?)
+            .with_markers(usize::try_from(options.max_markers).map_err(|_| {
                 AbiFailure::invalid("index marker ceiling exceeds addressable memory")
-            })?,
-            tile_parts: usize::try_from(options.max_tile_parts).map_err(|_| {
+            })?)
+            .with_tile_parts(usize::try_from(options.max_tile_parts).map_err(|_| {
                 AbiFailure::invalid("index tile-part ceiling exceeds addressable memory")
-            })?,
-        };
+            })?);
         // SAFETY: The export supplies the complete source descriptor and callback lifetime.
         let decoder = unsafe { decoder_from_source(source, Some(limits)) }?;
         // SAFETY: The export supplies exclusive, disjoint output storage for the new handle.
@@ -1031,9 +1034,9 @@ pub unsafe extern "C" fn emuella_j2k_decode_component_region(
         let image = decode_components(
             decoder,
             workspace,
-            emuella_j2k::codestream::Part1ComponentDecodeRequest {
+            emuella_j2k::Part1ComponentDecodeRequest {
                 component_indices: &[request.component],
-                region: emuella_j2k::codestream::TileRegionRequest {
+                region: emuella_j2k::TileRegionRequest {
                     x: request.x,
                     y: request.y,
                     width: request.width,
@@ -1148,9 +1151,9 @@ pub unsafe extern "C" fn emuella_j2k_decode_components_region(
         let image = decode_components(
             decoder,
             workspace,
-            emuella_j2k::codestream::Part1ComponentDecodeRequest {
+            emuella_j2k::Part1ComponentDecodeRequest {
                 component_indices: indices,
-                region: emuella_j2k::codestream::TileRegionRequest {
+                region: emuella_j2k::TileRegionRequest {
                     x: request.x,
                     y: request.y,
                     width: request.width,
@@ -1179,7 +1182,7 @@ pub unsafe extern "C" fn emuella_j2k_decode_components_region(
 fn decode_components(
     decoder: &DecoderState,
     workspace: &WorkspaceState,
-    request: emuella_j2k::codestream::Part1ComponentDecodeRequest<'_>,
+    request: emuella_j2k::Part1ComponentDecodeRequest<'_>,
     collect_work: bool,
 ) -> Result<Box<ImageState>, AbiFailure> {
     let prepared = if decoder.index_limits.is_some() {
@@ -1244,18 +1247,11 @@ fn decode_components(
     if FORCE_DECODE_PANIC.with(|force| force.replace(false)) {
         panic!("C ABI panic containment test");
     }
-    let timings = execute_prepared_part1_decode_into_with_workspace(
+    let work_counters = execute_prepared_part1_decode(
         &prepared,
         &mut target,
         &mut workspace,
-        emuella_j2k::codestream::PreparedPart1ExecutionOptions {
-            instrumentation: if collect_work {
-                emuella_j2k::codestream::DecodeInstrumentation::WorkCounters
-            } else {
-                emuella_j2k::codestream::DecodeInstrumentation::None
-            },
-            ..Default::default()
-        },
+        &Part1ExecutionOptions::default().with_collect_work_counters(collect_work),
     )
     .map_err(AbiFailure::from)?;
     let work = collect_work.then(|| EmuellaJ2kDecodeWorkV0 {
@@ -1263,16 +1259,16 @@ fn decode_components(
         abi_version: EMUELLA_J2K_ABI_VERSION,
         reserved: 0,
         preparation_count: 1,
-        code_blocks_decoded: timings.code_blocks_decoded,
-        tier1_coefficients: timings.tier1_coefficients,
-        dwt_samples: timings.dwt_samples,
-        synthesis_coefficients_loaded: timings.synthesis_coefficients_loaded,
-        synthesis_horizontal_values: timings.synthesis_horizontal_values,
-        synthesis_vertical_values: timings.synthesis_vertical_values,
-        synthesis_lifting_updates: timings.synthesis_lifting_updates,
-        synthesis_output_samples: timings.synthesis_output_samples,
-        windowed_synthesis_component_tiles: timings.windowed_synthesis_component_tiles,
-        full_synthesis_component_tiles: timings.full_synthesis_component_tiles,
+        code_blocks_decoded: work_counters.code_blocks_decoded,
+        tier1_coefficients: work_counters.tier1_coefficients,
+        dwt_samples: work_counters.dwt_samples,
+        synthesis_coefficients_loaded: work_counters.synthesis_coefficients_loaded,
+        synthesis_horizontal_values: work_counters.synthesis_horizontal_values,
+        synthesis_vertical_values: work_counters.synthesis_vertical_values,
+        synthesis_lifting_updates: work_counters.synthesis_lifting_updates,
+        synthesis_output_samples: work_counters.synthesis_output_samples,
+        windowed_synthesis_component_tiles: work_counters.windowed_synthesis_component_tiles,
+        full_synthesis_component_tiles: work_counters.full_synthesis_component_tiles,
         output_allocation_bytes: samples.iter().map(|plane| plane.len() as u64).sum(),
         output_capacity_bytes: samples.iter().map(|plane| plane.capacity() as u64).sum(),
         coefficient_capacity: workspace.coefficient_capacity() as u64,
@@ -1727,7 +1723,7 @@ mod tests {
     fn fixture() -> (Box<TestSource>, Vec<u8>) {
         let samples = (0_u8..16).collect::<Vec<_>>();
         let bytes =
-            emuella_j2k::codestream::encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples])
+            emuella_j2k_codestream::encode_planar_u8_no_decomp_test_fixture(4, 4, &[&samples])
                 .unwrap();
         (
             Box::new(TestSource {
@@ -1741,29 +1737,28 @@ mod tests {
 
     fn heterogeneous_fixture() -> Box<TestSource> {
         let planes = [vec![0_u8; 16], vec![0_u8; 8], vec![0_u8; 4]];
-        let mut bytes =
-            emuella_j2k::codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
-                4,
-                4,
-                &[
-                    emuella_j2k::codestream::SubsampledU8TestComponent {
-                        horizontal_separation: 1,
-                        vertical_separation: 1,
-                        samples: &planes[0],
-                    },
-                    emuella_j2k::codestream::SubsampledU8TestComponent {
-                        horizontal_separation: 2,
-                        vertical_separation: 1,
-                        samples: &planes[1],
-                    },
-                    emuella_j2k::codestream::SubsampledU8TestComponent {
-                        horizontal_separation: 2,
-                        vertical_separation: 2,
-                        samples: &planes[2],
-                    },
-                ],
-            )
-            .unwrap();
+        let mut bytes = emuella_j2k_codestream::encode_planar_u8_subsampled_no_decomp_test_fixture(
+            4,
+            4,
+            &[
+                emuella_j2k_codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 1,
+                    vertical_separation: 1,
+                    samples: &planes[0],
+                },
+                emuella_j2k_codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 1,
+                    samples: &planes[1],
+                },
+                emuella_j2k_codestream::SubsampledU8TestComponent {
+                    horizontal_separation: 2,
+                    vertical_separation: 2,
+                    samples: &planes[2],
+                },
+            ],
+        )
+        .unwrap();
         assert_eq!(&bytes[..4], &[0xff, 0x4f, 0xff, 0x51]);
         bytes[45] = 0x8b;
         bytes[48] = 0x0f;
@@ -1810,7 +1805,7 @@ mod tests {
     #[test]
     fn decoder_retains_successful_index_retries_io_failure_and_reuses_it_for_new_windows() {
         let (mut source, _) = fixture();
-        let payload_start = emuella_j2k::codestream::parse(&source.bytes).unwrap().tiles[0]
+        let payload_start = emuella_j2k_codestream::parse(&source.bytes).unwrap().tiles[0]
             .payload_offset
             .unwrap() as u64;
         let descriptor = source_descriptor(&mut source);
@@ -1855,9 +1850,9 @@ mod tests {
             inner: Mutex::new(Part1DecodeWorkspace::new()),
         };
         for x in [0, 2] {
-            let request = emuella_j2k::codestream::Part1ComponentDecodeRequest {
+            let request = emuella_j2k::Part1ComponentDecodeRequest {
                 component_indices: &[0],
-                region: emuella_j2k::codestream::TileRegionRequest {
+                region: emuella_j2k::TileRegionRequest {
                     x,
                     y: 0,
                     width: 2,
@@ -2203,15 +2198,13 @@ unsafe { decoder(&mut source) };
                     samples: &samples,
                     stride_bytes: 67 * usize::from(bands) * 2,
                 },
-                &EncodeOptions {
-                    format: OutputFormat::J2kCodestream,
-                    decomposition_levels: 2,
-                    tile_size: Some(TileSize {
+                &EncodeOptions::default()
+                    .with_format(OutputFormat::J2kCodestream)
+                    .with_decomposition_levels(2)
+                    .with_tile_size(Some(TileSize {
                         width: 32,
                         height: 32,
-                    }),
-                    ..Default::default()
-                },
+                    })),
             )
             .unwrap();
             let mut source = Box::new(TestSource {
@@ -2310,7 +2303,7 @@ unsafe { decoder(&mut source) };
     #[test]
     fn four_independent_components_use_all_inline_slots() {
         let originals = [vec![11; 16], vec![23; 16], vec![37; 16], vec![49; 16]];
-        let bytes = emuella_j2k::codestream::encode_planar_u8_no_decomp_test_fixture(
+        let bytes = emuella_j2k_codestream::encode_planar_u8_no_decomp_test_fixture(
             4,
             4,
             &[&originals[0], &originals[1], &originals[2], &originals[3]],

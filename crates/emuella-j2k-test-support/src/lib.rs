@@ -34,10 +34,7 @@ pub fn generate_grayscale_j2k(width: u32, height: u32) -> Result<Vec<u8>, String
             samples: &samples,
             stride_bytes: width as usize,
         },
-        &EncodeOptions {
-            format: OutputFormat::J2kCodestream,
-            ..EncodeOptions::default()
-        },
+        &EncodeOptions::default().with_format(OutputFormat::J2kCodestream),
     )
     .map_err(|error| error.to_string())
 }

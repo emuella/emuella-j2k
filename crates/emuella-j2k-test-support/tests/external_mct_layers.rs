@@ -3,8 +3,9 @@
 
 use std::collections::BTreeSet;
 
+use emuella_j2k_codestream as codestream;
 use emuella_j2k_core::{
-    ImageViewMut, Part1DecodeWorkspace, PlaneMut, SampleFormat, codestream,
+    ImageViewMut, Part1DecodeWorkspace, PlaneMut, SampleFormat,
     execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
 };
 use sha2::{Digest, Sha256};

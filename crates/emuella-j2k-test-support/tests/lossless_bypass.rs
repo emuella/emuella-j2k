@@ -1,11 +1,9 @@
 use emuella_j2k::*;
 
 fn options() -> EncodeOptions {
-    EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    }
+    EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2)
 }
 fn info(width: u32, height: u32, components: u16, bits: u8, layout: ComponentLayout) -> ImageInfo {
     ImageInfo::new(
@@ -45,11 +43,9 @@ fn samples(width: u32, height: u32, components: u16, bits: u8) -> Vec<u8> {
 fn verify(stream: &[u8], raw: &[u8]) {
     let decoded = decode(
         stream,
-        &DecodeOptions {
-            mode: DecodeMode::Components,
-            target_layout: ComponentLayout::Interleaved,
-            ..Default::default()
-        },
+        &DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_target_layout(ComponentLayout::Interleaved),
     )
     .unwrap();
     assert_eq!(decoded.data, ImageData::Interleaved(raw.to_vec()));
@@ -110,10 +106,7 @@ fn explicit_bypass_retains_padded_layouts_and_default_entry_points() {
                     encode_lossless_bypass_with_limits(
                         planar,
                         &options(),
-                        &LosslessEncodeLimits {
-                            max_output_bytes: 128,
-                            ..limits
-                        }
+                        &limits.with_max_output_bytes(128)
                     )
                     .is_err()
                 );
@@ -142,10 +135,7 @@ fn bypass_admission_adds_only_bounded_metadata_and_rejects_other_profiles() {
         lossless_bypass_encode_requirements(
             &image,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum - 1,
-                ..limits
-            }
+            &limits.with_max_working_bytes(minimum - 1)
         )
         .is_err()
     );
@@ -153,29 +143,17 @@ fn bypass_admission_adds_only_bounded_metadata_and_rejects_other_profiles() {
         lossless_bypass_encode_requirements(
             &image,
             &options(),
-            &LosslessEncodeLimits {
-                max_working_bytes: minimum,
-                ..limits
-            }
+            &limits.with_max_working_bytes(minimum)
         )
         .is_ok()
     );
     for altered in [
-        EncodeOptions {
-            decomposition_levels: 1,
-            ..options()
-        },
-        EncodeOptions {
-            format: OutputFormat::Jp2,
-            ..options()
-        },
-        EncodeOptions {
-            tile_size: Some(TileSize {
-                width: 64,
-                height: 64,
-            }),
-            ..options()
-        },
+        options().with_decomposition_levels(1),
+        options().with_format(OutputFormat::Jp2),
+        options().with_tile_size(Some(TileSize {
+            width: 64,
+            height: 64,
+        })),
     ] {
         assert!(lossless_bypass_encode_requirements(&image, &altered, &limits).is_err());
     }
@@ -215,10 +193,9 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
             samples: &raw,
             stride_bytes: width as usize * components as usize * usize::from(bits / 8),
         };
-        let limits = LosslessEncodeLimits {
-            max_working_bytes: 256 << 20,
-            max_output_bytes: 16 << 20,
-        };
+        let limits = LosslessEncodeLimits::default()
+            .with_max_working_bytes(256 << 20)
+            .with_max_output_bytes(16 << 20);
         let serial = pools[0]
             .install(|| lossless_bypass_encode_requirements(&image, &options(), &limits).unwrap());
         let expected = pools[0]
@@ -236,10 +213,8 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
                     encode_lossless_bypass_with_limits(view, &options(), &limits).unwrap()
                 );
                 for allowed in [1u64, 2] {
-                    let tight = LosslessEncodeLimits {
-                        max_working_bytes: serial.working_bytes + (allowed - 1) * (4 << 20),
-                        ..limits
-                    };
+                    let tight = limits
+                        .with_max_working_bytes(serial.working_bytes + (allowed - 1) * (4 << 20));
                     let req =
                         lossless_bypass_encode_requirements(&image, &options(), &tight).unwrap();
                     assert_eq!(
@@ -255,10 +230,7 @@ fn bypass_joined_worker_counts_and_tight_budgets_preserve_exact_bytes() {
                     encode_lossless_bypass_with_limits(
                         view,
                         &options(),
-                        &LosslessEncodeLimits {
-                            max_output_bytes: 128,
-                            ..limits
-                        }
+                        &limits.with_max_output_bytes(128)
                     )
                     .is_err()
                 );

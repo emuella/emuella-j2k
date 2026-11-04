@@ -244,6 +244,7 @@ pub fn prepare_htj2k_high_component_decode(
 }
 
 /// Project-authored high-component packet fixture, not an application encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_high_component_test_fixture(
     width: u32,
@@ -294,6 +295,7 @@ pub fn encode_htj2k_high_component_entropy_failure_test_fixture() -> Result<Vec<
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn fixture(
     width: u32,
     height: u32,

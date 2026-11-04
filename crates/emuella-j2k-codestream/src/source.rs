@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Stable class for a positioned source failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SourceErrorKind {
     OutOfRange,
     ShortRead,
@@ -14,6 +15,7 @@ pub enum SourceErrorKind {
 
 /// Structured source failure with logical `u64` range provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourceError {
     pub kind: SourceErrorKind,
     pub offset: u64,
@@ -23,6 +25,25 @@ pub struct SourceError {
 }
 
 impl SourceError {
+    /// Creates a source failure for a read of `requested` bytes at logical
+    /// `offset` when `available` bytes could be supplied.
+    #[must_use]
+    pub fn new(
+        kind: SourceErrorKind,
+        offset: u64,
+        requested: u64,
+        available: u64,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            offset,
+            requested,
+            available,
+            message: message.into(),
+        }
+    }
+
     fn range(kind: SourceErrorKind, offset: u64, requested: u64, available: u64) -> Self {
         Self {
             kind,
@@ -64,6 +85,7 @@ impl std::error::Error for SourceError {}
 
 /// Physical access counters. Logical codec skip counters remain separate.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourceMetrics {
     pub source_bytes_requested: u64,
     pub source_bytes_returned: u64,

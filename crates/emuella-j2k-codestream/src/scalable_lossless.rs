@@ -125,6 +125,7 @@ fn prepare_forward53_with_maximum(
 
 /// Byte limits for owned raw classic lossless D2 encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LosslessEncodeLimits {
     /// Additional requested live allocation allowance, excluding caller input
     /// and the retained output allocation. Includes conservative realloc overlap.
@@ -142,8 +143,25 @@ impl Default for LosslessEncodeLimits {
     }
 }
 
+impl LosslessEncodeLimits {
+    /// Returns these limits with `max_working_bytes` replaced.
+    #[must_use]
+    pub fn with_max_working_bytes(mut self, max_working_bytes: u64) -> Self {
+        self.max_working_bytes = max_working_bytes;
+        self
+    }
+
+    /// Returns these limits with `max_output_bytes` replaced.
+    #[must_use]
+    pub fn with_max_output_bytes(mut self, max_output_bytes: u64) -> Self {
+        self.max_output_bytes = max_output_bytes;
+        self
+    }
+}
+
 /// Checked conservative admission accounting, not measured RSS or a reservation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LosslessEncodeRequirements {
     /// Total samples across all components (width × height × components).
     pub total_component_samples: u64,

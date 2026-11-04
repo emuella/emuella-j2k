@@ -42,7 +42,7 @@ with no ignored examples.
 |---|---|
 | Facade `emuella-j2k` | At least one in-memory encode/inspect doctest executes |
 | Defining `emuella-j2k-core` | At least one inspection-error doctest executes; facade re-exports do not collect it |
-| Codestream/container re-exported boundaries | Documentation and doctest collection; currently zero authored doctests, explicitly reported |
+| Lower-layer codestream/container crates | Documentation and doctest collection; currently zero authored doctests, explicitly reported |
 | README | Exactly one `rust,no_run` block compiles; external runtime input makes it compile-only |
 | Getting-started, caller-output and error guides | Exactly one `rust` block each executes project-authored facade assertions: owned round trip, discovery/padded caller output, and structured failures |
 | Six inspected Markdown surfaces | README, documentation index, getting-started, Rust API map, caller-output and error guides: deterministic local destinations, heading anchors and explicit references; same-repository `blob/main` URLs use current source |

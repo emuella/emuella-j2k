@@ -52,11 +52,9 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
         },
         layout,
     )?;
-    let options = EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let limits = LosslessEncodeLimits::default();
     let requirements = lossless_encode_requirements(&info, &options, &limits)?;
     let bytes = usize::from(bits / 8);
@@ -135,11 +133,9 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
     let encode_ns = start.elapsed().as_nanos();
     let peak = allocation_meter::peak_since(baseline);
     // Freeze encoder allocation measurement before decode and all verification.
-    let decode_options = DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: layout,
-        ..Default::default()
-    };
+    let decode_options = DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(layout);
     let start = Instant::now();
     let (native, production) = decode_native_d2_profiled(&input_stream, &decode_options)?;
     let decode_ns = start.elapsed().as_nanos();
@@ -156,11 +152,9 @@ fn run(args: &[String]) -> std::result::Result<serde_json::Value, Box<dyn std::e
     } else {
         ImageData::Interleaved(samples.clone())
     };
-    let decode_options = DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: layout,
-        ..Default::default()
-    };
+    let decode_options = DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(layout);
     let ordinary_decoded = decode(&input_stream, &decode_options)?;
     let encoded_decoded = decode(&encoded, &decode_options)?;
     let ordinary_planes = if layout == ComponentLayout::Planar {

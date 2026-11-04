@@ -2,7 +2,9 @@
 
 Application operations return `Result<T, J2kError>`. Match the error variant
 and relevant structured fields; diagnostic strings are for people and are not
-a stable parsing contract. Inputs and options with several defects have no
+a stable parsing contract. `J2kError`, `UnsupportedFeature`, `SupportStatus`
+and `InputFormat` are non-exhaustive: a later release can add a variant, so an
+exhaustive `match` needs a wildcard arm. Inputs and options with several defects have no
 promised error precedence. Start at the [API map](rust-api.md) and choose a
 [supported input and request](supported-profiles.md).
 
@@ -32,10 +34,8 @@ fn main() -> Result<(), J2kError> {
     let metadata = inspect(&bytes, &InspectOptions::default())?;
     assert!(metadata.image.is_some());
     // Default mode is rendered: explicit source-component selection is unsupported.
-    let request = DecodeOptions {
-        requested_components: ComponentSelection::Indices(vec![0]),
-        ..DecodeOptions::default()
-    };
+    let request = DecodeOptions::default()
+        .with_requested_components(ComponentSelection::Indices(vec![0]));
     assert!(matches!(decode(&bytes, &request),
         Err(J2kError::Unsupported { .. })));
     let mut malformed = bytes.clone();

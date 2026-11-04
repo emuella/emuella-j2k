@@ -1,4 +1,5 @@
 //! Independent display vectors for the bounded JP2 presentation contract.
+use emuella_j2k_container as container;
 use emuella_j2k_core::*;
 use emuella_j2k_test_support::native_planes::{
     codestream, empty_codestream, jp2, jp2_box, late_invalid_segment,
@@ -59,14 +60,13 @@ fn caller(input: &[u8], options: &DecodeOptions, expected: &Image, failure: bool
         let mut workspace = Part1DecodeWorkspace::new();
         let mut run = |target: &mut ImageViewMut<'_>| {
             // Caller target layout governs, even when the option requests its opposite.
-            let options = DecodeOptions {
-                target_layout: if options.target_layout == ComponentLayout::Planar {
+            let options = options.clone().with_target_layout(
+                if options.target_layout == ComponentLayout::Planar {
                     ComponentLayout::Interleaved
                 } else {
                     ComponentLayout::Planar
                 },
-                ..options.clone()
-            };
+            );
             let result = if reusable {
                 decode_into_with_workspace(input, target, &options, &mut workspace)
             } else {
@@ -155,10 +155,7 @@ fn check(input: &[u8], native: &[Vec<u8>], displayed: &[Vec<u8>], model: ColorMo
         SupportStatus::Supported
     );
     for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
-        let options = DecodeOptions {
-            target_layout: layout,
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default().with_target_layout(layout);
         let expected = oracle(displayed, model, layout);
         let shape = decode_shape(input, &options).unwrap();
         assert_eq!(shape.codestream_components, native.len() as u16);
@@ -198,10 +195,7 @@ fn check(input: &[u8], native: &[Vec<u8>], displayed: &[Vec<u8>], model: ColorMo
             );
         }
         caller(input, &options, &expected, false);
-        let native_options = DecodeOptions {
-            mode: DecodeMode::Components,
-            ..options
-        };
+        let native_options = options.with_mode(DecodeMode::Components);
         let decoded_native = decode(input, &native_options).unwrap();
         assert_eq!(
             decoded_native.data,
@@ -214,10 +208,7 @@ fn check(input: &[u8], native: &[Vec<u8>], displayed: &[Vec<u8>], model: ColorMo
 }
 fn rejected(input: &[u8], malformed: bool, planes: &[Vec<u8>], model: ColorModel) {
     for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
-        let options = DecodeOptions {
-            target_layout: layout,
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default().with_target_layout(layout);
         for result in [
             decode(input, &options).map(|_| ()),
             decode_shape(input, &options).map(|_| ()),
@@ -561,10 +552,7 @@ fn out_of_table_indices_and_late_entropy_failure_are_atomic() {
     let extra = [palette(&[7], &[17, 81]), mapping(&[(0, 1, 0)])].concat();
     let input = make(&native, 17, &extra);
     for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
-        let options = DecodeOptions {
-            target_layout: layout,
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default().with_target_layout(layout);
         assert!(decode_shape(&input, &options).is_ok());
         assert!(
             matches!(decode(&input,&options),Err(J2kError::Unsupported{detail,..}) if detail.contains("indeterminate"))
@@ -576,25 +564,16 @@ fn out_of_table_indices_and_late_entropy_failure_are_atomic() {
             true,
         );
         assert_eq!(
-            decode(
-                &input,
-                &DecodeOptions {
-                    mode: DecodeMode::Components,
-                    ..options
-                }
-            )
-            .unwrap()
-            .data,
+            decode(&input, &options.with_mode(DecodeMode::Components))
+                .unwrap()
+                .data,
             oracle(&native, ColorModel::Unknown, layout).data
         );
     }
     let raw = late_invalid_segment(5, 3, &[&[17; 15], &[81; 15], &[129; 15]]);
     let input = jp2(&raw, 5, 3, 4, 16, &rgba_def());
     for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
-        let options = DecodeOptions {
-            target_layout: layout,
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default().with_target_layout(layout);
         assert!(decode_shape(&input, &options).is_ok());
         assert!(matches!(
             decode(&input, &options),
@@ -663,10 +642,7 @@ fn malformed_mapping_palette_and_roles_are_distinct_from_unsupported_features() 
         assert!(
             decode(
                 &input,
-                &DecodeOptions {
-                    mode: DecodeMode::Components,
-                    ..DecodeOptions::default()
-                }
+                &DecodeOptions::default().with_mode(DecodeMode::Components)
             )
             .is_ok()
         );
@@ -748,14 +724,8 @@ fn first_colour_controls_and_rendered_request_neighbours_remain_closed() {
         rejected(&input, false, &[vec![0; 15]], ColorModel::Grayscale);
     }
     for options in [
-        DecodeOptions {
-            requested_components: ComponentSelection::Indices(vec![0]),
-            ..DecodeOptions::default()
-        },
-        DecodeOptions {
-            max_quality_layers: Some(1),
-            ..DecodeOptions::default()
-        },
+        DecodeOptions::default().with_requested_components(ComponentSelection::Indices(vec![0])),
+        DecodeOptions::default().with_max_quality_layers(Some(1)),
     ] {
         assert!(matches!(
             decode(&good, &options),
@@ -778,10 +748,8 @@ fn first_colour_controls_and_rendered_request_neighbours_remain_closed() {
     }
     for options in [
         PartialDecodeOptions::default(),
-        PartialDecodeOptions {
-            resolution: ResolutionLevel::Reduced { discard_levels: 1 },
-            ..PartialDecodeOptions::default()
-        },
+        PartialDecodeOptions::default()
+            .with_resolution(ResolutionLevel::Reduced { discard_levels: 1 }),
     ] {
         assert!(decode_rendered_partial(&good, &options).is_err());
         assert!(decode_rendered_partial_info(&good, &options).is_err());
@@ -957,7 +925,8 @@ fn palette_limits_and_reordered_palette_channels_use_full_field_domains() {
 #[test]
 fn projection_handles_multiple_blocks_and_odd_image_edges() {
     let indices = (0..65 * 67).map(|i| (i % 3) as u8).collect::<Vec<_>>();
-    let raw = codestream::encode_planar_u8_no_decomp_test_fixture(65, 67, &[&indices]).unwrap();
+    let raw = emuella_j2k_codestream::encode_planar_u8_no_decomp_test_fixture(65, 67, &[&indices])
+        .unwrap();
     let extra = [
         palette(&[7; 4], &[9, 101, 27, 0, 42, 3, 199, 255, 211, 64, 8, 128]),
         mapping(&[(0, 1, 0), (0, 1, 1), (0, 1, 2), (0, 1, 3)]),
@@ -967,10 +936,7 @@ fn projection_handles_multiple_blocks_and_odd_image_edges() {
     let input = jp2(&raw, 65, 67, 1, 16, &extra);
     let rows = [[9, 101, 27, 0], [42, 3, 199, 255], [211, 64, 8, 128]];
     for layout in [ComponentLayout::Planar, ComponentLayout::Interleaved] {
-        let options = DecodeOptions {
-            target_layout: layout,
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default().with_target_layout(layout);
         let expected = Image {
             info: ImageInfo::new(65, 67, 4, SampleFormat::U8, ColorModel::Rgba, layout).unwrap(),
             component_info: Vec::new(),
@@ -1081,11 +1047,9 @@ fn unassociated_opacity_types_are_not_colour_association_conflicts() {
             rejected(&input, false, &native, ColorModel::Rgb);
             let decoded = decode(
                 &input,
-                &DecodeOptions {
-                    mode: DecodeMode::Components,
-                    target_layout: ComponentLayout::Planar,
-                    ..DecodeOptions::default()
-                },
+                &DecodeOptions::default()
+                    .with_mode(DecodeMode::Components)
+                    .with_target_layout(ComponentLayout::Planar),
             )
             .unwrap();
             assert_eq!(decoded.data, ImageData::Planes(native.clone()));

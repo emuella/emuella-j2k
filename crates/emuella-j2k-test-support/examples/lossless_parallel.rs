@@ -126,11 +126,9 @@ fn run() -> std::result::Result<serde_json::Value, Box<dyn std::error::Error>> {
         return Err("RAW length mismatch".into());
     }
     let limits = LosslessEncodeLimits::default();
-    let options = EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let requirements = pool.install(|| lossless_encode_requirements(&info, &options, &limits))?;
     let parsed = cs::parse(&input_stream)?;
     let coding = parsed.coding_style.as_ref().ok_or("missing COD")?;
@@ -222,11 +220,9 @@ fn run() -> std::result::Result<serde_json::Value, Box<dyn std::error::Error>> {
     {
         return Err("encoder allocation bound exceeded".into());
     }
-    let decode_options = DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: layout,
-        ..Default::default()
-    };
+    let decode_options = DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(layout);
     let before = cpu_ticks()?;
     let baseline = allocation_meter::reset();
     let start = Instant::now();

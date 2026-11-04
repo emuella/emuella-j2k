@@ -220,6 +220,7 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "emuella-j2k",
+ "emuella-j2k-codestream",
  "emuella-j2k-test-support",
  "static_assertions",
 ]
@@ -269,6 +270,7 @@ name = "emuella-j2k-python"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "emuella-j2k-codestream",
  "emuella-j2k-core",
  "numpy",
  "pyo3",
@@ -280,6 +282,7 @@ version = "0.1.0"
 dependencies = [
  "emuella-j2k",
  "emuella-j2k-codestream",
+ "emuella-j2k-container",
  "emuella-j2k-core",
  "emuella-j2k-tier1",
  "rayon",
