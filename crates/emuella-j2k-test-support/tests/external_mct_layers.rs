@@ -132,7 +132,10 @@ fn external_mct_layers_have_staggered_inclusion_continuation_and_exact_regions()
             },
         )
         .expect("prepare an all-layer MCT region");
-        assert_eq!(prepared.reconstruction_component_indices(), [0, 1, 2]);
+        assert_eq!(
+            emuella_j2k_core::prepared_part1_reconstruction_component_indices(&prepared),
+            [0, 1, 2]
+        );
         let mut buffers = vec![vec![0xa5; 68 * 29]; components.len()];
         let mut planes = buffers
             .iter_mut()

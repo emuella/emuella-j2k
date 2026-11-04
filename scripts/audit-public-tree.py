@@ -355,6 +355,10 @@ def main() -> int:
         errors.append("hosted CI does not test the decoded-pixel Layer 2 runner")
     if "python3 scripts/test-layer2-derived-set.py" not in ci_contract:
         errors.append("hosted CI does not test the derived-set Layer 2 runner")
+    if "python3 scripts/check-facade-public-api.py" not in full_gate:
+        errors.append("canonical gate does not check the facade public API snapshot")
+    if "python3 scripts/test-facade-public-api.py" not in full_gate:
+        errors.append("canonical gate does not test the facade public API snapshot check")
     if "uses: EmbarkStudios/cargo-deny-action@v2" not in ci_workflow:
         errors.append("hosted CI does not enforce cargo-deny policy")
     if "python3 scripts/generate-binary-dependency-notices.py --check" not in ci_contract:
