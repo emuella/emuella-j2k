@@ -93,7 +93,7 @@ pub use emuella_j2k_core::{
 
 // Full, caller-output and partial decode.
 pub use emuella_j2k_core::{
-    ComponentSelection, DecodeMode, DecodeOptions, DecodeShape, Image, ImageData,
+    ComponentSelection, DecodeLimits, DecodeMode, DecodeOptions, DecodeShape, Image, ImageData,
     PartialDecodeOptions, Region, ResolutionLevel, TileSelection, decode, decode_into,
     decode_partial, decode_partial_component_info, decode_partial_info, decode_partial_into,
     decode_rendered_partial, decode_rendered_partial_info, decode_rendered_partial_into,
@@ -176,6 +176,12 @@ pub use emuella_j2k_core::{
 /// };
 /// ```
 ///
+/// ```compile_fail,E0639
+/// let _ = emuella_j2k::DecodeLimits {
+///     max_output_samples: 1,
+/// };
+/// ```
+///
 /// Error and classification enums need a wildcard arm, so variants can be added:
 ///
 /// ```compile_fail,E0004
@@ -232,6 +238,8 @@ pub use emuella_j2k_core::{
 /// assert!(known(InputFormat::Jp2));
 /// let error = J2kError::TruncatedInput { needed: 1, remaining: 0 };
 /// assert!(matches!(error, J2kError::TruncatedInput { needed: 1, .. }));
+/// let limits = emuella_j2k::DecodeLimits::default().with_max_output_samples(1 << 20);
+/// assert_eq!(options.with_limits(limits).limits.max_output_samples, 1 << 20);
 /// ```
 #[cfg(doctest)]
 pub struct FacadeBoundary;

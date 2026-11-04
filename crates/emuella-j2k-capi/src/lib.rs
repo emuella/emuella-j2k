@@ -345,6 +345,7 @@ impl From<J2kError> for AbiFailure {
             }
             J2kError::Unsupported { .. } => EMUELLA_J2K_STATUS_UNSUPPORTED,
             J2kError::Source { .. } => EMUELLA_J2K_STATUS_SOURCE_IO,
+            J2kError::LimitExceeded { .. } => EMUELLA_J2K_STATUS_RESOURCE_LIMIT,
             J2kError::InternalInvariant { .. } => EMUELLA_J2K_STATUS_INTERNAL,
             // A variant added by a later core release has no dedicated status yet.
             _ => EMUELLA_J2K_STATUS_INTERNAL,
@@ -3047,5 +3048,16 @@ unsafe { decoder(&mut source) };
         unsafe { emuella_j2k_workspace_destroy(workspace) };
         // SAFETY: This matching handle is released once, after its last synchronous use.
         unsafe { emuella_j2k_decoder_destroy(decoder) };
+    }
+
+    #[test]
+    fn caller_decode_limit_failures_report_resource_limit() {
+        let failure = AbiFailure::from(J2kError::LimitExceeded {
+            limit: "max_output_samples",
+            requested: 4,
+            maximum: 3,
+        });
+        assert_eq!(failure.status, EMUELLA_J2K_STATUS_RESOURCE_LIMIT);
+        assert!(failure.message.contains("max_output_samples"));
     }
 }

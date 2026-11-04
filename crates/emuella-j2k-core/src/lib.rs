@@ -5801,11 +5801,69 @@ pub enum UnsupportedFeature {
     IncrementalInput,
 }
 
+/// Caller-selected resource budgets for one decode request.
+///
+/// A budget can only lower the decoder's built-in caps: a larger value is
+/// accepted, but the built-in caps still apply. Each budget is checked from
+/// inspected headers and the request before decode work or output allocation
+/// begins. Start from `Default::default()`, which keeps the built-in bounds,
+/// and use the `with_<field>` setters; later releases may add budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecodeLimits {
+    /// Maximum total output samples across every selected component (native
+    /// mode) or rendered channel, after region, tile and resolution
+    /// reduction: each plane's width × height, summed. Rendered channels are
+    /// counted on the reference grid, with at least one channel per codestream
+    /// component. Zero is invalid. Exceeding the budget returns
+    /// [`J2kError::LimitExceeded`]. Defaults to
+    /// [`Self::BUILT_IN_MAX_OUTPUT_SAMPLES`].
+    pub max_output_samples: u64,
+}
+
+impl DecodeLimits {
+    /// Built-in total decode-sample cap and the default `max_output_samples`.
+    /// Routes also keep their own narrower built-in per-component caps.
+    pub const BUILT_IN_MAX_OUTPUT_SAMPLES: u64 = 256 * 1024 * 1024;
+
+    /// Returns these limits with `max_output_samples` replaced.
+    #[must_use]
+    pub fn with_max_output_samples(mut self, max_output_samples: u64) -> Self {
+        self.max_output_samples = max_output_samples;
+        self
+    }
+
+    /// Validate the budget and return it only when it lowers the built-in cap.
+    /// Default and larger budgets leave the existing built-in checks in sole
+    /// charge, so default requests keep their established behaviour.
+    fn lowered_max_output_samples(&self) -> Result<Option<u64>> {
+        if self.max_output_samples == 0 {
+            return Err(J2kError::InvalidParameter {
+                parameter: "max_output_samples",
+                message: "maximum output samples must be at least one",
+            });
+        }
+        Ok(
+            (self.max_output_samples < Self::BUILT_IN_MAX_OUTPUT_SAMPLES)
+                .then_some(self.max_output_samples),
+        )
+    }
+}
+
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        Self {
+            max_output_samples: Self::BUILT_IN_MAX_OUTPUT_SAMPLES,
+        }
+    }
+}
+
 /// Full-image decode parameters.
 ///
 /// Defaults select rendered, all-component, all-layer, planar output with no
-/// best-effort attempt. Component selection and positive quality-layer limits
-/// require component mode and their separately admitted profiles.
+/// best-effort attempt and the built-in [`DecodeLimits`]. Component selection
+/// and positive quality-layer limits require component mode and their
+/// separately admitted profiles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DecodeOptions {
@@ -5830,6 +5888,9 @@ pub struct DecodeOptions {
     pub max_quality_layers: Option<u16>,
     /// Owned output layout; [`decode_into`] instead derives layout from its target.
     pub target_layout: ComponentLayout,
+    /// Caller resource budgets, checked before decode work begins. Shape
+    /// discovery applies them too, so it agrees with execution.
+    pub limits: DecodeLimits,
 }
 
 impl DecodeOptions {
@@ -5870,6 +5931,13 @@ impl DecodeOptions {
         self.allow_best_effort_backend_decode = allow_best_effort_backend_decode;
         self
     }
+
+    /// Returns these options with `limits` replaced.
+    #[must_use]
+    pub fn with_limits(mut self, limits: DecodeLimits) -> Self {
+        self.limits = limits;
+        self
+    }
 }
 
 impl Default for DecodeOptions {
@@ -5880,6 +5948,7 @@ impl Default for DecodeOptions {
             requested_components: ComponentSelection::All,
             max_quality_layers: None,
             target_layout: ComponentLayout::Planar,
+            limits: DecodeLimits::default(),
         }
     }
 }
@@ -6273,13 +6342,45 @@ mod option_setter_tests {
     }
 
     #[test]
+    fn decode_limit_setters_replace_only_their_field() {
+        let limits = DecodeLimits::default().with_max_output_samples(17);
+        assert_eq!(
+            limits,
+            DecodeLimits {
+                max_output_samples: 17,
+            }
+        );
+        assert_eq!(
+            DecodeLimits::default(),
+            DecodeLimits {
+                max_output_samples: DecodeLimits::BUILT_IN_MAX_OUTPUT_SAMPLES,
+            }
+        );
+        assert_eq!(
+            DecodeOptions::default().with_limits(limits),
+            DecodeOptions {
+                limits,
+                ..DecodeOptions::default()
+            }
+        );
+        assert_eq!(
+            PartialDecodeOptions::default().with_limits(limits),
+            PartialDecodeOptions {
+                limits,
+                ..PartialDecodeOptions::default()
+            }
+        );
+    }
+
+    #[test]
     fn decode_and_inspect_setters_replace_only_their_field() {
         let options = DecodeOptions::default()
             .with_mode(DecodeMode::Components)
             .with_requested_components(ComponentSelection::Indices(vec![2, 0]))
             .with_max_quality_layers(Some(3))
             .with_target_layout(ComponentLayout::Interleaved)
-            .with_allow_best_effort_backend_decode(true);
+            .with_allow_best_effort_backend_decode(true)
+            .with_limits(DecodeLimits::default().with_max_output_samples(11));
         assert_eq!(
             options,
             DecodeOptions {
@@ -6288,6 +6389,9 @@ mod option_setter_tests {
                 requested_components: ComponentSelection::Indices(vec![2, 0]),
                 max_quality_layers: Some(3),
                 target_layout: ComponentLayout::Interleaved,
+                limits: DecodeLimits {
+                    max_output_samples: 11,
+                },
             }
         );
         assert_eq!(
@@ -6327,7 +6431,8 @@ mod option_setter_tests {
             .with_resolution(ResolutionLevel::Reduced { discard_levels: 1 })
             .with_components(ComponentSelection::Indices(vec![1]))
             .with_max_quality_layers(Some(2))
-            .with_target_layout(ComponentLayout::Interleaved);
+            .with_target_layout(ComponentLayout::Interleaved)
+            .with_limits(DecodeLimits::default().with_max_output_samples(13));
         assert_eq!(
             options,
             PartialDecodeOptions {
@@ -6337,6 +6442,9 @@ mod option_setter_tests {
                 components: ComponentSelection::Indices(vec![1]),
                 max_quality_layers: Some(2),
                 target_layout: ComponentLayout::Interleaved,
+                limits: DecodeLimits {
+                    max_output_samples: 13,
+                },
             }
         );
         assert_eq!(
@@ -6457,6 +6565,10 @@ pub struct PartialDecodeOptions {
     pub max_quality_layers: Option<u16>,
     /// Requested storage layout; native unequal grids generally require planar.
     pub target_layout: ComponentLayout,
+    /// Caller resource budgets, checked before decode work begins. Output
+    /// samples count the requested window; a compatibility route that decodes
+    /// the full image before cropping also checks that full decode.
+    pub limits: DecodeLimits,
 }
 
 impl PartialDecodeOptions {
@@ -6501,6 +6613,13 @@ impl PartialDecodeOptions {
         self.target_layout = target_layout;
         self
     }
+
+    /// Returns these options with `limits` replaced.
+    #[must_use]
+    pub fn with_limits(mut self, limits: DecodeLimits) -> Self {
+        self.limits = limits;
+        self
+    }
 }
 
 impl Default for PartialDecodeOptions {
@@ -6512,6 +6631,7 @@ impl Default for PartialDecodeOptions {
             components: ComponentSelection::All,
             max_quality_layers: None,
             target_layout: ComponentLayout::Planar,
+            limits: DecodeLimits::default(),
         }
     }
 }
@@ -6689,6 +6809,169 @@ pub fn inspect(input: &[u8], options: &InspectOptions) -> Result<Metadata> {
     metadata_from_container(input, container, options)
 }
 
+/// How a request's output samples are counted against [`DecodeLimits`].
+#[derive(Clone, Copy)]
+enum OutputSampleMeasure<'a> {
+    /// Selected native component planes, each on its own sampled grid.
+    Native(&'a ComponentSelection),
+    /// Rendered channels on the reference grid: the presentation's channel
+    /// count, but never fewer than the codestream's component count.
+    Rendered { channels: u16 },
+}
+
+/// Reject a full decode request whose output exceeds a lowered caller budget.
+///
+/// This reads headers only. It runs before any route prepares packet state or
+/// allocates output, and is a no-op for the default (built-in) budget.
+fn enforce_decode_limits(input: &[u8], options: &DecodeOptions) -> Result<()> {
+    let Some(maximum) = options.limits.lowered_max_output_samples()? else {
+        return Ok(());
+    };
+    let metadata = inspect(input, &InspectOptions::default())?;
+    let measure = match options.mode {
+        DecodeMode::Components => OutputSampleMeasure::Native(&options.requested_components),
+        DecodeMode::Rendered => OutputSampleMeasure::Rendered {
+            channels: jp2_presentation::for_request(input, &metadata, options)?.map_or(0, |plan| {
+                plan.shape(options.target_layout).output_components
+            }),
+        },
+    };
+    let requested = requested_output_samples(input, &metadata, measure, None, None, 0)?;
+    check_output_sample_limit(requested, maximum)
+}
+
+/// Partial counterpart of [`enforce_decode_limits`]: count the requested
+/// region or tile at the requested resolution.
+fn enforce_partial_decode_limits(
+    input: &[u8],
+    options: &PartialDecodeOptions,
+    mode: DecodeMode,
+) -> Result<()> {
+    let Some(maximum) = options.limits.lowered_max_output_samples()? else {
+        return Ok(());
+    };
+    let metadata = inspect(input, &InspectOptions::default())?;
+    let measure = match mode {
+        DecodeMode::Components => OutputSampleMeasure::Native(&options.components),
+        DecodeMode::Rendered => OutputSampleMeasure::Rendered { channels: 0 },
+    };
+    let discard_levels = match options.resolution {
+        ResolutionLevel::Full => 0,
+        ResolutionLevel::Reduced { discard_levels } => discard_levels,
+    };
+    let requested = requested_output_samples(
+        input,
+        &metadata,
+        measure,
+        options.region,
+        options.tile,
+        discard_levels,
+    )?;
+    check_output_sample_limit(requested, maximum)
+}
+
+fn check_output_sample_limit(requested: Option<u64>, maximum: u64) -> Result<()> {
+    match requested {
+        Some(requested) if requested > maximum => Err(J2kError::LimitExceeded {
+            limit: "max_output_samples",
+            requested,
+            maximum,
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Primary codestream of any inspected format, or `None` when there is none.
+fn primary_codestream_bytes<'a>(input: &'a [u8], metadata: &Metadata) -> Result<Option<&'a [u8]>> {
+    match metadata.format {
+        InputFormat::J2kCodestream | InputFormat::Htj2kCodestream => Ok(Some(input)),
+        InputFormat::Jp2 | InputFormat::Jph => {
+            let container = container::parse(input).map_err(map_container_error)?;
+            container
+                .primary_codestream(input)
+                .map_err(map_container_error)
+        }
+        InputFormat::Unknown => Ok(None),
+    }
+}
+
+/// Count a request's output samples from SIZ geometry alone, saturating at
+/// `u64::MAX`. Returns `None` when no codestream exists, so no route can decode.
+///
+/// Each image-relative window maps to the absolute reference grid, then to a
+/// component grid by ceiling division by its separations, then to the reduced
+/// grid by ceiling division by `2^discard_levels`, as the decode routes do.
+/// A window outside the image is counted unclipped and an out-of-range
+/// component is skipped: their routes reject them, and over-counting a
+/// rejected request is harmless. A region takes precedence over a tile for
+/// the same reason.
+fn requested_output_samples(
+    input: &[u8],
+    metadata: &Metadata,
+    measure: OutputSampleMeasure<'_>,
+    region: Option<Region>,
+    tile: Option<TileSelection>,
+    discard_levels: u8,
+) -> Result<Option<u64>> {
+    let Some(codestream_bytes) = primary_codestream_bytes(input, metadata)? else {
+        return Ok(None);
+    };
+    let parsed = codestream::parse(codestream_bytes).map_err(map_codestream_error)?;
+    let siz = &parsed.siz;
+    let window = match (region, tile) {
+        (Some(region), _) => region,
+        (None, Some(tile)) => direct_part1_tile_region(siz, tile)?,
+        (None, None) => Region {
+            x: 0,
+            y: 0,
+            width: parsed.image_width(),
+            height: parsed.image_height(),
+        },
+    };
+    // Each coordinate is below 2^34, so these sums cannot overflow.
+    let x0 = u64::from(siz.image_origin_x) + u64::from(window.x);
+    let y0 = u64::from(siz.image_origin_y) + u64::from(window.y);
+    let x1 = x0 + u64::from(window.width);
+    let y1 = y0 + u64::from(window.height);
+    let reduce = |coordinate: u64| {
+        if discard_levels >= 63 {
+            u64::from(coordinate != 0)
+        } else {
+            coordinate.div_ceil(1 << discard_levels)
+        }
+    };
+    let plane_samples = |horizontal_separation: u8, vertical_separation: u8| {
+        // SIZ parsing rejects zero separations; `max` keeps division defined.
+        let x_step = u64::from(horizontal_separation.max(1));
+        let y_step = u64::from(vertical_separation.max(1));
+        let width = reduce(x1.div_ceil(x_step)).saturating_sub(reduce(x0.div_ceil(x_step)));
+        let height = reduce(y1.div_ceil(y_step)).saturating_sub(reduce(y0.div_ceil(y_step)));
+        width.saturating_mul(height)
+    };
+    let component_samples = |component: &codestream::ComponentParameters| {
+        plane_samples(
+            component.horizontal_separation,
+            component.vertical_separation,
+        )
+    };
+    let total = match measure {
+        OutputSampleMeasure::Native(ComponentSelection::All) => siz
+            .components
+            .iter()
+            .map(component_samples)
+            .fold(0_u64, u64::saturating_add),
+        OutputSampleMeasure::Native(ComponentSelection::Indices(indices)) => indices
+            .iter()
+            .filter_map(|index| siz.components.get(usize::from(*index)))
+            .map(component_samples)
+            .fold(0_u64, u64::saturating_add),
+        OutputSampleMeasure::Rendered { channels } => {
+            plane_samples(1, 1).saturating_mul(u64::from(channels.max(siz.component_count())))
+        }
+    };
+    Ok(Some(total))
+}
+
 mod native_diagnostics;
 #[cfg(feature = "std")]
 pub use native_diagnostics::decode_native_d2_profiled;
@@ -6745,6 +7028,7 @@ fn decode_impl(
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
+    enforce_decode_limits(input, options)?;
     if let Some(plan) = jp2_presentation::for_request(input, &metadata, options)? {
         return plan.decode(options);
     }
@@ -6801,6 +7085,7 @@ pub fn decode_htj2k_with_workspace(
         });
     }
     let metadata = inspect(input, &InspectOptions::default())?;
+    enforce_decode_limits(input, options)?;
     let native_component_grid =
         validate_htj2k_native_component_grid_request(input, &metadata, options)?;
     if let Some(image) = ht_high_component::decode(input, options, workspace)? {
@@ -6853,6 +7138,7 @@ pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
+    enforce_decode_limits(input, options)?;
     reject_unsupported_rendered_projection(input, &metadata, options)?;
     decode_htj2k_cleanup_vlc_output_probe_from_metadata(input, &metadata, workspace)
 }
@@ -6891,6 +7177,7 @@ pub fn decode_shape(input: &[u8], options: &DecodeOptions) -> Result<DecodeShape
     if options.allow_best_effort_backend_decode {
         validate_native_best_effort_decode_request(&metadata)?;
     }
+    enforce_decode_limits(input, options)?;
     if let Some(plan) = jp2_presentation::for_request(input, &metadata, options)? {
         return Ok(plan.shape(options.target_layout));
     }
@@ -7525,6 +7812,7 @@ fn decode_bounded_jp2_sycc_420_with_policy(
 /// Decode a non-empty full-resolution image-relative rectangle from the
 /// bounded direct JP2 sYCC 4:2:0 profile into owned rendered RGB buffers.
 pub fn decode_rendered_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Image> {
+    enforce_partial_decode_limits(input, options, DecodeMode::Rendered)?;
     decode_bounded_jp2_sycc_420_with_policy(
         input,
         options,
@@ -7538,6 +7826,7 @@ pub fn decode_rendered_partial_info(
     input: &[u8],
     options: &PartialDecodeOptions,
 ) -> Result<ImageInfo> {
+    enforce_partial_decode_limits(input, options, DecodeMode::Rendered)?;
     let plan =
         prepare_bounded_jp2_sycc_partial(input, options, BoundedSyccMetadataPolicy::DirectPartial)?;
     bounded_sycc_output_info(plan.requested_region, options.target_layout)
@@ -8736,6 +9025,7 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
             message: "maximum quality layers must be at least one",
         });
     }
+    enforce_partial_decode_limits(input, options, DecodeMode::Components)?;
 
     #[cfg(feature = "std")]
     if let Some(image) = ht_roi::decode(input, options)? {
@@ -8819,9 +9109,12 @@ pub fn decode_partial(input: &[u8], options: &PartialDecodeOptions) -> Result<Im
         InputFormat::Jp2 | InputFormat::J2kCodestream => DecodeMode::Components,
         _ => DecodeMode::Rendered,
     };
+    // This compatibility route reconstructs the full image before cropping, so
+    // the caller's budget also applies to that full decode.
     let mut decode_options = DecodeOptions {
         mode,
         target_layout: ComponentLayout::Planar,
+        limits: options.limits,
         ..DecodeOptions::default()
     };
     decode_options.requested_components = ComponentSelection::All;
@@ -9133,6 +9426,7 @@ pub fn decode_partial_info(input: &[u8], options: &PartialDecodeOptions) -> Resu
             remaining: 0,
         });
     }
+    enforce_partial_decode_limits(input, options, DecodeMode::Components)?;
     partial_decode_target_info(input, options)
 }
 
@@ -9154,6 +9448,7 @@ pub fn decode_partial_component_info(
             "native component descriptors require planar output",
         ));
     }
+    enforce_partial_decode_limits(input, options, DecodeMode::Components)?;
     #[cfg(feature = "std")]
     {
         if let Some((_, _, component_info)) = ht_roi::prepare(input, options)? {
@@ -10060,6 +10355,7 @@ pub fn prepare_part1_decode<'a>(
     }
     let metadata = inspect(input, &InspectOptions::default())?;
     validate_partial_quality_layer_profile(input, &metadata, options)?;
+    enforce_partial_decode_limits(input, options, DecodeMode::Components)?;
     let codestream_bytes = primary_part1_codestream_bytes(input, &metadata)?.ok_or_else(|| {
         unsupported(
             UnsupportedFeature::PartialDecodeMode,
@@ -10718,6 +11014,7 @@ pub fn decode_partial_into_with_workspace(
         });
     }
     validate_image_view_mut(target)?;
+    enforce_partial_decode_limits(input, options, DecodeMode::Components)?;
 
     let mut owned_options = options.clone();
     owned_options.target_layout = match target {
@@ -12748,6 +13045,16 @@ pub enum J2kError {
         /// Bytes supplied by the caller.
         provided: usize,
     },
+    /// The request exceeds a caller-selected [`DecodeLimits`] budget. It is
+    /// reported before decode work or output allocation begins.
+    LimitExceeded {
+        /// Name of the exceeded [`DecodeLimits`] field.
+        limit: &'static str,
+        /// Amount the request needs, saturating at `u64::MAX`.
+        requested: u64,
+        /// Caller-selected maximum.
+        maximum: u64,
+    },
     /// An internal consistency check failed; report a reproducible case.
     InternalInvariant {
         /// Human-readable explanation.
@@ -12784,6 +13091,14 @@ impl fmt::Display for J2kError {
             Self::BufferTooSmall { required, provided } => write!(
                 f,
                 "buffer too small: required at least {required} bytes, provided {provided}"
+            ),
+            Self::LimitExceeded {
+                limit,
+                requested,
+                maximum,
+            } => write!(
+                f,
+                "decode limit `{limit}` exceeded: request needs {requested}, maximum {maximum}"
             ),
             Self::InternalInvariant { message } => {
                 write!(f, "internal invariant failed: {message}")
@@ -19810,6 +20125,8 @@ mod many_tile_tests {
     }
 }
 
+#[cfg(test)]
+mod decode_limit_tests;
 #[cfg(all(test, feature = "std"))]
 mod ht_lossy_public_tests;
 #[cfg(all(test, feature = "std"))]
