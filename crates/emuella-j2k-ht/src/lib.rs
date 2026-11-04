@@ -19353,6 +19353,11 @@ pub struct HtCleanupPassSegmentViews<'a> {
 impl<'a> HtCleanupPassSegmentViews<'a> {
     /// Build the forward magnitude/sign, forward MEL, and reverse VLC cursor
     /// bundle for this cleanup pass segment.
+    ///
+    /// MEL decoding through the bundle follows ISO/IEC 15444-15:2019 |
+    /// ITU-T T.814, 7.1.3: byte `Lcup-2` is read with its low nibble set, and
+    /// reads beyond it see `0xFF` fill. The MEL cursor's bit counts cover only
+    /// the stored bytes from `Pcup` to `Lcup-2`; fill bits are never counted.
     pub fn bit_cursors(self) -> Result<HtCleanupPassSegmentBitCursors<'a>, HtLayoutError> {
         if self.mel_vlc.len() < 2 {
             return Err(HtLayoutError::InvalidCleanupPassSegment {
@@ -19362,7 +19367,9 @@ impl<'a> HtCleanupPassSegmentViews<'a> {
         }
         Ok(HtCleanupPassSegmentBitCursors {
             magnitude_sign: HtForwardBitCursor::new(self.magnitude_sign),
-            mel: HtForwardBitCursor::new(&self.mel_vlc[..self.mel_vlc.len() - 1]),
+            mel: HtForwardBitCursor::new_cleanup_segment_mel(
+                &self.mel_vlc[..self.mel_vlc.len() - 1],
+            ),
             vlc: HtCleanupPassVlcReverseBitCursor::new(self.mel_vlc)?,
         })
     }
@@ -25896,22 +25903,44 @@ fn read_required_mel_bit_from_cursor(
     cursor: &mut HtForwardBitCursor<'_>,
 ) -> Result<u8, HtLayoutError> {
     if cursor.bits_remaining_in_current == 0 {
-        let previous_byte_requires_unstuffing = cursor.byte_offset != 0 && cursor.current == 0xff;
-        let Some(byte) = cursor.bytes.get(cursor.byte_offset).copied() else {
-            return Err(HtLayoutError::StreamBitReadUnavailable {
-                stream: HtCleanupStreamKind::Mel,
-                requested_bits: 1,
-                remaining_bits: cursor.remaining_bits(),
-            });
+        let previous_byte_requires_unstuffing =
+            (cursor.byte_offset != 0 || cursor.virtual_fill) && cursor.current == 0xff;
+        let byte = match cursor.bytes.get(cursor.byte_offset).copied() {
+            Some(stored) => {
+                // In a cleanup segment the final MEL byte is byte `Lcup-2`,
+                // which MEL reads see with its low nibble set (T.814 7.1.1).
+                // Setting low bits cannot change the stuffing check below.
+                let byte = if cursor.mel_cleanup_segment_end
+                    && cursor.byte_offset + 1 == cursor.bytes.len()
+                {
+                    stored | 0x0f
+                } else {
+                    stored
+                };
+                if previous_byte_requires_unstuffing && byte > 0x8f {
+                    return Err(HtLayoutError::StreamStuffedByteInvalid {
+                        stream: HtCleanupStreamKind::Mel,
+                        byte,
+                        consumed_bits: cursor.consumed_bits(),
+                    });
+                }
+                cursor.byte_offset += 1;
+                byte
+            }
+            // T.814 7.1.3 supplies `0xFF` once a cleanup segment's MEL bytes
+            // are exhausted.
+            None if cursor.mel_cleanup_segment_end => {
+                cursor.virtual_fill = true;
+                0xff
+            }
+            None => {
+                return Err(HtLayoutError::StreamBitReadUnavailable {
+                    stream: HtCleanupStreamKind::Mel,
+                    requested_bits: 1,
+                    remaining_bits: cursor.remaining_bits(),
+                });
+            }
         };
-        if previous_byte_requires_unstuffing && byte > 0x8f {
-            return Err(HtLayoutError::StreamStuffedByteInvalid {
-                stream: HtCleanupStreamKind::Mel,
-                byte,
-                consumed_bits: cursor.consumed_bits(),
-            });
-        }
-        cursor.byte_offset += 1;
         cursor.current = byte;
         cursor.bits_remaining_in_current = if previous_byte_requires_unstuffing {
             7
@@ -26848,7 +26877,12 @@ pub struct HtForwardBitCursor<'a> {
     current: u8,
     bits_remaining_in_current: u8,
     magnitude_sign_current_data_bits: u8,
-    magnitude_sign_virtual_padding: bool,
+    /// Set once the cursor has run past its bytes into synthesised `0xFF`
+    /// fill; consumed and remaining counts then cover only the stored bytes.
+    virtual_fill: bool,
+    /// The cursor reads the MEL byte-stream of an HT cleanup segment: its last
+    /// byte is byte `Lcup-2` and `0xFF` fill follows it.
+    mel_cleanup_segment_end: bool,
 }
 
 impl<'a> HtForwardBitCursor<'a> {
@@ -26860,13 +26894,28 @@ impl<'a> HtForwardBitCursor<'a> {
             current: 0,
             bits_remaining_in_current: 0,
             magnitude_sign_current_data_bits: 8,
-            magnitude_sign_virtual_padding: false,
+            virtual_fill: false,
+            mel_cleanup_segment_end: false,
         }
     }
 
-    /// Number of bits already returned by this cursor.
+    /// Start reading the MEL byte-stream of an HT cleanup segment.
+    ///
+    /// `bytes` runs from byte `Pcup` to byte `Lcup-2` of the segment. Following
+    /// ISO/IEC 15444-15:2019 | ITU-T T.814, 7.1.1 and 7.1.3, MEL reads see the
+    /// last of these bytes with its four least-significant bits set, and see
+    /// `0xFF` bytes once these bytes are exhausted.
+    fn new_cleanup_segment_mel(bytes: &'a [u8]) -> Self {
+        Self {
+            mel_cleanup_segment_end: true,
+            ..Self::new(bytes)
+        }
+    }
+
+    /// Number of stored bits already consumed by this cursor. Synthesised
+    /// `0xFF` fill beyond the stored bytes is not counted.
     pub fn consumed_bits(&self) -> usize {
-        if self.magnitude_sign_virtual_padding {
+        if self.virtual_fill {
             return self.bytes.len() * 8;
         }
         self.byte_offset * 8 - usize::from(self.bits_remaining_in_current)
@@ -26877,9 +26926,10 @@ impl<'a> HtForwardBitCursor<'a> {
         self.consumed_bits().div_ceil(8)
     }
 
-    /// Number of unread bits left in this cursor.
+    /// Number of unread stored bits left in this cursor; zero once reads have
+    /// reached synthesised fill.
     pub fn remaining_bits(&self) -> usize {
-        if self.magnitude_sign_virtual_padding {
+        if self.virtual_fill {
             return 0;
         }
         (self.bytes.len() - self.byte_offset) * 8 + usize::from(self.bits_remaining_in_current)
@@ -26978,8 +27028,8 @@ impl<'a> HtForwardBitCursor<'a> {
         let mut value = 0_u32;
         for shift in 0..count {
             if self.bits_remaining_in_current == 0 {
-                let follows_ff = self.current == 0xff
-                    && (self.byte_offset != 0 || self.magnitude_sign_virtual_padding);
+                let follows_ff =
+                    self.current == 0xff && (self.byte_offset != 0 || self.virtual_fill);
                 if let Some(&byte) = self.bytes.get(self.byte_offset) {
                     self.current = byte;
                     self.byte_offset += 1;
@@ -26987,7 +27037,7 @@ impl<'a> HtForwardBitCursor<'a> {
                     // Annex F defines an exhausted MagSgn stream as an
                     // unbounded sequence of 0xff fill bytes.
                     self.current = 0xff;
-                    self.magnitude_sign_virtual_padding = true;
+                    self.virtual_fill = true;
                 }
                 self.magnitude_sign_current_data_bits = if follows_ff { 7 } else { 8 };
                 self.bits_remaining_in_current = self.magnitude_sign_current_data_bits;
@@ -27313,6 +27363,225 @@ mod short_vlc_prefix_tests {
             Err(HtLayoutError::StreamBitReadUnavailable { .. })
         ));
         assert_eq!(cursor.consumed_bits(), 0);
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod cleanup_mel_segment_end_tests {
+    //! MEL reads at the end of an HT cleanup segment, after ISO/IEC
+    //! 15444-15:2019 | ITU-T T.814, 7.1.3 (physical page 14) and the modified
+    //! segment view of 7.1.1 (physical page 12); retrieval
+    //! 10baf9472429d52f5d6b5f9b7a892dbed395b1db. MEL reads see byte `Lcup-2`
+    //! with its low nibble set, and `0xFF` beyond it. The fast and checked
+    //! readers are compared with each other and with a plain bit-by-bit model.
+
+    use super::*;
+    use alloc::vec::Vec;
+
+    /// Bit-by-bit model of the MEL bits read from a cleanup segment's combined
+    /// MEL/VLC suffix, bytes `Pcup` to `Lcup-1`.
+    struct MelBitModel<'a> {
+        suffix: &'a [u8],
+        fetched: usize,
+        byte: u8,
+        bits: u8,
+    }
+
+    impl MelBitModel<'_> {
+        /// Return the next MEL bit, or `None` where the decoder rejects a
+        /// stored byte above `0x8F` after `0xFF`.
+        fn bit(&mut self) -> Option<u8> {
+            if self.bits == 0 {
+                let after_ff = self.byte == 0xff;
+                let last_stored = self.suffix.len() - 2;
+                self.byte = if self.fetched < last_stored {
+                    self.suffix[self.fetched]
+                } else if self.fetched == last_stored {
+                    self.suffix[self.fetched] | 0x0f
+                } else {
+                    0xff
+                };
+                if self.fetched <= last_stored && after_ff && self.byte > 0x8f {
+                    return None;
+                }
+                self.fetched += 1;
+                self.bits = if after_ff { 7 } else { 8 };
+            }
+            self.bits -= 1;
+            Some((self.byte >> self.bits) & 1)
+        }
+    }
+
+    /// Model events and the number of MEL bytes, stored or fill, fetched.
+    fn model_events(suffix: &[u8], count: usize) -> Option<(Vec<HtMelEvent>, usize)> {
+        let mut bits = MelBitModel {
+            suffix,
+            fetched: 0,
+            byte: 0,
+            bits: 0,
+        };
+        let mut state = 0;
+        let mut events = Vec::new();
+        while events.len() < count {
+            let exponent = HT_MEL_EXPONENTS[state];
+            if bits.bit()? == 1 {
+                events.extend(core::iter::repeat_n(HtMelEvent::Zero, 1 << exponent));
+                state = (state + 1).min(12);
+            } else {
+                let mut zeros = 0;
+                for _ in 0..exponent {
+                    zeros = (zeros << 1) | usize::from(bits.bit()?);
+                }
+                events.extend(core::iter::repeat_n(HtMelEvent::Zero, zeros));
+                events.push(HtMelEvent::One);
+                state = state.saturating_sub(1);
+            }
+        }
+        events.truncate(count);
+        Some((events, bits.fetched))
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ReaderResult {
+        events: Result<Vec<HtMelEvent>, HtLayoutError>,
+        consumed_bits: usize,
+        remaining_bits: usize,
+    }
+
+    fn fast_events(suffix: &[u8], count: usize) -> ReaderResult {
+        let mut reader = fast_cleanup::FastMelReader::new_cleanup_segment(suffix);
+        let events = (0..count).map(|_| reader.decode_event()).collect();
+        ReaderResult {
+            events,
+            consumed_bits: reader.consumed_bits(),
+            remaining_bits: reader.remaining_bits(),
+        }
+    }
+
+    fn checked_events(suffix: &[u8], count: usize) -> ReaderResult {
+        let mut cursors = HtCleanupPassSegmentViews {
+            magnitude_sign: &[],
+            mel_vlc: suffix,
+        }
+        .bit_cursors()
+        .unwrap();
+        let mut state = HtMelEventState::new();
+        let events = (0..count)
+            .map(|_| state.decode_event_from_segment_mel(&mut cursors.mel))
+            .collect();
+        ReaderResult {
+            events,
+            consumed_bits: cursors.mel.consumed_bits(),
+            remaining_bits: cursors.mel.remaining_bits(),
+        }
+    }
+
+    /// Decode through both readers, require agreement, and return the result.
+    fn agreed_events(suffix: &[u8], count: usize) -> ReaderResult {
+        let fast = fast_events(suffix, count);
+        assert_eq!(fast, checked_events(suffix, count), "suffix {suffix:02x?}");
+        fast
+    }
+
+    #[test]
+    fn byte_lcup_minus_2_is_read_with_its_low_nibble_set() {
+        // Stored, 0xF2 gives a one event at its fifth bit; seen as 0xFF, its
+        // first six bits give eight zero events.
+        let result = agreed_events(&[0xf2, 0x00], 8);
+        assert_eq!(result.events, Ok(vec![HtMelEvent::Zero; 8]));
+        assert_eq!((result.consumed_bits, result.remaining_bits), (6, 2));
+    }
+
+    #[test]
+    fn reads_past_the_mel_bytes_yield_ff_fill() {
+        // Byte `Lcup-2` already has its low nibble set, so only the fill is
+        // under test. Fill bits are not counted as consumed.
+        let suffix = [0x5a, 0x3f, 0x00];
+        let (expected, fetched) = model_events(&suffix, 64).unwrap();
+        assert!(fetched > suffix.len() - 1, "the events must need fill");
+        assert!(expected.contains(&HtMelEvent::One));
+        let result = agreed_events(&suffix, 64);
+        assert_eq!(result.events, Ok(expected));
+        assert_eq!((result.consumed_bits, result.remaining_bits), (16, 0));
+    }
+
+    #[test]
+    fn stuffing_rules_carry_across_the_segment_end() {
+        // 0x0F after 0xFF contributes seven bits; 0xF3 is seen as 0xFF, so
+        // the first fill byte contributes seven bits.
+        for suffix in [[0xff, 0x0f, 0x00], [0x12, 0xf3, 0x00], [0x00, 0xff, 0x00]] {
+            let (expected, fetched) = model_events(&suffix, 128).unwrap();
+            assert!(fetched > suffix.len() - 1);
+            let result = agreed_events(&suffix, 128);
+            assert_eq!(result.events, Ok(expected), "suffix {suffix:02x?}");
+            assert_eq!(result.consumed_bits, 16);
+            assert_eq!(result.remaining_bits, 0);
+        }
+    }
+
+    #[test]
+    fn invalid_stuffing_in_byte_lcup_minus_2_is_still_rejected() {
+        let suffix = [0xff, 0x9f, 0x00];
+        assert!(model_events(&suffix, 32).is_none());
+        assert!(matches!(
+            agreed_events(&suffix, 32).events,
+            Err(HtLayoutError::StreamStuffedByteInvalid {
+                stream: HtCleanupStreamKind::Mel,
+                byte: 0x9f,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fast_and_checked_readers_match_the_model_on_varied_suffixes() {
+        const BYTES: [u8; 8] = [0x00, 0x0f, 0x5a, 0x7f, 0x80, 0x8f, 0xf0, 0xff];
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let (mut accepted, mut rejected, mut filled) = (0, 0, 0);
+        for _ in 0..4000 {
+            let len = 2 + (next() % 6) as usize;
+            let suffix: Vec<u8> = (0..len)
+                .map(|_| {
+                    let value = next();
+                    if value & 1 == 0 {
+                        BYTES[(value >> 1) as usize % BYTES.len()]
+                    } else {
+                        (value >> 8) as u8
+                    }
+                })
+                .collect();
+            let count = (next() % 201) as usize;
+            let result = agreed_events(&suffix, count);
+            let stored_bits = (len - 1) * 8;
+            assert!(result.consumed_bits <= stored_bits);
+            match model_events(&suffix, count) {
+                Some((expected, fetched)) => {
+                    assert_eq!(result.events, Ok(expected), "suffix {suffix:02x?}");
+                    assert_eq!(result.consumed_bits + result.remaining_bits, stored_bits);
+                    accepted += 1;
+                    if fetched > len - 1 {
+                        filled += 1;
+                    }
+                }
+                None => {
+                    assert!(
+                        matches!(
+                            result.events,
+                            Err(HtLayoutError::StreamStuffedByteInvalid { .. })
+                        ),
+                        "suffix {suffix:02x?}"
+                    );
+                    rejected += 1;
+                }
+            }
+        }
+        assert!(accepted > 1000 && rejected > 100 && filled > 500);
     }
 }
 
