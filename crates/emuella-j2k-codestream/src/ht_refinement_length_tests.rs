@@ -7,25 +7,37 @@
 
 use super::*;
 
+/// How a packet's contribution relates to the fixture's HT sets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContributionKind {
+    /// Starts the set with the fixture's Cleanup bytes.
+    Starts,
+    /// Continues the current set's refinement segment.
+    Continues,
+    /// Starts a later set at a set boundary with a zero-length Cleanup
+    /// segment, followed by its refinement length field if it announces more
+    /// than the Cleanup pass.
+    Empty,
+    /// Reaches a later empty set through a bridge: one length field per
+    /// segment before the packet's final set, the first carrying the
+    /// contribution's refinement bytes, then the final set's zero-length
+    /// Cleanup field and, if it announces more passes, its refinement field.
+    BridgedEmpty,
+}
+
 /// One packet's contribution for the fixture's single code-block.
 #[derive(Clone, Copy)]
 struct LayerContribution<'a> {
     /// Coding passes announced in this packet; zero writes an empty packet.
     passes: u16,
-    /// Starts the set with the fixture's Cleanup bytes; otherwise the packet
-    /// continues the set's refinement segment.
-    starts_set: bool,
-    /// Starts a later set with a zero-length Cleanup segment after this many
-    /// placeholder passes; the packet's last pass is that Cleanup pass.
-    empty_set_after: Option<u16>,
+    kind: ContributionKind,
     refinement: &'a [u8],
 }
 
 const fn starts_set(passes: u16, refinement: &[u8]) -> LayerContribution<'_> {
     LayerContribution {
         passes,
-        starts_set: true,
-        empty_set_after: None,
+        kind: ContributionKind::Starts,
         refinement,
     }
 }
@@ -33,25 +45,30 @@ const fn starts_set(passes: u16, refinement: &[u8]) -> LayerContribution<'_> {
 const fn continues_set(passes: u16, refinement: &[u8]) -> LayerContribution<'_> {
     LayerContribution {
         passes,
-        starts_set: false,
-        empty_set_after: None,
+        kind: ContributionKind::Continues,
         refinement,
     }
 }
 
-const fn empty_set_after(placeholders: u16) -> LayerContribution<'static> {
+const fn empty_set(passes: u16, refinement: &[u8]) -> LayerContribution<'_> {
     LayerContribution {
-        passes: placeholders + 1,
-        starts_set: false,
-        empty_set_after: Some(placeholders),
-        refinement: &[],
+        passes,
+        kind: ContributionKind::Empty,
+        refinement,
+    }
+}
+
+const fn bridged_empty_set(passes: u16, bridge_bytes: &[u8]) -> LayerContribution<'_> {
+    LayerContribution {
+        passes,
+        kind: ContributionKind::BridgedEmpty,
+        refinement: bridge_bytes,
     }
 }
 
 const EMPTY: LayerContribution<'static> = LayerContribution {
     passes: 0,
-    starts_set: false,
-    empty_set_after: None,
+    kind: ContributionKind::Continues,
     refinement: &[],
 };
 
@@ -102,7 +119,10 @@ fn layered_fixture(layers: &[LayerContribution<'_>]) -> Vec<u8> {
     let mut replacement = Vec::new();
     let mut included = false;
     let mut l_block = 3_u8;
+    let mut first_pass = 0_u16;
     for layer in layers {
+        let pass = first_pass;
+        first_pass += layer.passes;
         let mut writer = PacketBitWriter::new();
         if layer.passes == 0 {
             writer.write_bit(0).unwrap();
@@ -114,7 +134,10 @@ fn layered_fixture(layers: &[LayerContribution<'_>]) -> Vec<u8> {
         if included {
             writer.write_bit(1).unwrap();
         } else {
-            assert!(layer.starts_set, "the first contribution starts the set");
+            assert!(
+                layer.kind == ContributionKind::Starts,
+                "the first contribution starts the set"
+            );
             let x = contribution.code_block_x;
             let y = contribution.code_block_y;
             EncTagTree::new(1, 1, [0])
@@ -134,18 +157,45 @@ fn layered_fixture(layers: &[LayerContribution<'_>]) -> Vec<u8> {
         write_coding_pass_count(&mut writer, layer.passes).unwrap();
         // (length, extra length bits) in header order.
         let mut lengths = Vec::new();
-        if let Some(placeholders) = layer.empty_set_after {
-            lengths.push((
-                0,
-                u8::try_from((u32::from(placeholders) + 1).ilog2()).unwrap(),
-            ));
-        } else if layer.starts_set {
-            lengths.push((cleanup.len(), 0_u8));
-            if layer.passes > 1 {
-                lengths.push((layer.refinement.len(), u8::from(layer.passes > 2)));
+        match layer.kind {
+            ContributionKind::Starts | ContributionKind::Empty => {
+                let cleanup_len = if layer.kind == ContributionKind::Starts {
+                    cleanup.len()
+                } else {
+                    0
+                };
+                lengths.push((cleanup_len, 0_u8));
+                if layer.passes > 1 {
+                    lengths.push((layer.refinement.len(), u8::from(layer.passes > 2)));
+                }
             }
-        } else {
-            lengths.push((layer.refinement.len(), u8::from(layer.passes > 1)));
+            ContributionKind::Continues => {
+                lengths.push((layer.refinement.len(), u8::from(layer.passes > 1)));
+            }
+            ContributionKind::BridgedEmpty => {
+                let pass_end = pass + layer.passes;
+                let final_set_start = (pass_end - 1) / 3 * 3;
+                assert!(final_set_start > pass, "a bridge precedes the final set");
+                let mut segment_start = pass;
+                while segment_start < final_set_start {
+                    let segment_end = if segment_start.is_multiple_of(3) {
+                        segment_start + 1
+                    } else {
+                        (segment_start / 3 + 1) * 3
+                    };
+                    let len = if segment_start == pass {
+                        layer.refinement.len()
+                    } else {
+                        0
+                    };
+                    lengths.push((len, u8::from(segment_end - segment_start > 1)));
+                    segment_start = segment_end;
+                }
+                lengths.push((0, 0));
+                if pass_end - final_set_start > 1 {
+                    lengths.push((0, u8::from(pass_end - final_set_start > 2)));
+                }
+            }
         }
         while lengths
             .iter()
@@ -162,10 +212,10 @@ fn layered_fixture(layers: &[LayerContribution<'_>]) -> Vec<u8> {
         }
         writer.align();
         replacement.extend_from_slice(writer.bytes());
-        if layer.starts_set {
+        if layer.kind == ContributionKind::Starts {
             replacement.extend_from_slice(&cleanup);
         }
-        if layer.starts_set && layer.passes == 1 {
+        if layer.kind != ContributionKind::Continues && layer.passes == 1 {
             assert!(layer.refinement.is_empty());
         } else {
             replacement.extend_from_slice(layer.refinement);
@@ -334,21 +384,24 @@ fn zero_length_continuation_after_refinement_bytes_adds_its_passes() {
     );
 }
 
+fn coding_sets(layers: &[LayerContribution<'_>]) -> Vec<HtCodeBlockCodingSet> {
+    let [contribution] = contributions(&multiple_set_fixture(layers))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    contribution.ht_coding_sets().collect()
+}
+
 #[test]
 fn zero_length_continuation_of_an_empty_set_keeps_it_empty() {
-    // Pass 0 is set 0's Cleanup pass and passes 1-2 are placeholders. Set 1
-    // has a zero-length Cleanup segment (pass 3), and pass 4 continues it
-    // with no bytes.
-    let sets = |layers: &[LayerContribution<'_>]| {
-        let [contribution] = contributions(&multiple_set_fixture(layers))
-            .unwrap()
-            .try_into()
-            .unwrap();
-        contribution.ht_coding_sets().collect::<Vec<_>>()
-    };
+    // Pass 0 is set 0's Cleanup pass and passes 1-2 continue it with no
+    // bytes. Set 1 has a zero-length Cleanup segment (pass 3), and pass 4
+    // continues it with no bytes.
+    let sets = coding_sets;
     let continued = sets(&[
         starts_set(1, &[]),
-        empty_set_after(2),
+        continues_set(2, &[]),
+        empty_set(1, &[]),
         continues_set(1, &[]),
     ]);
     assert_eq!(continued.len(), 2);
@@ -363,14 +416,193 @@ fn zero_length_continuation_of_an_empty_set_keeps_it_empty() {
     );
     assert_eq!(
         continued,
-        sets(&[starts_set(1, &[]), empty_set_after(2), EMPTY])
+        sets(&[
+            starts_set(1, &[]),
+            continues_set(2, &[]),
+            empty_set(1, &[]),
+            EMPTY
+        ])
     );
 
     // B.3 requires the refinement segment of an empty set to be empty too.
     let error = contributions(&multiple_set_fixture(&[
         starts_set(1, &[]),
-        empty_set_after(2),
+        continues_set(2, &[]),
+        empty_set(1, &[]),
         continues_set(1, REFINEMENT),
+    ]))
+    .unwrap_err();
+    assert!(
+        format!("{error:?}").contains("follows a zero-length cleanup segment"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn later_empty_set_reader_consumes_its_refinement_length() {
+    for announced in [2_u16, 3] {
+        let width = 3 + u8::from(announced > 2);
+        let read = |refinement_len: u32| {
+            let mut writer = PacketBitWriter::new();
+            writer.write_bits(0, 3).unwrap();
+            writer.write_bits(refinement_len, width).unwrap();
+            writer.write_bit(1).unwrap();
+            let source = ContiguousPacketSource {
+                bytes: writer.bytes(),
+            };
+            let mut reader = PacketBitReader::at(&source, 0).unwrap();
+            read_layered_ht_codeword_lengths(&mut reader, 3, 3, announced, true)
+                .map(|lengths| (lengths, reader.read_bits_with_stuffing(1).unwrap()))
+        };
+        let ((codeword_len, segments, coding_passes, cleanup_set), next_bit) = read(0).unwrap();
+        assert_eq!(
+            (codeword_len, segments.len(), coding_passes, cleanup_set),
+            (0, 0, 0, None),
+            "announced {announced}"
+        );
+        assert_eq!(next_bit, 1, "announced {announced}");
+
+        // B.3: the empty set's refinement segment must be empty too.
+        let error = read(5).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("follows a zero-length cleanup segment"),
+            "announced {announced}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn later_contribution_reads_one_length_per_bridge_segment() {
+    // (first coding pass, announced passes, bridge segment widths) after the
+    // first non-empty set. The final set starts with a five-byte Cleanup
+    // segment in a 3-bit field.
+    for (first, announced, bridge) in [
+        (1_u16, 3_u16, &[4_u8][..]),
+        (2, 2, &[3]),
+        (3, 4, &[3, 4]),
+        (1, 6, &[4, 3, 4]),
+    ] {
+        let read = |bridge_len: u32| {
+            let mut writer = PacketBitWriter::new();
+            for (index, &width) in bridge.iter().enumerate() {
+                let len = if index == 0 { bridge_len } else { 0 };
+                writer.write_bits(len, width).unwrap();
+            }
+            writer.write_bits(5, 3).unwrap();
+            writer.write_bit(1).unwrap();
+            let source = ContiguousPacketSource {
+                bytes: writer.bytes(),
+            };
+            let mut reader = PacketBitReader::at(&source, 0).unwrap();
+            read_layered_ht_codeword_lengths(&mut reader, 3, first, announced, true)
+                .map(|lengths| (lengths, reader.read_bits_with_stuffing(1).unwrap()))
+        };
+        let ((codeword_len, _, coding_passes, cleanup_set), next_bit) = read(0).unwrap();
+        let final_set = u8::try_from((first + announced - 1) / 3).unwrap();
+        assert_eq!(
+            (codeword_len, coding_passes, cleanup_set, next_bit),
+            (5, 1, Some((final_set, 5)), 1),
+            "first {first}, announced {announced}"
+        );
+
+        let error = read(2).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CodestreamError::Unsupported {
+                    construct: UnsupportedConstruct::PacketDecode,
+                    ..
+                }
+            ),
+            "first {first}, announced {announced}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn empty_bridge_completes_the_preceding_set_as_split_packets_do() {
+    // Set 0 has refinement bytes, so the bridge's zero-length MagRef pass
+    // raises Z_blk from 2 to 3, as a separate zero-length continuation does.
+    let with_bytes = coding_sets(&[starts_set(2, REFINEMENT), bridged_empty_set(2, &[])]);
+    assert_eq!(with_bytes[0].coding_passes, 3);
+    assert_eq!(
+        with_bytes,
+        coding_sets(&[
+            starts_set(2, REFINEMENT),
+            continues_set(1, &[]),
+            empty_set(1, &[])
+        ])
+    );
+
+    // A Cleanup-only set keeps Z_blk = 1.
+    let cleanup_only = coding_sets(&[starts_set(1, &[]), bridged_empty_set(3, &[])]);
+    assert_eq!(cleanup_only[0].coding_passes, 1);
+    assert_eq!(
+        cleanup_only,
+        coding_sets(&[starts_set(1, &[]), continues_set(2, &[]), empty_set(1, &[])])
+    );
+
+    // A bridge may cross a whole empty set. Only the packet's final set is
+    // retained from the bridged contribution.
+    let crossed = coding_sets(&[starts_set(1, &[]), bridged_empty_set(6, &[])]);
+    let split = coding_sets(&[
+        starts_set(1, &[]),
+        continues_set(2, &[]),
+        empty_set(3, &[]),
+        empty_set(1, &[]),
+    ]);
+    assert_eq!(crossed.len(), 2);
+    assert_eq!(split.len(), 3);
+    assert_eq!(crossed.first(), split.first());
+    assert_eq!(crossed.last(), split.last());
+
+    // Bytes before the final set would need another retained set.
+    let error = contributions(&multiple_set_fixture(&[
+        starts_set(1, &[]),
+        bridged_empty_set(3, REFINEMENT),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CodestreamError::Unsupported {
+                construct: UnsupportedConstruct::PacketDecode,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn later_empty_set_refinement_length_keeps_the_packet_header_in_step() {
+    // Set 0 is passes 0-2 and set 1 is an empty set from pass 3. However its
+    // passes are split across packets, set 1 stays a zero-byte, zero-pass
+    // set and the following packets still parse.
+    let set0 = starts_set(3, REFINEMENT);
+    let expected = coding_sets(&[set0, empty_set(3, &[]), EMPTY]);
+    assert_eq!(expected.len(), 2);
+    assert_eq!(expected[0].coding_passes, 3);
+    assert_eq!(
+        (
+            expected[1].byte_len,
+            expected[1].cleanup_byte_len,
+            expected[1].coding_passes
+        ),
+        (0, 0, 0)
+    );
+    for layers in [
+        [set0, empty_set(2, &[]), continues_set(1, &[])],
+        [set0, empty_set(1, &[]), continues_set(2, &[])],
+        [set0, empty_set(2, &[]), EMPTY],
+    ] {
+        assert_eq!(coding_sets(&layers), expected);
+    }
+
+    let error = contributions(&multiple_set_fixture(&[
+        set0,
+        empty_set(2, REFINEMENT),
+        EMPTY,
     ]))
     .unwrap_err();
     assert!(

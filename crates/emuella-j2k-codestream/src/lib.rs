@@ -10564,33 +10564,50 @@ pub fn encode_htj2k_two_layer_multiple_set_test_fixture(
     Ok(codestream)
 }
 
+/// `Lblock` after a first packet whose only length field is a one-pass
+/// Cleanup segment of `cleanup_len` bytes.
 #[cfg(any(test, feature = "test-fixtures"))]
-fn repeated_cleanup_second_ht_set_packet(cleanup: &[u8]) -> Result<Vec<u8>> {
+fn first_cleanup_l_block(cleanup_len: usize) -> Result<u8> {
     let mut l_block = 3_u8;
-    while cleanup.len() >= (1_usize << u32::from(l_block)) {
+    while cleanup_len >= (1_usize << u32::from(l_block)) {
         l_block = l_block
             .checked_add(1)
             .ok_or(CodestreamError::SizeOverflow)?;
     }
+    Ok(l_block)
+}
+
+/// Writes a later packet that finishes the first set with an empty
+/// refinement segment (passes 1-2) and starts the next set with a Cleanup
+/// segment of `cleanup_len` bytes (pass 3). Each segment has its own length
+/// field. ISO/IEC 15444-15:2019, B.2–B.3, physical pages 40–41; retrieval
+/// 10baf9472429d52f5d6b5f9b7a892dbed395b1db. ISO/IEC 15444-1:2024, B.10.7.2,
+/// physical page 93; retrieval 34e5d1639b9f121807e620c001893ca9d2c8f977.
+#[cfg(any(test, feature = "test-fixtures"))]
+fn bridged_second_ht_set_packet_header(l_block: u8, cleanup_len: usize) -> Result<Vec<u8>> {
     let mut writer = PacketBitWriter::new();
     writer.write_bit(1)?;
     writer.write_bit(1)?;
     write_coding_pass_count(&mut writer, 3)?;
-    while cleanup.len() >= (1_usize << u32::from(l_block + 1)) {
-        writer.write_bit(1)?;
-        l_block = l_block
-            .checked_add(1)
-            .ok_or(CodestreamError::SizeOverflow)?;
-    }
     writer.write_bit(0)?;
     writer.write_bits(
-        u32::try_from(cleanup.len()).map_err(|_| CodestreamError::SizeOverflow)?,
+        0,
         l_block
             .checked_add(1)
             .ok_or(CodestreamError::SizeOverflow)?,
     )?;
+    writer.write_bits(
+        u32::try_from(cleanup_len).map_err(|_| CodestreamError::SizeOverflow)?,
+        l_block,
+    )?;
     writer.align();
-    let mut packet = writer.bytes().to_vec();
+    Ok(writer.bytes().to_vec())
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn repeated_cleanup_second_ht_set_packet(cleanup: &[u8]) -> Result<Vec<u8>> {
+    let mut packet =
+        bridged_second_ht_set_packet_header(first_cleanup_l_block(cleanup.len())?, cleanup.len())?;
     packet.extend_from_slice(cleanup);
     Ok(packet)
 }
@@ -10618,14 +10635,21 @@ fn encode_htj2k_empty_later_sets_test_fixture(layers: u16) -> Result<Vec<u8>> {
         samples: &samples,
         stride_bytes: 8,
     })?;
-    let mut writer = PacketBitWriter::new();
-    writer.write_bit(1)?;
-    writer.write_bit(1)?;
-    write_coding_pass_count(&mut writer, 3)?;
-    writer.write_bit(0)?;
-    writer.write_bits(0, 4)?;
-    writer.align();
-    let empty_later_packet = writer.bytes();
+    let parsed = parse(&codestream)?;
+    let tile_rect = *tile_rects(&parsed)?
+        .first()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    let tile_part = *parsed.tiles.first().ok_or(CodestreamError::SizeOverflow)?;
+    let payload = tile_payload(&codestream, &tile_part)?;
+    let contributions =
+        parse_default_precinct_lrcp_packets(&codestream, &parsed, tile_rect, payload)?;
+    let [contribution] = contributions.as_slice() else {
+        return Err(CodestreamError::SizeOverflow);
+    };
+    // Every later packet finishes the current set with an empty refinement
+    // segment and starts the next set with an empty Cleanup segment.
+    let empty_later_packet =
+        bridged_second_ht_set_packet_header(first_cleanup_l_block(contribution.codeword_len)?, 0)?;
     let empty_packet_count = usize::from(layers - 1);
     let added_len = empty_later_packet
         .len()
@@ -10636,7 +10660,7 @@ fn encode_htj2k_empty_later_sets_test_fixture(layers: u16) -> Result<Vec<u8>> {
         .try_reserve_exact(added_len)
         .map_err(|_| CodestreamError::SizeOverflow)?;
     for _ in 0..empty_packet_count {
-        empty_later_packets.extend_from_slice(empty_later_packet);
+        empty_later_packets.extend_from_slice(&empty_later_packet);
     }
 
     let cod = find_marker(&codestream, 0, Marker::Cod).ok_or(CodestreamError::SizeOverflow)?;
@@ -35762,10 +35786,16 @@ fn parse_default_precinct_packets_in_scope(
                                         })
                                     };
                                     let ht_continuation_set_passes =
-                                        if actual_start.is_multiple_of(3) {
-                                            0
-                                        } else {
+                                        if !actual_start.is_multiple_of(3) {
                                             pass_end - actual_start / 3 * 3
+                                        } else if first_non_empty_set.is_some()
+                                            && !first_coding_pass.is_multiple_of(3)
+                                        {
+                                            // An empty bridge completes the
+                                            // preceding set before this one.
+                                            3
+                                        } else {
+                                            0
                                         };
                                     (
                                         codeword_len,
@@ -38497,7 +38527,8 @@ struct PendingPacketContribution {
     ht_coded: bool,
     first_segment_continues: bool,
     /// For an HT refinement continuation, the passes its set has announced
-    /// through this packet; zero otherwise.
+    /// through this packet. For a later set reached through an empty bridge
+    /// that finishes the preceding set, 3. Zero otherwise.
     ht_continuation_set_passes: u16,
 }
 
@@ -38650,6 +38681,20 @@ fn read_layered_ht_codeword_lengths(
     let actual_start = first_coding_pass.max(final_set_start);
     let placeholder_passes = actual_start - first_coding_pass;
     let coding_passes = pass_end - actual_start;
+    // Placeholder passes precede only the first HT set. After it, every
+    // segment before the packet's final set ends at an index in T and has its
+    // own length field: the rest of the current set's refinement segment,
+    // then each later set's Cleanup and refinement segments. ISO/IEC
+    // 15444-15:2019, B.1–B.2, physical page 40; retrieval
+    // 10baf9472429d52f5d6b5f9b7a892dbed395b1db. ISO/IEC 15444-1:2024,
+    // B.10.7.2, physical page 93; retrieval
+    // 34e5d1639b9f121807e620c001893ca9d2c8f977.
+    let placeholder_passes = if has_non_empty_ht_set {
+        read_empty_ht_bridge_lengths(reader, l_block, first_coding_pass, actual_start)?;
+        0
+    } else {
+        placeholder_passes
+    };
     if actual_start % 3 != 0 {
         let set_end = (first_coding_pass / 3 + 1) * 3;
         if pass_end > set_end {
@@ -38715,6 +38760,21 @@ fn read_layered_ht_codeword_lengths(
                     "HT placeholder-only segment has a non-zero length",
                 ));
             }
+        } else if coding_passes > 1 {
+            // A later empty set's refinement segment still has its own
+            // length field, which must be 0. ISO/IEC 15444-15:2019, B.2–B.3,
+            // physical pages 40–41; retrieval
+            // 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+            let refinement_length_bits = l_block
+                .checked_add(u8::from(coding_passes > 2))
+                .ok_or(CodestreamError::SizeOverflow)?;
+            if reader.read_bits_with_stuffing(refinement_length_bits)? != 0 {
+                return Err(invalid(
+                    None,
+                    Some(Marker::Sod),
+                    "HT refinement segment follows a zero-length cleanup segment",
+                ));
+            }
         }
         return Ok((0, Vec::new(), 0, None));
     }
@@ -38771,6 +38831,43 @@ fn read_layered_ht_codeword_lengths(
             cleanup_len,
         )),
     ))
+}
+
+/// Reads the length fields of the segments a later HT packet contribution
+/// carries before its final set, and requires each of them to be empty.
+///
+/// Empty sets may bridge bit-planes between non-empty sets (ISO/IEC
+/// 15444-15:2019, B.3 NOTE 2, physical page 41; retrieval
+/// 10baf9472429d52f5d6b5f9b7a892dbed395b1db). A bridge that carries bytes
+/// would need more than one retained set from one packet contribution, which
+/// the reader does not yet split.
+fn read_empty_ht_bridge_lengths(
+    reader: &mut PacketBitReader<'_>,
+    l_block: u8,
+    first_coding_pass: u16,
+    final_set_start: u16,
+) -> Result<()> {
+    let mut pass = first_coding_pass;
+    while pass < final_set_start {
+        let segment_end = if pass.is_multiple_of(3) {
+            pass + 1
+        } else {
+            (pass / 3 + 1) * 3
+        };
+        let length_bits = l_block
+            .checked_add(u8::from(segment_end - pass > 1))
+            .ok_or(CodestreamError::SizeOverflow)?;
+        if reader.read_bits_with_stuffing(length_bits)? != 0 {
+            return Err(unsupported(
+                None,
+                Some(Marker::Sod),
+                UnsupportedConstruct::PacketDecode,
+                "HT packet contribution has bytes before its final HT set",
+            ));
+        }
+        pass = segment_end;
+    }
+    Ok(())
 }
 
 fn bypass_segment_pass_capacity(coding_pass: u16) -> u16 {
@@ -38944,6 +39041,12 @@ fn append_default_precinct_contribution(
                         "HT coding set cannot extend a classic Tier-1 contribution",
                     ));
                 }
+                if pending.ht_continuation_set_passes != 0 {
+                    complete_ht_set_through_empty_bridge(
+                        contribution,
+                        pending.ht_continuation_set_passes,
+                    )?;
+                }
                 coding_set.byte_offset = contribution.codeword_len;
                 if contribution.expanded_ht_coding_sets.is_none() {
                     let first = contribution
@@ -39035,6 +39138,44 @@ fn append_default_precinct_contribution(
     let contribution_index = contributions.len();
     push_default_precinct_contribution(contributions, pending, segment_offset)?;
     contribution_indices.insert(key, contribution_index);
+    Ok(())
+}
+
+/// Applies an empty bridge's zero-length continuation to the preceding HT
+/// set: the set now announces `set_passes`, so `Z_blk` covers them all if it
+/// has refinement bytes and stays at 1 (or 0 for an empty set) otherwise.
+/// ISO/IEC 15444-15:2019, B.3, physical page 41; retrieval
+/// 10baf9472429d52f5d6b5f9b7a892dbed395b1db.
+fn complete_ht_set_through_empty_bridge(
+    contribution: &mut PacketCodeBlockContribution,
+    set_passes: u16,
+) -> Result<()> {
+    let previous = contribution
+        .final_ht_coding_set()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    if previous.byte_len == previous.cleanup_byte_len || previous.coding_passes >= set_passes {
+        return Ok(());
+    }
+    let added_passes = set_passes - previous.coding_passes;
+    if let Some(last) = contribution
+        .expanded_ht_coding_sets
+        .as_deref_mut()
+        .and_then(<[HtCodeBlockCodingSet]>::last_mut)
+    {
+        last.coding_passes = set_passes;
+    }
+    let last_segment = contribution
+        .coding_segments
+        .last_mut()
+        .ok_or(CodestreamError::SizeOverflow)?;
+    last_segment.coding_passes = last_segment
+        .coding_passes
+        .checked_add(added_passes)
+        .ok_or(CodestreamError::SizeOverflow)?;
+    contribution.coding_passes = contribution
+        .coding_passes
+        .checked_add(added_passes)
+        .ok_or(CodestreamError::SizeOverflow)?;
     Ok(())
 }
 
