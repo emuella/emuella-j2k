@@ -121,7 +121,7 @@ class RunnerTests(unittest.TestCase):
     def test_hosted_installer_and_upload_keep_pins_and_report_lifetime(self):
         for workflow in ("ci.yml", "release-dry-run.yml"):
             text = (ROOT / ".github/workflows" / workflow).read_text()
-            self.assertIn("taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad", text)
+            self.assertIn("taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b", text)
             self.assertIn("tool: cargo-nextest@0.9.146", text)
             self.assertIn("checksum: true", text)
             self.assertIn("fallback: none", text)
