@@ -19685,6 +19685,131 @@ mod effective_coding_style_tests {
     }
 }
 
+#[cfg(test)]
+mod many_tile_tests {
+    //! Codestreams with thousands of tiles. Per-tile packet work once rescanned
+    //! every marker, tile part and tile-part header, so decode cost grew with
+    //! the square of the tile count.
+
+    use super::*;
+
+    fn segment(output: &mut Vec<u8>, marker: u16, data: &[u8]) {
+        output.extend_from_slice(&marker.to_be_bytes());
+        output.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+        output.extend_from_slice(data);
+    }
+
+    /// One unsigned 8-bit component on a grid of 1x1 tiles, each with one
+    /// tile part holding one empty packet. `htj2k` adds Part 15 signalling
+    /// and the HT code-block style.
+    fn one_sample_tiles(width: u32, height: u32, htj2k: bool) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0x4f];
+        let mut siz = vec![if htj2k { 0x40 } else { 0 }, 0];
+        for value in [width, height, 0, 0, 1, 1, 0, 0] {
+            siz.extend_from_slice(&value.to_be_bytes());
+        }
+        siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+        segment(&mut bytes, 0xff51, &siz);
+        if htj2k {
+            segment(&mut bytes, 0xff50, &[0, 2, 0, 0, 0, 0]);
+        }
+        // LRCP, one layer, no MCT or decomposition, 64x64 code-blocks, 5/3.
+        let style = if htj2k { 0x40 } else { 0 };
+        segment(&mut bytes, 0xff52, &[0, 0, 0, 1, 0, 0, 4, 4, style, 1]);
+        // No quantisation, two guard bits and one subband exponent.
+        segment(&mut bytes, 0xff5c, &[0x40, 9 << 3]);
+        for tile in 0..u16::try_from(width * height).unwrap() {
+            let mut sot = tile.to_be_bytes().to_vec();
+            sot.extend_from_slice(&15_u32.to_be_bytes());
+            sot.extend_from_slice(&[0, 1]);
+            segment(&mut bytes, 0xff90, &sot);
+            bytes.extend_from_slice(&[0xff, 0x93, 0]);
+        }
+        bytes.extend_from_slice(&[0xff, 0xd9]);
+        bytes
+    }
+
+    #[test]
+    fn thousands_of_one_sample_tiles_inspect_and_decode() {
+        for htj2k in [false, true] {
+            let bytes = one_sample_tiles(64, 64, htj2k);
+            let metadata = inspect(&bytes, &InspectOptions::default()).unwrap();
+            assert_eq!(metadata.support, SupportStatus::Supported, "HTJ2K {htj2k}");
+            let image = decode(
+                &bytes,
+                &DecodeOptions {
+                    mode: DecodeMode::Components,
+                    ..DecodeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!((image.info.width, image.info.height), (64, 64));
+            let ImageData::Planes(planes) = image.data else {
+                panic!("component decode returned interleaved samples");
+            };
+            let [plane] = planes.as_slice() else {
+                panic!("one component was expected");
+            };
+            assert_eq!(plane.len(), 64 * 64);
+            // Every tile carries the same empty packet, so every tile must
+            // reconstruct the same sample.
+            assert!(plane.iter().all(|sample| *sample == plane[0]));
+            if !htj2k {
+                // Zero Part 1 coefficients reconstruct to the level-shift
+                // midpoint.
+                assert_eq!(plane[0], 128);
+            }
+        }
+    }
+
+    #[test]
+    fn thousands_of_coded_tiles_round_trip_exactly() {
+        let (width, height) = (256_u32, 128_u32);
+        let samples = (0..width * height)
+            .map(|index| (index * 37 % 251) as u8)
+            .collect::<Vec<_>>();
+        let info = ImageInfo::new(
+            width,
+            height,
+            1,
+            SampleFormat::U8,
+            ColorModel::Grayscale,
+            ComponentLayout::Planar,
+        )
+        .unwrap();
+        let planes =
+            [Plane::new(&samples, width, height, width as usize, SampleFormat::U8).unwrap()];
+        let bytes = encode(
+            ImageView::Planar {
+                info: &info,
+                planes: &planes,
+            },
+            &EncodeOptions {
+                format: OutputFormat::J2kCodestream,
+                decomposition_levels: 2,
+                tile_size: Some(TileSize {
+                    width: 4,
+                    height: 4,
+                }),
+                ..EncodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(codestream::parse(&bytes).unwrap().tiles.len(), 2048);
+        let metadata = inspect(&bytes, &InspectOptions::default()).unwrap();
+        assert_eq!(metadata.support, SupportStatus::Supported);
+        let image = decode(
+            &bytes,
+            &DecodeOptions {
+                mode: DecodeMode::Components,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(image.data, ImageData::Planes(vec![samples]));
+    }
+}
+
 #[cfg(all(test, feature = "std"))]
 mod ht_lossy_public_tests;
 #[cfg(all(test, feature = "std"))]

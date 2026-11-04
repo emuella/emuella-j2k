@@ -12,7 +12,7 @@ extern crate alloc;
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -7949,7 +7949,7 @@ impl<S: source::CodestreamSource> Part1SourceIndex<S> {
             work,
             request,
             false,
-            |_codestream, tile| {
+            |_scope, tile| {
                 let mut spans = self
                     .payload_spans
                     .get(&tile.tile_index)
@@ -17834,6 +17834,7 @@ fn parse_bounded_tile_maxshift(
     input: &[u8],
     codestream: &Codestream,
 ) -> Result<Option<BoundedTileMaxshift>> {
+    record_codestream_wide_derivation();
     let first_tile_offset = codestream
         .markers
         .iter()
@@ -24518,6 +24519,7 @@ fn validate_one_tile_part_per_tile_inner(
         ));
     }
 
+    let rect_tile_indices = sorted_tile_indices(tile_rects.iter().map(|rect| rect.tile_index));
     for tile in &codestream.tiles {
         if tile.tile_part_index != 0 {
             return Err(unsupported(
@@ -24541,11 +24543,7 @@ fn validate_one_tile_part_per_tile_inner(
                 },
             ));
         }
-        let matching_rects = tile_rects
-            .iter()
-            .filter(|rect| rect.tile_index == tile.tile_index)
-            .count();
-        if matching_rects != 1 {
+        if sorted_tile_index_count(&rect_tile_indices, tile.tile_index) != 1 {
             return Err(unsupported(
                 None,
                 Some(Marker::Sot),
@@ -24575,13 +24573,10 @@ fn validate_one_tile_part_per_tile_inner(
         return Ok(());
     }
 
+    let retained_tile_indices =
+        sorted_tile_indices(codestream.tiles.iter().map(|tile| tile.tile_index));
     for rect in tile_rects {
-        let matching_parts = codestream
-            .tiles
-            .iter()
-            .filter(|tile| tile.tile_index == rect.tile_index)
-            .count();
-        if matching_parts != 1 {
+        if sorted_tile_index_count(&retained_tile_indices, rect.tile_index) != 1 {
             return Err(unsupported(
                 None,
                 Some(Marker::Sot),
@@ -24692,14 +24687,25 @@ mod one_tile_part_per_tile_validation_tests {
     }
 }
 
+/// Tile indices sorted for [`sorted_tile_index_count`], replacing a scan of
+/// every tile rectangle or tile part per lookup.
+fn sorted_tile_indices(tile_indices: impl Iterator<Item = u16>) -> Vec<u16> {
+    record_codestream_wide_derivation();
+    let mut sorted = tile_indices.collect::<Vec<_>>();
+    sorted.sort_unstable();
+    sorted
+}
+
+fn sorted_tile_index_count(sorted: &[u16], tile_index: u16) -> usize {
+    sorted.partition_point(|index| *index <= tile_index)
+        - sorted.partition_point(|index| *index < tile_index)
+}
+
 fn validate_retained_tile_parts_per_tile(codestream: &Codestream) -> Result<()> {
     let tile_rects = tile_rects(codestream)?;
+    let rect_tile_indices = sorted_tile_indices(tile_rects.iter().map(|rect| rect.tile_index));
     for tile in &codestream.tiles {
-        let matching_rects = tile_rects
-            .iter()
-            .filter(|rect| rect.tile_index == tile.tile_index)
-            .count();
-        if matching_rects != 1 {
+        if sorted_tile_index_count(&rect_tile_indices, tile.tile_index) != 1 {
             return Err(unsupported(
                 None,
                 Some(Marker::Sot),
@@ -24734,19 +24740,30 @@ fn validate_retained_tile_parts_per_tile(codestream: &Codestream) -> Result<()> 
         return Ok(());
     }
 
+    let groups = RetainedTilePartGroups::new(&codestream.tiles);
     for rect in tile_rects {
-        validate_retained_tile_parts_for_tile(codestream, rect.tile_index)?;
+        validate_retained_tile_parts(
+            groups
+                .tile_parts(&codestream.tiles, rect.tile_index)
+                .collect(),
+        )?;
     }
 
     Ok(())
 }
 
 fn validate_retained_tile_parts_for_tile(codestream: &Codestream, tile_index: u16) -> Result<()> {
-    let mut tile_parts = codestream
-        .tiles
-        .iter()
-        .filter(|tile| tile.tile_index == tile_index)
-        .collect::<Vec<_>>();
+    validate_retained_tile_parts(
+        codestream
+            .tiles
+            .iter()
+            .filter(|tile| tile.tile_index == tile_index)
+            .collect(),
+    )
+}
+
+/// Validate one tile's retained tile parts, given in codestream order.
+fn validate_retained_tile_parts(mut tile_parts: Vec<&TilePartState>) -> Result<()> {
     if tile_parts.is_empty() {
         return Err(unsupported(
             None,
@@ -25008,7 +25025,7 @@ pub fn profile_selected_code_block_segments_from_source_for_bench(
         scan.work,
         request,
         false,
-        |_codestream, tile| {
+        |_scope, tile| {
             let mut spans = scan.payload_spans.remove(&tile.tile_index).ok_or_else(|| {
                 unsupported(
                     None,
@@ -25302,8 +25319,7 @@ fn decode_supported_part1_reversible53_default_precinct_validated(
         stage_started.elapsed(),
     );
     let mut planes = decode_default_precinct_tile_component_planes(
-        input,
-        codestream,
+        &CodestreamPacketScope::new(input, codestream, None),
         coding_style,
         tile_rect,
         payload,
@@ -25724,8 +25740,7 @@ pub fn decode_part1_reduced_reversible_mct_components_selected(
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         component_indices,
@@ -25780,8 +25795,7 @@ pub fn decode_part1_reduced_irreversible_mct_component_zero(
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         &component_indices,
@@ -25835,8 +25849,7 @@ pub fn decode_part1_reduced_heterogeneous_irreversible_component_zero(
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         &component_indices,
@@ -25893,8 +25906,7 @@ pub fn decode_part1_reduced_roi_irreversible_component_zero(
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         &component_indices,
@@ -25945,8 +25957,7 @@ pub fn decode_part1_p0_07_progression_change_component_zero(input: &[u8]) -> Res
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         &component_indices,
@@ -25987,8 +25998,7 @@ pub fn decode_part1_p0_08_heterogeneous_reversible_component_zero(
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         &component_indices,
@@ -26065,10 +26075,10 @@ pub fn decode_part1_p0_10_subsampled_reversible_mct_component_zero(
     let mut output = alloc::vec![0_u8; plane_len];
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
+    let scope = CodestreamPacketScope::new(input, &codestream, None);
     for tile_rect in tile_rects(&codestream)? {
         let mut decoded = decode_multitile_tile_component_samples_selected(
-            input,
-            &codestream,
+            &scope,
             coding_style,
             tile_rect,
             &component_indices,
@@ -26115,8 +26125,7 @@ pub fn decode_part1_p0_13_high_component_progression_component_zero(
     let mut workspace = Part1ComponentDecodeWorkspace::new();
     let mut timings = None;
     let mut components = decode_multitile_tile_component_samples_selected(
-        input,
-        &codestream,
+        &CodestreamPacketScope::new(input, &codestream, None),
         coding_style,
         tile_rect,
         &[0],
@@ -26292,8 +26301,12 @@ pub fn prepare_part1_component_decode<'a>(
         parse_work,
         request,
         true,
-        |codestream, tile| {
-            tile_payload_spans_for_rect(input, codestream, tile).map(PreparedTilePayload::Slice)
+        |scope, tile| {
+            tile_payload_spans_from_tile_parts(
+                input,
+                scope.retained_tile_parts(tile.tile_index).collect(),
+            )
+            .map(PreparedTilePayload::Slice)
         },
     )?;
     #[cfg(feature = "std")]
@@ -26344,7 +26357,7 @@ pub fn prepare_part1_component_decode_from_source<'a>(
         scan.work,
         request,
         false,
-        |_codestream, tile| {
+        |_scope, tile| {
             let mut spans = scan.payload_spans.remove(&tile.tile_index).ok_or_else(|| {
                 unsupported(
                     None,
@@ -26773,7 +26786,7 @@ fn prepare_part1_component_decode_from_parsed<'a, F>(
     mut payload_for_tile: F,
 ) -> Result<PreparedPart1ComponentDecode<'a>>
 where
-    F: FnMut(&Codestream, TileRect) -> Result<PreparedTilePayload<'a>>,
+    F: FnMut(&CodestreamPacketScope<'_>, TileRect) -> Result<PreparedTilePayload<'a>>,
 {
     let component_indices = request.component_indices.to_vec();
     let region = request.region;
@@ -26896,6 +26909,8 @@ where
         timings.support_classification_ns = stage_started.elapsed().as_nanos();
     }
 
+    let scope =
+        CodestreamPacketScope::new(marker_input, &codestream, Some(&parse_work.tile_part_order));
     let mut prepared_tiles = Vec::with_capacity(plan.tiles.len());
     for planned in plan.tiles {
         let component_windows = reconstruction_component_indices
@@ -26930,7 +26945,7 @@ where
         };
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
-        let payload = payload_for_tile(&codestream, planned.tile)?;
+        let payload = payload_for_tile(&scope, planned.tile)?;
         timings.tile_payloads_prepared = timings.tile_payloads_prepared.saturating_add(1);
         timings.tile_part_spans_prepared = timings
             .tile_part_spans_prepared
@@ -26943,14 +26958,12 @@ where
         #[cfg(feature = "std")]
         let stage_started = std::time::Instant::now();
         let parsed_packets = parse_prepared_payload_packets(
-            marker_input,
-            &codestream,
+            &scope,
             planned.tile,
             &payload,
             request.max_layers,
             max_resolution,
             &reconstruction_component_indices,
-            &parse_work.tile_part_order,
         )?;
         timings.packets_parsed = timings
             .packets_parsed
@@ -31339,8 +31352,7 @@ pub fn decode_baseline_owned_components_profiled_with_work_counters(
 
 #[cfg_attr(not(feature = "std"), allow(unused_mut, unused_variables))]
 fn decode_default_precinct_tile_component_planes(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     payload: &[u8],
@@ -31349,7 +31361,7 @@ fn decode_default_precinct_tile_component_planes(
 ) -> Result<Vec<Vec<i32>>> {
     #[cfg(feature = "std")]
     let stage_started = std::time::Instant::now();
-    let contributions = parse_default_precinct_lrcp_packets(input, codestream, tile_rect, payload)?;
+    let contributions = parse_default_precinct_lrcp_packets_in_scope(scope, tile_rect, payload)?;
     #[cfg(feature = "std")]
     record_stage(
         timings,
@@ -31515,8 +31527,7 @@ fn decode_multitile_components_selected_validated(
             return Err(CodestreamError::SizeOverflow);
         }
         let samples = decode_multitile_tile_component_samples_selected(
-            input,
-            codestream,
+            &CodestreamPacketScope::new(input, codestream, None),
             coding_style,
             tile_rect,
             component_indices,
@@ -31593,10 +31604,10 @@ fn decode_multitile_components_selected_validated(
         });
     }
 
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     for tile_rect in tile_rects(codestream)? {
         let tile_components = decode_multitile_tile_component_samples_selected(
-            input,
-            codestream,
+            &scope,
             coding_style,
             tile_rect,
             component_indices,
@@ -31827,8 +31838,7 @@ impl PacketOrganisationConfig {
 }
 
 fn decode_multitile_tile_component_samples_selected(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     component_indices: &[u16],
@@ -31838,10 +31848,10 @@ fn decode_multitile_tile_component_samples_selected(
     discard_levels: u8,
     packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<Vec<u8>>> {
+    let codestream = scope.codestream;
     if coding_style.transform == WaveletTransform::Irreversible97 {
         let planes = decode_multitile_tile_irreversible_component_planes_selected(
-            input,
-            codestream,
+            scope,
             coding_style,
             tile_rect,
             component_indices,
@@ -31883,8 +31893,7 @@ fn decode_multitile_tile_component_samples_selected(
     }
 
     let planes = decode_multitile_tile_component_planes_selected(
-        input,
-        codestream,
+        scope,
         coding_style,
         tile_rect,
         component_indices,
@@ -31967,8 +31976,7 @@ fn record_selected_tile_output_samples(
 }
 
 fn decode_multitile_tile_irreversible_component_planes_selected(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     component_indices: &[u16],
@@ -31978,6 +31986,8 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
     discard_levels: u8,
     packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<Vec<f32>>> {
+    let input = scope.input;
+    let codestream = scope.codestream;
     let max_resolution = coding_style
         .decomposition_levels
         .checked_sub(discard_levels)
@@ -31991,22 +32001,21 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
         })?;
     #[cfg(feature = "std")]
     let stage_started = std::time::Instant::now();
-    let payload = tile_payload_spans_for_rect(input, codestream, tile_rect)?;
+    let payload = scope.tile_payload_spans(tile_rect)?;
     #[cfg(feature = "std")]
     record_stage(timings, DecodeStage::TilePayload, stage_started.elapsed());
 
     #[cfg(feature = "std")]
     let stage_started = std::time::Instant::now();
-    let parsed_packets = parse_default_precinct_packets_from_source(
-        input,
-        codestream,
+    let parsed_packets = parse_default_precinct_packets_in_scope(
+        scope,
         tile_rect,
         &payload,
         max_layers,
         Some(max_resolution),
         Some(component_indices),
         packet_organisation,
-        None,
+        HtCodingSetRetention::Complete,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -32066,8 +32075,7 @@ fn decode_multitile_tile_irreversible_component_planes_selected(
 }
 
 fn decode_multitile_tile_component_planes_selected(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     component_indices: &[u16],
@@ -32077,6 +32085,8 @@ fn decode_multitile_tile_component_planes_selected(
     discard_levels: u8,
     packet_organisation: PacketOrganisationConfig,
 ) -> Result<Vec<Vec<i32>>> {
+    let input = scope.input;
+    let codestream = scope.codestream;
     let max_resolution = coding_style
         .decomposition_levels
         .checked_sub(discard_levels)
@@ -32090,22 +32100,21 @@ fn decode_multitile_tile_component_planes_selected(
         })?;
     #[cfg(feature = "std")]
     let stage_started = std::time::Instant::now();
-    let payload = tile_payload_spans_for_rect(input, codestream, tile_rect)?;
+    let payload = scope.tile_payload_spans(tile_rect)?;
     #[cfg(feature = "std")]
     record_stage(timings, DecodeStage::TilePayload, stage_started.elapsed());
 
     #[cfg(feature = "std")]
     let stage_started = std::time::Instant::now();
-    let parsed_packets = parse_default_precinct_packets_from_source(
-        input,
-        codestream,
+    let parsed_packets = parse_default_precinct_packets_in_scope(
+        scope,
         tile_rect,
         &payload,
         max_layers,
         Some(max_resolution),
         Some(component_indices),
         packet_organisation,
-        None,
+        HtCodingSetRetention::Complete,
     )?;
     let excluded_body_bytes = parsed_packets.excluded_body_bytes;
     let packet_count = parsed_packets.packet_count;
@@ -32148,7 +32157,8 @@ fn decode_multitile_tile_component_planes_selected(
             p0_13_main_maxshift_grant,
         )?
     } else {
-        parse_bounded_tile_maxshift(input, codestream)?
+        scope
+            .bounded_tile_maxshift()?
             .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index)
     };
     reconstruct_default_precinct_component_planes_selected(
@@ -32192,10 +32202,10 @@ fn decode_multitile_component_samples_sequential(
                 .ok_or(CodestreamError::SizeOverflow)
         })
         .collect::<Result<Vec<_>>>()?;
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     for tile_rect in tile_rects {
         let tile_components = decode_multitile_tile_component_samples(
-            input,
-            codestream,
+            &scope,
             coding_style,
             *tile_rect,
             component_count,
@@ -32224,16 +32234,15 @@ fn decode_multitile_component_samples_sequential(
 
 #[cfg_attr(not(feature = "std"), allow(unused_mut, unused_variables))]
 fn decode_multitile_tile_component_samples(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     component_count: usize,
     timings: &mut Option<&mut DecodeStageTimings>,
 ) -> Result<Vec<Vec<u8>>> {
+    let codestream = scope.codestream;
     let mut planes = decode_multitile_tile_component_planes(
-        input,
-        codestream,
+        scope,
         coding_style,
         tile_rect,
         component_count,
@@ -32311,8 +32320,7 @@ fn decode_multitile_tile_component_samples(
 }
 
 fn decode_multitile_tile_component_planes(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     coding_style: CodingStyleMarker,
     tile_rect: TileRect,
     component_count: usize,
@@ -32320,13 +32328,12 @@ fn decode_multitile_tile_component_planes(
 ) -> Result<Vec<Vec<i32>>> {
     #[cfg(feature = "std")]
     let stage_started = std::time::Instant::now();
-    let payload = tile_payload_for_rect(input, codestream, tile_rect)?;
+    let payload = scope.tile_payload(tile_rect)?;
     #[cfg(feature = "std")]
     record_stage(timings, DecodeStage::TilePayload, stage_started.elapsed());
 
     decode_default_precinct_tile_component_planes(
-        input,
-        codestream,
+        scope,
         coding_style,
         tile_rect,
         &payload,
@@ -32376,13 +32383,13 @@ fn decode_multitile_component_samples_parallel(
 ) -> Result<Vec<DecodedComponent>> {
     use rayon::prelude::*;
 
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     let decoded_tiles = tile_rects
         .par_iter()
         .map(|tile_rect| {
             let mut no_timings: Option<&mut DecodeStageTimings> = None;
             decode_multitile_tile_component_samples(
-                input,
-                codestream,
+                &scope,
                 coding_style,
                 *tile_rect,
                 component_count,
@@ -33173,17 +33180,28 @@ pub fn parse_default_precinct_lrcp_packets(
     tile_rect: TileRect,
     payload: &[u8],
 ) -> Result<Vec<PacketCodeBlockContribution>> {
+    parse_default_precinct_lrcp_packets_in_scope(
+        &CodestreamPacketScope::new(input, codestream, None),
+        tile_rect,
+        payload,
+    )
+}
+
+fn parse_default_precinct_lrcp_packets_in_scope(
+    scope: &CodestreamPacketScope<'_>,
+    tile_rect: TileRect,
+    payload: &[u8],
+) -> Result<Vec<PacketCodeBlockContribution>> {
     let source = ContiguousPacketSource { bytes: payload };
-    parse_default_precinct_packets_from_source(
-        input,
-        codestream,
+    parse_default_precinct_packets_in_scope(
+        scope,
         tile_rect,
         &source,
         None,
         None,
         None,
         PacketOrganisationConfig::DEFAULT,
-        None,
+        HtCodingSetRetention::Complete,
     )
     .map(|parsed| parsed.contributions)
 }
@@ -33339,6 +33357,7 @@ fn indexed_marker_fragments<'a>(
 }
 
 fn tile_part_header_marker_ranges(markers: &[MarkerSegment]) -> Vec<(usize, usize)> {
+    record_codestream_wide_derivation();
     let mut ranges = Vec::new();
     let mut index = 0_usize;
     while index < markers.len() {
@@ -33359,58 +33378,516 @@ fn tile_part_header_marker_ranges(markers: &[MarkerSegment]) -> Vec<(usize, usiz
     ranges
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CODESTREAM_WIDE_DERIVATIONS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+/// Count, in tests, one derivation that scans the whole codestream. Tile
+/// loops must obtain these through one [`CodestreamPacketScope`], so their
+/// number stays independent of the tile count.
+fn record_codestream_wide_derivation() {
+    #[cfg(test)]
+    CODESTREAM_WIDE_DERIVATIONS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(feature = "std")]
+type PacketScopeCell<T> = std::sync::OnceLock<T>;
+#[cfg(not(feature = "std"))]
+type PacketScopeCell<T> = core::cell::OnceCell<T>;
+
+/// Codestream-wide state shared by the per-tile packet walks of one request.
+///
+/// Every entry is a pure function of the borrowed input, parsed codestream and
+/// tile-part order, so a tile reads exactly what it would otherwise derive for
+/// itself. Entries are resolved on first use, where per-tile code previously
+/// derived them, which keeps evaluation order and error precedence unchanged;
+/// failures are retained because recomputing them would return the same
+/// error. Reusing one scope across a tile loop replaces per-tile rescans of
+/// every marker, tile part and tile-part header with indexed lookups, keeping
+/// many-tile work close to linear.
+struct CodestreamPacketScope<'a> {
+    input: &'a [u8],
+    codestream: &'a Codestream,
+    physical_tile_part_order: Option<&'a [TilePartOrderEntry]>,
+    retained_tile_part_order: PacketScopeCell<Vec<TilePartOrderEntry>>,
+    tile_part_order_index: PacketScopeCell<TilePartOrderIndex>,
+    retained_tile_parts: PacketScopeCell<RetainedTilePartGroups>,
+    sod_markers: PacketScopeCell<BTreeMap<usize, usize>>,
+    main_quantization_markers: PacketScopeCell<MainQuantizationMarkers<'a>>,
+    effective_headers: PacketScopeCell<Result<EffectiveProgressionHeaders>>,
+    plm: PacketScopeCell<Result<Option<Vec<(Vec<usize>, usize)>>>>,
+    packet_header_layout: PacketScopeCell<Result<PacketHeaderLayout>>,
+    bounded_tile_maxshift: PacketScopeCell<Result<Option<BoundedTileMaxshift>>>,
+}
+
+impl<'a> CodestreamPacketScope<'a> {
+    /// `physical_tile_part_order` is the order every tile walk in this scope
+    /// would otherwise receive; `None` selects the retained tile-part order.
+    fn new(
+        input: &'a [u8],
+        codestream: &'a Codestream,
+        physical_tile_part_order: Option<&'a [TilePartOrderEntry]>,
+    ) -> Self {
+        Self {
+            input,
+            codestream,
+            physical_tile_part_order,
+            retained_tile_part_order: PacketScopeCell::new(),
+            tile_part_order_index: PacketScopeCell::new(),
+            retained_tile_parts: PacketScopeCell::new(),
+            sod_markers: PacketScopeCell::new(),
+            main_quantization_markers: PacketScopeCell::new(),
+            effective_headers: PacketScopeCell::new(),
+            plm: PacketScopeCell::new(),
+            packet_header_layout: PacketScopeCell::new(),
+            bounded_tile_maxshift: PacketScopeCell::new(),
+        }
+    }
+
+    fn tile_part_order(&self) -> &[TilePartOrderEntry] {
+        match self.physical_tile_part_order {
+            Some(order) => order,
+            None => self.retained_tile_part_order.get_or_init(|| {
+                self.codestream
+                    .tiles
+                    .iter()
+                    .map(|tile| TilePartOrderEntry {
+                        tile_index: tile.tile_index,
+                        tile_part_index: tile.tile_part_index,
+                        payload_len: tile.payload_len,
+                    })
+                    .collect()
+            }),
+        }
+    }
+
+    fn tile_part_order_index(&self) -> &TilePartOrderIndex {
+        self.tile_part_order_index
+            .get_or_init(|| TilePartOrderIndex::new(self.tile_part_order()))
+    }
+
+    /// Tile-part order positions of one tile, in tile-part order.
+    fn tile_part_order_positions(&self, tile_index: u16) -> &[usize] {
+        self.tile_part_order_index()
+            .tile_positions(self.tile_part_order(), tile_index)
+    }
+
+    /// Tile-part order positions carrying one tile and tile-part index.
+    fn matching_tile_part_order_positions(&self, tile_index: u16, tile_part_index: u8) -> &[usize] {
+        self.tile_part_order_index().matching_positions(
+            self.tile_part_order(),
+            tile_index,
+            tile_part_index,
+        )
+    }
+
+    /// Zero-based rank of an order position among the entries of its tile.
+    fn tile_part_ordinal(&self, position: usize) -> Option<usize> {
+        self.tile_part_order_index().ordinals.get(position).copied()
+    }
+
+    /// Rank, among one tile's order entries, of its first entry carrying the
+    /// tile-part index.
+    fn first_tile_part_ordinal(&self, tile_index: u16, tile_part_index: u8) -> Option<usize> {
+        self.matching_tile_part_order_positions(tile_index, tile_part_index)
+            .first()
+            .and_then(|position| self.tile_part_ordinal(*position))
+    }
+
+    /// Retained tile parts of one tile, in codestream order.
+    fn retained_tile_parts(&self, tile_index: u16) -> impl Iterator<Item = &'a TilePartState> {
+        let tiles = &self.codestream.tiles;
+        self.retained_tile_parts
+            .get_or_init(|| RetainedTilePartGroups::new(tiles))
+            .tile_parts(tiles, tile_index)
+    }
+
+    /// Index of the first retained SOD marker whose payload starts at the
+    /// offset.
+    fn sod_marker_index(&self, payload_offset: usize) -> Option<usize> {
+        self.sod_markers
+            .get_or_init(|| {
+                let mut sod_markers = BTreeMap::new();
+                for (index, segment) in self.codestream.markers.iter().enumerate() {
+                    if segment.marker == Marker::Sod {
+                        sod_markers.entry(segment.data_offset).or_insert(index);
+                    }
+                }
+                sod_markers
+            })
+            .get(&payload_offset)
+            .copied()
+    }
+
+    fn main_quantization_markers(&self) -> &MainQuantizationMarkers<'a> {
+        self.main_quantization_markers
+            .get_or_init(|| MainQuantizationMarkers::new(self.input, self.codestream))
+    }
+
+    fn effective_headers(&self) -> Result<&EffectiveProgressionHeaders> {
+        self.effective_headers
+            .get_or_init(|| EffectiveProgressionHeaders::new(self.input, self.codestream))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn effective_progression_volumes(
+        &self,
+        tile: u16,
+        layers: u16,
+        max_resolution_end: u8,
+    ) -> Result<Vec<ProgressionVolume>> {
+        let headers = self.effective_headers()?;
+        effective_progression_volumes_for_tile(
+            &headers.state,
+            headers.tile_parts(tile),
+            self.codestream,
+            tile,
+            layers,
+            max_resolution_end,
+        )
+    }
+
+    fn packet_lengths_from_plm(&self) -> Result<Option<&Vec<(Vec<usize>, usize)>>> {
+        self.plm
+            .get_or_init(|| {
+                packet_lengths_from_plm(self.input, self.codestream, self.tile_part_order())
+            })
+            .as_ref()
+            .map(Option::as_ref)
+            .map_err(Clone::clone)
+    }
+
+    fn packet_header_source(&self, tile_index: u16) -> Result<PacketHeaderSource> {
+        self.packet_header_layout
+            .get_or_init(|| {
+                PacketHeaderLayout::new(self.input, self.codestream, self.tile_part_order())
+            })
+            .as_ref()
+            .map_err(Clone::clone)?
+            .tile_source(self, tile_index)
+    }
+
+    fn bounded_tile_maxshift(&self) -> Result<Option<BoundedTileMaxshift>> {
+        self.bounded_tile_maxshift
+            .get_or_init(|| parse_bounded_tile_maxshift(self.input, self.codestream))
+            .clone()
+    }
+
+    /// [`tile_payload_for_rect`] without filtering every retained tile part.
+    fn tile_payload(&self, tile_rect: TileRect) -> Result<Cow<'a, [u8]>> {
+        tile_payload_from_tile_parts(self.input, self.retained_tile_parts(tile_rect.tile_index))
+    }
+
+    /// [`tile_payload_spans_for_rect`] without filtering every retained tile
+    /// part.
+    fn tile_payload_spans(&self, tile_rect: TileRect) -> Result<TilePartPayload<'a>> {
+        tile_payload_spans_from_tile_parts(
+            self.input,
+            self.retained_tile_parts(tile_rect.tile_index).collect(),
+        )
+    }
+}
+
+/// Lookups into one tile-part order without scanning every entry per tile.
+struct TilePartOrderIndex {
+    /// Order positions grouped by tile index, ascending within each tile.
+    by_tile: Vec<usize>,
+    /// Order positions grouped by tile and tile-part index, ascending within
+    /// each group.
+    by_tile_part: Vec<usize>,
+    /// For each order position, its rank among the entries of its tile.
+    ordinals: Vec<usize>,
+}
+
+impl TilePartOrderIndex {
+    fn new(order: &[TilePartOrderEntry]) -> Self {
+        record_codestream_wide_derivation();
+        let mut by_tile = (0..order.len()).collect::<Vec<_>>();
+        // Stable sorts keep ascending positions inside each group.
+        by_tile.sort_by_key(|position| order[*position].tile_index);
+        let mut by_tile_part = by_tile.clone();
+        by_tile_part.sort_by_key(|position| {
+            (
+                order[*position].tile_index,
+                order[*position].tile_part_index,
+            )
+        });
+        let mut ordinals = alloc::vec![0; order.len()];
+        let mut previous_tile = None;
+        let mut ordinal = 0_usize;
+        for position in &by_tile {
+            let tile_index = order[*position].tile_index;
+            if previous_tile == Some(tile_index) {
+                ordinal += 1;
+            } else {
+                previous_tile = Some(tile_index);
+                ordinal = 0;
+            }
+            ordinals[*position] = ordinal;
+        }
+        Self {
+            by_tile,
+            by_tile_part,
+            ordinals,
+        }
+    }
+
+    fn tile_positions(&self, order: &[TilePartOrderEntry], tile_index: u16) -> &[usize] {
+        let start = self
+            .by_tile
+            .partition_point(|position| order[*position].tile_index < tile_index);
+        let end = self
+            .by_tile
+            .partition_point(|position| order[*position].tile_index <= tile_index);
+        &self.by_tile[start..end]
+    }
+
+    fn matching_positions(
+        &self,
+        order: &[TilePartOrderEntry],
+        tile_index: u16,
+        tile_part_index: u8,
+    ) -> &[usize] {
+        let key = |position: &usize| {
+            (
+                order[*position].tile_index,
+                order[*position].tile_part_index,
+            )
+        };
+        let start = self
+            .by_tile_part
+            .partition_point(|position| key(position) < (tile_index, tile_part_index));
+        let end = self
+            .by_tile_part
+            .partition_point(|position| key(position) <= (tile_index, tile_part_index));
+        &self.by_tile_part[start..end]
+    }
+}
+
+/// Retained tile-part positions grouped by tile index, each group in
+/// codestream order, so a tile's parts are found without filtering every
+/// retained tile part.
+struct RetainedTilePartGroups {
+    positions: Vec<usize>,
+}
+
+impl RetainedTilePartGroups {
+    fn new(tiles: &[TilePartState]) -> Self {
+        record_codestream_wide_derivation();
+        let mut positions = (0..tiles.len()).collect::<Vec<_>>();
+        // A stable sort keeps codestream order inside each tile.
+        positions.sort_by_key(|position| tiles[*position].tile_index);
+        Self { positions }
+    }
+
+    fn tile_parts<'t>(
+        &self,
+        tiles: &'t [TilePartState],
+        tile_index: u16,
+    ) -> impl Iterator<Item = &'t TilePartState> {
+        let start = self
+            .positions
+            .partition_point(|position| tiles[*position].tile_index < tile_index);
+        let end = self
+            .positions
+            .partition_point(|position| tiles[*position].tile_index <= tile_index);
+        self.positions[start..end]
+            .iter()
+            .map(move |position| &tiles[*position])
+    }
+}
+
+/// Effective header state with its tile parts grouped for per-tile progression
+/// lookup.
+struct EffectiveProgressionHeaders {
+    state: EffectiveHeaderState,
+    /// `state.tile_parts` grouped by tile and ordered by tile-part index, ties
+    /// in codestream order.
+    tile_parts: Vec<EffectiveTilePartState>,
+}
+
+impl EffectiveProgressionHeaders {
+    fn new(input: &[u8], codestream: &Codestream) -> Result<Self> {
+        let state = resolve_effective_header_state(
+            input,
+            &codestream.siz,
+            codestream.kind,
+            &codestream.markers,
+        )?;
+        let mut tile_parts = state.tile_parts.clone();
+        tile_parts.sort_by_key(|part| (part.tile_index, part.tile_part_index));
+        Ok(Self { state, tile_parts })
+    }
+
+    fn tile_parts(&self, tile_index: u16) -> &[EffectiveTilePartState] {
+        let start = self
+            .tile_parts
+            .partition_point(|part| part.tile_index < tile_index);
+        let end = self
+            .tile_parts
+            .partition_point(|part| part.tile_index <= tile_index);
+        &self.tile_parts[start..end]
+    }
+}
+
+/// Main-header QCD and QCC segments selected exactly as
+/// [`parse_component_quantization_for_styles`] selects them.
+struct MainQuantizationMarkers<'a> {
+    qcd: Vec<&'a MarkerSegment>,
+    qcc: Vec<&'a MarkerSegment>,
+}
+
+impl<'a> MainQuantizationMarkers<'a> {
+    fn new(input: &[u8], codestream: &'a Codestream) -> Self {
+        record_codestream_wide_derivation();
+        let first_tile_offset = codestream
+            .markers
+            .iter()
+            .find(|marker| marker.marker == Marker::Sot)
+            .map(|marker| marker.offset)
+            .unwrap_or(input.len());
+        let main = |kind: Marker| {
+            codestream
+                .markers
+                .iter()
+                .filter(|marker| marker.marker == kind && marker.offset < first_tile_offset)
+                .collect::<Vec<_>>()
+        };
+        Self {
+            qcd: main(Marker::Qcd),
+            qcc: main(Marker::Qcc),
+        }
+    }
+}
+
 fn packed_packet_header_source(
     input: &[u8],
     codestream: &Codestream,
     tile_index: u16,
     tile_part_order: &[TilePartOrderEntry],
 ) -> Result<PacketHeaderSource> {
-    let first_sot = codestream
-        .markers
-        .iter()
-        .position(|segment| segment.marker == Marker::Sot)
-        .unwrap_or(codestream.markers.len());
-    let main = &codestream.markers[..first_sot];
-    if let Some(segment) = main.iter().find(|segment| segment.marker == Marker::Ppt) {
-        return Err(invalid(
-            Some(segment.offset),
-            Some(Marker::Ppt),
-            "PPT is confined to tile-part headers",
-        ));
-    }
-    let ppm_segments = main
-        .iter()
-        .filter(|segment| segment.marker == Marker::Ppm)
-        .collect::<Vec<_>>();
-    let ranges = tile_part_header_marker_ranges(&codestream.markers);
-    if let Some(segment) = ranges.iter().find_map(|(start, end)| {
-        codestream.markers[*start + 1..*end]
+    CodestreamPacketScope::new(input, codestream, Some(tile_part_order))
+        .packet_header_source(tile_index)
+}
+
+/// Tile-independent packet-header organisation of one codestream.
+///
+/// Main-header placement, PPM/PPT exclusivity and the complete PPM series are
+/// checked here once. A failure applies to every tile: per-tile selection
+/// only copies already bounded PPM collections, so it cannot fail before a
+/// later collection in the shared series does.
+enum PacketHeaderLayout {
+    Ppm(PpmHeaderLayout),
+    TileParts(TilePartHeaderLayout),
+}
+
+/// The concatenated PPM series split into one collection per tile-part order
+/// entry.
+struct PpmHeaderLayout {
+    packed: Vec<u8>,
+    collections: Vec<PpmHeaderCollection>,
+    /// Raw PPM marker-segment ends inside `packed`, in collection order.
+    segment_ends: Vec<usize>,
+}
+
+struct PpmHeaderCollection {
+    start: usize,
+    end: usize,
+    /// End of this collection's entries in `PpmHeaderLayout::segment_ends`.
+    segment_ends_end: usize,
+}
+
+/// Tile-part header ranges for inline or PPT packet headers.
+struct TilePartHeaderLayout {
+    ranges: Vec<(usize, usize)>,
+    /// Tiles with a PPT segment in some tile-part header whose SOT parses.
+    ppt_tiles: BTreeSet<u16>,
+    /// `(tile index, range position)` pairs in tile then codestream order,
+    /// covering the ranges before `sot_error`.
+    ranges_by_tile: Vec<(u16, usize)>,
+    /// The first tile-part header whose SOT does not parse. Selected PPT tiles
+    /// assemble their earlier ranges before reporting it.
+    sot_error: Option<CodestreamError>,
+}
+
+impl PacketHeaderLayout {
+    fn new(
+        input: &[u8],
+        codestream: &Codestream,
+        tile_part_order: &[TilePartOrderEntry],
+    ) -> Result<Self> {
+        record_codestream_wide_derivation();
+        let first_sot = codestream
+            .markers
             .iter()
-            .find(|segment| segment.marker == Marker::Ppm)
-    }) {
-        return Err(invalid(
-            Some(segment.offset),
-            Some(Marker::Ppm),
-            "PPM is confined to the main header",
-        ));
-    }
-    let first_ppt = ranges.iter().find_map(|(start, end)| {
-        codestream.markers[*start + 1..*end]
+            .position(|segment| segment.marker == Marker::Sot)
+            .unwrap_or(codestream.markers.len());
+        let main = &codestream.markers[..first_sot];
+        if let Some(segment) = main.iter().find(|segment| segment.marker == Marker::Ppt) {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Ppt),
+                "PPT is confined to tile-part headers",
+            ));
+        }
+        let ppm_segments = main
             .iter()
-            .find(|segment| segment.marker == Marker::Ppt)
-    });
-    if !ppm_segments.is_empty()
-        && let Some(segment) = first_ppt
-    {
-        return Err(invalid(
-            Some(segment.offset),
-            Some(Marker::Ppt),
-            "PPM and PPT packet-header sources are mutually exclusive",
-        ));
+            .filter(|segment| segment.marker == Marker::Ppm)
+            .collect::<Vec<_>>();
+        let ranges = tile_part_header_marker_ranges(&codestream.markers);
+        if let Some(segment) = ranges.iter().find_map(|(start, end)| {
+            codestream.markers[*start + 1..*end]
+                .iter()
+                .find(|segment| segment.marker == Marker::Ppm)
+        }) {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Ppm),
+                "PPM is confined to the main header",
+            ));
+        }
+        let first_ppt = ranges.iter().find_map(|(start, end)| {
+            codestream.markers[*start + 1..*end]
+                .iter()
+                .find(|segment| segment.marker == Marker::Ppt)
+        });
+        if !ppm_segments.is_empty()
+            && let Some(segment) = first_ppt
+        {
+            return Err(invalid(
+                Some(segment.offset),
+                Some(Marker::Ppt),
+                "PPM and PPT packet-header sources are mutually exclusive",
+            ));
+        }
+
+        if !ppm_segments.is_empty() {
+            return PpmHeaderLayout::new(input, &ppm_segments, tile_part_order).map(Self::Ppm);
+        }
+        TilePartHeaderLayout::new(input, codestream, ranges).map(Self::TileParts)
     }
 
-    if !ppm_segments.is_empty() {
-        let fragments = indexed_marker_fragments(input, &ppm_segments, Marker::Ppm)?;
+    fn tile_source(
+        &self,
+        scope: &CodestreamPacketScope<'_>,
+        tile_index: u16,
+    ) -> Result<PacketHeaderSource> {
+        match self {
+            Self::Ppm(layout) => layout.tile_source(scope, tile_index),
+            Self::TileParts(layout) => layout.tile_source(scope, tile_index),
+        }
+    }
+}
+
+impl PpmHeaderLayout {
+    fn new(
+        input: &[u8],
+        ppm_segments: &[&MarkerSegment],
+        tile_part_order: &[TilePartOrderEntry],
+    ) -> Result<Self> {
+        let fragments = indexed_marker_fragments(input, ppm_segments, Marker::Ppm)?;
         let mut packed = Vec::new();
         let mut raw_segment_ends = Vec::with_capacity(fragments.len());
         for (index, fragment) in fragments.into_iter().enumerate() {
@@ -33424,12 +33901,11 @@ fn packed_packet_header_source(
             append_bounded_marker_bytes(&mut packed, fragment, Marker::Ppm)?;
             raw_segment_ends.push(packed.len());
         }
-        let mut output = Vec::new();
+        let mut collections = Vec::with_capacity(tile_part_order.len());
         let mut segment_ends = Vec::new();
-        let mut tile_part_ends = Vec::new();
         let mut cursor = 0_usize;
         let mut segment_cursor = 0_usize;
-        for tile_part in tile_part_order {
+        for _ in tile_part_order {
             require(&packed, cursor, 4).map_err(|_| {
                 invalid(
                     ppm_segments.first().map(|segment| segment.offset),
@@ -33440,18 +33916,13 @@ fn packed_packet_header_source(
             let header_len = usize::try_from(read_u32(&packed, cursor)?)
                 .map_err(|_| CodestreamError::SizeOverflow)?;
             cursor = cursor.checked_add(4).ok_or(CodestreamError::SizeOverflow)?;
-            let headers = checked_slice(&packed, cursor, header_len).map_err(|_| {
+            checked_slice(&packed, cursor, header_len).map_err(|_| {
                 invalid(
                     ppm_segments.first().map(|segment| segment.offset),
                     Some(Marker::Ppm),
                     "PPM tile-part packet-header bytes are truncated",
                 )
             })?;
-            let selected = tile_part.tile_index == tile_index;
-            if selected {
-                append_bounded_marker_bytes(&mut output, headers, Marker::Ppm)?;
-                tile_part_ends.push(output.len());
-            }
             let end = cursor
                 .checked_add(header_len)
                 .ok_or(CodestreamError::SizeOverflow)?;
@@ -33467,16 +33938,14 @@ fn packed_packet_header_source(
                         "PPM marker segment ends inside an Nppm field",
                     ));
                 }
-                if selected {
-                    segment_ends.push(
-                        output
-                            .len()
-                            .checked_sub(end - boundary)
-                            .ok_or(CodestreamError::SizeOverflow)?,
-                    );
-                }
+                segment_ends.push(boundary);
                 segment_cursor += 1;
             }
+            collections.push(PpmHeaderCollection {
+                start: cursor,
+                end,
+                segment_ends_end: segment_ends.len(),
+            });
             cursor = end;
         }
         if cursor != packed.len() || segment_cursor != raw_segment_ends.len() {
@@ -33486,86 +33955,320 @@ fn packed_packet_header_source(
                 "PPM series does not contain exactly one header collection per tile-part",
             ));
         }
-        return Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
+        Ok(Self {
+            packed,
+            collections,
+            segment_ends,
+        })
+    }
+
+    fn tile_source(
+        &self,
+        scope: &CodestreamPacketScope<'_>,
+        tile_index: u16,
+    ) -> Result<PacketHeaderSource> {
+        let mut output = Vec::new();
+        let mut segment_ends = Vec::new();
+        let mut tile_part_ends = Vec::new();
+        for &position in scope.tile_part_order_positions(tile_index) {
+            let collection = self
+                .collections
+                .get(position)
+                .ok_or(CodestreamError::SizeOverflow)?;
+            append_bounded_marker_bytes(
+                &mut output,
+                &self.packed[collection.start..collection.end],
+                Marker::Ppm,
+            )?;
+            tile_part_ends.push(output.len());
+            let segment_ends_start = position
+                .checked_sub(1)
+                .map_or(0, |previous| self.collections[previous].segment_ends_end);
+            for boundary in &self.segment_ends[segment_ends_start..collection.segment_ends_end] {
+                segment_ends.push(
+                    output
+                        .len()
+                        .checked_sub(collection.end - boundary)
+                        .ok_or(CodestreamError::SizeOverflow)?,
+                );
+            }
+        }
+        Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
             kind: PacketHeaderSourceKind::Ppm,
             bytes: output,
             segment_ends,
             tile_part_ends,
             availability_ends: Vec::new(),
-        }));
+        }))
     }
+}
 
-    let tile_has_ppt = ranges.iter().any(|(start, end)| {
-        parse_sot(
-            checked_slice(
-                input,
-                codestream.markers[*start].data_offset,
-                codestream.markers[*start].data_len,
-            )
-            .unwrap_or(&[]),
-            codestream.markers[*start].offset,
-        )
-        .is_ok_and(|tile| {
-            tile.tile_index == tile_index
-                && codestream.markers[*start + 1..*end]
-                    .iter()
-                    .any(|segment| segment.marker == Marker::Ppt)
-        })
-    });
-    if !tile_has_ppt {
-        return Ok(PacketHeaderSource::Inline);
-    }
-
-    let mut output = Vec::new();
-    let mut segment_ends = Vec::new();
-    let mut availability_ends = Vec::new();
-    for (start, end) in ranges {
-        let sot = &codestream.markers[start];
-        let tile = parse_sot(
-            checked_slice(input, sot.data_offset, sot.data_len)?,
-            sot.offset,
-        )?;
-        let ppt_segments = codestream.markers[start + 1..end]
-            .iter()
-            .filter(|segment| segment.marker == Marker::Ppt)
-            .collect::<Vec<_>>();
-        if tile.tile_index != tile_index {
-            continue;
-        }
-        let tile_part_ordinal = tile_part_order
-            .iter()
-            .filter(|entry| entry.tile_index == tile_index)
-            .position(|entry| entry.tile_part_index == tile.tile_part_index)
-            .ok_or_else(|| {
-                invalid(
-                    Some(sot.offset),
-                    Some(Marker::Sot),
-                    "retained tile-part header is absent from physical codestream order",
+impl TilePartHeaderLayout {
+    fn new(input: &[u8], codestream: &Codestream, ranges: Vec<(usize, usize)>) -> Result<Self> {
+        let mut ppt_tiles = BTreeSet::new();
+        let mut ranges_by_tile = Vec::with_capacity(ranges.len());
+        let mut sot_error = None;
+        for (position, (start, end)) in ranges.iter().enumerate() {
+            let sot = &codestream.markers[*start];
+            let has_ppt = codestream.markers[*start + 1..*end]
+                .iter()
+                .any(|segment| segment.marker == Marker::Ppt);
+            if has_ppt
+                && let Ok(tile) = parse_sot(
+                    checked_slice(input, sot.data_offset, sot.data_len).unwrap_or(&[]),
+                    sot.offset,
                 )
-            })?;
-        for (index, fragment) in indexed_marker_fragments(input, &ppt_segments, Marker::Ppt)?
-            .into_iter()
-            .enumerate()
-        {
-            if fragment.is_empty() {
-                return Err(invalid(
-                    ppt_segments.get(index).map(|segment| segment.offset),
-                    Some(Marker::Ppt),
-                    "PPT marker payload must contain packet-header bytes after Zppt",
-                ));
+            {
+                ppt_tiles.insert(tile.tile_index);
             }
-            append_bounded_marker_bytes(&mut output, fragment, Marker::Ppt)?;
-            segment_ends.push(output.len());
-            availability_ends.push((output.len(), tile_part_ordinal));
+            if sot_error.is_none() {
+                match checked_slice(input, sot.data_offset, sot.data_len)
+                    .and_then(|data| parse_sot(data, sot.offset))
+                {
+                    Ok(tile) => ranges_by_tile.push((tile.tile_index, position)),
+                    Err(error) => sot_error = Some(error),
+                }
+            }
+        }
+        ranges_by_tile.sort_by_key(|(tile_index, _)| *tile_index);
+        Ok(Self {
+            ranges,
+            ppt_tiles,
+            ranges_by_tile,
+            sot_error,
+        })
+    }
+
+    fn tile_source(
+        &self,
+        scope: &CodestreamPacketScope<'_>,
+        tile_index: u16,
+    ) -> Result<PacketHeaderSource> {
+        if !self.ppt_tiles.contains(&tile_index) {
+            return Ok(PacketHeaderSource::Inline);
+        }
+
+        let input = scope.input;
+        let codestream = scope.codestream;
+        let tile_ranges = &self.ranges_by_tile[self
+            .ranges_by_tile
+            .partition_point(|(tile, _)| *tile < tile_index)
+            ..self
+                .ranges_by_tile
+                .partition_point(|(tile, _)| *tile <= tile_index)];
+        let mut output = Vec::new();
+        let mut segment_ends = Vec::new();
+        let mut availability_ends = Vec::new();
+        for (_, position) in tile_ranges {
+            let (start, end) = self.ranges[*position];
+            let sot = &codestream.markers[start];
+            let tile = parse_sot(
+                checked_slice(input, sot.data_offset, sot.data_len)?,
+                sot.offset,
+            )?;
+            let ppt_segments = codestream.markers[start + 1..end]
+                .iter()
+                .filter(|segment| segment.marker == Marker::Ppt)
+                .collect::<Vec<_>>();
+            let tile_part_ordinal = scope
+                .first_tile_part_ordinal(tile_index, tile.tile_part_index)
+                .ok_or_else(|| {
+                    invalid(
+                        Some(sot.offset),
+                        Some(Marker::Sot),
+                        "retained tile-part header is absent from physical codestream order",
+                    )
+                })?;
+            for (index, fragment) in indexed_marker_fragments(input, &ppt_segments, Marker::Ppt)?
+                .into_iter()
+                .enumerate()
+            {
+                if fragment.is_empty() {
+                    return Err(invalid(
+                        ppt_segments.get(index).map(|segment| segment.offset),
+                        Some(Marker::Ppt),
+                        "PPT marker payload must contain packet-header bytes after Zppt",
+                    ));
+                }
+                append_bounded_marker_bytes(&mut output, fragment, Marker::Ppt)?;
+                segment_ends.push(output.len());
+                availability_ends.push((output.len(), tile_part_ordinal));
+            }
+        }
+        if let Some(error) = &self.sot_error {
+            return Err(error.clone());
+        }
+        Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
+            kind: PacketHeaderSourceKind::Ppt,
+            bytes: output,
+            segment_ends,
+            tile_part_ends: Vec::new(),
+            availability_ends,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod many_tile_packet_scope_tests {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Organisation {
+        Inline,
+        Plt,
+        Plm,
+        Tlm,
+    }
+
+    fn segment(output: &mut Vec<u8>, marker: Marker, data: &[u8]) {
+        output.extend_from_slice(&marker.code().to_be_bytes());
+        output.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+        output.extend_from_slice(data);
+    }
+
+    /// A grid of 1x1 tiles of one unsigned 8-bit component. Tile parts are
+    /// interleaved across tiles; only the first part of each tile carries its
+    /// one empty packet.
+    fn one_sample_tiles(
+        side: u32,
+        htj2k: bool,
+        organisation: Organisation,
+        parts_per_tile: u8,
+    ) -> Vec<u8> {
+        let tiles = u16::try_from(side * side).unwrap();
+        let mut bytes = Marker::Soc.code().to_be_bytes().to_vec();
+        let mut siz = vec![if htj2k { 0x40 } else { 0 }, 0];
+        for value in [side, side, 0, 0, 1, 1, 0, 0] {
+            siz.extend_from_slice(&value.to_be_bytes());
+        }
+        siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+        segment(&mut bytes, Marker::Siz, &siz);
+        if htj2k {
+            segment(&mut bytes, Marker::Cap, &[0, 2, 0, 0, 0, 0]);
+        }
+        let style = if htj2k { 0x40 } else { 0 };
+        segment(&mut bytes, Marker::Cod, &[0, 0, 0, 1, 0, 0, 4, 4, style, 1]);
+        segment(&mut bytes, Marker::Qcd, &[0x40, 9 << 3]);
+        match organisation {
+            Organisation::Plm => {
+                let mut plm = vec![0];
+                for _ in 0..tiles {
+                    plm.extend_from_slice(&[1, 1]);
+                }
+                segment(&mut bytes, Marker::Plm, &plm);
+            }
+            Organisation::Tlm => {
+                // Ztlm, then 16-bit Ttlm and 32-bit Ptlm fields.
+                let mut tlm = vec![0, 0x60];
+                for tile in 0..tiles {
+                    tlm.extend_from_slice(&tile.to_be_bytes());
+                    tlm.extend_from_slice(&15_u32.to_be_bytes());
+                }
+                segment(&mut bytes, Marker::Tlm, &tlm);
+            }
+            Organisation::Inline | Organisation::Plt => {}
+        }
+        for part in 0..parts_per_tile {
+            for tile in 0..tiles {
+                let mut header = Vec::new();
+                let body: &[u8] = if part == 0 { &[0] } else { &[] };
+                if organisation == Organisation::Plt && part == 0 {
+                    segment(&mut header, Marker::Plt, &[0, 1]);
+                }
+                let mut sot = tile.to_be_bytes().to_vec();
+                sot.extend_from_slice(
+                    &u32::try_from(14 + header.len() + body.len())
+                        .unwrap()
+                        .to_be_bytes(),
+                );
+                sot.extend_from_slice(&[part, parts_per_tile]);
+                segment(&mut bytes, Marker::Sot, &sot);
+                bytes.extend_from_slice(&header);
+                bytes.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+                bytes.extend_from_slice(body);
+            }
+        }
+        bytes.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
+        bytes
+    }
+
+    fn derivations_during(work: impl FnOnce()) -> usize {
+        CODESTREAM_WIDE_DERIVATIONS.with(|count| count.set(0));
+        work();
+        CODESTREAM_WIDE_DERIVATIONS.with(|count| count.get())
+    }
+
+    /// Classification and decode derive codestream-wide state a fixed number
+    /// of times, however many tiles share it.
+    fn classify_and_decode_derivations(
+        side: u32,
+        htj2k: bool,
+        organisation: Organisation,
+        parts_per_tile: u8,
+    ) -> (usize, usize) {
+        let bytes = one_sample_tiles(side, htj2k, organisation, parts_per_tile);
+        let samples = usize::try_from(side * side).unwrap();
+        let case = (side, htj2k, organisation, parts_per_tile);
+        let classification = derivations_during(|| {
+            if htj2k {
+                let codestream = parse(&bytes).unwrap();
+                assert_eq!(
+                    htj2k_lossless_profile_unsupported_construct(&bytes, &codestream),
+                    None,
+                    "{case:?}"
+                );
+                validate_part15_packet_signalling(&bytes, &codestream).unwrap();
+            } else {
+                assert!(is_algorithmic_baseline_profile(&bytes), "{case:?}");
+            }
+        });
+        let decode = derivations_during(|| {
+            let decoded = if htj2k {
+                decode_htj2k_lossless_owned(&bytes)
+                    .unwrap_or_else(|error| panic!("{case:?}: {error:?}"))
+                    .unwrap_or_else(|| panic!("{case:?} was not decoded"))
+            } else {
+                let selected = decode_baseline_owned_components_selected(&bytes, &[0])
+                    .unwrap_or_else(|error| panic!("{case:?}: {error:?}"));
+                let decoded = decode_baseline_owned_components(&bytes)
+                    .unwrap_or_else(|error| panic!("{case:?}: {error:?}"));
+                assert_eq!(selected, decoded, "{case:?}");
+                decoded
+            };
+            assert_eq!((decoded.width, decoded.height), (side, side), "{case:?}");
+            let [component] = decoded.components.as_slice() else {
+                panic!("one component was expected for {case:?}");
+            };
+            assert_eq!(component.samples.len(), samples, "{case:?}");
+            if !htj2k {
+                assert!(component.samples.iter().all(|sample| *sample == 128));
+            }
+        });
+        (classification, decode)
+    }
+
+    #[test]
+    fn many_tile_classification_and_decode_share_codestream_wide_work() {
+        for (htj2k, organisation, parts_per_tile) in [
+            (false, Organisation::Inline, 1),
+            (false, Organisation::Inline, 2),
+            (false, Organisation::Plt, 1),
+            (false, Organisation::Plt, 2),
+            (false, Organisation::Plm, 1),
+            (false, Organisation::Tlm, 1),
+            (true, Organisation::Inline, 1),
+            (true, Organisation::Plt, 1),
+        ] {
+            let small = classify_and_decode_derivations(8, htj2k, organisation, parts_per_tile);
+            let large = classify_and_decode_derivations(32, htj2k, organisation, parts_per_tile);
+            assert_eq!(
+                small,
+                large,
+                "codestream-wide work grew with the tile count for {:?}",
+                (htj2k, organisation, parts_per_tile)
+            );
         }
     }
-    Ok(PacketHeaderSource::Packed(PackedPacketHeaderSource {
-        kind: PacketHeaderSourceKind::Ppt,
-        bytes: output,
-        segment_ends,
-        tile_part_ends: Vec::new(),
-        availability_ends,
-    }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33621,6 +34324,7 @@ fn packet_lengths_from_plm(
     codestream: &Codestream,
     tile_part_order: &[TilePartOrderEntry],
 ) -> Result<Option<Vec<(Vec<usize>, usize)>>> {
+    record_codestream_wide_derivation();
     let first_sot = codestream
         .markers
         .iter()
@@ -33715,17 +34419,12 @@ fn packet_lengths_from_plm(
 }
 
 fn tile_packet_lengths(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     tile_index: u16,
-    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<Option<PacketLengths>> {
-    let plm = packet_lengths_from_plm(input, codestream, tile_part_order)?;
-    let mut tile_parts = codestream
-        .tiles
-        .iter()
-        .filter(|tile_part| tile_part.tile_index == tile_index)
-        .collect::<Vec<_>>();
+    let plm = scope.packet_lengths_from_plm()?;
+    let tile_part_order = scope.tile_part_order();
+    let mut tile_parts = scope.retained_tile_parts(tile_index).collect::<Vec<_>>();
     tile_parts.sort_by_key(|tile_part| tile_part.tile_part_index);
 
     let mut all_lengths = Vec::new();
@@ -33736,26 +34435,18 @@ fn tile_packet_lengths(
     let mut logical_tile_offset = 0_usize;
     let mut saw_length_declaration = false;
     for tile_part in tile_parts {
-        let matching_order = tile_part_order
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                entry.tile_index == tile_part.tile_index
-                    && entry.tile_part_index == tile_part.tile_part_index
-            })
-            .collect::<Vec<_>>();
-        let [(codestream_index, order_entry)] = matching_order.as_slice() else {
+        let [codestream_index] = scope
+            .matching_tile_part_order_positions(tile_part.tile_index, tile_part.tile_part_index)
+        else {
             return Err(invalid(
                 None,
                 Some(Marker::Sot),
                 "retained tile-part ordinal disagrees with physical codestream order",
             ));
         };
-        let tile_part_ordinal = tile_part_order[..=*codestream_index]
-            .iter()
-            .filter(|entry| entry.tile_index == tile_index)
-            .count()
-            .checked_sub(1)
+        let order_entry = &tile_part_order[*codestream_index];
+        let tile_part_ordinal = scope
+            .tile_part_ordinal(*codestream_index)
             .ok_or(CodestreamError::SizeOverflow)?;
         let payload_len = tile_part.payload_len.ok_or(CodestreamError::SizeOverflow)?;
         if order_entry
@@ -33768,9 +34459,13 @@ fn tile_packet_lengths(
                 "retained tile-part payload span disagrees with physical codestream order",
             ));
         }
-        let plt = tile_part_packet_lengths_from_plt(input, codestream, tile_part)?;
+        let plt = tile_part_packet_lengths_from_plt_at(
+            scope.input,
+            scope.codestream,
+            tile_part,
+            |payload_offset| scope.sod_marker_index(payload_offset),
+        )?;
         let plm_entry = plm
-            .as_ref()
             .and_then(|entries| entries.get(*codestream_index))
             .cloned();
         if let (Some((plm_lengths, plm_offset)), Some((plt_lengths, _))) = (&plm_entry, &plt)
@@ -33904,6 +34599,21 @@ fn tile_part_packet_lengths_from_plt(
     codestream: &Codestream,
     tile_part: &TilePartState,
 ) -> Result<Option<(Vec<usize>, usize)>> {
+    tile_part_packet_lengths_from_plt_at(input, codestream, tile_part, |payload_offset| {
+        codestream.markers.iter().position(|segment| {
+            segment.marker == Marker::Sod && segment.data_offset == payload_offset
+        })
+    })
+}
+
+/// Read one tile part's PLT series. `sod_marker_index` returns the first
+/// retained SOD marker whose payload begins at the given offset.
+fn tile_part_packet_lengths_from_plt_at(
+    input: &[u8],
+    codestream: &Codestream,
+    tile_part: &TilePartState,
+    sod_marker_index: impl FnOnce(usize) -> Option<usize>,
+) -> Result<Option<(Vec<usize>, usize)>> {
     let payload_offset = tile_part.payload_offset.ok_or_else(|| {
         unsupported(
             None,
@@ -33920,17 +34630,13 @@ fn tile_part_packet_lengths_from_plt(
             "PLT validation requires a retained tile-part payload length",
         )
     })?;
-    let sod_index = codestream
-        .markers
-        .iter()
-        .position(|segment| segment.marker == Marker::Sod && segment.data_offset == payload_offset)
-        .ok_or_else(|| {
-            invalid(
-                Some(payload_offset.saturating_sub(2)),
-                Some(Marker::Sod),
-                "tile-part payload has no matching retained SOD marker",
-            )
-        })?;
+    let sod_index = sod_marker_index(payload_offset).ok_or_else(|| {
+        invalid(
+            Some(payload_offset.saturating_sub(2)),
+            Some(Marker::Sod),
+            "tile-part payload has no matching retained SOD marker",
+        )
+    })?;
     let sot_index = codestream.markers[..sod_index]
         .iter()
         .rposition(|segment| segment.marker == Marker::Sot)
@@ -34302,6 +35008,7 @@ fn packet_precinct_grid_supported(
         || bounded_heterogeneous_single_precincts
 }
 
+#[cfg(test)]
 fn parse_default_precinct_packets_from_source(
     input: &[u8],
     codestream: &Codestream,
@@ -34336,6 +35043,7 @@ enum HtCodingSetRetention {
     NativeAdmission,
 }
 
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 fn parse_default_precinct_packets_from_source_with_ht_retention(
     input: &[u8],
@@ -34349,6 +35057,33 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
     physical_tile_part_order: Option<&[TilePartOrderEntry]>,
     ht_coding_set_retention: HtCodingSetRetention,
 ) -> Result<ParsedPacketContributions> {
+    parse_default_precinct_packets_in_scope(
+        &CodestreamPacketScope::new(input, codestream, physical_tile_part_order),
+        tile_rect,
+        payload,
+        max_layers,
+        max_resolution,
+        selected_components,
+        packet_organisation,
+        ht_coding_set_retention,
+    )
+}
+
+/// Parse one tile's packets with codestream-wide state from `scope`, which
+/// also fixes the physical tile-part order. Tile loops share one scope.
+#[allow(clippy::too_many_arguments)]
+fn parse_default_precinct_packets_in_scope(
+    scope: &CodestreamPacketScope<'_>,
+    tile_rect: TileRect,
+    payload: &dyn PacketByteSource,
+    max_layers: Option<u16>,
+    max_resolution: Option<u8>,
+    selected_components: Option<&[u16]>,
+    packet_organisation: PacketOrganisationConfig,
+    ht_coding_set_retention: HtCodingSetRetention,
+) -> Result<ParsedPacketContributions> {
+    let input = scope.input;
+    let codestream = scope.codestream;
     let part15_single_ht_declared = codestream
         .capability
         .as_ref()
@@ -34480,9 +35215,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         .ok_or(CodestreamError::SizeOverflow)?
         .checked_add(1)
         .ok_or(CodestreamError::SizeOverflow)?;
-    let progression_volumes = effective_progression_volumes(
-        input,
-        codestream,
+    let progression_volumes = scope.effective_progression_volumes(
         tile_rect.tile_index,
         coding_style.layers,
         max_resolution_end,
@@ -34505,24 +35238,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         )?;
     }
 
-    let retained_tile_part_order;
-    let tile_part_order = match physical_tile_part_order {
-        Some(order) => order,
-        None => {
-            retained_tile_part_order = codestream
-                .tiles
-                .iter()
-                .map(|tile| TilePartOrderEntry {
-                    tile_index: tile.tile_index,
-                    tile_part_index: tile.tile_part_index,
-                    payload_len: tile.payload_len,
-                })
-                .collect::<Vec<_>>();
-            &retained_tile_part_order
-        }
-    };
-    let packet_header_source =
-        packed_packet_header_source(input, codestream, tile_rect.tile_index, tile_part_order)?;
+    let packet_header_source = scope.packet_header_source(tile_rect.tile_index)?;
     let packed_headers = match &packet_header_source {
         PacketHeaderSource::Inline => None,
         PacketHeaderSource::Packed(source) => Some(source),
@@ -34530,8 +35246,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
     let header_payload: &dyn PacketByteSource = packed_headers
         .map(|source| source as &dyn PacketByteSource)
         .unwrap_or(payload);
-    let packet_lengths =
-        tile_packet_lengths(input, codestream, tile_rect.tile_index, tile_part_order)?;
+    let packet_lengths = tile_packet_lengths(scope, tile_rect.tile_index)?;
     let subband_counts = component_styles
         .iter()
         .map(|style| {
@@ -34544,9 +35259,10 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                 .ok_or(CodestreamError::SizeOverflow)
         })
         .collect::<Result<Vec<_>>>()?;
-    let component_quantization = parse_component_quantization_for_styles(
+    let component_quantization = parse_component_quantization_for_styles_with_markers(
         input,
         codestream,
+        scope.main_quantization_markers(),
         &component_styles,
         &subband_counts,
         1usize
@@ -34600,7 +35316,8 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
             packet_organisation.p0_13_main_maxshift_grant(),
         )?
     } else {
-        parse_bounded_tile_maxshift(input, codestream)?
+        scope
+            .bounded_tile_maxshift()?
             .filter(|maxshift| maxshift.tile_index == tile_rect.tile_index)
     };
     let mut component_states = component_quantization
@@ -34678,6 +35395,10 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
         }
         expected_offset == payload.len()
     });
+    let final_tile_part_ordinal = scope
+        .tile_part_order_positions(tile_rect.tile_index)
+        .len()
+        .checked_sub(1);
     let scheduled_packet_count = visit_progression_volumes(
         &codestream.siz,
         tile_rect.tile_index,
@@ -34712,14 +35433,7 @@ fn parse_default_precinct_packets_from_source_with_ht_retention(
                 }
                 Some(packed) if packed.kind == PacketHeaderSourceKind::Ppt => packed
                     .available_tile_part_at(header_offset)
-                    .filter(|available| {
-                        tile_part_order
-                            .iter()
-                            .filter(|entry| entry.tile_index == tile_rect.tile_index)
-                            .count()
-                            .checked_sub(1)
-                            == Some(*available)
-                    }),
+                    .filter(|available| final_tile_part_ordinal == Some(*available)),
                 _ => None,
             };
             let packet_tile_part = if declared_packet_len == Some(0) {
@@ -38399,6 +39113,7 @@ struct SpatialPrecinct {
     precinct: u32,
 }
 
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 fn effective_progression_volumes(
     input: &[u8],
     codestream: &Codestream,
@@ -38419,6 +39134,27 @@ fn effective_progression_volumes(
         .filter(|part| part.tile_index == tile)
         .collect::<Vec<_>>();
     tile_parts.sort_by_key(|part| part.tile_part_index);
+    effective_progression_volumes_for_tile(
+        &state,
+        &tile_parts,
+        codestream,
+        tile,
+        layers,
+        max_resolution_end,
+    )
+}
+
+/// Derive one tile's progression volumes from resolved header state.
+/// `tile_parts` holds the tile's effective tile parts ordered by tile-part
+/// index.
+fn effective_progression_volumes_for_tile(
+    state: &EffectiveHeaderState,
+    tile_parts: &[EffectiveTilePartState],
+    codestream: &Codestream,
+    tile: u16,
+    layers: u16,
+    max_resolution_end: u8,
+) -> Result<Vec<ProgressionVolume>> {
     let last_part = tile_parts.last().copied().ok_or_else(|| {
         invalid(
             None,
@@ -41762,6 +42498,8 @@ impl TagTree {
         leaf_y: u16,
         threshold: u32,
     ) -> Result<Option<u32>> {
+        #[cfg(test)]
+        TAG_TREE_DECODES.with(|count| count.set(count.get() + 1));
         let mut coordinates = [(0_u16, 0_u16); MAX_TAG_TREE_LEVELS];
         if self.levels.len() > coordinates.len() {
             return Err(CodestreamError::SizeOverflow);
@@ -41930,6 +42668,13 @@ impl TagTreeRasterWalk {
 }
 
 #[cfg(test)]
+std::thread_local! {
+    /// Tag-tree leaf decodes, so tests can bound packet-header work through
+    /// the real packet parser.
+    static TAG_TREE_DECODES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tag_tree_raster_walk_tests {
     use super::*;
 
@@ -42047,6 +42792,58 @@ mod tag_tree_raster_walk_tests {
         }
     }
 
+    /// One 256 x 256 unsigned 8-bit component, no decomposition levels and
+    /// 4 x 4 code-blocks, so 4096 code-blocks share one precinct. Each layer's
+    /// packet is the byte 0x80: present, then a zero inclusion bit that keeps
+    /// the root of the inclusion tree beyond the layer.
+    fn many_code_block_layers(layers: u16) -> Vec<u8> {
+        fn segment(output: &mut Vec<u8>, marker: Marker, data: &[u8]) {
+            output.extend_from_slice(&marker.code().to_be_bytes());
+            output.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
+            output.extend_from_slice(data);
+        }
+        let mut bytes = Marker::Soc.code().to_be_bytes().to_vec();
+        let mut siz = vec![0, 0];
+        for value in [256_u32, 256, 0, 0, 256, 256, 0, 0] {
+            siz.extend_from_slice(&value.to_be_bytes());
+        }
+        siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+        segment(&mut bytes, Marker::Siz, &siz);
+        let mut cod = vec![0, 0];
+        cod.extend_from_slice(&layers.to_be_bytes());
+        cod.extend_from_slice(&[0, 0, 0, 0, 0, 1]);
+        segment(&mut bytes, Marker::Cod, &cod);
+        segment(&mut bytes, Marker::Qcd, &[0x40, 9 << 3]);
+        let body = alloc::vec![0x80_u8; usize::from(layers)];
+        let mut sot = 0_u16.to_be_bytes().to_vec();
+        sot.extend_from_slice(&u32::try_from(14 + body.len()).unwrap().to_be_bytes());
+        sot.extend_from_slice(&[0, 1]);
+        segment(&mut bytes, Marker::Sot, &sot);
+        bytes.extend_from_slice(&Marker::Sod.code().to_be_bytes());
+        bytes.extend_from_slice(&body);
+        bytes.extend_from_slice(&Marker::Eoc.code().to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn packet_parser_decodes_one_inclusion_leaf_per_excluded_layer() {
+        let layers = 64;
+        let bytes = many_code_block_layers(layers);
+        TAG_TREE_DECODES.with(|count| count.set(0));
+        let decoded = decode_baseline_owned_components_selected(&bytes, &[0])
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let decodes = TAG_TREE_DECODES.with(|count| count.get());
+        assert_eq!(decoded.components.len(), 1);
+        assert!(
+            decoded.components[0]
+                .samples
+                .iter()
+                .all(|&sample| sample == 128)
+        );
+        // A full scan would decode all 4096 leaves in every layer.
+        assert_eq!(decodes, usize::from(layers));
+    }
+
     #[test]
     fn excluded_precinct_costs_constant_work_per_layer() {
         // One zero bit per layer keeps the root undecided but beyond the
@@ -42147,6 +42944,26 @@ fn parse_component_quantization_for_styles(
     default_expected_subbands: usize,
     selected_components: Option<&[u16]>,
 ) -> Result<Vec<ComponentQuantization>> {
+    parse_component_quantization_for_styles_with_markers(
+        input,
+        codestream,
+        &MainQuantizationMarkers::new(input, codestream),
+        component_styles,
+        expected_subbands_by_component,
+        default_expected_subbands,
+        selected_components,
+    )
+}
+
+fn parse_component_quantization_for_styles_with_markers(
+    input: &[u8],
+    codestream: &Codestream,
+    main_markers: &MainQuantizationMarkers<'_>,
+    component_styles: &[CodingStyleMarker],
+    expected_subbands_by_component: &[usize],
+    default_expected_subbands: usize,
+    selected_components: Option<&[u16]>,
+) -> Result<Vec<ComponentQuantization>> {
     let component_count = usize::from(codestream.siz.component_count());
     if component_styles.len() != component_count
         || expected_subbands_by_component.len() != component_count
@@ -42160,19 +42977,9 @@ fn parse_component_quantization_for_styles(
             "QCD/QCC resolution requires a main-header COD marker",
         )
     })?;
-    let first_tile_offset = codestream
-        .markers
-        .iter()
-        .find(|marker| marker.marker == Marker::Sot)
-        .map(|marker| marker.offset)
-        .unwrap_or(input.len());
     let component_index_bytes = component_selector_len(&codestream.siz);
     let mut has_qcc_override = alloc::vec![false; component_count];
-    for qcc in codestream
-        .markers
-        .iter()
-        .filter(|marker| marker.marker == Marker::Qcc && marker.offset < first_tile_offset)
-    {
+    for qcc in main_markers.qcc.iter().copied() {
         let segment = checked_slice(input, qcc.data_offset, qcc.data_len)?;
         if segment.len() <= component_index_bytes {
             return Err(invalid(
@@ -42201,11 +43008,7 @@ fn parse_component_quantization_for_styles(
             ));
         }
     }
-    let qcd_markers = codestream
-        .markers
-        .iter()
-        .filter(|marker| marker.marker == Marker::Qcd && marker.offset < first_tile_offset)
-        .collect::<Vec<_>>();
+    let qcd_markers = &main_markers.qcd;
     let [qcd] = qcd_markers.as_slice() else {
         return Err(invalid(
             qcd_markers.first().map(|marker| marker.offset),
@@ -42255,11 +43058,7 @@ fn parse_component_quantization_for_styles(
         .collect::<Result<Vec<_>>>()?;
     let mut overridden = alloc::vec![false; component_count];
 
-    for qcc in codestream
-        .markers
-        .iter()
-        .filter(|marker| marker.marker == Marker::Qcc && marker.offset < first_tile_offset)
-    {
+    for qcc in main_markers.qcc.iter().copied() {
         let segment = checked_slice(input, qcc.data_offset, qcc.data_len)?;
         if segment.len() <= component_index_bytes {
             return Err(invalid(
@@ -42311,22 +43110,20 @@ fn parse_component_quantization_for_styles(
             let coding_style = component_styles
                 .get(component_index)
                 .ok_or(CodestreamError::SizeOverflow)?;
-            let (marker, marker_offset) = codestream
-                .markers
+            let (marker, marker_offset) = main_markers
+                .qcc
                 .iter()
                 .find(|marker| {
-                    marker.marker == Marker::Qcc
-                        && marker.offset < first_tile_offset
-                        && checked_slice(input, marker.data_offset, marker.data_len)
-                            .ok()
-                            .and_then(|data| {
-                                if component_index_bytes == 1 {
-                                    data.first().copied().map(usize::from)
-                                } else {
-                                    read_u16(data, 0).ok().map(usize::from)
-                                }
-                            })
-                            == Some(component_index)
+                    checked_slice(input, marker.data_offset, marker.data_len)
+                        .ok()
+                        .and_then(|data| {
+                            if component_index_bytes == 1 {
+                                data.first().copied().map(usize::from)
+                            } else {
+                                read_u16(data, 0).ok().map(usize::from)
+                            }
+                        })
+                        == Some(component_index)
                 })
                 .map_or((Marker::Qcd, qcd.offset), |marker| {
                     (Marker::Qcc, marker.offset)
@@ -50147,27 +50944,27 @@ impl PacketByteSource for BufferedSourcePacketPayload<'_> {
     }
 }
 
+/// Parse one prepared tile in `scope`, whose physical order is the parsed
+/// tile-part order.
 fn parse_prepared_payload_packets(
-    marker_input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     tile: TileRect,
     payload: &PreparedTilePayload<'_>,
     max_layers: Option<u16>,
     max_resolution: u8,
     component_indices: &[u16],
-    tile_part_order: &[TilePartOrderEntry],
 ) -> Result<ParsedPacketContributions> {
+    let codestream = scope.codestream;
     match payload {
-        PreparedTilePayload::Slice(_) => parse_default_precinct_packets_from_source(
-            marker_input,
-            codestream,
+        PreparedTilePayload::Slice(_) => parse_default_precinct_packets_in_scope(
+            scope,
             tile,
             payload,
             max_layers,
             Some(max_resolution),
             Some(component_indices),
             PacketOrganisationConfig::DEFAULT,
-            Some(tile_part_order),
+            HtCodingSetRetention::Complete,
         ),
         PreparedTilePayload::Source(source_payload) => {
             let retained_layers = max_layers.unwrap_or(u16::MAX);
@@ -50176,16 +50973,15 @@ fn parse_prepared_payload_packets(
                 .is_some_and(|style| retained_layers < style.layers);
             let buffered =
                 BufferedSourcePacketPayload::new(source_payload, exact_packet_header_reads);
-            let result = parse_default_precinct_packets_from_source(
-                marker_input,
-                codestream,
+            let result = parse_default_precinct_packets_in_scope(
+                scope,
                 tile,
                 &buffered,
                 max_layers,
                 Some(max_resolution),
                 Some(component_indices),
                 PacketOrganisationConfig::DEFAULT,
-                Some(tile_part_order),
+                HtCodingSetRetention::Complete,
             );
             if let Some(error) = buffered.take_error() {
                 Err(source_error_in_phase(error, "packet-header preparation"))
@@ -50196,17 +50992,29 @@ fn parse_prepared_payload_packets(
     }
 }
 
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 fn tile_payload_spans_for_rect<'a>(
     input: &'a [u8],
     codestream: &Codestream,
     tile_rect: TileRect,
 ) -> Result<TilePartPayload<'a>> {
-    validate_retained_tile_parts_for_tile(codestream, tile_rect.tile_index)?;
-    let mut tile_parts = codestream
-        .tiles
-        .iter()
-        .filter(|tile| tile.tile_index == tile_rect.tile_index)
-        .collect::<Vec<_>>();
+    tile_payload_spans_from_tile_parts(
+        input,
+        codestream
+            .tiles
+            .iter()
+            .filter(|tile| tile.tile_index == tile_rect.tile_index)
+            .collect(),
+    )
+}
+
+/// Map one tile's retained tile parts, given in codestream order, to
+/// logically contiguous payload spans.
+fn tile_payload_spans_from_tile_parts<'a>(
+    input: &'a [u8],
+    mut tile_parts: Vec<&TilePartState>,
+) -> Result<TilePartPayload<'a>> {
+    validate_retained_tile_parts(tile_parts.clone())?;
     tile_parts.sort_by_key(|tile| tile.tile_part_index);
 
     let mut spans = Vec::with_capacity(tile_parts.len());
@@ -50232,10 +51040,20 @@ fn tile_payload_for_rect<'a>(
     codestream: &Codestream,
     tile_rect: TileRect,
 ) -> Result<Cow<'a, [u8]>> {
-    let mut matching_tile_parts = codestream
-        .tiles
-        .iter()
-        .filter(|tile| tile.tile_index == tile_rect.tile_index);
+    tile_payload_from_tile_parts(
+        input,
+        codestream
+            .tiles
+            .iter()
+            .filter(|tile| tile.tile_index == tile_rect.tile_index),
+    )
+}
+
+/// Join one tile's payload from its retained tile parts in codestream order.
+fn tile_payload_from_tile_parts<'a, 't>(
+    input: &'a [u8],
+    mut matching_tile_parts: impl Iterator<Item = &'t TilePartState>,
+) -> Result<Cow<'a, [u8]>> {
     let first_tile_part = matching_tile_parts.next().ok_or_else(|| {
         unsupported(
             None,
@@ -50794,23 +51612,22 @@ fn classify_htj2k_lossless_profile(
     }
     let single_tile = tile_rects.len() == 1;
 
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     for tile_rect in tile_rects {
-        let payload = tile_payload_spans_for_rect(input, codestream, tile_rect).map_err(|_| {
+        let payload = scope.tile_payload_spans(tile_rect).map_err(|_| {
             Htj2kLosslessProfileDiagnostic::new(
                 UnsupportedConstruct::MarkerSegment,
                 "native HTJ2K lossless decode requires retained payload state for every tile",
             )
         })?;
-        let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
-            input,
-            codestream,
+        let contributions = parse_default_precinct_packets_in_scope(
+            &scope,
             tile_rect,
             &payload,
             None,
             None,
             None,
             PacketOrganisationConfig::DEFAULT,
-            None,
             HtCodingSetRetention::NativeAdmission,
         )
         .map_err(|_| {
@@ -52109,19 +52926,19 @@ pub fn htj2k_lossless_no_decomp_workload_profile(
     let mut cleanup_profile_scratch = ht::HtBlockScratchBuffer::new();
     let mut segment_scratch = Vec::new();
     let mut code_blocks = Vec::new();
+    let scope = CodestreamPacketScope::new(input, &codestream, None);
     for tile_rect in tile_rects {
         let payload = if single_tile {
             single_part1_profile_tile(input, &codestream)?.1
         } else {
-            let tile_part = codestream
-                .tiles
-                .iter()
-                .find(|tile| tile.tile_index == tile_rect.tile_index)
+            let tile_part = scope
+                .retained_tile_parts(tile_rect.tile_index)
+                .next()
                 .ok_or(CodestreamError::SizeOverflow)?;
             tile_payload(input, tile_part)?
         };
         let contributions =
-            parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+            parse_default_precinct_lrcp_packets_in_scope(&scope, tile_rect, payload)?;
         let code_block_columns = usize::try_from(ceil_div(tile_rect.width, configured_width)?)
             .map_err(|_| CodestreamError::SizeOverflow)?;
         let code_block_rows = usize::try_from(ceil_div(tile_rect.height, configured_height)?)
@@ -52631,6 +53448,7 @@ pub fn prepare_htj2k_native_component_grid_decode(
         })?;
     validate_one_tile_part_per_tile(&codestream)?;
     let mut tiles = Vec::new();
+    let scope = CodestreamPacketScope::new(input, &codestream, None);
     for tile_rect in tile_rects(&codestream)? {
         if !ht_native_components_single_precinct_grid(&codestream, tile_rect, coding_style) {
             return Err(unsupported(
@@ -52640,14 +53458,13 @@ pub fn prepare_htj2k_native_component_grid_decode(
                 "native HTJ2K component-grid decode requires one effective precinct per resolution",
             ));
         }
-        let tile_part = codestream
-            .tiles
-            .iter()
-            .find(|part| part.tile_index == tile_rect.tile_index)
+        let tile_part = scope
+            .retained_tile_parts(tile_rect.tile_index)
+            .next()
             .ok_or(CodestreamError::SizeOverflow)?;
         let payload = tile_payload(input, tile_part)?;
         let contributions =
-            parse_default_precinct_lrcp_packets(input, &codestream, tile_rect, payload)?;
+            parse_default_precinct_lrcp_packets_in_scope(&scope, tile_rect, payload)?;
         classify_htonly_native_packet_mechanisms(&contributions).map_err(|diagnostic| {
             unsupported(None, None, diagnostic.construct, diagnostic.detail)
         })?;
@@ -55467,10 +56284,10 @@ fn decode_htj2k_multitile_components_sequential(
     workspace: &mut HtCodestreamDecodeWorkspace,
 ) -> Result<Vec<DecodedComponent>> {
     let mut components = allocate_stitched_components(plane_len, component_sample_bytes)?;
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     for &tile_rect in tile_rects {
         let tile_components = decode_htj2k_multitile_tile_components(
-            input,
-            codestream,
+            &scope,
             marker_candidate,
             transfer,
             tile_rect,
@@ -55511,13 +56328,13 @@ fn decode_htj2k_multitile_components_parallel(
     workspace
         .parallel_tiles
         .resize_with(tile_rects.len(), HtCodestreamDecodeWorkspace::new);
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     let decoded_tiles = tile_rects
         .par_iter()
         .zip(workspace.parallel_tiles.par_iter_mut())
         .map(|(&tile_rect, tile_workspace)| {
             decode_htj2k_multitile_tile_components(
-                input,
-                codestream,
+                &scope,
                 marker_candidate,
                 transfer,
                 tile_rect,
@@ -55590,21 +56407,20 @@ fn stitch_htj2k_tile_components(
 
 #[cfg(feature = "std")]
 fn decode_htj2k_multitile_tile_components(
-    input: &[u8],
-    codestream: &Codestream,
+    scope: &CodestreamPacketScope<'_>,
     marker_candidate: ht::HtDecodeCandidate,
     transfer: HtReversibleCodeBlockTransfer,
     tile_rect: TileRect,
     workspace: &mut HtCodestreamDecodeWorkspace,
 ) -> Result<Vec<DecodedComponent>> {
-    let tile_part = codestream
-        .tiles
-        .iter()
-        .find(|tile| tile.tile_index == tile_rect.tile_index)
+    let codestream = scope.codestream;
+    let tile_part = scope
+        .retained_tile_parts(tile_rect.tile_index)
+        .next()
         .copied()
         .ok_or(CodestreamError::SizeOverflow)?;
-    let payload = tile_payload(input, &tile_part)?;
-    let contributions = parse_default_precinct_lrcp_packets(input, codestream, tile_rect, payload)?;
+    let payload = tile_payload(scope.input, &tile_part)?;
+    let contributions = parse_default_precinct_lrcp_packets_in_scope(scope, tile_rect, payload)?;
     classify_htonly_native_packet_mechanisms(&contributions)
         .map_err(|diagnostic| unsupported(None, None, diagnostic.construct, diagnostic.detail))?;
     let stride = usize::try_from(tile_rect.width).map_err(|_| CodestreamError::SizeOverflow)?;
@@ -56811,18 +57627,15 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
     let Ok(tile_rects) = tile_rects(codestream) else {
         return Ok(());
     };
+    let scope = CodestreamPacketScope::new(input, codestream, None);
+    // The organisation depends only on the codestream; resolve it once
+    // rather than re-evaluating every envelope for each tile.
+    let mut packet_organisation = None;
     for tile_rect in tile_rects {
-        let Ok(payload) = tile_payload_spans_for_rect(input, codestream, tile_rect) else {
+        let Ok(payload) = scope.tile_payload_spans(tile_rect) else {
             continue;
         };
-        if let Err(error) = parse_default_precinct_packets_from_source(
-            input,
-            codestream,
-            tile_rect,
-            &payload,
-            None,
-            None,
-            None,
+        let packet_organisation = *packet_organisation.get_or_insert_with(|| {
             if ht_high_component::envelope(codestream) {
                 PacketOrganisationConfig::HT_HIGH_COMPONENT
             } else if ht_reduced_roi::envelope(codestream) {
@@ -56837,8 +57650,17 @@ pub fn validate_part15_packet_signalling(input: &[u8], codestream: &Codestream) 
                 PacketOrganisationConfig::HT_SCALAR_DERIVED_REDUCED
             } else {
                 PacketOrganisationConfig::DEFAULT
-            },
+            }
+        });
+        if let Err(error) = parse_default_precinct_packets_in_scope(
+            &scope,
+            tile_rect,
+            &payload,
             None,
+            None,
+            None,
+            packet_organisation,
+            HtCodingSetRetention::Complete,
         ) && matches!(
             &error,
             CodestreamError::InvalidMarker {
@@ -56908,18 +57730,17 @@ fn validate_htonly_permission_effective_packet_mechanisms(
     if !multiple_sets_declared {
         return Ok(());
     }
+    let scope = CodestreamPacketScope::new(input, codestream, None);
     for tile_rect in tile_rects(codestream)? {
-        let payload = tile_payload_spans_for_rect(input, codestream, tile_rect)?;
-        let contributions = parse_default_precinct_packets_from_source_with_ht_retention(
-            input,
-            codestream,
+        let payload = scope.tile_payload_spans(tile_rect)?;
+        let contributions = parse_default_precinct_packets_in_scope(
+            &scope,
             tile_rect,
             &payload,
             None,
             None,
             None,
             PacketOrganisationConfig::DEFAULT,
-            None,
             HtCodingSetRetention::NativeAdmission,
         )?
         .contributions;
@@ -57728,6 +58549,7 @@ fn resolve_effective_header_state(
     kind: CodestreamKind,
     markers: &[MarkerSegment],
 ) -> Result<EffectiveHeaderState> {
+    record_codestream_wide_derivation();
     let first_sot_index = markers
         .iter()
         .position(|segment| segment.marker == Marker::Sot)
