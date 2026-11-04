@@ -28,11 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = encode(ImageView::Interleaved {
         info: &input_info, samples: &samples, stride_bytes: 8,
     }, &EncodeOptions::default())?;
-    let options = DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: ComponentLayout::Interleaved,
-        ..DecodeOptions::default()
-    };
+    let options = DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(ComponentLayout::Interleaved);
     let shape = decode_shape(&bytes, &options)?;
     // This example is deliberately a uniform, unit-sampled U8 profile.
     assert_eq!(shape.sample_format, SampleFormat::U8);

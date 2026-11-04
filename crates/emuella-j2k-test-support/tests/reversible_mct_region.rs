@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use emuella_j2k_codestream as codestream;
 use emuella_j2k_core::{
-    ImageViewMut, Part1DecodeWorkspace, PlaneMut, Region, SampleFormat, codestream,
+    ImageViewMut, Part1DecodeWorkspace, PlaneMut, Region, SampleFormat,
     execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
 };
 use emuella_j2k_test_support::native_planes::{

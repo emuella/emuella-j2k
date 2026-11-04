@@ -187,10 +187,7 @@ fn lossless_baselines_are_repeatable_and_define_zero_distortion() {
                 * usize::from(case.components)
                 * usize::from(case.format.bits_per_sample / 8),
         };
-        let options = EncodeOptions {
-            format: OutputFormat::J2kCodestream,
-            ..EncodeOptions::default()
-        };
+        let options = EncodeOptions::default().with_format(OutputFormat::J2kCodestream);
         let first = encode(image, &options).expect("lossless baseline encodes");
         let second = encode(image, &options).expect("lossless baseline re-encodes");
         assert_eq!(
@@ -202,11 +199,9 @@ fn lossless_baselines_are_repeatable_and_define_zero_distortion() {
 
         let decoded = decode(
             &first,
-            &DecodeOptions {
-                mode: DecodeMode::Components,
-                target_layout: ComponentLayout::Interleaved,
-                ..DecodeOptions::default()
-            },
+            &DecodeOptions::default()
+                .with_mode(DecodeMode::Components)
+                .with_target_layout(ComponentLayout::Interleaved),
         )
         .expect("lossless baseline decodes");
         let ImageData::Interleaved(decoded) = decoded.data else {
@@ -265,13 +260,11 @@ fn irreversible_target_rate_qualifies_bounded_matrix() {
         };
         let mut previous_error: Option<SquaredError> = None;
         for (bits_per_pixel, budget) in [(1.0, 6_200), (2.0, 12_400), (4.0, 24_800)] {
-            let raw_options = EncodeOptions {
-                format: OutputFormat::J2kCodestream,
-                transform: WaveletTransform::Irreversible97,
-                quality: EncodeQuality::TargetRate { bits_per_pixel },
-                decomposition_levels: 2,
-                ..EncodeOptions::default()
-            };
+            let raw_options = EncodeOptions::default()
+                .with_format(OutputFormat::J2kCodestream)
+                .with_transform(WaveletTransform::Irreversible97)
+                .with_quality(EncodeQuality::TargetRate { bits_per_pixel })
+                .with_decomposition_levels(2);
             let first = encode(image, &raw_options).expect("target-rate raw encode succeeds");
             let second = encode(image, &raw_options).expect("target-rate raw re-encode succeeds");
             assert_eq!(first, second, "{} {bits_per_pixel} bpp", case.name);
@@ -285,11 +278,9 @@ fn irreversible_target_rate_qualifies_bounded_matrix() {
 
             let decoded = decode(
                 &first,
-                &DecodeOptions {
-                    mode: DecodeMode::Components,
-                    target_layout: ComponentLayout::Interleaved,
-                    ..DecodeOptions::default()
-                },
+                &DecodeOptions::default()
+                    .with_mode(DecodeMode::Components)
+                    .with_target_layout(ComponentLayout::Interleaved),
             )
             .expect("target-rate raw codestream decodes");
             let ImageData::Interleaved(decoded) = decoded.data else {
@@ -318,21 +309,13 @@ fn irreversible_target_rate_qualifies_bounded_matrix() {
             }
             previous_error = Some(error);
 
-            let jp2 = encode(
-                image,
-                &EncodeOptions {
-                    format: OutputFormat::Jp2,
-                    ..raw_options.clone()
-                },
-            )
-            .expect("target-rate JP2 encode succeeds");
+            let jp2 = encode(image, &raw_options.clone().with_format(OutputFormat::Jp2))
+                .expect("target-rate JP2 encode succeeds");
             let jp2_decoded = decode(
                 &jp2,
-                &DecodeOptions {
-                    mode: DecodeMode::Components,
-                    target_layout: ComponentLayout::Interleaved,
-                    ..DecodeOptions::default()
-                },
+                &DecodeOptions::default()
+                    .with_mode(DecodeMode::Components)
+                    .with_target_layout(ComponentLayout::Interleaved),
             )
             .expect("target-rate JP2 decodes");
             assert_eq!(jp2_decoded.data, ImageData::Interleaved(decoded));
@@ -370,12 +353,12 @@ fn irreversible_target_rate_fails_closed_outside_profile() {
         samples: &source,
         stride_bytes: QUALIFICATION_WIDTH as usize,
     };
-    let options = |bits_per_pixel| EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        transform: WaveletTransform::Irreversible97,
-        quality: EncodeQuality::TargetRate { bits_per_pixel },
-        decomposition_levels: 2,
-        ..EncodeOptions::default()
+    let options = |bits_per_pixel| {
+        EncodeOptions::default()
+            .with_format(OutputFormat::J2kCodestream)
+            .with_transform(WaveletTransform::Irreversible97)
+            .with_quality(EncodeQuality::TargetRate { bits_per_pixel })
+            .with_decomposition_levels(2)
     };
     for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
         assert!(encode(image, &options(invalid)).is_err());
@@ -401,34 +384,20 @@ fn irreversible_target_rate_fails_closed_outside_profile() {
         )
         .is_err()
     );
+    assert!(encode(image, &options(2.0).with_decomposition_levels(1)).is_err());
     assert!(
         encode(
             image,
-            &EncodeOptions {
-                decomposition_levels: 1,
-                ..options(2.0)
-            }
+            &options(2.0).with_transform(WaveletTransform::Reversible53)
         )
         .is_err()
     );
     assert!(
         encode(
             image,
-            &EncodeOptions {
-                transform: WaveletTransform::Reversible53,
-                ..options(2.0)
-            }
-        )
-        .is_err()
-    );
-    assert!(
-        encode(
-            image,
-            &EncodeOptions {
-                transform: WaveletTransform::Irreversible97,
-                quality: EncodeQuality::Lossless,
-                ..EncodeOptions::default()
-            }
+            &EncodeOptions::default()
+                .with_transform(WaveletTransform::Irreversible97)
+                .with_quality(EncodeQuality::Lossless)
         )
         .is_err()
     );
@@ -455,21 +424,13 @@ fn extreme_u16_target_rate_only_returns_classic_decodable_outputs() {
     let mut unattainable_target_rejected = false;
 
     for bits_per_pixel in [1.58, 1.59, 1.60, 1.65, 1.70, 1.71, 8.00] {
-        let raw_options = EncodeOptions {
-            format: OutputFormat::J2kCodestream,
-            transform: WaveletTransform::Irreversible97,
-            quality: EncodeQuality::TargetRate { bits_per_pixel },
-            decomposition_levels: 2,
-            ..EncodeOptions::default()
-        };
+        let raw_options = EncodeOptions::default()
+            .with_format(OutputFormat::J2kCodestream)
+            .with_transform(WaveletTransform::Irreversible97)
+            .with_quality(EncodeQuality::TargetRate { bits_per_pixel })
+            .with_decomposition_levels(2);
         let raw = encode(image, &raw_options);
-        let jp2 = encode(
-            image,
-            &EncodeOptions {
-                format: OutputFormat::Jp2,
-                ..raw_options.clone()
-            },
-        );
+        let jp2 = encode(image, &raw_options.clone().with_format(OutputFormat::Jp2));
 
         match (raw, jp2) {
             (Ok(raw), Ok(jp2)) => {
@@ -490,11 +451,9 @@ fn extreme_u16_target_rate_only_returns_classic_decodable_outputs() {
                 for (label, encoded) in [("raw", raw.as_slice()), ("JP2", jp2.as_slice())] {
                     let decoded = decode(
                         encoded,
-                        &DecodeOptions {
-                            mode: DecodeMode::Components,
-                            target_layout: ComponentLayout::Interleaved,
-                            ..DecodeOptions::default()
-                        },
+                        &DecodeOptions::default()
+                            .with_mode(DecodeMode::Components)
+                            .with_target_layout(ComponentLayout::Interleaved),
                     )
                     .unwrap_or_else(|error| {
                         panic!("{label} {bits_per_pixel} bpp did not component-decode: {error}")
@@ -611,15 +570,13 @@ fn irreversible_target_rate_accepts_planar_inputs() {
                 info: &info,
                 planes: &planes,
             },
-            &EncodeOptions {
-                format: OutputFormat::J2kCodestream,
-                transform: WaveletTransform::Irreversible97,
-                quality: EncodeQuality::TargetRate {
+            &EncodeOptions::default()
+                .with_format(OutputFormat::J2kCodestream)
+                .with_transform(WaveletTransform::Irreversible97)
+                .with_quality(EncodeQuality::TargetRate {
                     bits_per_pixel: 2.0,
-                },
-                decomposition_levels: 2,
-                ..EncodeOptions::default()
-            },
+                })
+                .with_decomposition_levels(2),
         )
         .expect("planar target-rate input encodes");
         assert!(encoded.len() <= 12_400, "{}", case.name);

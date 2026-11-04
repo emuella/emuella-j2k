@@ -21,10 +21,7 @@ fn generated_j2k_round_trips_without_external_fixtures() {
     let encoded = generate_grayscale_j2k(17, 19).expect("project generator succeeds");
     let decoded = decode(
         &encoded,
-        &DecodeOptions {
-            target_layout: ComponentLayout::Interleaved,
-            ..DecodeOptions::default()
-        },
+        &DecodeOptions::default().with_target_layout(ComponentLayout::Interleaved),
     )
     .expect("generated J2K decodes");
     assert_eq!(

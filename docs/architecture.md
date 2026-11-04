@@ -14,8 +14,9 @@ emuella-j2k-capi
                           └── emuella-j2k-accel
 ```
 
-`emuella-j2k` is the application-facing public facade and re-exports the API
-implemented by `emuella-j2k-core`. The core crate owns caller-visible images,
+`emuella-j2k` is the application-facing public facade. It re-exports an
+explicit list of the API implemented by `emuella-j2k-core`, and none of the
+lower-level crates' modules, diagnostics or test fixtures. The core crate owns caller-visible images,
 parameters, errors, support classification, and high-level
 inspect/decode/encode entry points. Lower-level crates parse boxes and markers,
 walk packets, decode or encode code blocks, and apply transforms. Optional

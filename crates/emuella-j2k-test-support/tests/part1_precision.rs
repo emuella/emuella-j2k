@@ -1,6 +1,7 @@
+use emuella_j2k_codestream as c;
 use emuella_j2k_core::{
     ColorModel, ComponentLayout, EncodeOptions, ImageInfo, ImageView, ImageViewMut, OutputFormat,
-    Part1DecodeWorkspace, PlaneMut, SampleEndian, SampleFormat, TileSize, codestream as c, encode,
+    Part1DecodeWorkspace, PlaneMut, SampleEndian, SampleFormat, TileSize, encode,
     execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
 };
 
@@ -41,15 +42,13 @@ fn fixture(bits: u8, bands: u16, levels: u8, tiled: bool) -> Vec<u8> {
             samples: &samples,
             stride_bytes: 67 * usize::from(bands) * 2,
         },
-        &EncodeOptions {
-            format: OutputFormat::J2kCodestream,
-            decomposition_levels: levels,
-            tile_size: tiled.then_some(TileSize {
+        &EncodeOptions::default()
+            .with_format(OutputFormat::J2kCodestream)
+            .with_decomposition_levels(levels)
+            .with_tile_size(tiled.then_some(TileSize {
                 width: 32,
                 height: 32,
-            }),
-            ..Default::default()
-        },
+            })),
     )
     .unwrap()
 }

@@ -23,6 +23,7 @@ cbindgen = "=0.29.4"
 [dev-dependencies]
 # Workspace-only fixtures; omit the unpublished helper from packaged dependencies.
 emuella-j2k-test-support = { path = "../emuella-j2k-test-support" }
+emuella-j2k-codestream = { workspace = true, features = ["test-fixtures"] }
 static_assertions = "1.1.0"
 
 [lints.rust]

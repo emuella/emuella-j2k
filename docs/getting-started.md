@@ -30,11 +30,10 @@ fn main() -> Result<(), emuella_j2k::J2kError> {
     let image = metadata.image.expect("encoded image metadata");
     assert_eq!((image.width, image.height, image.components), (8, 8, 1));
 
-    let decoded = decode(&bytes, &DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: ComponentLayout::Interleaved,
-        ..DecodeOptions::default()
-    })?;
+    let options = DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(ComponentLayout::Interleaved);
+    let decoded = decode(&bytes, &options)?;
     assert_eq!(decoded.info.sample_format, SampleFormat::U8);
     assert_eq!(decoded.data, ImageData::Interleaved(samples.to_vec()));
     Ok(())

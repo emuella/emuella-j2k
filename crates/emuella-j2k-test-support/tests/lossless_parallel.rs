@@ -96,11 +96,9 @@ fn ordered_bounded_batches_preserve_bytes_layouts_samples_and_budgets() {
                     }
                     let decoded = decode(
                         &stream,
-                        &DecodeOptions {
-                            mode: DecodeMode::Components,
-                            target_layout: ComponentLayout::Interleaved,
-                            ..Default::default()
-                        },
+                        &DecodeOptions::default()
+                            .with_mode(DecodeMode::Components)
+                            .with_target_layout(ComponentLayout::Interleaved),
                     )
                     .unwrap();
                     assert_eq!(decoded.data, ImageData::Interleaved(packed.clone()));

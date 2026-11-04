@@ -1333,30 +1333,28 @@ fn compare_j2k_to_pgx(
         return Err("PGX metadata disagrees with the comparison contract".to_owned());
     }
     let decoded = if contract.output_window || contract.resolution_reduction != 0 {
-        let options = PartialDecodeOptions {
-            region: contract
-                .output_window
-                .then(|| comparison_source_region(contract))
-                .transpose()?,
-            resolution: if contract.resolution_reduction == 0 {
+        let options = PartialDecodeOptions::default()
+            .with_region(
+                contract
+                    .output_window
+                    .then(|| comparison_source_region(contract))
+                    .transpose()?,
+            )
+            .with_resolution(if contract.resolution_reduction == 0 {
                 ResolutionLevel::Full
             } else {
                 ResolutionLevel::Reduced {
                     discard_levels: contract.resolution_reduction,
                 }
-            },
-            components: ComponentSelection::Indices(vec![contract.component]),
-            target_layout: ComponentLayout::Planar,
-            ..PartialDecodeOptions::default()
-        };
+            })
+            .with_components(ComponentSelection::Indices(vec![contract.component]))
+            .with_target_layout(ComponentLayout::Planar);
         decode_partial(codestream, &options)
     } else {
-        let options = DecodeOptions {
-            mode: DecodeMode::Components,
-            requested_components: ComponentSelection::Indices(vec![contract.component]),
-            target_layout: ComponentLayout::Planar,
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_requested_components(ComponentSelection::Indices(vec![contract.component]))
+            .with_target_layout(ComponentLayout::Planar);
         decode(codestream, &options)
     };
     let decoded = decoded.map_err(|error| format!("decode failed: {error}"))?;
@@ -1400,13 +1398,12 @@ fn compare_rendered_jp2_to_tiff(
     }
     let decoded = decode(
         jp2,
-        &DecodeOptions {
-            allow_best_effort_backend_decode: false,
-            mode: DecodeMode::Rendered,
-            requested_components: ComponentSelection::All,
-            max_quality_layers: None,
-            target_layout: ComponentLayout::Interleaved,
-        },
+        &DecodeOptions::default()
+            .with_allow_best_effort_backend_decode(false)
+            .with_mode(DecodeMode::Rendered)
+            .with_requested_components(ComponentSelection::All)
+            .with_max_quality_layers(None)
+            .with_target_layout(ComponentLayout::Interleaved),
     )
     .map_err(|error| format!("rendered decode failed: {error}"))?;
     if decoded.info.width != contract.width
@@ -1559,10 +1556,7 @@ mod tests {
                 samples: &samples,
                 stride_bytes: width as usize,
             },
-            &EncodeOptions {
-                format: OutputFormat::J2kCodestream,
-                ..EncodeOptions::default()
-            },
+            &EncodeOptions::default().with_format(OutputFormat::J2kCodestream),
         )
         .map_err(|error| error.to_string())
     }
@@ -1598,10 +1592,7 @@ mod tests {
                 samples: &samples,
                 stride_bytes: width as usize * 3,
             },
-            &EncodeOptions {
-                format,
-                ..EncodeOptions::default()
-            },
+            &EncodeOptions::default().with_format(format),
         )
         .map_err(|error| error.to_string())
     }

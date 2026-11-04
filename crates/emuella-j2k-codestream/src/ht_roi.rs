@@ -370,6 +370,7 @@ pub fn decode_prepared_htj2k_roi_window_owned(
 
 /// Generate coefficient-domain ROI evidence without external source samples.
 /// This is synthetic test support, not an application encoder profile.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_roi_window_test_fixture(
     width: u32,
@@ -383,6 +384,7 @@ pub fn encode_htj2k_roi_window_test_fixture(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn fixture(
     width: u32,
     height: u32,

@@ -1,11 +1,10 @@
+use emuella_j2k_codestream as codestream;
 use emuella_j2k_core::*;
 
 fn options() -> EncodeOptions {
-    EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    }
+    EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2)
 }
 fn info(w: u32, h: u32, c: u16, bits: u8, layout: ComponentLayout) -> ImageInfo {
     ImageInfo::new(
@@ -71,11 +70,9 @@ fn odd_dwt_and_code_block_boundaries_roundtrip_both_layouts_and_formats() {
                 assert_eq!(encoded, explicit);
                 let decoded = decode(
                     &encoded,
-                    &DecodeOptions {
-                        mode: DecodeMode::Components,
-                        target_layout: ComponentLayout::Interleaved,
-                        ..Default::default()
-                    },
+                    &DecodeOptions::default()
+                        .with_mode(DecodeMode::Components)
+                        .with_target_layout(ComponentLayout::Interleaved),
                 )
                 .unwrap();
                 assert_eq!(decoded.data, ImageData::Interleaved(input.clone()));

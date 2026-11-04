@@ -55,11 +55,9 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
         samples: &raw,
         stride_bytes: 256 * components * 2,
     };
-    let options = EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let limits = LosslessEncodeLimits {
         max_output_bytes: 64 * 1024 * 1024,
         max_working_bytes: 768 * 1024 * 1024,
@@ -67,29 +65,19 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let bypass = encode_lossless_bypass_with_limits(view, &options, &limits)?;
     let decoded = decode(
         &bypass,
-        &DecodeOptions {
-            mode: DecodeMode::Components,
-            target_layout: ComponentLayout::Interleaved,
-            ..Default::default()
-        },
+        &DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_target_layout(ComponentLayout::Interleaved),
     )?;
     if decoded.data != ImageData::Interleaved(raw.clone()) {
         return Err("bypass round trip differs".into());
     }
     let ht = encode_htj2k(
         view,
-        &Htj2kEncodeOptions {
-            decomposition_levels: 2,
-        },
+        &Htj2kEncodeOptions::default().with_decomposition_levels(2),
     );
-    let d1 = lossless_bypass_encode_requirements(
-        &info,
-        &EncodeOptions {
-            decomposition_levels: 1,
-            ..options
-        },
-        &limits,
-    );
+    let d1 =
+        lossless_bypass_encode_requirements(&info, &options.with_decomposition_levels(1), &limits);
     if !matches!(ht, Err(J2kError::Unsupported { .. }))
         || !matches!(d1, Err(J2kError::Unsupported { .. }))
     {

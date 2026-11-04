@@ -100,11 +100,9 @@ impl Htj2kCodec {
         dtype: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let expected = ArrayShape::parse(&shape, self.layout)?;
-        let options = DecodeOptions {
-            mode: DecodeMode::Components,
-            target_layout: self.layout.component_layout(),
-            ..DecodeOptions::default()
-        };
+        let options = DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_target_layout(self.layout.component_layout());
         let image = decode_htj2k_with_workspace(payload, &options, &mut self.decode_workspace)
             .map_err(core_error)?
             .ok_or_else(|| {
@@ -181,14 +179,13 @@ impl Htj2kCodec {
         py: Python<'py>,
         payload: &[u8],
     ) -> PyResult<Bound<'py, PyDict>> {
-        let profile =
-            emuella_j2k_core::codestream::htj2k_lossless_no_decomp_workload_profile(payload)
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
-                .ok_or_else(|| {
-                    PyValueError::new_err(
-                        "payload is outside the profiled lossless HTJ2K no-decomposition profile",
-                    )
-                })?;
+        let profile = emuella_j2k_codestream::htj2k_lossless_no_decomp_workload_profile(payload)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "payload is outside the profiled lossless HTJ2K no-decomposition profile",
+                )
+            })?;
         let result = PyDict::new(py);
         result.set_item(
             "configured_code_block_width",

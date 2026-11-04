@@ -109,11 +109,9 @@ fn all_backends_workers_styles_full_range_components_and_padding_have_exact_byte
                 let serial = pools[0].install(|| requirements(limits).unwrap());
                 let decoded = decode(
                     &reference,
-                    &DecodeOptions {
-                        mode: DecodeMode::Components,
-                        target_layout: ComponentLayout::Interleaved,
-                        ..Default::default()
-                    },
+                    &DecodeOptions::default()
+                        .with_mode(DecodeMode::Components)
+                        .with_target_layout(ComponentLayout::Interleaved),
                 )
                 .unwrap();
                 assert_eq!(decoded.data, ImageData::Interleaved(packed.clone()));

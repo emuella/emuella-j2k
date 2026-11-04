@@ -21,22 +21,14 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-pub use emuella_j2k_codestream as codestream;
-pub use emuella_j2k_container as container;
+use emuella_j2k_codestream as codestream;
+use emuella_j2k_container as container;
 #[cfg(feature = "std")]
 mod ht_high_component;
 #[cfg(feature = "std")]
 mod ht_roi;
 mod jp2_presentation;
 mod native_planes;
-
-pub const PROJECT_NAME: &str = "emuella-j2k";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectSummary {
-    pub name: &'static str,
-    pub summary: &'static str,
-}
 
 #[cfg(test)]
 mod htj2k_encode_tests {
@@ -271,7 +263,7 @@ mod htj2k_encode_tests {
         assert_eq!(metadata.support, SupportStatus::Supported);
         assert_eq!(
             metadata.codestream.as_ref().map(|value| value.kind),
-            Some(codestream::CodestreamKind::Htj2k)
+            Some(CodestreamKind::Htj2k)
         );
         assert_eq!(
             metadata.container,
@@ -2920,10 +2912,7 @@ mod jp2_header_validation_tests {
         let varying_jp2 = wrap_jp2(&varying, 5, 3, 3, 255, Some(&[7, 0x89, 7]));
         let metadata = inspect(&varying_jp2, &InspectOptions::default()).unwrap();
         assert_eq!(metadata.format, InputFormat::Jp2);
-        assert_eq!(
-            metadata.codestream.unwrap().kind,
-            codestream::CodestreamKind::J2k
-        );
+        assert_eq!(metadata.codestream.unwrap().kind, CodestreamKind::J2k);
     }
 
     #[test]
@@ -4902,18 +4891,12 @@ mod jp2_header_validation_tests {
     }
 }
 
-pub fn bootstrap_summary() -> ProjectSummary {
-    ProjectSummary {
-        name: PROJECT_NAME,
-        summary: "A pure-Rust JPEG 2000 and HTJ2K codec with a native Rust library, thin CLI, and future WASM and language-binding paths.",
-    }
-}
-
 /// Convenient result alias for all public core operations.
 pub type Result<T> = core::result::Result<T, J2kError>;
 
 /// High-level container or codestream family detected from input bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InputFormat {
     /// JP2 container with Part 1 codestream payload.
     Jp2,
@@ -4929,6 +4912,7 @@ pub enum InputFormat {
 
 /// Output family requested by encode calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputFormat {
     /// JP2 container with deterministic baseline metadata.
     Jp2,
@@ -5047,6 +5031,7 @@ impl SampleFormat {
 
 /// Color model declared or inferred for an image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColorModel {
     /// A single greyscale channel.
     Grayscale,
@@ -5107,6 +5092,7 @@ pub struct ImageInfo {
 /// mode callers should use these descriptors when source components may have
 /// different precision, signedness, origins, or sampling factors.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ComponentInfo {
     /// Source codestream component index, or `None` for a rendered channel
     /// produced by a transform or container projection.
@@ -5130,6 +5116,7 @@ pub struct ComponentInfo {
 /// Raw Part 1 image and component properties inspected from a positioned
 /// source without constructing a decode request.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Part1SourceInspection {
     pub image: ImageInfo,
     pub components: Vec<ComponentInfo>,
@@ -5479,6 +5466,7 @@ pub struct Htj2kDecodeWorkspace {
 /// This is a benchmark/provenance surface for the in-progress real HT parser.
 /// It reports cleanup-prefix parser progress only; it is not a decoded image and
 /// does not imply general HTJ2K decode support.
+#[doc(hidden)]
 #[cfg(feature = "std")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Htj2kCleanupVlcOutputProbe {
@@ -5512,6 +5500,7 @@ pub struct Htj2kCleanupVlcOutputProbe {
 
 /// First standard-table VLC lookup made by the current HTJ2K cleanup-output
 /// parser probe.
+#[doc(hidden)]
 #[cfg(feature = "std")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Htj2kCleanupVlcFirstLookup {
@@ -5530,6 +5519,7 @@ pub struct Htj2kCleanupVlcFirstLookup {
 
 /// First cleanup VLC quad-group step made by the current HTJ2K cleanup-output
 /// parser probe.
+#[doc(hidden)]
 #[cfg(feature = "std")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Htj2kCleanupVlcFirstGroup {
@@ -5565,6 +5555,7 @@ pub struct Htj2kCleanupVlcFirstGroup {
 }
 
 /// Compact description of one significant HTJ2K cleanup-output record.
+#[doc(hidden)]
 #[cfg(feature = "std")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Htj2kCleanupVlcSignificantOutput {
@@ -5594,6 +5585,7 @@ pub enum ImageData {
 
 /// Container and codestream metadata available without image allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Metadata {
     /// Detected container/codestream family.
     pub format: InputFormat,
@@ -5611,6 +5603,7 @@ pub struct Metadata {
 
 /// Resolved output shape for a full-image decode request.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodeShape {
     /// Resolved reference/output image width; native grid widths may differ.
     pub width: u32,
@@ -5649,16 +5642,37 @@ impl DecodeShape {
 
 /// Codestream-level fields that can be reported before full decode.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CodestreamInfo {
-    pub kind: codestream::CodestreamKind,
+    pub kind: CodestreamKind,
     pub tile_grid: Option<TileGrid>,
     pub progression_order: Option<ProgressionOrder>,
     pub transform: Option<WaveletTransform>,
     pub entropy_coder: Option<EntropyCoder>,
 }
 
+/// Raw codestream family reported by inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CodestreamKind {
+    /// JPEG 2000 Part 1 codestream.
+    J2k,
+    /// HTJ2K codestream.
+    Htj2k,
+}
+
+impl CodestreamKind {
+    fn from_codestream(kind: codestream::CodestreamKind) -> Self {
+        match kind {
+            codestream::CodestreamKind::J2k => Self::J2k,
+            codestream::CodestreamKind::Htj2k => Self::Htj2k,
+        }
+    }
+}
+
 /// JP2/JPH container fields relevant to support classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ContainerInfo {
     pub brand: Option<String>,
     pub compatible_brands: Vec<String>,
@@ -5683,6 +5697,7 @@ pub enum ProgressionOrder {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WaveletTransform {
     Reversible53,
     Irreversible97,
@@ -5690,6 +5705,7 @@ pub enum WaveletTransform {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EntropyCoder {
     ClassicTier1,
     HtBlockCoding,
@@ -5704,6 +5720,7 @@ pub struct MetadataRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MetadataKind {
     Xml,
     Uuid,
@@ -5716,6 +5733,7 @@ pub enum MetadataKind {
 /// This is separate from whether a particular mode, component selection, layout
 /// or partial request is admitted, and from successful packet reconstruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SupportStatus {
     /// An implemented bounded decode path was recognised.
     Supported,
@@ -5742,6 +5760,7 @@ impl SupportStatus {
 
 /// Named unsupported features used by errors and metadata classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UnsupportedFeature {
     /// Input container/codestream family or profile.
     InputFormat,
@@ -5773,6 +5792,7 @@ pub enum UnsupportedFeature {
 /// best-effort attempt. Component selection and positive quality-layer limits
 /// require component mode and their separately admitted profiles.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodeOptions {
     /// Permit legacy callers to request a native best-effort decode attempt
     /// after metadata inspection has classified an input as outside the
@@ -5795,6 +5815,46 @@ pub struct DecodeOptions {
     pub max_quality_layers: Option<u16>,
     /// Owned output layout; [`decode_into`] instead derives layout from its target.
     pub target_layout: ComponentLayout,
+}
+
+impl DecodeOptions {
+    /// Returns these options with `mode` replaced.
+    #[must_use]
+    pub fn with_mode(mut self, mode: DecodeMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Returns these options with `requested_components` replaced.
+    #[must_use]
+    pub fn with_requested_components(mut self, requested_components: ComponentSelection) -> Self {
+        self.requested_components = requested_components;
+        self
+    }
+
+    /// Returns these options with `max_quality_layers` replaced.
+    #[must_use]
+    pub fn with_max_quality_layers(mut self, max_quality_layers: Option<u16>) -> Self {
+        self.max_quality_layers = max_quality_layers;
+        self
+    }
+
+    /// Returns these options with `target_layout` replaced.
+    #[must_use]
+    pub fn with_target_layout(mut self, target_layout: ComponentLayout) -> Self {
+        self.target_layout = target_layout;
+        self
+    }
+
+    /// Returns these options with `allow_best_effort_backend_decode` replaced.
+    #[must_use]
+    pub fn with_allow_best_effort_backend_decode(
+        mut self,
+        allow_best_effort_backend_decode: bool,
+    ) -> Self {
+        self.allow_best_effort_backend_decode = allow_best_effort_backend_decode;
+        self
+    }
 }
 
 impl Default for DecodeOptions {
@@ -5952,6 +6012,7 @@ impl Htj2kDecodeWorkspace {
 
 /// Metadata parse parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InspectOptions {
     /// Retain selected raw metadata records. Default `true`; disabling this
     /// does not bypass structural validation or remove parsed image properties.
@@ -5959,6 +6020,22 @@ pub struct InspectOptions {
     /// Compute the bounded decode classification. Default `true`; `false`
     /// returns [`SupportStatus::Unknown`], not an approval.
     pub classify_support: bool,
+}
+
+impl InspectOptions {
+    /// Returns these options with `preserve_raw_metadata` replaced.
+    #[must_use]
+    pub fn with_preserve_raw_metadata(mut self, preserve_raw_metadata: bool) -> Self {
+        self.preserve_raw_metadata = preserve_raw_metadata;
+        self
+    }
+
+    /// Returns these options with `classify_support` replaced.
+    #[must_use]
+    pub fn with_classify_support(mut self, classify_support: bool) -> Self {
+        self.classify_support = classify_support;
+        self
+    }
 }
 
 impl Default for InspectOptions {
@@ -5977,6 +6054,7 @@ impl Default for InspectOptions {
 /// for every combination. The target-rate profile requires irreversible 9/7,
 /// two levels and its maintained input/resource bounds.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct EncodeOptions {
     /// JP2 container or raw Part 1 codestream.
     pub format: OutputFormat,
@@ -5992,6 +6070,57 @@ pub struct EncodeOptions {
     pub tile_size: Option<TileSize>,
     /// Supplied records; accepted kinds and container combinations are restricted.
     pub metadata: Vec<MetadataRecord>,
+}
+
+impl EncodeOptions {
+    /// Returns these options with `format` replaced.
+    #[must_use]
+    pub fn with_format(mut self, format: OutputFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Returns these options with `progression_order` replaced.
+    #[must_use]
+    pub fn with_progression_order(mut self, progression_order: ProgressionOrder) -> Self {
+        self.progression_order = progression_order;
+        self
+    }
+
+    /// Returns these options with `transform` replaced.
+    #[must_use]
+    pub fn with_transform(mut self, transform: WaveletTransform) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Returns these options with `quality` replaced.
+    #[must_use]
+    pub fn with_quality(mut self, quality: EncodeQuality) -> Self {
+        self.quality = quality;
+        self
+    }
+
+    /// Returns these options with `decomposition_levels` replaced.
+    #[must_use]
+    pub fn with_decomposition_levels(mut self, decomposition_levels: u8) -> Self {
+        self.decomposition_levels = decomposition_levels;
+        self
+    }
+
+    /// Returns these options with `tile_size` replaced.
+    #[must_use]
+    pub fn with_tile_size(mut self, tile_size: Option<TileSize>) -> Self {
+        self.tile_size = tile_size;
+        self
+    }
+
+    /// Returns these options with `metadata` replaced.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: Vec<MetadataRecord>) -> Self {
+        self.metadata = metadata;
+        self
+    }
 }
 
 impl Default for EncodeOptions {
@@ -6013,6 +6142,7 @@ impl Default for EncodeOptions {
 /// [`encode_htj2k`] writes a raw codestream and [`encode_htj2k_jph`] writes
 /// the same codestream bytes in a deterministic JPH container.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Htj2kEncodeOptions {
     /// Reversible 5/3 decomposition levels. The bounded algorithmic surface
     /// supports cleanup-only codestreams with zero or one level.
@@ -6024,6 +6154,7 @@ pub struct Htj2kEncodeOptions {
 /// Use [`encode_htj2k_lossy`] for raw output or [`encode_htj2k_lossy_jph`] for
 /// JPH. This additive type leaves [`Htj2kEncodeOptions`] lossless and unchanged.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Htj2kLossyEncodeOptions {
     /// Complete raw-codestream bits per reference-grid pixel, excluding JPH.
     ///
@@ -6036,6 +6167,152 @@ pub struct Htj2kLossyEncodeOptions {
     pub bits_per_pixel: f32,
 }
 
+impl Htj2kEncodeOptions {
+    /// Returns these options with `decomposition_levels` replaced.
+    #[must_use]
+    pub fn with_decomposition_levels(mut self, decomposition_levels: u8) -> Self {
+        self.decomposition_levels = decomposition_levels;
+        self
+    }
+}
+
+impl Htj2kLossyEncodeOptions {
+    /// Creates options for the given complete raw-codestream target rate.
+    ///
+    /// The rate is validated by the encoder, not by this constructor.
+    #[must_use]
+    pub fn new(bits_per_pixel: f32) -> Self {
+        Self { bits_per_pixel }
+    }
+}
+
+#[cfg(test)]
+mod option_setter_tests {
+    use super::*;
+
+    #[test]
+    fn decode_and_inspect_setters_replace_only_their_field() {
+        let options = DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_requested_components(ComponentSelection::Indices(vec![2, 0]))
+            .with_max_quality_layers(Some(3))
+            .with_target_layout(ComponentLayout::Interleaved)
+            .with_allow_best_effort_backend_decode(true);
+        assert_eq!(
+            options,
+            DecodeOptions {
+                allow_best_effort_backend_decode: true,
+                mode: DecodeMode::Components,
+                requested_components: ComponentSelection::Indices(vec![2, 0]),
+                max_quality_layers: Some(3),
+                target_layout: ComponentLayout::Interleaved,
+            }
+        );
+        assert_eq!(
+            DecodeOptions::default().with_mode(DecodeMode::Components),
+            DecodeOptions {
+                mode: DecodeMode::Components,
+                ..DecodeOptions::default()
+            }
+        );
+        let inspect = InspectOptions::default()
+            .with_preserve_raw_metadata(false)
+            .with_classify_support(false);
+        assert_eq!(
+            inspect,
+            InspectOptions {
+                preserve_raw_metadata: false,
+                classify_support: false,
+            }
+        );
+    }
+
+    #[test]
+    fn partial_setters_replace_only_their_field() {
+        let region = Region {
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+        };
+        let tile = TileSelection {
+            tile_x: 5,
+            tile_y: 6,
+        };
+        let options = PartialDecodeOptions::default()
+            .with_region(Some(region))
+            .with_tile(Some(tile))
+            .with_resolution(ResolutionLevel::Reduced { discard_levels: 1 })
+            .with_components(ComponentSelection::Indices(vec![1]))
+            .with_max_quality_layers(Some(2))
+            .with_target_layout(ComponentLayout::Interleaved);
+        assert_eq!(
+            options,
+            PartialDecodeOptions {
+                region: Some(region),
+                tile: Some(tile),
+                resolution: ResolutionLevel::Reduced { discard_levels: 1 },
+                components: ComponentSelection::Indices(vec![1]),
+                max_quality_layers: Some(2),
+                target_layout: ComponentLayout::Interleaved,
+            }
+        );
+        assert_eq!(
+            PartialDecodeOptions::default().with_region(None),
+            PartialDecodeOptions::default()
+        );
+    }
+
+    #[test]
+    fn encode_setters_and_constructors_replace_only_their_field() {
+        let record = MetadataRecord {
+            kind: MetadataKind::Xml,
+            label: None,
+            bytes: b"<a/>".to_vec(),
+        };
+        let tile_size = TileSize {
+            width: 64,
+            height: 32,
+        };
+        let options = EncodeOptions::default()
+            .with_format(OutputFormat::J2kCodestream)
+            .with_progression_order(ProgressionOrder::Rpcl)
+            .with_transform(WaveletTransform::Irreversible97)
+            .with_quality(EncodeQuality::TargetRate {
+                bits_per_pixel: 1.5,
+            })
+            .with_decomposition_levels(2)
+            .with_tile_size(Some(tile_size))
+            .with_metadata(vec![record.clone()]);
+        assert_eq!(
+            options,
+            EncodeOptions {
+                format: OutputFormat::J2kCodestream,
+                progression_order: ProgressionOrder::Rpcl,
+                transform: WaveletTransform::Irreversible97,
+                quality: EncodeQuality::TargetRate {
+                    bits_per_pixel: 1.5,
+                },
+                decomposition_levels: 2,
+                tile_size: Some(tile_size),
+                metadata: vec![record],
+            }
+        );
+        assert_eq!(
+            Htj2kEncodeOptions::default().with_decomposition_levels(1),
+            Htj2kEncodeOptions {
+                decomposition_levels: 1,
+            }
+        );
+        assert_eq!(
+            Htj2kLossyEncodeOptions::new(0.75),
+            Htj2kLossyEncodeOptions {
+                bits_per_pixel: 0.75,
+            }
+        );
+    }
+}
+
 /// Optional tile dimensions for the narrow native multi-tile encode surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileSize {
@@ -6046,6 +6323,7 @@ pub struct TileSize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum EncodeQuality {
     /// Reversible coding with exact native component reconstruction.
     Lossless,
@@ -6075,6 +6353,7 @@ pub enum ComponentSelection {
 /// endpoint independently ceiling-projected. Existing HTONLY branches retain
 /// their documented component, discard and transform contracts.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PartialDecodeOptions {
     /// Non-empty full-resolution image-relative half-open reference-grid
     /// rectangle. Mutually exclusive with [`Self::tile`]. Reduced lossy HT
@@ -6096,6 +6375,50 @@ pub struct PartialDecodeOptions {
     pub max_quality_layers: Option<u16>,
     /// Requested storage layout; native unequal grids generally require planar.
     pub target_layout: ComponentLayout,
+}
+
+impl PartialDecodeOptions {
+    /// Returns these options with `region` replaced.
+    #[must_use]
+    pub fn with_region(mut self, region: Option<Region>) -> Self {
+        self.region = region;
+        self
+    }
+
+    /// Returns these options with `tile` replaced.
+    #[must_use]
+    pub fn with_tile(mut self, tile: Option<TileSelection>) -> Self {
+        self.tile = tile;
+        self
+    }
+
+    /// Returns these options with `resolution` replaced.
+    #[must_use]
+    pub fn with_resolution(mut self, resolution: ResolutionLevel) -> Self {
+        self.resolution = resolution;
+        self
+    }
+
+    /// Returns these options with `components` replaced.
+    #[must_use]
+    pub fn with_components(mut self, components: ComponentSelection) -> Self {
+        self.components = components;
+        self
+    }
+
+    /// Returns these options with `max_quality_layers` replaced.
+    #[must_use]
+    pub fn with_max_quality_layers(mut self, max_quality_layers: Option<u16>) -> Self {
+        self.max_quality_layers = max_quality_layers;
+        self
+    }
+
+    /// Returns these options with `target_layout` replaced.
+    #[must_use]
+    pub fn with_target_layout(mut self, target_layout: ComponentLayout) -> Self {
+        self.target_layout = target_layout;
+        self
+    }
 }
 
 impl Default for PartialDecodeOptions {
@@ -6421,6 +6744,7 @@ pub fn decode_htj2k_with_workspace(
 /// Returns `Ok(None)` when the input is outside that profile. This is diagnostic
 /// instrumentation for implementation and benchmark work, not a full-image
 /// decode path.
+#[doc(hidden)]
 #[cfg(feature = "std")]
 pub fn decode_htj2k_cleanup_vlc_output_probe_with_workspace(
     input: &[u8],
@@ -9996,6 +10320,11 @@ pub fn prepare_part1_decode_from_source<'a>(
 
 /// Explicit retained-resource ceilings for a Part 1 source index.
 pub use codestream::Part1SourceIndexLimits;
+pub use codestream::source::{CodestreamSource, SliceSource, SourceError, SourceErrorKind};
+pub use codestream::{
+    DecodeInstrumentation, DecodeStageTimings, Part1ComponentDecodeRequest,
+    PreparedPart1ExecutionOptions, TileRegionRequest,
+};
 
 /// Reusable validated raw Part 1 headers bound to one immutable positioned source.
 /// See [`codestream::Part1SourceIndex`] for construction budgets and source lifetime.
@@ -11886,17 +12215,6 @@ fn interleaved_rgb_from_planes(
     Ok(interleaved)
 }
 
-/// Convert planar RGB input through the runtime encode layout adapter used by
-/// conformance benchmarks.
-#[cfg(feature = "std")]
-pub fn interleaved_rgb_from_planes_for_bench(
-    info: &ImageInfo,
-    planes: &[Plane<'_>],
-    sample_format: SampleFormat,
-) -> Result<Vec<u8>> {
-    interleaved_rgb_from_planes(info, planes, sample_format)
-}
-
 #[cfg(feature = "std")]
 fn plane_row(plane: Plane<'_>, y: usize, row_bytes: usize) -> Result<&[u8]> {
     let row_start = y
@@ -12202,6 +12520,7 @@ fn fourcc_from_label(label: &str) -> Option<container::FourCc> {
 /// simultaneous defects have no stable precedence. Errors alone make no general
 /// unchanged-output guarantee; publication contracts are profile-specific.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum J2kError {
     /// Invalid caller description or option.
     InvalidParameter {
@@ -12982,7 +13301,7 @@ fn metadata_from_codestream(
 fn codestream_info_from_codestream(codestream: &codestream::Codestream) -> CodestreamInfo {
     let coding_style = codestream.uniform_effective_coding_style();
     CodestreamInfo {
-        kind: codestream.kind,
+        kind: CodestreamKind::from_codestream(codestream.kind),
         tile_grid: Some(TileGrid {
             tile_width: codestream.siz.tile_width,
             tile_height: codestream.siz.tile_height,
@@ -13376,7 +13695,7 @@ fn validate_partial_options_without_support(
     // Irreversible HT requests must use their independently admitted native
     // route above. Full-image support does not authorise the generic crop path.
     if metadata.codestream.as_ref().is_some_and(|stream| {
-        stream.kind == codestream::CodestreamKind::Htj2k
+        stream.kind == CodestreamKind::Htj2k
             && stream.transform == Some(WaveletTransform::Irreversible97)
     }) {
         return Err(unsupported(

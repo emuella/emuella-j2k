@@ -44,6 +44,7 @@ pub use ht_high_component::encode_htj2k_high_component_entropy_failure_test_fixt
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub use ht_high_component::encode_htj2k_high_component_multiple_set_test_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub use ht_high_component::encode_htj2k_high_component_test_fixture;
 mod ht_reduced_roi;
@@ -52,11 +53,13 @@ pub use ht_high_component::prepare_htj2k_high_component_decode;
 mod ht_roi;
 #[cfg(feature = "std")]
 mod ht_tile_window;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
 #[doc(hidden)]
 pub use ht_reduced_roi::encode_htj2k_reduced_roi_multiple_set_test_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub use ht_reduced_roi::encode_htj2k_reduced_roi_test_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub use ht_roi::encode_htj2k_roi_window_test_fixture;
 #[cfg(feature = "std")]
@@ -9557,6 +9560,7 @@ pub fn encode_grayscale_u8_no_decomp(input: GrayscaleU8Encode<'_>) -> Result<Vec
 /// This is not a general encode API. It deliberately exposes the existing
 /// no-decomposition test profile so higher API layers can verify component
 /// counts that image-oriented grayscale/RGB encoders cannot express.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_planar_u8_no_decomp_test_fixture(
     width: u32,
@@ -9608,6 +9612,7 @@ pub struct SubsampledU8TestComponent<'a> {
 /// declared native sampling grids.
 ///
 /// This is test support rather than a general encoder surface.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_planar_u8_subsampled_no_decomp_test_fixture(
     reference_width: u32,
@@ -9713,6 +9718,7 @@ pub fn encode_planar_u8_subsampled_no_decomp_test_fixture(
 /// grids.
 ///
 /// This is test support rather than a general encoder surface.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
     reference_width: u32,
@@ -9732,6 +9738,7 @@ pub fn encode_planar_u8_subsampled_one_decomp_test_fixture(
 /// grids.
 ///
 /// This is test support rather than a general encoder surface.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_planar_u8_subsampled_two_decomp_test_fixture(
     reference_width: u32,
@@ -9746,6 +9753,7 @@ pub fn encode_planar_u8_subsampled_two_decomp_test_fixture(
     )
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn encode_planar_u8_subsampled_decomp_test_fixture(
     reference_width: u32,
     reference_height: u32,
@@ -10011,6 +10019,7 @@ fn reserved_parameterless_markers_are_skipped_in_main_and_tile_headers() {
 ///
 /// This is test infrastructure for packet-grid interoperability, not a public
 /// general-purpose precinct encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_grayscale_u8_cprl_precinct_test_fixture(
     input: GrayscaleU8Encode<'_>,
@@ -10096,6 +10105,7 @@ pub fn encode_grayscale_u8_cprl_precinct_test_fixture(
 ///
 /// This is test infrastructure for decomposed packet-grid interoperability,
 /// not a public general-purpose precinct encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_grayscale_u8_one_decomp_cprl_precinct_test_fixture(
     input: GrayscaleU8Encode<'_>,
@@ -11650,6 +11660,7 @@ pub fn encode_htj2k_rgb_u8_one_decomp(input: RgbU8Encode<'_>) -> Result<Vec<u8>>
 /// Build a project-authored reversible-MCT HTJ2K fixture with a caller-chosen
 /// decomposition count. This is test support for bounded native decode paths,
 /// not an application encode profile.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_rgb_u8_reversible_mct_decomp_test_fixture(
     input: RgbU8Encode<'_>,
@@ -11832,11 +11843,13 @@ pub fn encode_part1_reversible_mct_region_test_fixture(
 /// The fixture is synthetic test support, not an application encode profile.
 /// Its retained LL/HL/LH/HH coefficients deliberately vary in sign and
 /// magnitude in the sole component packet plane.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_irreversible_reduced_component_test_fixture() -> Result<Vec<u8>> {
     encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(1, false)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
     component_count: u16,
     multiple_component_transform: bool,
@@ -11845,6 +11858,7 @@ fn encode_htj2k_irreversible_reduced_component_test_fixture_with_envelope(
 }
 
 /// Project-authored six-level RLCP fixture; not an application encode profile.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_six_level_reduced_component_test_fixture(
     width: u32,
@@ -11853,6 +11867,7 @@ pub fn encode_htj2k_six_level_reduced_component_test_fixture(
     encode_ht_irreversible_reduced_fixture(3, true, width, height, 6)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn encode_ht_irreversible_reduced_fixture(
     component_count: u16,
     multiple_component_transform: bool,
@@ -12098,6 +12113,7 @@ fn encode_ht_irreversible_reduced_fixture(
 }
 
 /// Synthetic heterogeneous CPRL test support, not an application encode profile.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_heterogeneous_reduced_component_test_fixture(
     width: u32,
@@ -12106,6 +12122,7 @@ pub fn encode_htj2k_heterogeneous_reduced_component_test_fixture(
     encode_ht_heterogeneous_reduced_fixture(width, height, 30)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn encode_ht_heterogeneous_reduced_fixture(
     width: u32,
     height: u32,
@@ -12285,6 +12302,7 @@ fn encode_ht_heterogeneous_reduced_fixture(
     Ok(output)
 }
 /// Synthetic sampled-PCRL scalar-derived test support, not an encode profile.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_scalar_derived_reduced_component_test_fixture(
     width: u32,
@@ -12293,6 +12311,7 @@ pub fn encode_htj2k_scalar_derived_reduced_component_test_fixture(
     encode_ht_scalar_derived_reduced_fixture(width, height, 7, 0x88)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn encode_ht_scalar_derived_reduced_fixture(
     width: u32,
     height: u32,
@@ -12491,6 +12510,7 @@ fn encode_ht_scalar_derived_reduced_fixture(
 /// This project-authored fixture exercises bounded reduced-decode admission
 /// without allocating samples for the declared image. It is test support, not
 /// an application encode profile.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_reduced_component_empty_packet_test_fixture(
     width: u32,

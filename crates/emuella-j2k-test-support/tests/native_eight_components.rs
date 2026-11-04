@@ -3,21 +3,17 @@ use emuella_j2k_codestream as codestream;
 use emuella_j2k_core::*;
 
 fn options() -> EncodeOptions {
-    EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    }
+    EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2)
 }
 fn info(w: u32, h: u32, layout: ComponentLayout) -> ImageInfo {
     ImageInfo::new(w, h, 8, SampleFormat::U16_LE, ColorModel::Unknown, layout).unwrap()
 }
 fn decode_options(layout: ComponentLayout) -> DecodeOptions {
-    DecodeOptions {
-        mode: DecodeMode::Components,
-        target_layout: layout,
-        ..Default::default()
-    }
+    DecodeOptions::default()
+        .with_mode(DecodeMode::Components)
+        .with_target_layout(layout)
 }
 fn samples(w: u32, h: u32) -> Vec<u8> {
     (0..w * h)
@@ -297,30 +293,18 @@ fn rejects_unsupported_encode_contract_and_preserves_append_destination() {
         assert_eq!(out, [1, 2, 3]);
     }
     let mut bad_options = vec![
-        EncodeOptions {
-            format: OutputFormat::Jp2,
-            ..options()
-        },
-        EncodeOptions {
-            quality: EncodeQuality::TargetRate {
-                bits_per_pixel: 1.0,
-            },
-            ..options()
-        },
+        options().with_format(OutputFormat::Jp2),
+        options().with_quality(EncodeQuality::TargetRate {
+            bits_per_pixel: 1.0,
+        }),
     ];
     for level in [0, 1, 3] {
-        bad_options.push(EncodeOptions {
-            decomposition_levels: level,
-            ..options()
-        });
+        bad_options.push(options().with_decomposition_levels(level));
     }
-    bad_options.push(EncodeOptions {
-        tile_size: Some(TileSize {
-            width: 4,
-            height: 4,
-        }),
-        ..options()
-    });
+    bad_options.push(options().with_tile_size(Some(TileSize {
+        width: 4,
+        height: 4,
+    })));
     for o in bad_options {
         assert!(
             encode(

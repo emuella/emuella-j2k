@@ -245,13 +245,14 @@ pub(super) fn doubled_coefficient(coefficient: i32, available: u8, shift: u8) ->
 }
 
 /// Project-authored coefficient-domain fixture, not an application encoder.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn encode_htj2k_reduced_roi_test_fixture(width: u32, height: u32) -> Result<Vec<u8>> {
     fixture(width, height, 12, false, 9, 4, 0x88)
 }
 
 /// Project-authored later empty HT-set announcement for signalling tests.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(test, feature = "test-fixtures")))]
 #[doc(hidden)]
 pub fn encode_htj2k_reduced_roi_multiple_set_test_fixture() -> Result<Vec<u8>> {
     let input = encode_htj2k_reduced_roi_test_fixture(65, 97)?;
@@ -285,6 +286,7 @@ pub fn encode_htj2k_reduced_roi_multiple_set_test_fixture() -> Result<Vec<u8>> {
     Ok(multiple)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn fixture(
     width: u32,
     height: u32,

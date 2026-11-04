@@ -402,11 +402,9 @@ fn run() -> Result<Value> {
         },
         layout,
     )?;
-    let options = api::EncodeOptions {
-        format: api::OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    };
+    let options = api::EncodeOptions::default()
+        .with_format(api::OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2);
     let api_planes: Vec<_> = if planar {
         raw.chunks_exact(plane_bytes)
             .map(|samples| {
@@ -434,11 +432,9 @@ fn run() -> Result<Value> {
             stride_bytes: width as usize * sample_bytes * components,
         }
     };
-    let decode_options = api::DecodeOptions {
-        mode: api::DecodeMode::Components,
-        target_layout: layout,
-        ..Default::default()
-    };
+    let decode_options = api::DecodeOptions::default()
+        .with_mode(api::DecodeMode::Components)
+        .with_target_layout(layout);
     let verify_api = |decoded: &api::Image| -> Result<()> {
         if decoded.info.width != width
             || decoded.info.height != height

@@ -282,7 +282,8 @@ The bounded driver accepts matching unsigned unit-sampled classic D2, reversible
 origins, and no SOP/EPH. RGB decode permits existing no-MCT or RCT streams;
 encoding retains the existing RGB RCT policy. Eight-band decode uses the full
 owned native component route. No prepared selective route is substituted.
-`decode_native_d2_profiled` shares the ordinary core `decode` implementation,
+`decode_native_d2_profiled`, which only `emuella-j2k-core` exports (the facade
+does not re-export it), shares the ordinary core `decode` implementation,
 including inspection, component metadata and native output construction. The
 one-worker gate is checked against the current Rayon pool when enabled; multiple
 workers are explicitly unsupported by this diagnostic. Component coding or

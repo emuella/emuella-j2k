@@ -1,6 +1,6 @@
 # Bounded lossy HTJ2K public API
 
-`Htj2kLossyEncodeOptions { bits_per_pixel: f32 }`, `encode_htj2k_lossy` and
+`Htj2kLossyEncodeOptions::new(bits_per_pixel)`, `encode_htj2k_lossy` and
 `encode_htj2k_lossy_jph` expose the calibrated irreversible HT encoder through
 `ImageView`. The existing `Htj2kEncodeOptions`, `encode_htj2k` and
 `encode_htj2k_jph` retain their lossless API and byte paths. There is no public

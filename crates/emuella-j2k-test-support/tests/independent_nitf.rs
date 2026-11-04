@@ -1,8 +1,8 @@
 //! Optional source interoperability; inputs remain with the testdata owner.
+use emuella_j2k_codestream as c;
 use emuella_j2k_core::{
     ImageViewMut, Part1DecodeWorkspace, Part1SourceIndex, PlaneMut, PreparedPart1Decode,
-    codestream as c, execute_prepared_part1_decode_into_with_workspace,
-    prepare_part1_decode_from_source,
+    execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
 };
 use sha2::{Digest, Sha256};
 

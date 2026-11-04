@@ -19,6 +19,7 @@ parallel = ["emuella-j2k-core/parallel"]
 
 [dependencies]
 bytemuck = "1.23.1"
+emuella-j2k-codestream = { workspace = true, features = ["std"] }
 emuella-j2k-core = { workspace = true, features = ["std"] }
 numpy.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }

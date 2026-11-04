@@ -103,11 +103,9 @@ fn stage_accounting() {
                         },
                 })
                 .collect();
-            let options = EncodeOptions {
-                format: OutputFormat::J2kCodestream,
-                decomposition_levels: 2,
-                ..Default::default()
-            };
+            let options = EncodeOptions::default()
+                .with_format(OutputFormat::J2kCodestream)
+                .with_decomposition_levels(2);
             let limits = LosslessEncodeLimits::default();
             let (stream, e) =
                 cs::encode_lossless_d2_profiled(width, height, bits, &planes, limits).unwrap();
@@ -139,11 +137,9 @@ fn stage_accounting() {
             } else {
                 ImageData::Interleaved(packed)
             };
-            let options = DecodeOptions {
-                mode: DecodeMode::Components,
-                target_layout: layout,
-                ..Default::default()
-            };
+            let options = DecodeOptions::default()
+                .with_mode(DecodeMode::Components)
+                .with_target_layout(layout);
             let (native, production) = decode_native_d2_profiled(&stream, &options).unwrap();
             assert_eq!(native.info.components, components);
             assert_eq!(native.data, expected);
@@ -210,11 +206,9 @@ fn stage_accounting() {
             assert_eq!(
                 decode(
                     &stream,
-                    &DecodeOptions {
-                        mode: DecodeMode::Components,
-                        target_layout: layout,
-                        ..Default::default()
-                    }
+                    &DecodeOptions::default()
+                        .with_mode(DecodeMode::Components)
+                        .with_target_layout(layout)
                 )
                 .unwrap()
                 .data,
@@ -280,10 +274,7 @@ fn errors_preserve_profile_and_resource_gates() {
         assert!(
             decode_native_d2_profiled(
                 &[0, 1, 2],
-                &DecodeOptions {
-                    mode: DecodeMode::Components,
-                    ..Default::default()
-                }
+                &DecodeOptions::default().with_mode(DecodeMode::Components)
             )
             .is_err()
         )
@@ -334,11 +325,9 @@ fn no_mct_rgb() {
     );
     let (native, timing) = decode_native_d2_profiled(
         &stream,
-        &DecodeOptions {
-            mode: DecodeMode::Components,
-            target_layout: ComponentLayout::Interleaved,
-            ..Default::default()
-        },
+        &DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_target_layout(ComponentLayout::Interleaved),
     )
     .unwrap();
     assert_eq!(native.data, ImageData::Interleaved(expected));
@@ -346,11 +335,9 @@ fn no_mct_rgb() {
     assert_eq!(
         decode(
             &stream,
-            &DecodeOptions {
-                mode: DecodeMode::Components,
-                target_layout: ComponentLayout::Interleaved,
-                ..Default::default()
-            }
+            &DecodeOptions::default()
+                .with_mode(DecodeMode::Components)
+                .with_target_layout(ComponentLayout::Interleaved)
         )
         .unwrap()
         .data,
@@ -382,10 +369,7 @@ fn production_diagnostic_rejects_multiple_workers() {
             assert!(
                 decode_native_d2_profiled(
                     &stream,
-                    &DecodeOptions {
-                        mode: DecodeMode::Components,
-                        ..Default::default()
-                    }
+                    &DecodeOptions::default().with_mode(DecodeMode::Components)
                 )
                 .is_err()
             );
@@ -393,10 +377,7 @@ fn production_diagnostic_rejects_multiple_workers() {
             assert!(
                 decode(
                     &stream,
-                    &DecodeOptions {
-                        mode: DecodeMode::Components,
-                        ..Default::default()
-                    }
+                    &DecodeOptions::default().with_mode(DecodeMode::Components)
                 )
                 .is_ok()
             );
@@ -421,40 +402,29 @@ fn production_diagnostic_retains_native_options_and_decode_errors() {
             samples: &samples,
             stride_bytes: 8,
         };
-        let decode_options = DecodeOptions {
-            mode: DecodeMode::Components,
-            ..Default::default()
-        };
+        let decode_options = DecodeOptions::default().with_mode(DecodeMode::Components);
         let d1 = encode(
             view,
-            &EncodeOptions {
-                format: OutputFormat::J2kCodestream,
-                decomposition_levels: 1,
-                ..Default::default()
-            },
+            &EncodeOptions::default()
+                .with_format(OutputFormat::J2kCodestream)
+                .with_decomposition_levels(1),
         )
         .unwrap();
         assert!(decode(&d1, &decode_options).is_ok());
         assert!(decode_native_d2_profiled(&d1, &decode_options).is_err());
         let d2 = encode(
             view,
-            &EncodeOptions {
-                format: OutputFormat::J2kCodestream,
-                decomposition_levels: 2,
-                ..Default::default()
-            },
+            &EncodeOptions::default()
+                .with_format(OutputFormat::J2kCodestream)
+                .with_decomposition_levels(2),
         )
         .unwrap();
         for options in [
             DecodeOptions::default(),
-            DecodeOptions {
-                max_quality_layers: Some(1),
-                ..decode_options.clone()
-            },
-            DecodeOptions {
-                requested_components: ComponentSelection::Indices(vec![0]),
-                ..decode_options.clone()
-            },
+            decode_options.clone().with_max_quality_layers(Some(1)),
+            decode_options
+                .clone()
+                .with_requested_components(ComponentSelection::Indices(vec![0])),
         ] {
             assert!(decode_native_d2_profiled(&d2, &options).is_err());
         }

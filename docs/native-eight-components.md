@@ -28,17 +28,14 @@ let info = ImageInfo::new(
 )?;
 let stream = encode(
     ImageView::Interleaved { info: &info, samples, stride_bytes: 67 * 8 * 2 },
-    &EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    },
+    &EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2),
 )?;
-let image = decode(&stream, &DecodeOptions {
-    mode: DecodeMode::Components,
-    target_layout: ComponentLayout::Interleaved,
-    ..Default::default()
-})?;
+let options = DecodeOptions::default()
+    .with_mode(DecodeMode::Components)
+    .with_target_layout(ComponentLayout::Interleaved);
+let image = decode(&stream, &options)?;
 assert_eq!(image.info.components, 8);
 assert_eq!(image.info.color_model, ColorModel::Unknown);
 # Ok(())

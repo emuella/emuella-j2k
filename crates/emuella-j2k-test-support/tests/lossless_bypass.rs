@@ -1,11 +1,9 @@
 use emuella_j2k::*;
 
 fn options() -> EncodeOptions {
-    EncodeOptions {
-        format: OutputFormat::J2kCodestream,
-        decomposition_levels: 2,
-        ..Default::default()
-    }
+    EncodeOptions::default()
+        .with_format(OutputFormat::J2kCodestream)
+        .with_decomposition_levels(2)
 }
 fn info(width: u32, height: u32, components: u16, bits: u8, layout: ComponentLayout) -> ImageInfo {
     ImageInfo::new(
@@ -45,11 +43,9 @@ fn samples(width: u32, height: u32, components: u16, bits: u8) -> Vec<u8> {
 fn verify(stream: &[u8], raw: &[u8]) {
     let decoded = decode(
         stream,
-        &DecodeOptions {
-            mode: DecodeMode::Components,
-            target_layout: ComponentLayout::Interleaved,
-            ..Default::default()
-        },
+        &DecodeOptions::default()
+            .with_mode(DecodeMode::Components)
+            .with_target_layout(ComponentLayout::Interleaved),
     )
     .unwrap();
     assert_eq!(decoded.data, ImageData::Interleaved(raw.to_vec()));
@@ -161,21 +157,12 @@ fn bypass_admission_adds_only_bounded_metadata_and_rejects_other_profiles() {
         .is_ok()
     );
     for altered in [
-        EncodeOptions {
-            decomposition_levels: 1,
-            ..options()
-        },
-        EncodeOptions {
-            format: OutputFormat::Jp2,
-            ..options()
-        },
-        EncodeOptions {
-            tile_size: Some(TileSize {
-                width: 64,
-                height: 64,
-            }),
-            ..options()
-        },
+        options().with_decomposition_levels(1),
+        options().with_format(OutputFormat::Jp2),
+        options().with_tile_size(Some(TileSize {
+            width: 64,
+            height: 64,
+        })),
     ] {
         assert!(lossless_bypass_encode_requirements(&image, &altered, &limits).is_err());
     }

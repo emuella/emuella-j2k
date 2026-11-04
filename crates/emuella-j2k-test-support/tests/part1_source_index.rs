@@ -2,11 +2,12 @@ use std::ops::Range;
 use std::sync::Mutex;
 
 use c::source::{CodestreamSource, SliceSource, SourceError, SourceErrorKind};
+use emuella_j2k_codestream as c;
 use emuella_j2k_core::{
     ColorModel, ComponentLayout, EncodeOptions, ImageInfo, ImageView, ImageViewMut, J2kError,
     OutputFormat, Part1DecodeWorkspace, Part1SourceIndex, PlaneMut, PreparedPart1Decode,
-    SampleFormat, TileSize, codestream as c, encode,
-    execute_prepared_part1_decode_into_with_workspace, prepare_part1_decode_from_source,
+    SampleFormat, TileSize, encode, execute_prepared_part1_decode_into_with_workspace,
+    prepare_part1_decode_from_source,
 };
 
 struct RecordingSource {
@@ -84,15 +85,13 @@ fn sized_fixture(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
             samples: &samples,
             stride_bytes: width as usize,
         },
-        &EncodeOptions {
-            format: OutputFormat::J2kCodestream,
-            decomposition_levels: 2,
-            tile_size: Some(TileSize {
+        &EncodeOptions::default()
+            .with_format(OutputFormat::J2kCodestream)
+            .with_decomposition_levels(2)
+            .with_tile_size(Some(TileSize {
                 width: 32,
                 height: 32,
-            }),
-            ..Default::default()
-        },
+            })),
     )
     .unwrap();
     (bytes, samples)
