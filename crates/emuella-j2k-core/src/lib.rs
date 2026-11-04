@@ -5430,13 +5430,17 @@ impl PreparedPart1Decode<'_> {
     pub fn component_info(&self) -> &[ComponentInfo] {
         &self.component_info
     }
+}
 
-    /// Source components retained solely for reconstruction and transform
-    /// dependencies, independently of caller-visible output selection.
-    #[doc(hidden)]
-    pub fn reconstruction_component_indices(&self) -> &[u16] {
-        self.codestream.reconstruction_component_indices()
-    }
+/// Diagnostic source components retained for reconstruction and transform
+/// dependencies of a prepared Part 1 plan, independently of caller-visible
+/// output selection.
+///
+/// Core-only diagnostic surface; the facade does not re-export it.
+pub fn prepared_part1_reconstruction_component_indices<'p>(
+    prepared: &'p PreparedPart1Decode<'_>,
+) -> &'p [u16] {
+    prepared.codestream.reconstruction_component_indices()
 }
 
 /// Diagnostic preparation counters for a prepared Part 1 plan.

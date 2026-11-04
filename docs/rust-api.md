@@ -185,6 +185,12 @@ are implementation crates whose APIs follow the facade's needs and can change
 in any release. Depend on them directly only for lower-layer work, pinned to
 an exact version.
 
+The reviewed facade surface, with every reachable field, method and trait
+implementation, is recorded in the
+[public API snapshot](emuella-j2k-public-api.txt). The canonical gate fails
+when that surface changes without a reviewed snapshot update or names an item
+the facade does not export.
+
 Types expected to grow are `#[non_exhaustive]`:
 
 - enums `J2kError`, `UnsupportedFeature`, `SupportStatus`, `InputFormat`,

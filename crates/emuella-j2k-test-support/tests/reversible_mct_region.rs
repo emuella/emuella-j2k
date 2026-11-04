@@ -54,7 +54,10 @@ fn execute_source(
         },
     )
     .unwrap();
-    assert_eq!(prepared.reconstruction_component_indices(), [0, 1, 2]);
+    assert_eq!(
+        emuella_j2k_core::prepared_part1_reconstruction_component_indices(&prepared),
+        [0, 1, 2]
+    );
     assert_eq!(prepared.info().width, region.width);
     assert_eq!(prepared.info().height, region.height);
     assert_eq!(prepared.info().components as usize, components.len());

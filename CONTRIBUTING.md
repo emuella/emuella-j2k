@@ -116,6 +116,37 @@ point; ordinary workspace tests retain a representative smoke case without
 repeating that complete matrix in unoptimised mode. See
 [`docs/testing.md`](docs/testing.md#canonical-local-gate) for the focused command.
 
+### Facade public API snapshot
+
+The reviewed public surface of the `emuella-j2k` facade is committed in
+[`docs/emuella-j2k-public-api.txt`](docs/emuella-j2k-public-api.txt). The full
+route, locally and in hosted CI, runs
+`python3 scripts/check-facade-public-api.py` and its fixture tests. The check
+documents the facade and each workspace crate it depends on as rustdoc JSON,
+follows every re-export into its defining crate and renders public fields,
+variants, inherent and trait methods, associated items and trait
+implementations, including `#[doc(hidden)]` members. It fails when:
+
+- a rendered signature names an item that the facade does not itself export,
+  other than `core`, `alloc` and `std` items; or
+- the rendered surface differs from the snapshot, with default features or with
+  the `parallel` and `simd` features.
+
+When a change to the facade is intended, refresh the snapshot and commit its
+diff with the change; reviewers treat that diff as the compatibility record:
+
+```sh
+python3 scripts/check-facade-public-api.py --update
+```
+
+Refreshing cannot accept a reachability failure. Export the item deliberately
+or keep it out of the exported item's fields, signatures and implementations.
+Rustdoc JSON is an unstable output format. The check enables it on the pinned
+toolchain through a `RUSTC_BOOTSTRAP` value scoped to the documented workspace
+crates, so it needs no nightly toolchain. It accepts one JSON format version, so
+a toolchain pin change includes reviewing the renderer and the snapshot. Its
+build output stays under `facade-public-api` in the Cargo target directory.
+
 ### Hosted CI build cache
 
 The hosted `test` job restores one disposable Rust cache after the exported

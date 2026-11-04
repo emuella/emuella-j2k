@@ -12,6 +12,8 @@ cargo fmt \
   -- \
   --check
 cargo check --workspace --all-targets
+python3 scripts/test-facade-public-api.py
+python3 scripts/check-facade-public-api.py
 cargo check -p emuella-j2k-codestream --features parallel
 python3 scripts/run-nextest.py workspace --workspace
 cargo test --workspace --doc
