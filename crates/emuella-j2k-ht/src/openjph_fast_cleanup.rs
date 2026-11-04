@@ -84,7 +84,7 @@ impl<'a> PreparedHtCleanupBlock<'a> {
                 views.magnitude_sign,
                 coefficient_count,
             ),
-            mel: FastMelReader::new(&views.mel_vlc[..views.mel_vlc.len() - 1]),
+            mel: FastMelReader::new_cleanup_segment(views.mel_vlc),
             vlc: FastVlcReader::new(views.mel_vlc)?,
         })
     }
@@ -116,7 +116,7 @@ impl<'a> PreparedHtCleanupBlock<'a> {
                 storage,
                 dispatch,
             ),
-            mel: FastMelReader::new(&views.mel_vlc[..views.mel_vlc.len() - 1]),
+            mel: FastMelReader::new_cleanup_segment(views.mel_vlc),
             vlc,
         })
     }
@@ -610,6 +610,18 @@ impl<'a> FastMagSgnReader<'a> {
     }
 }
 
+/// What a [`FastMelReader`] reads once its stored bytes are exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FastMelStreamEnd {
+    /// Nothing: reading past the stored bytes is an error.
+    Bounded,
+    /// Byte `Lcup-2` of an HT cleanup segment, already given the low-nibble
+    /// view that MEL reads see, followed by fill.
+    CleanupSegmentLastByte(u8),
+    /// `0xFF` fill, without limit.
+    Fill,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct FastMelReader<'a> {
     bytes: &'a [u8],
@@ -621,6 +633,9 @@ pub(super) struct FastMelReader<'a> {
     run_state: u8,
     pending_zero_events: u8,
     pending_one_event: bool,
+    end: FastMelStreamEnd,
+    stored_bits: usize,
+    fill_loaded_bits: usize,
 }
 
 impl<'a> FastMelReader<'a> {
@@ -635,11 +650,32 @@ impl<'a> FastMelReader<'a> {
             run_state: 0,
             pending_zero_events: 0,
             pending_one_event: false,
+            end: FastMelStreamEnd::Bounded,
+            stored_bits: bytes.len() * 8,
+            fill_loaded_bits: 0,
+        }
+    }
+
+    /// Read the MEL byte-stream of an HT cleanup segment from its combined
+    /// MEL/VLC suffix, which runs from byte `Pcup` to byte `Lcup-1`.
+    ///
+    /// ISO/IEC 15444-15:2019 | ITU-T T.814, 7.1.3 reads MEL bytes through the
+    /// modified view of 7.1.1: byte `Lcup-2` has its four least-significant
+    /// bits set, byte `Lcup-1` reads as `0xFF`, and every read past the
+    /// segment also yields `0xFF`. Only bytes `Pcup` to `Lcup-2` are counted as
+    /// stored MEL bits.
+    pub(super) fn new_cleanup_segment(mel_vlc: &'a [u8]) -> Self {
+        debug_assert!(mel_vlc.len() >= 2);
+        let last = mel_vlc.len() - 2;
+        Self {
+            end: FastMelStreamEnd::CleanupSegmentLastByte(mel_vlc[last] | 0x0f),
+            stored_bits: (last + 1) * 8,
+            ..Self::new(&mel_vlc[..last])
         }
     }
 
     #[inline(always)]
-    fn decode_event(&mut self) -> Result<HtMelEvent, HtLayoutError> {
+    pub(super) fn decode_event(&mut self) -> Result<HtMelEvent, HtLayoutError> {
         loop {
             if self.pending_zero_events != 0 {
                 self.pending_zero_events -= 1;
@@ -714,12 +750,15 @@ impl<'a> FastMelReader<'a> {
         }
     }
 
-    fn consumed_bits(&self) -> usize {
-        self.physical_loaded_bits - self.available as usize
+    pub(super) fn consumed_bits(&self) -> usize {
+        // Fill bits always follow every stored bit in the reservoir, so any
+        // still-buffered bits beyond the fill loaded so far are stored bits.
+        let stored_available = (self.available as usize).saturating_sub(self.fill_loaded_bits);
+        self.physical_loaded_bits - stored_available
     }
 
-    fn remaining_bits(&self) -> usize {
-        self.bytes.len() * 8 - self.consumed_bits()
+    pub(super) fn remaining_bits(&self) -> usize {
+        self.stored_bits - self.consumed_bits()
     }
 
     fn consumed_bytes(&self) -> usize {
@@ -737,8 +776,33 @@ impl<'a> FastMelReader<'a> {
     #[inline(always)]
     fn refill(&mut self) -> Result<(), HtLayoutError> {
         let Some(&byte) = self.bytes.get(self.next) else {
-            return Err(self.unavailable(1));
+            return self.refill_past_stored_bytes();
         };
+        self.load_stored_byte(byte)?;
+        self.next += 1;
+        Ok(())
+    }
+
+    #[cold]
+    fn refill_past_stored_bytes(&mut self) -> Result<(), HtLayoutError> {
+        match self.end {
+            FastMelStreamEnd::Bounded => Err(self.unavailable(1)),
+            FastMelStreamEnd::CleanupSegmentLastByte(byte) => {
+                // Setting the low nibble cannot change the stuffing check.
+                self.load_stored_byte(byte)?;
+                self.end = FastMelStreamEnd::Fill;
+                Ok(())
+            }
+            FastMelStreamEnd::Fill => {
+                let bit_count = self.push_byte(0xff);
+                self.fill_loaded_bits = self.fill_loaded_bits.saturating_add(bit_count as usize);
+                Ok(())
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn load_stored_byte(&mut self, byte: u8) -> Result<(), HtLayoutError> {
         if self.previous_was_ff && byte > 0x8f {
             return Err(HtLayoutError::StreamStuffedByteInvalid {
                 stream: HtCleanupStreamKind::Mel,
@@ -746,8 +810,15 @@ impl<'a> FastMelReader<'a> {
                 consumed_bits: self.consumed_bits(),
             });
         }
-        self.next += 1;
         self.physical_loaded_bits += 8;
+        self.push_byte(byte);
+        Ok(())
+    }
+
+    /// Append one byte's MEL bits to the reservoir, dropping the stuffing bit
+    /// after `0xFF`, and return how many bits were appended.
+    #[inline(always)]
+    fn push_byte(&mut self, byte: u8) -> u32 {
         let bit_count = if self.previous_was_ff { 7 } else { 8 };
         let bits = if bit_count == 8 {
             byte.reverse_bits()
@@ -757,7 +828,7 @@ impl<'a> FastMelReader<'a> {
         self.reservoir |= u64::from(bits) << self.available;
         self.available += bit_count;
         self.previous_was_ff = byte == 0xff;
-        Ok(())
+        bit_count
     }
 
     fn unavailable(&self, requested_bits: usize) -> HtLayoutError {
